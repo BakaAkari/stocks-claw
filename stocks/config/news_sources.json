@@ -1,0 +1,26 @@
+{
+  "sources": [
+    {
+      "name": "Yahoo Finance World News",
+      "type": "rss",
+      "url": "https://finance.yahoo.com/news/rssindex"
+    },
+    {
+      "name": "GNews Multi-Asset",
+      "type": "gnews",
+      "query": "stock market gold nasdaq",
+      "lang": "en"
+    },
+    {
+      "name": "Juhe Finance News",
+      "type": "juhe",
+      "category": "caijing",
+      "note": "中文财经新闻，免费额度100次/天，需配置 .secret/juhe-key.md"
+    },
+    {
+      "name": "Juhe Caijing News (ID 743)",
+      "type": "juhe_caijing",
+      "note": "中文财经新闻(澎湃新闻等)，需配置 .secret/juhe-caijing-key.md"
+    }
+  ]
+}

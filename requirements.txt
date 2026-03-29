@@ -1,0 +1,14 @@
+# 核心依赖（Python 标准库为主）
+# 本系统主要依赖 Python 3.11+ 标准库
+
+# 如需运行测试，可安装：
+# pytest>=7.0.0
+
+# 系统依赖：
+# - OpenClaw 运行环境
+# - Feishu 账号（用于接收推送）
+
+# API Key 需要自行申请：
+# - Finnhub API (https://finnhub.io/)
+# - GNews API (https://gnews.io/)
+# - 聚合数据 (https://www.juhe.cn/) - 可选

@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-01-01 00:00:00",
+  "assets": [
+    {
+      "asset_name": "示例：货币基金",
+      "platform": "支付宝/银行/券商",
+      "amount": 100000,
+      "asset_type": "现金管理",
+      "notes": "活期/货币基金，流动性储备",
+      "confirmed_by_user": true
+    },
+    {
+      "asset_name": "示例：理财产品",
+      "platform": "银行/支付宝",
+      "amount": 200000,
+      "asset_type": "理财",
+      "notes": "稳健理财，R2风险等级",
+      "confirmed_by_user": true
+    },
+    {
+      "asset_name": "示例：指数基金",
+      "platform": "券商/支付宝",
+      "amount": 50000,
+      "asset_type": "股票ETF",
+      "notes": "沪深300ETF/纳指ETF等",
+      "confirmed_by_user": true
+    },
+    {
+      "asset_name": "示例：黄金ETF",
+      "platform": "支付宝/券商",
+      "amount": 30000,
+      "asset_type": "黄金ETF",
+      "notes": "华安黄金ETF等",
+      "confirmed_by_user": true
+    }
+  ],
+  "portfolio_profile_notes": {
+    "base_currency_policy": "描述你的币种处理偏好",
+    "portfolio_focus": "关注组合健康程度与金融结构",
+    "investment_preference": "稳健/稳健偏成长/积极等",
+    "analysis_expectation": "希望系统提供的分析类型",
+    "custom_notes": "其他需要记录的个人信息"
+  },
+  "portfolio_constraints": {
+    "target_bucket_ranges": {
+      "成长": [0, 30]
+    },
+    "max_drawdown_tolerance": 0.15,
+    "allow_stop_loss": false
+  }
+}

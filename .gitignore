@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Secret files
+.secret/*
+!.secret/README.md
+!.secret/*.example.md
+
+# Data files (user specific)
+stocks/data/*.json
+stocks/data/*.jsonl
+!stocks/data/financial_assets.json
+
+# Logs
+*.log
+stocks/logs/
+stocks/events/
+
+# Reports
+stocks/reports/*.md
+stocks/reports/*.json
+!stocks/reports/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+tmp/
+temp/
+*.tmp

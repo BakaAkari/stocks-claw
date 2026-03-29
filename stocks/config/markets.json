@@ -1,0 +1,12 @@
+{
+  "a": {
+    "label": "A股",
+    "providers": ["tencent", "eastmoney"],
+    "default_provider": "tencent"
+  },
+  "us": {
+    "label": "美股",
+    "providers": ["finnhub"],
+    "default_provider": "finnhub"
+  }
+}
