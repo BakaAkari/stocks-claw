@@ -32,6 +32,16 @@
 
 ## 部署流程
 
+### Step 0: 安装位置
+
+将本仓库克隆到 OpenClaw 工作空间的根目录：
+
+```bash
+cd /home/node/.openclaw/workspace
+git clone https://github.com/BakaAkari/stocks-claw.git
+cd stocks-claw
+```
+
 ### Step 1: 配置文件初始化
 
 ```bash

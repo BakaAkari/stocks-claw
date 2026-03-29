@@ -1,71 +1,94 @@
 # OpenClaw Personal Investment Advisor
 
-基于 OpenClaw 的个人投资顾问系统，接入多源财经数据，利用 LLM 生成个性化投资建议，并通过 Feishu 定时推送。
+A personal investment advisory system built on OpenClaw, integrating multi-source financial data, leveraging LLM to generate personalized investment advice, and delivering reports via Feishu on a scheduled basis.
 
-## 快速开始
+> [中文版本](README.zh.md) | [Agent Guide](AGENT_GUIDE.md)
 
-如果你是 AI Agent，请先阅读 [`AGENT_GUIDE.md`](AGENT_GUIDE.md)。
+---
 
-如果你是用户，请将本仓库交给你的 AI 助手，让它读取 `AGENT_GUIDE.md` 后协助你完成配置。
+## Quick Start
 
-## 核心功能
+If you are an AI Agent, please read [`AGENT_GUIDE.md`](AGENT_GUIDE.md) first.
 
-- 📊 **资产管理** - 维护你的金融资产清单
-- 📰 **新闻追踪** - 接入 Yahoo、GNews、聚合数据等多源财经新闻
-- 📈 **行情分析** - 监控你关心的股票和 ETF
-- 🤖 **AI 建议** - 基于 LLM 生成个人化投资建议
-- 📲 **定时推送** - 通过 Feishu 接收投资报告
+If you are a user, please hand this repository to your AI assistant and let it read `AGENT_GUIDE.md` to help you complete the configuration.
 
-## 系统要求
+---
 
-- [OpenClaw](https://github.com/openclaw/openclaw) 运行环境
+## Core Features
+
+- 📊 **Asset Management** - Maintain your financial asset portfolio
+- 📰 **News Tracking** - Access Yahoo, GNews, Juhe and other multi-source financial news
+- 📈 **Market Analysis** - Monitor stocks and ETFs you care about
+- 🤖 **AI Advice** - Generate personalized investment advice based on LLM
+- 📲 **Scheduled Delivery** - Receive investment reports via Feishu
+
+---
+
+## System Requirements
+
+- [OpenClaw](https://github.com/openclaw/openclaw) runtime environment
 - Python 3.11+
-- Feishu 账号（用于接收报告）
+- Feishu account (for receiving reports)
 
-## 项目结构
+---
+
+## Installation Location
+
+Place this repository in your OpenClaw workspace root directory:
+
+```
+/home/node/.openclaw/workspace/stocks-claw/
+```
+
+---
+
+## Project Structure
 
 ```
 .
-├── AGENT_GUIDE.md          # ⭐ AI Agent 部署指南
-├── README.md               # 本文件
-├── requirements.txt        # Python 依赖
-├── .secret/               # API Key 配置目录
+├── AGENT_GUIDE.md              # ⭐ AI Agent deployment guide (must read)
+├── README.md                   # This file
+├── README.zh.md               # Chinese version
+├── requirements.txt           # Python dependencies
+├── .secret/                   # API Key configuration directory
 │   ├── README.md
-│   ├── finnhub-key.md     # Finnhub API Key
-│   ├── gnews-key.md       # GNews API Key
-│   ├── juhe-key.md        # 聚合数据 Key（可选）
-│   └── juhe-caijing-key.md # 聚合数据财经 Key（可选）
-└── stocks/                # 核心代码
-    ├── config/           # 配置文件
-    ├── data/             # 资产数据（需自行填写）
-    ├── cli/              # 命令行工具
-    ├── services/         # 核心服务
-    └── prompts/          # LLM 提示词
+│   ├── finnhub-key.md         # Finnhub API Key
+│   ├── gnews-key.md           # GNews API Key
+│   ├── juhe-key.md            # Juhe Data Key (optional)
+│   └── juhe-caijing-key.md    # Juhe Financial News Key (optional)
+└── stocks/                    # Core code
+    ├── config/               # Configuration files
+    ├── data/                 # Asset data (fill in yourself)
+    ├── cli/                  # Command line tools
+    ├── services/             # Core services
+    └── prompts/              # LLM prompts
 ```
 
-## 配置步骤
+---
 
-1. **申请 API Key**
-   - [Finnhub](https://finnhub.io/)（美股行情）
-   - [GNews](https://gnews.io/)（英文新闻）
-   - [聚合数据](https://www.juhe.cn/)（中文新闻，可选）
+## Configuration Steps
 
-2. **填写 API Key**
+1. **Apply for API Keys**
+   - [Finnhub](https://finnhub.io/) (US stock quotes)
+   - [GNews](https://gnews.io/) (English news)
+   - [Juhe Data](https://www.juhe.cn/) (Chinese news, optional)
+
+2. **Fill in API Keys**
    ```bash
    echo "your-finnhub-key" > .secret/finnhub-key.md
    echo "your-gnews-key" > .secret/gnews-key.md
    ```
 
-3. **配置资产和监控标的**
+3. **Configure Assets and Watchlist**
    ```bash
-   # 编辑你的资产
+   # Edit your assets
    vim stocks/data/financial_assets.json
    
-   # 编辑监控标的
+   # Edit watchlist
    vim stocks/config/watchlist.json
    ```
 
-4. **设置定时任务**
+4. **Set up Scheduled Tasks**
    ```bash
    openclaw cron add --name "stocks-report" \
      --cron "0 9,11,14,16 * * 1-5" \
@@ -73,22 +96,28 @@
      --message "bash stocks/scripts/personal-report-delivery.sh"
    ```
 
-详细步骤请参考 [`AGENT_GUIDE.md`](AGENT_GUIDE.md)。
+For detailed steps, please refer to [`AGENT_GUIDE.md`](AGENT_GUIDE.md).
 
-## 文档
+---
 
-- [`AGENT_GUIDE.md`](AGENT_GUIDE.md) - AI Agent 部署指南
-- [`stocks/DATA_SOURCES.md`](stocks/DATA_SOURCES.md) - 数据源配置说明
-- [`stocks/ARCHITECTURE.md`](stocks/ARCHITECTURE.md) - 系统架构设计
-- [`stocks/DATA_MODEL.md`](stocks/DATA_MODEL.md) - 数据模型说明
+## Documentation
 
-## 免责声明
+- [`AGENT_GUIDE.md`](AGENT_GUIDE.md) - AI Agent deployment guide
+- [`stocks/DATA_SOURCES.md`](stocks/DATA_SOURCES.md) - Data source configuration
+- [`stocks/ARCHITECTURE.md`](stocks/ARCHITECTURE.md) - System architecture design
+- [`stocks/DATA_MODEL.md`](stocks/DATA_MODEL.md) - Data model documentation
 
-本系统仅供学习和参考，不构成投资建议。投资有风险，决策需谨慎。
+---
+
+## Disclaimer
+
+This system is for learning and reference purposes only and does not constitute investment advice. Investing involves risks; please make decisions cautiously.
+
+---
 
 ## License
 
-MIT License - 详见 [LICENSE](LICENSE)
+MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
