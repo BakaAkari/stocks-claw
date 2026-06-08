@@ -55,12 +55,13 @@ class MCPAdapter:
         返回包含用户资产、市场行情、新闻、组合映射、市场状态、
         偏离检查等全部信息的 AnalysisContext。
         """
+        import asyncio
         try:
-            context = self.engine.build_context(
+            context = asyncio.run(self.engine.build_context(
                 include_news=params.get("include_news", True),
                 include_quotes=params.get("include_quotes", True),
                 include_history=params.get("include_history", True),
-            )
+            ))
             return {
                 "success": True,
                 "data": context.to_dict(),
@@ -74,9 +75,10 @@ class MCPAdapter:
         Params:
             market: 市场代码，如 ``"a"``、``"us"`` 或 ``None``（全部）。
         """
+        import asyncio
         try:
             market = params.get("market")
-            quotes = self.engine.fetch_quotes(market)
+            quotes = asyncio.run(self.engine.fetch_quotes(market))
             return {
                 "success": True,
                 "data": {
@@ -95,10 +97,11 @@ class MCPAdapter:
             sources: 新闻源列表，``None`` 则按配置获取所有源。
             limit: 每源获取条数（默认 10）。
         """
+        import asyncio
         try:
             sources = params.get("sources")
             limit = params.get("limit", 10)
-            news = self.engine.fetch_news(sources=sources, limit=limit)
+            news = asyncio.run(self.engine.fetch_news(sources=sources, limit=limit))
             return {
                 "success": True,
                 "data": [n.to_dict() for n in news],

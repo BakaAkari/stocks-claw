@@ -67,7 +67,7 @@ class CLIAdapter:
         external_watchlist = self._load_json_file(args.watchlist)
 
         # 2. 调用 engine 构建 AnalysisContext
-        context = self.engine.build_context(
+        context = await self.engine.build_context(
             include_news=not args.no_news,
             include_quotes=not args.no_quotes,
             include_history=True,
@@ -75,7 +75,7 @@ class CLIAdapter:
 
         # 3. 如启用 LLM 增强，调用 engine 增强数据
         if args.llm_enhancer and hasattr(self.engine, "enhance_news"):
-            enhanced_news = self.engine.enhance_news(context.news)
+            enhanced_news = await self.engine.enhance_news(context.news)
             # 将增强后的新闻回填到 context（通过重建或属性更新）
             # 由于 dataclass 是 frozen，这里通过 to_dict 再重建的方式不现实，
             # 实际由 engine.build_context 内部根据配置决定是否增强。
@@ -86,7 +86,7 @@ class CLIAdapter:
         report: Optional[str] = None
         if args.llm_analysis and hasattr(self.engine, "generate_report"):
             try:
-                report = self.engine.generate_report(context)
+                report = await self.engine.generate_report(context)
             except RuntimeError as exc:
                 report = f"[LLM 分析未启用或失败: {exc}]"
 

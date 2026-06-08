@@ -83,17 +83,18 @@ def _make_request_handler(engine):
 
         def _route_post(self, path: str, body: dict) -> tuple[int, dict]:
             """路由 POST 请求到 engine 方法。"""
+            import asyncio
             if path == "/api/v1/analysis/context":
-                context = self._engine.build_context(
+                context = asyncio.run(self._engine.build_context(
                     include_news=body.get("include_news", True),
                     include_quotes=body.get("include_quotes", True),
                     include_history=body.get("include_history", True),
-                )
+                ))
                 return 200, {"success": True, "data": context.to_dict()}
 
             if path == "/api/v1/quotes":
                 market = body.get("market")
-                quotes = self._engine.fetch_quotes(market)
+                quotes = asyncio.run(self._engine.fetch_quotes(market))
                 if market:
                     data = {market: [q.to_dict() for q in quotes.get(market, [])]}
                 else:
@@ -103,7 +104,7 @@ def _make_request_handler(engine):
             if path == "/api/v1/news":
                 sources = body.get("sources")
                 limit = body.get("limit", 10)
-                news = self._engine.fetch_news(sources=sources, limit=limit)
+                news = asyncio.run(self._engine.fetch_news(sources=sources, limit=limit))
                 return 200, {
                     "success": True,
                     "data": [n.to_dict() for n in news],
