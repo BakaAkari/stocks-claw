@@ -36,7 +36,7 @@ class LLMAnalysis:
 
     def __init__(
         self,
-        model: str = "deepseek-v4-pro",
+        model: str = "kimi-k2.6",
         enabled: bool = True,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
