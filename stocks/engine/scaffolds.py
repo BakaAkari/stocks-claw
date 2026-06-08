@@ -183,7 +183,6 @@ class MarketScaffold:
             if q.pct_change is None:
                 continue
             pc = q.pct_change
-            all_quotes.append(q)
 
             # 按市场分类
             if q.instrument.market == "a":

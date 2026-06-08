@@ -12,6 +12,14 @@ class Instrument:
     name: str
     market: str                    # "a" / "us"
     exchange: Optional[str] = None  # "sh" / "sz" / "us"
+    
+    def to_dict(self) -> dict:
+        return {
+            "code": self.code,
+            "name": self.name,
+            "market": self.market,
+            "exchange": self.exchange,
+        }
 
 
 @dataclass(frozen=True)

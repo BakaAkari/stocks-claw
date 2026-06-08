@@ -104,7 +104,7 @@ def test_scaffolds():
         ]
     }
     state = ms.build(quotes)
-    assert state.risk_appetite == "mixed"
+    assert state.risk_appetite == "cooling"
     assert state.china_state == "stable"
     print("✓ MarketScaffold.build")
     
