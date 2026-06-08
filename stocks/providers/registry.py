@@ -1,34 +1,28 @@
 from __future__ import annotations
 
-from stocks.config_loader import load_market_settings
-from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
-from stocks.providers.finnhub_quote import FinnhubQuoteProvider
-from stocks.providers.tencent_a import TencentAQuoteProvider
+from typing import Optional
+
+from stocks.providers.base import QuoteProvider
 
 
 class ProviderRegistry:
+    """Provider 注册表 — 运行时动态注册/发现"""
+
     def __init__(self):
-        self._providers = {
-            'a': {
-                'tencent': TencentAQuoteProvider(),
-                'eastmoney': EastmoneyAQuoteProvider(),
-            },
-            'us': {
-                'finnhub': FinnhubQuoteProvider(),
-            },
-        }
+        self._providers: dict[str, QuoteProvider] = {}
 
-    def get_market_provider_names(self, market_key: str) -> list[str]:
-        settings = load_market_settings(market_key)
-        names = settings.get('providers', [])
-        if names:
-            return names
-        default_name = settings.get('default_provider')
-        return [default_name] if default_name else []
+    def register(self, provider: QuoteProvider) -> None:
+        """注册 Provider"""
+        self._providers[provider.name] = provider
 
-    def get(self, market_key: str, provider_name: str):
-        market_providers = self._providers.get(market_key, {})
-        provider = market_providers.get(provider_name)
-        if provider is None:
-            raise RuntimeError(f'provider 不存在: market={market_key}, name={provider_name}')
-        return provider
+    def get(self, name: str) -> Optional[QuoteProvider]:
+        """按名称获取 Provider"""
+        return self._providers.get(name)
+
+    def list_for_market(self, market: str) -> list[QuoteProvider]:
+        """获取支持指定市场的所有 Provider"""
+        return [p for p in self._providers.values() if market in p.supported_markets]
+
+    def all(self) -> list[QuoteProvider]:
+        """获取所有 Provider"""
+        return list(self._providers.values())

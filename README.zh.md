@@ -1,6 +1,8 @@
-# OpenClaw Personal Investment Advisor
+# OpenClaw / Hermes Personal Investment Advisor
 
-基于 OpenClaw 的个人投资顾问系统，接入多源财经数据，利用 LLM 生成个性化投资建议，并通过 Feishu 定时推送。
+基于 OpenClaw / Hermes 的个人投资顾问工具包，接入多源财经数据，利用 LLM 生成个性化投资建议。
+
+**定位：Agent 能力扩展工具包** —— 部署在 Agent workspace 中，Agent 通过 CLI 命令调用功能。
 
 ## 快速开始
 
@@ -14,31 +16,62 @@
 - 📰 **新闻追踪** - 接入 Yahoo、GNews、聚合数据等多源财经新闻
 - 📈 **行情分析** - 监控你关心的股票和 ETF
 - 🤖 **AI 建议** - 基于 LLM 生成个人化投资建议
-- 📲 **定时推送** - 通过 Feishu 接收投资报告
+- 📲 **定时推送** - 通过 Agent 对话界面接收投资报告
 
 ## 系统要求
 
-- [OpenClaw](https://github.com/openclaw/openclaw) 运行环境
-- Python 3.11+
-- Feishu 账号（用于接收报告）
+- Python 3.9+
+- 可选：OpenClaw 或 Hermes Agent 运行环境
+- Feishu 账号（可选，用于接收报告）
+
+## 统一 CLI 入口
+
+所有功能通过统一入口调用：
+
+```bash
+python3 -m stocks.cli.stocks <子命令> [选项]
+```
+
+### 子命令
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `query <代码>` | 查询股票/ETF 行情 | `python3 -m stocks.cli.stocks query 000300 --market sh` |
+| `report` | 生成个人投资报告 | `python3 -m stocks.cli.stocks report --refresh-news` |
+| `assets list` | 查看金融资产 | `python3 -m stocks.cli.stocks assets list --json` |
+| `assets add` | 添加/更新资产 | `python3 -m stocks.cli.stocks assets add --name 黄金ETF --platform 支付宝 --amount 50000` |
+| `health` | 系统健康检查 | `python3 -m stocks.cli.stocks health --json` |
+| `news refresh` | 刷新新闻数据 | `python3 -m stocks.cli.stocks news refresh` |
+| `config validate` | 校验配置 | `python3 -m stocks.cli.stocks config validate` |
+| `logs` | 查看日志 | `python3 -m stocks.cli.stocks logs --lines 20` |
+
+### `--json` 参数
+
+所有子命令支持 `--json` 参数，以 JSON 格式输出，方便 Agent 解析：
+
+```bash
+python3 -m stocks.cli.stocks query 600519 --market sh --json
+python3 -m stocks.cli.stocks health --json
+python3 -m stocks.cli.stocks assets list --json
+```
 
 ## 项目结构
 
 ```
 .
-├── AGENT_GUIDE.md          # ⭐ AI Agent 部署指南
-├── README.md               # 本文件
+├── AGENT_GUIDE.md          # ⭐ AI Agent 部署指南（必读）
+├── README.md               # 英文版本
+├── README.zh.md            # 本文件
 ├── requirements.txt        # Python 依赖
 ├── .secret/               # API Key 配置目录
-│   ├── README.md
 │   ├── finnhub-key.md     # Finnhub API Key
 │   ├── gnews-key.md       # GNews API Key
 │   ├── juhe-key.md        # 聚合数据 Key（可选）
 │   └── juhe-caijing-key.md # 聚合数据财经 Key（可选）
 └── stocks/                # 核心代码
+    ├── cli/               # 命令行工具（统一入口 stocks.py）
     ├── config/           # 配置文件
     ├── data/             # 资产数据（需自行填写）
-    ├── cli/              # 命令行工具
     ├── services/         # 核心服务
     └── prompts/          # LLM 提示词
 ```
@@ -65,12 +98,10 @@
    vim stocks/config/watchlist.json
    ```
 
-4. **设置定时任务**
+4. **设置定时任务**（可选）
    ```bash
-   openclaw cron add --name "stocks-report" \
-     --cron "0 9,11,14,16 * * 1-5" \
-     --session isolated \
-     --message "bash stocks/scripts/personal-report-delivery.sh"
+   # 系统 cron
+   0 9,11,14,16 * * 1-5 cd /path/to/stocks-claw && python3 -m stocks.cli.stocks report --refresh-news --save
    ```
 
 详细步骤请参考 [`AGENT_GUIDE.md`](AGENT_GUIDE.md)。
@@ -92,4 +123,4 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 ---
 
-*Built with [OpenClaw](https://github.com/openclaw/openclaw)*
+*Built for OpenClaw / Hermes Agent*

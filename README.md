@@ -1,6 +1,8 @@
-# OpenClaw Personal Investment Advisor
+# OpenClaw / Hermes Personal Investment Advisor
 
-A personal investment advisory system built on OpenClaw, integrating multi-source financial data, leveraging LLM to generate personalized investment advice, and delivering reports via Feishu on a scheduled basis.
+A personal investment advisory toolkit that integrates multi-source financial data and leverages LLM to generate personalized investment advice.
+
+**Positioning: Agent Capability Extension Toolkit** — Deployed in the Agent workspace, the Agent invokes its functions through CLI commands.
 
 > [中文版本](README.zh.md) | [Agent Guide](AGENT_GUIDE.md)
 
@@ -20,24 +22,59 @@ If you are a user, please hand this repository to your AI assistant and let it r
 - 📰 **News Tracking** - Access Yahoo, GNews, Juhe and other multi-source financial news
 - 📈 **Market Analysis** - Monitor stocks and ETFs you care about
 - 🤖 **AI Advice** - Generate personalized investment advice based on LLM
-- 📲 **Scheduled Delivery** - Receive investment reports via Feishu
+- 📲 **Scheduled Delivery** - Receive investment reports through the Agent conversation interface
 
 ---
 
 ## System Requirements
 
-- [OpenClaw](https://github.com/openclaw/openclaw) runtime environment
-- Python 3.11+
-- Feishu account (for receiving reports)
+- Python 3.9+
+- Optional: OpenClaw or Hermes Agent runtime environment
+- Feishu account (optional, for receiving reports)
+
+---
+
+## Unified CLI Entry
+
+All functions are invoked through a unified entry point:
+
+```bash
+python3 -m stocks.cli.stocks <subcommand> [options]
+```
+
+### Subcommands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `query <code>` | Query stock/ETF quotes | `python3 -m stocks.cli.stocks query 000300 --market sh` |
+| `report` | Generate personal investment report | `python3 -m stocks.cli.stocks report --refresh-news` |
+| `assets list` | View financial assets | `python3 -m stocks.cli.stocks assets list --json` |
+| `assets add` | Add/update asset | `python3 -m stocks.cli.stocks assets add --name GoldETF --platform Alipay --amount 50000` |
+| `health` | System health check | `python3 -m stocks.cli.stocks health --json` |
+| `news refresh` | Refresh news data | `python3 -m stocks.cli.stocks news refresh` |
+| `config validate` | Validate configuration | `python3 -m stocks.cli.stocks config validate` |
+| `logs` | View logs | `python3 -m stocks.cli.stocks logs --lines 20` |
+
+### `--json` Flag
+
+All subcommands support the `--json` flag for JSON output, making it easy for Agents to parse:
+
+```bash
+python3 -m stocks.cli.stocks query AAPL --market us --json
+python3 -m stocks.cli.stocks health --json
+python3 -m stocks.cli.stocks assets list --json
+```
 
 ---
 
 ## Installation Location
 
-Place this repository in your OpenClaw workspace root directory:
+Place this repository in your Agent workspace root directory:
 
 ```
 /home/node/.openclaw/workspace/stocks-claw/
+# or
+~/hermes/workspace/stocks-claw/
 ```
 
 ---
@@ -51,15 +88,14 @@ Place this repository in your OpenClaw workspace root directory:
 ├── README.zh.md               # Chinese version
 ├── requirements.txt           # Python dependencies
 ├── .secret/                   # API Key configuration directory
-│   ├── README.md
 │   ├── finnhub-key.md         # Finnhub API Key
 │   ├── gnews-key.md           # GNews API Key
 │   ├── juhe-key.md            # Juhe Data Key (optional)
 │   └── juhe-caijing-key.md    # Juhe Financial News Key (optional)
 └── stocks/                    # Core code
+    ├── cli/                   # CLI tools (unified entry: stocks.py)
     ├── config/               # Configuration files
     ├── data/                 # Asset data (fill in yourself)
-    ├── cli/                  # Command line tools
     ├── services/             # Core services
     └── prompts/              # LLM prompts
 ```
@@ -88,12 +124,10 @@ Place this repository in your OpenClaw workspace root directory:
    vim stocks/config/watchlist.json
    ```
 
-4. **Set up Scheduled Tasks**
+4. **Set up Scheduled Tasks** (optional)
    ```bash
-   openclaw cron add --name "stocks-report" \
-     --cron "0 9,11,14,16 * * 1-5" \
-     --session isolated \
-     --message "bash stocks/scripts/personal-report-delivery.sh"
+   # System cron
+   0 9,11,14,16 * * 1-5 cd /path/to/stocks-claw && python3 -m stocks.cli.stocks report --refresh-news --save
    ```
 
 For detailed steps, please refer to [`AGENT_GUIDE.md`](AGENT_GUIDE.md).
@@ -121,4 +155,4 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-*Built with [OpenClaw](https://github.com/openclaw/openclaw)*
+*Built for OpenClaw / Hermes Agent*
