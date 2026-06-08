@@ -42,8 +42,8 @@ class LLMEnhancer:
 
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
-        enabled: bool = False,
+        model: str = "deepseek-v4-flash",
+        enabled: bool = True,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
     ):

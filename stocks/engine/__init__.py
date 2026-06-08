@@ -51,8 +51,8 @@ class StocksEngine:
         self,
         config_dir: Optional[str] = None,
         data_dir: Optional[str] = None,
-        llm_enhancer_enabled: bool = False,
-        llm_analysis_enabled: bool = False,
+        llm_enhancer_enabled: bool = True,
+        llm_analysis_enabled: bool = True,
         openai_api_key: Optional[str] = None,
         openai_base_url: Optional[str] = None,
     ):
@@ -61,8 +61,8 @@ class StocksEngine:
         Args:
             config_dir: 配置文件目录，默认 ``stocks/config/``。
             data_dir: 数据文件目录，默认 ``stocks/data/``。
-            llm_enhancer_enabled: 是否启用 LLM 数据增强。
-            llm_analysis_enabled: 是否启用 LLM 深度分析。
+            llm_enhancer_enabled: 是否启用 LLM 数据增强（默认 True，无 key 时自动降级禁用）。
+            llm_analysis_enabled: 是否启用 LLM 深度分析（默认 True，无 key 时自动降级禁用）。
             openai_api_key: OpenAI 兼容 API Key（传参优先，其次环境变量，其次.secret文件）。
             openai_base_url: OpenAI 兼容 API Base URL（传参优先，其次环境变量，其次.secret文件）。
         """

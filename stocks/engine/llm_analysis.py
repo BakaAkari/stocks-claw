@@ -36,8 +36,8 @@ class LLMAnalysis:
 
     def __init__(
         self,
-        model: str = "gpt-4o",
-        enabled: bool = False,
+        model: str = "deepseek-v4-pro",
+        enabled: bool = True,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
     ):
