@@ -41,6 +41,7 @@ from stocks.providers.tencent_a import TencentAQuoteProvider
 # 默认配置路径
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+SECRET_DIR = Path(__file__).resolve().parents[2] / ".secret"
 
 
 class StocksEngine:
@@ -62,11 +63,14 @@ class StocksEngine:
             data_dir: 数据文件目录，默认 ``stocks/data/``。
             llm_enhancer_enabled: 是否启用 LLM 数据增强。
             llm_analysis_enabled: 是否启用 LLM 深度分析。
-            openai_api_key: OpenAI 兼容 API Key。
-            openai_base_url: OpenAI 兼容 API Base URL。
+            openai_api_key: OpenAI 兼容 API Key（传参优先，其次环境变量，其次.secret文件）。
+            openai_base_url: OpenAI 兼容 API Base URL（传参优先，其次环境变量，其次.secret文件）。
         """
         self.config_dir = Path(config_dir) if config_dir else DEFAULT_CONFIG_DIR
         self.data_dir = Path(data_dir) if data_dir else DEFAULT_DATA_DIR
+
+        # 自动加载 LLM 配置（传参 > 环境变量 > .secret 文件）
+        api_key, base_url = self._load_openai_config(openai_api_key, openai_base_url)
 
         # 1. 初始化 Provider Registry
         self.registry = ProviderRegistry()
@@ -85,16 +89,16 @@ class StocksEngine:
         )
         self.persistence = DataPersistence()
 
-        # 3. 初始化 LLM 模块（默认禁用）
+        # 3. 初始化 LLM 模块（默认禁用，如有配置则自动启用）
         self.llm_enhancer = LLMEnhancer(
-            enabled=llm_enhancer_enabled,
-            api_key=openai_api_key,
-            base_url=openai_base_url,
+            enabled=llm_enhancer_enabled and bool(api_key),
+            api_key=api_key,
+            base_url=base_url,
         )
         self.llm_analysis = LLMAnalysis(
-            enabled=llm_analysis_enabled,
-            api_key=openai_api_key,
-            base_url=openai_base_url,
+            enabled=llm_analysis_enabled and bool(api_key),
+            api_key=api_key,
+            base_url=base_url,
         )
 
         # 4. 加载配置
@@ -114,6 +118,40 @@ class StocksEngine:
         self._constraints = self._load_json("portfolio_constraints.json") or {}
         self._profile = self._load_json("investor_profile.json") or {}
         self._watchlist = self._load_watchlist()
+
+    def _load_openai_config(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """加载 OpenAI 兼容 LLM 配置。
+
+        优先级：传参 > 环境变量 > .secret 文件。
+        返回 (api_key, base_url)。
+        """
+        # API Key
+        key = api_key
+        if not key:
+            env_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            if env_key:
+                key = env_key
+            else:
+                key_file = SECRET_DIR / "openai-key.md"
+                if key_file.exists():
+                    key = key_file.read_text(encoding="utf-8").strip()
+
+        # Base URL
+        url = base_url
+        if not url:
+            env_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+            if env_url:
+                url = env_url
+            else:
+                url_file = SECRET_DIR / "openai-base-url.md"
+                if url_file.exists():
+                    url = url_file.read_text(encoding="utf-8").strip()
+
+        return (key or None, url or None)
 
     def _load_json(self, filename: str) -> Optional[dict]:
         """从配置目录加载 JSON 文件。"""

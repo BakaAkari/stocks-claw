@@ -168,11 +168,20 @@ def main():
     parser = argparse.ArgumentParser(description="stocks-claw HTTP 服务")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
     parser.add_argument("--port", type=int, default=8080, help="监听端口")
+    parser.add_argument("--llm-enhancer", action="store_true", help="启用 LLM 数据增强")
+    parser.add_argument("--llm-analysis", action="store_true", help="启用 LLM 深度分析")
+    parser.add_argument("--openai-key", default=None, help="OpenAI 兼容 API Key")
+    parser.add_argument("--openai-base-url", default=None, help="OpenAI 兼容 API Base URL")
     args = parser.parse_args()
 
     from stocks.engine import StocksEngine  # type: ignore[import-not-found]
 
-    engine = StocksEngine()
+    engine = StocksEngine(
+        llm_enhancer_enabled=args.llm_enhancer,
+        llm_analysis_enabled=args.llm_analysis,
+        openai_api_key=args.openai_key,
+        openai_base_url=args.openai_base_url,
+    )
     adapter = HTTPAdapter(engine, host=args.host, port=args.port)
     adapter.start()
 

@@ -239,9 +239,23 @@ def _stdio_loop(adapter: MCPAdapter) -> None:
 
 def main():
     """MCP stdio 服务器入口。"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="stocks-claw MCP 服务器")
+    parser.add_argument("--llm-enhancer", action="store_true", help="启用 LLM 数据增强")
+    parser.add_argument("--llm-analysis", action="store_true", help="启用 LLM 深度分析")
+    parser.add_argument("--openai-key", default=None, help="OpenAI 兼容 API Key")
+    parser.add_argument("--openai-base-url", default=None, help="OpenAI 兼容 API Base URL")
+    args = parser.parse_args()
+
     from stocks.engine import StocksEngine  # type: ignore[import-not-found]
 
-    engine = StocksEngine()
+    engine = StocksEngine(
+        llm_enhancer_enabled=args.llm_enhancer,
+        llm_analysis_enabled=args.llm_analysis,
+        openai_api_key=args.openai_key,
+        openai_base_url=args.openai_base_url,
+    )
     adapter = MCPAdapter(engine)
     _stdio_loop(adapter)
 

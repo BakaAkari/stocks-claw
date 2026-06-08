@@ -47,6 +47,14 @@ class CLIAdapter:
             help="启用 LLM 深度分析（生成投资建议报告）"
         )
         parser.add_argument(
+            "--openai-key", default=None,
+            help="OpenAI 兼容 API Key（覆盖环境变量和 .secret 文件）"
+        )
+        parser.add_argument(
+            "--openai-base-url", default=None,
+            help="OpenAI 兼容 API Base URL（覆盖环境变量和 .secret 文件）"
+        )
+        parser.add_argument(
             "--no-news", action="store_true",
             help="构建上下文时不包含新闻"
         )
@@ -217,7 +225,21 @@ def main():
     # 延迟导入，避免循环依赖
     from stocks.engine import StocksEngine  # type: ignore[import-not-found]
 
-    engine = StocksEngine()
+    # 先解析一次参数，提取 openai 配置传给 engine
+    import argparse
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--openai-key", default=None)
+    pre_parser.add_argument("--openai-base-url", default=None)
+    pre_parser.add_argument("--llm-enhancer", action="store_true")
+    pre_parser.add_argument("--llm-analysis", action="store_true")
+    pre_args, _ = pre_parser.parse_known_args()
+
+    engine = StocksEngine(
+        llm_enhancer_enabled=pre_args.llm_enhancer,
+        llm_analysis_enabled=pre_args.llm_analysis,
+        openai_api_key=pre_args.openai_key,
+        openai_base_url=pre_args.openai_base_url,
+    )
     adapter = CLIAdapter(engine)
     adapter.run()
 
