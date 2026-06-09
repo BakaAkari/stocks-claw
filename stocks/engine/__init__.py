@@ -14,7 +14,9 @@ StocksEngine 是 stocks-claw 的核心门面类，负责：
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -28,6 +30,7 @@ from stocks.domain.models import (
     Quote,
 )
 from stocks.engine.context_builder import ContextBuilder
+from stocks.engine.exchange_rate import convert_to_cny
 from stocks.engine.fetchers import DataFetcher
 from stocks.engine.llm_analysis import LLMAnalysis
 from stocks.engine.llm_enhancer import LLMEnhancer
@@ -102,20 +105,29 @@ class StocksEngine:
             base_url=base_url,
         )
 
-        # 3.5 校验模型可用性（代理不可达时保留原配置，模型不存在时自动降级）
+        # 3.5 校验模型可用性（后台线程异步执行，不阻塞初始化）
+        self._model_validation_done = False
         if api_key and base_url:
-            resolved_e, resolved_a, e_available, a_available = validate_llm_models(
-                enhancer_model=self.llm_enhancer.model,
-                analysis_model=self.llm_analysis.model,
-                api_key=api_key,
-                base_url=base_url,
-            )
-            self.llm_enhancer.model = resolved_e
-            self.llm_analysis.model = resolved_a
-            if not e_available:
-                self.llm_enhancer.enabled = False
-            if not a_available:
-                self.llm_analysis.enabled = False
+            import threading
+            def _validate_in_background():
+                try:
+                    resolved_e, resolved_a, e_available, a_available = validate_llm_models(
+                        enhancer_model=self.llm_enhancer.model,
+                        analysis_model=self.llm_analysis.model,
+                        api_key=api_key,
+                        base_url=base_url,
+                    )
+                    self.llm_enhancer.model = resolved_e
+                    self.llm_analysis.model = resolved_a
+                    if not e_available:
+                        self.llm_enhancer.enabled = False
+                    if not a_available:
+                        self.llm_analysis.enabled = False
+                except Exception:
+                    pass
+                finally:
+                    self._model_validation_done = True
+            threading.Thread(target=_validate_in_background, daemon=True).start()
 
         # 4. 加载配置
         self._assets: list[FinancialAsset] = []
@@ -221,6 +233,17 @@ class StocksEngine:
                 asset_type = item.get("asset_type") or item.get("type", "unknown")
                 notes = item.get("notes")
                 confirmed = item.get("confirmed_by_user", item.get("confirmed", True))
+                currency = item.get("currency", "CNY")
+
+                # 多币种换算：统一为 CNY
+                if currency and currency.upper() != "CNY":
+                    cny_amount, rate = convert_to_cny(amount, currency)
+                    if notes:
+                        notes = f"{notes} | 原始: {amount} {currency} (汇率 {rate:.4f})"
+                    else:
+                        notes = f"原始: {amount} {currency} (汇率 {rate:.4f})"
+                    amount = cny_amount
+
                 assets.append(
                     FinancialAsset(
                         name=name,
@@ -229,6 +252,7 @@ class StocksEngine:
                         asset_type=asset_type,
                         notes=notes,
                         confirmed=bool(confirmed),
+                        currency="CNY",  # 统一存储为 CNY
                     )
                 )
             except (ValueError, TypeError):
@@ -392,17 +416,24 @@ class StocksEngine:
             enhanced_news=enhanced_news if self.llm_enhancer.enabled else None,
         )
 
-        # 6. 如启用 LLM 增强，生成行情摘要
+        # 6. 如启用 LLM 增强，生成行情摘要（使用 2s 短超时，避免阻塞）
         if self.llm_enhancer.enabled and context.quotes:
-            market_summary = await self.llm_enhancer.generate_market_summary(
-                context.quotes,
-                context.market_state.to_dict(),
-            )
-            # 由于 AnalysisContext 是 frozen dataclass，需要重建
-            if market_summary:
-                context = self._replace_context_field(
-                    context, "market_summary_nl", market_summary
+            try:
+                market_summary = await asyncio.wait_for(
+                    self.llm_enhancer.generate_market_summary(
+                        context.quotes,
+                        context.market_state.to_dict(),
+                        timeout=2,
+                    ),
+                    timeout=3,
                 )
+                # 由于 AnalysisContext 是 frozen dataclass，需要重建
+                if market_summary:
+                    context = self._replace_context_field(
+                        context, "market_summary_nl", market_summary
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("Market summary generation timed out, skipping")
 
         return context
 

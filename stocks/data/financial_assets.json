@@ -45,7 +45,8 @@
     "amount": 450,
     "asset_type": "股票",
     "notes": "3股，价格约150 USD（待实时更新）",
-    "confirmed": true
+    "confirmed": true,
+    "currency": "USD"
   },
   {
     "name": "美股可用资金",
@@ -53,6 +54,7 @@
     "amount": 13890,
     "asset_type": "现金",
     "notes": "USD现金余额",
-    "confirmed": true
+    "confirmed": true,
+    "currency": "USD"
   }
 ]

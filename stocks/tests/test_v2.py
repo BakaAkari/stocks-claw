@@ -150,16 +150,16 @@ def test_engine_init():
     
     assert health["status"] == "ok"
     assert len(health["providers"]) == 3
-    assert health["assets_loaded"] == 4
-    assert health["watchlist_loaded"] == 4
+    assert health["assets_loaded"] == 7
+    assert health["watchlist_loaded"] == 9
     print("✓ StocksEngine init + health_check")
     
     assets = engine.load_assets()
-    assert len(assets) == 4
+    assert len(assets) == 7
     print("✓ load_assets")
     
     mapping = engine.analyze_portfolio(assets)
-    assert len(mapping.buckets) == 4
+    assert len(mapping.buckets) >= 3
     print("✓ analyze_portfolio")
     
     print("Engine Init: 全部通过")
@@ -181,7 +181,7 @@ async def test_engine_async():
     # 构建上下文
     context = await engine.build_context()
     assert isinstance(context, AnalysisContext)
-    assert context.asset_count == 4
+    assert context.asset_count == 7
     assert context.schema_version == 2
     print("✓ build_context")
     

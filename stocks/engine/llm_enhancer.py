@@ -126,6 +126,7 @@ class LLMEnhancer:
         self,
         quotes: dict[str, list[Quote]],
         market_state: dict,
+        timeout: int = 5,
     ) -> str:
         """生成行情自然语言摘要。
 
@@ -137,7 +138,7 @@ class LLMEnhancer:
 
         prompt = self._build_market_summary_prompt(quotes, market_state)
         try:
-            return await asyncio.to_thread(self._call_llm, prompt)
+            return await asyncio.to_thread(self._call_llm, prompt, timeout)
         except Exception as exc:
             logger.warning("Market summary generation failed: %s", exc)
             return ""
@@ -146,7 +147,7 @@ class LLMEnhancer:
     # 内部方法
     # ------------------------------------------------------------------
 
-    def _call_llm(self, prompt: str) -> str:
+    def _call_llm(self, prompt: str, timeout: Optional[int] = None) -> str:
         """同步调用 LLM API，返回模型生成的文本。
 
         使用标准 OpenAI Chat Completions API 格式，兼容任何提供相同格式的服务。
@@ -176,7 +177,7 @@ class LLMEnhancer:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=_LLM_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or _LLM_TIMEOUT) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
                 return result["choices"][0]["message"]["content"].strip()
         except Exception as exc:

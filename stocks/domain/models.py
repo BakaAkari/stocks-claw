@@ -127,6 +127,7 @@ class FinancialAsset:
     asset_type: str = "unknown"
     notes: Optional[str] = None
     confirmed: bool = True
+    currency: str = "CNY"  # 币种: CNY / USD / HKD 等
     
     def to_dict(self) -> dict:
         return {
@@ -136,6 +137,7 @@ class FinancialAsset:
             "asset_type": self.asset_type,
             "notes": self.notes,
             "confirmed": self.confirmed,
+            "currency": self.currency,
         }
 
 
