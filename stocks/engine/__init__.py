@@ -31,6 +31,7 @@ from stocks.engine.context_builder import ContextBuilder
 from stocks.engine.fetchers import DataFetcher
 from stocks.engine.llm_analysis import LLMAnalysis
 from stocks.engine.llm_enhancer import LLMEnhancer
+from stocks.engine.llm_utils import validate_llm_models
 from stocks.engine.persistence import DataPersistence
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
@@ -89,7 +90,7 @@ class StocksEngine:
         )
         self.persistence = DataPersistence()
 
-        # 3. 初始化 LLM 模块（默认禁用，如有配置则自动启用）
+        # 3. 初始化 LLM 模块（默认启用，如有配置则自动启用）
         self.llm_enhancer = LLMEnhancer(
             enabled=llm_enhancer_enabled and bool(api_key),
             api_key=api_key,
@@ -100,6 +101,21 @@ class StocksEngine:
             api_key=api_key,
             base_url=base_url,
         )
+
+        # 3.5 校验模型可用性（代理不可达时保留原配置，模型不存在时自动降级）
+        if api_key and base_url:
+            resolved_e, resolved_a, e_available, a_available = validate_llm_models(
+                enhancer_model=self.llm_enhancer.model,
+                analysis_model=self.llm_analysis.model,
+                api_key=api_key,
+                base_url=base_url,
+            )
+            self.llm_enhancer.model = resolved_e
+            self.llm_analysis.model = resolved_a
+            if not e_available:
+                self.llm_enhancer.enabled = False
+            if not a_available:
+                self.llm_analysis.enabled = False
 
         # 4. 加载配置
         self._assets: list[FinancialAsset] = []
