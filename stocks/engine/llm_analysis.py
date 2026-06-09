@@ -23,7 +23,7 @@ from stocks.domain.models import AnalysisContext
 logger = logging.getLogger(__name__)
 
 # 默认 LLM 超时（秒）
-_LLM_TIMEOUT = 60
+_LLM_TIMEOUT = 360
 
 
 class LLMAnalysis:
@@ -218,7 +218,15 @@ class LLMAnalysis:
         try:
             with urllib.request.urlopen(req, timeout=_LLM_TIMEOUT) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
-                return result["choices"][0]["message"]["content"].strip()
+            msg = result["choices"][0]["message"]
+            content = msg.get("content", "").strip()
+            # 某些 reasoning 模型（如 kimi-k2.6）可能 content 为空但 reasoning_content 有内容
+            if not content:
+                reasoning = msg.get("reasoning_content", "").strip()
+                if reasoning:
+                    logger.warning("LLM returned empty content, using reasoning_content fallback")
+                    return reasoning
+            return content
         except Exception as exc:
             logger.warning("LLM API call failed: %s", exc)
             return ""
