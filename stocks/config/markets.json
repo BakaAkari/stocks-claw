@@ -8,5 +8,10 @@
     "label": "美股",
     "providers": ["finnhub"],
     "default_provider": "finnhub"
+  },
+  "crypto": {
+    "label": "加密货币",
+    "providers": ["finnhub"],
+    "default_provider": "finnhub"
   }
 }

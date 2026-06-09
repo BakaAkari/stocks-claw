@@ -17,12 +17,16 @@ FINNHUB_KEY_PATH = ROOT / ".secret" / "finnhub-key.md"
 
 
 class FinnhubQuoteProvider(QuoteProvider):
-    """Finnhub API 美股行情 Provider
+    """Finnhub API 行情 Provider
 
     使用 Finnhub API https://finnhub.io/api/v1/quote
     需要 API key（从环境变量 FINNHUB_API_KEY 或 .secret/finnhub-key.md 读取）。
-    支持美股，返回 Quote 对象。
+    支持美股和加密货币，返回 Quote 对象。
     网络异常、API 限制或解析失败时返回 None / 空列表。
+
+    加密货币 symbol 格式：
+    - 完整格式：EXCHANGE:SYMBOL（如 BINANCE:BTCUSDT）
+    - 简写格式：SYMBOL（如 BTCUSDT），自动添加 BINANCE: 前缀
     """
 
     @property
@@ -31,7 +35,7 @@ class FinnhubQuoteProvider(QuoteProvider):
 
     @property
     def supported_markets(self) -> list[str]:
-        return ["us"]
+        return ["us", "crypto"]
 
     def __init__(self, api_key: Optional[str] = None):
         if api_key:
@@ -44,6 +48,21 @@ class FinnhubQuoteProvider(QuoteProvider):
                 self.api_key = FINNHUB_KEY_PATH.read_text(encoding="utf-8").strip()
             else:
                 self.api_key = ""
+
+    def _build_symbol(self, instrument: Instrument) -> str:
+        """根据市场类型构建 Finnhub symbol。"""
+        code = instrument.code.strip().upper()
+        market = (instrument.market or "us").lower()
+
+        if market == "crypto":
+            # 如果已包含交易所前缀（如 BINANCE:BTCUSDT），直接使用
+            if ":" in code:
+                return code
+            # 否则默认使用 BINANCE 前缀
+            return f"BINANCE:{code}"
+
+        # 美股默认直接使用 code
+        return code
 
     def _fetch_sync(self, symbol: str) -> Optional[dict]:
         """同步请求 Finnhub quote 接口，返回 JSON 字典。"""
@@ -85,7 +104,7 @@ class FinnhubQuoteProvider(QuoteProvider):
 
     async def fetch(self, instrument: Instrument) -> Optional[Quote]:
         """获取单只标的行情。"""
-        symbol = instrument.code.strip().upper()
+        symbol = self._build_symbol(instrument)
         data = await asyncio.to_thread(self._fetch_sync, symbol)
         if data is None:
             return None

@@ -151,7 +151,7 @@ def test_engine_init():
     assert health["status"] == "ok"
     assert len(health["providers"]) == 3
     assert health["assets_loaded"] == 7
-    assert health["watchlist_loaded"] == 9
+    assert health["watchlist_loaded"] == 11
     print("✓ StocksEngine init + health_check")
     
     assets = engine.load_assets()

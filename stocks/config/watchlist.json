@@ -54,6 +54,21 @@
           "market": "us"
         }
       ]
+    },
+    "crypto": {
+      "label": "加密货币",
+      "watchlist": [
+        {
+          "code": "BTCUSDT",
+          "name": "比特币",
+          "market": "crypto"
+        },
+        {
+          "code": "ETHUSDT",
+          "name": "以太坊",
+          "market": "crypto"
+        }
+      ]
     }
   }
 }
