@@ -22,16 +22,16 @@
 ```python
 @dataclass(frozen=True)
 class Quote:
-    instrument: Instrument
-    price: Optional[float]
-    change: Optional[float]
-    pct_change: Optional[float]
-    volume_lot: Optional[float]
-    amount_10k: Optional[float]
-    open_price: Optional[float] = None
-    high: Optional[float] = None
-    low: Optional[float] = None
-    prev_close: Optional[float] = None
+instrument: Instrument
+price: Optional[float]
+change: Optional[float]
+pct_change: Optional[float]
+volume_lot: Optional[float]
+amount_10k: Optional[float]
+open_price: Optional[float] = None
+high: Optional[float] = None
+low: Optional[float] = None
+prev_close: Optional[float] = None
 ```
 
 **这个统一是成功的**，因为：
@@ -52,7 +52,7 @@ class Quote:
 | 字段 | Yahoo RSS | GNews | Juhe 235 | Juhe 743 |
 |------|-----------|-------|----------|----------|
 | **标题** | `title` | `articles[].title` | `result.data[].title` | `result.newslist[].title` |
-| **摘要** | `description` ✅ | `articles[].description` ✅ | **❌ 无摘要** | **❌ 无摘要** |
+| **摘要** | `description` | `articles[].description` | ** 无摘要** | ** 无摘要** |
 | **URL** | `link` | `articles[].url` | `result.data[].url` | `result.newslist[].url` |
 | **时间** | `pubDate` (RFC 822) | `publishedAt` (ISO 8601) | `date` (格式未知) | `ctime` (格式未知) |
 | **来源** | 无 | `source.name` | `author_name`/`media_name` | `source` |
@@ -67,10 +67,10 @@ class Quote:
 
 ```python
 # news_fetch_service.py 第 149 行
-'summary': '',  # 聚合数据API不返回摘要
+'summary': '', # 聚合数据API不返回摘要
 
 # 第 201 行
-'summary': '',  # API不返回摘要
+'summary': '', # API不返回摘要
 ```
 
 这意味着：
@@ -87,10 +87,10 @@ class Quote:
 现有代码**没有做任何时间标准化**，直接原样存储：
 
 ```python
-'published_at': (item.findtext('pubDate') or '').strip(),  # RSS
-'published_at': (item.get('publishedAt') or '').strip(),   # GNews
-'published_at': (item.get('date') or '').strip(),           # Juhe 235
-'published_at': (item.get('ctime') or '').strip(),         # Juhe 743
+'published_at': (item.findtext('pubDate') or '').strip(), # RSS
+'published_at': (item.get('publishedAt') or '').strip(), # GNews
+'published_at': (item.get('date') or '').strip(), # Juhe 235
+'published_at': (item.get('ctime') or '').strip(), # Juhe 743
 ```
 
 这意味着：
@@ -123,11 +123,11 @@ Agent 需要同时处理中英文新闻，或者 engine 需要按语言分组。
 ```python
 # 我之前的理想化设计
 def _compress_news(news: list[NewsItem], level: str) -> list[NewsItem]:
-    if level == "compact":
-        return [{"title": n.title, "source": n.source} for n in news[:5]]
-    elif level == "standard":
-        return [{"title": n.title, "summary": n.summary, "source": n.source} 
-                for n in news[:10]]
+if level == "compact":
+return [{"title": n.title, "source": n.source} for n in news[:5]]
+elif level == "standard":
+return [{"title": n.title, "summary": n.summary, "source": n.source}
+for n in news[:10]]
 ```
 
 **现实问题**：
@@ -196,14 +196,14 @@ engine 负责的不是"统一处理数据"，而是：
 ```python
 @dataclass
 class NewsItem:
-    title: str
-    url: str
-    source_name: str          # 来源名称（各源统一后的）
-    source_type: str          # "rss" | "gnews" | "juhe_235" | "juhe_743"
-    published_at: Optional[datetime]  # 标准化后的时间（可能解析失败为 None）
-    summary: Optional[str]    # 摘要（可能为 None，如 Juhe 源）
-    language: str             # "en" | "zh" | "unknown"
-    raw_metadata: dict        # 原始字段（保留用于调试）
+title: str
+url: str
+source_name: str # 来源名称（各源统一后的）
+source_type: str # "rss" | "gnews" | "juhe_235" | "juhe_743"
+published_at: Optional[datetime] # 标准化后的时间（可能解析失败为 None）
+summary: Optional[str] # 摘要（可能为 None，如 Juhe 源）
+language: str # "en" | "zh" | "unknown"
+raw_metadata: dict # 原始字段（保留用于调试）
 ```
 
 **关键修正**：
@@ -226,27 +226,27 @@ class NewsItem:
 
 ```python
 def _structural_filter(news: list[NewsItem]) -> list[NewsItem]:
-    """engine 只做结构化过滤，不做语义判断"""
-    
-    # 1. 去重：基于 URL + 标题相似度（简单字符串匹配）
-    seen_urls = set()
-    unique = []
-    for item in news:
-        if item.url in seen_urls:
-            continue
-        seen_urls.add(item.url)
-        unique.append(item)
-    
-    # 2. 时间过滤：只保留最近 24 小时（可配置）
-    cutoff = datetime.now() - timedelta(hours=24)
-    recent = [n for n in unique if n.published_at and n.published_at > cutoff]
-    
-    # 3. 空值过滤：去掉 title 为空的新闻
-    valid = [n for n in recent if n.title.strip()]
-    
-    # 4. 按时间排序（最新的在前）
-    # 注意：published_at 为 None 的新闻排在最后
-    return sorted(valid, key=lambda n: n.published_at or datetime.min, reverse=True)
+"""engine 只做结构化过滤，不做语义判断"""
+
+# 1. 去重：基于 URL + 标题相似度（简单字符串匹配）
+seen_urls = set()
+unique = []
+for item in news:
+if item.url in seen_urls:
+continue
+seen_urls.add(item.url)
+unique.append(item)
+
+# 2. 时间过滤：只保留最近 24 小时（可配置）
+cutoff = datetime.now() - timedelta(hours=24)
+recent = [n for n in unique if n.published_at and n.published_at > cutoff]
+
+# 3. 空值过滤：去掉 title 为空的新闻
+valid = [n for n in recent if n.title.strip()]
+
+# 4. 按时间排序（最新的在前）
+# 注意：published_at 为 None 的新闻排在最后
+return sorted(valid, key=lambda n: n.published_at or datetime.min, reverse=True)
 ```
 
 **engine 不做的事情**：
@@ -266,27 +266,27 @@ detail_level: Literal["compact", "standard", "full"] = "standard"
 
 ```python
 class NewsOutputConfig:
-    """新闻输出配置 — 按数据源分别控制"""
-    
-    # 全局限制
-    max_total_items: int = 20           # 总新闻条数上限
-    max_age_hours: int = 24             # 时间范围
-    
-    # 按源分别控制（因为各源数据完整度不同）
-    per_source_limits: dict[str, int] = {
-        "rss": 5,           # RSS 有摘要，可以多取几条
-        "gnews": 5,         # GNews 有摘要，可以多取几条
-        "juhe_235": 3,      # Juhe 没摘要，少取几条
-        "juhe_743": 3,      # Juhe 没摘要，少取几条
-    }
-    
-    # 字段选择（按源分别控制）
-    per_source_fields: dict[str, list[str]] = {
-        "rss": ["title", "summary", "url", "published_at", "source_name"],
-        "gnews": ["title", "summary", "url", "published_at", "source_name"],
-        "juhe_235": ["title", "url", "published_at", "source_name"],  # 没 summary
-        "juhe_743": ["title", "url", "published_at", "source_name"],  # 没 summary
-    }
+"""新闻输出配置 — 按数据源分别控制"""
+
+# 全局限制
+max_total_items: int = 20 # 总新闻条数上限
+max_age_hours: int = 24 # 时间范围
+
+# 按源分别控制（因为各源数据完整度不同）
+per_source_limits: dict[str, int] = {
+"rss": 5, # RSS 有摘要，可以多取几条
+"gnews": 5, # GNews 有摘要，可以多取几条
+"juhe_235": 3, # Juhe 没摘要，少取几条
+"juhe_743": 3, # Juhe 没摘要，少取几条
+}
+
+# 字段选择（按源分别控制）
+per_source_fields: dict[str, list[str]] = {
+"rss": ["title", "summary", "url", "published_at", "source_name"],
+"gnews": ["title", "summary", "url", "published_at", "source_name"],
+"juhe_235": ["title", "url", "published_at", "source_name"], # 没 summary
+"juhe_743": ["title", "url", "published_at", "source_name"], # 没 summary
+}
 ```
 
 **为什么这样设计**：
@@ -319,8 +319,8 @@ Agent 需要处理 engine 无法处理的异构性：
 ```python
 # base.py — 抽象接口
 class QuoteProvider(ABC):
-    @abstractmethod
-    def get_quote(self, instrument: Instrument) -> Quote: ...
+@abstractmethod
+def get_quote(self, instrument: Instrument) -> Quote: ...
 
 # tencent_a.py / eastmoney_a.py / finnhub_quote.py — 各自实现解析
 # registry.py — 按市场注册 provider
@@ -331,8 +331,8 @@ class QuoteProvider(ABC):
 ```python
 # 新增
 class NewsProvider(ABC):
-    @abstractmethod
-    def fetch(self, limit: int = 10) -> list[NewsItem]: ...
+@abstractmethod
+def fetch(self, limit: int = 10) -> list[NewsItem]: ...
 
 # rss_provider.py / gnews_provider.py / juhe_235_provider.py / juhe_743_provider.py
 # news_registry.py — 按类型注册
@@ -354,15 +354,15 @@ class NewsProvider(ABC):
 
 | 职责 | engine | Agent |
 |------|--------|-------|
-| **信息源配置** | ✅ 管理数据源、API Key、fallback | ❌ 不接触 |
-| **数据获取** | ✅ 调用各源 API，错误隔离 | ❌ 不直接调用 |
-| **数据适配** | ✅ 每个源独立解析，输出标准模型（带缺失标记） | ❌ 不处理 |
-| **结构化过滤** | ✅ 去重、时间过滤、空值过滤、按时间排序 | ❌ 不做 |
-| **语义压缩** | ❌ 不做（无法判断重要性） | ✅ Agent 用 LLM 做 |
-| **跨源语义去重** | ❌ 不做（不同语言/标题无法匹配） | ✅ Agent 用 LLM 做 |
-| **摘要生成** | ❌ 不做（Juhe 没摘要，engine 不能凭空生成） | ✅ Agent 需要时自己生成 |
-| **深度分析** | ❌ 默认不做 | ✅ 默认由 Agent 做 |
-| **输出格式** | ✅ 结构化 JSON（按数据源分别控制字段） | ✅ 人类可读文本 |
+| **信息源配置** | 管理数据源、API Key、fallback | 不接触 |
+| **数据获取** | 调用各源 API，错误隔离 | 不直接调用 |
+| **数据适配** | 每个源独立解析，输出标准模型（带缺失标记） | 不处理 |
+| **结构化过滤** | 去重、时间过滤、空值过滤、按时间排序 | 不做 |
+| **语义压缩** | 不做（无法判断重要性） | Agent 用 LLM 做 |
+| **跨源语义去重** | 不做（不同语言/标题无法匹配） | Agent 用 LLM 做 |
+| **摘要生成** | 不做（Juhe 没摘要，engine 不能凭空生成） | Agent 需要时自己生成 |
+| **深度分析** | 默认不做 | 默认由 Agent 做 |
+| **输出格式** | 结构化 JSON（按数据源分别控制字段） | 人类可读文本 |
 
 ---
 

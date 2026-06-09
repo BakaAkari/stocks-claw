@@ -9,24 +9,24 @@
 
 | 维度 | 当前覆盖度 | 风险等级 | 说明 |
 |------|-----------|---------|------|
-| **架构设计** | ⭐⭐⭐⭐⭐ 高 | 🟢 低 | 3层架构、接口契约、职责边界清晰 |
-| **模块接口** | ⭐⭐⭐⭐ 较高 | 🟢 低 | 核心类和方法签名完整 |
-| **多模式交互** | ⭐⭐⭐⭐ 较高 | 🟡 中 | CLI/Python/MCP/HTTP 都有示例 |
-| **错误处理** | ⭐⭐ 较低 | 🔴 高 | 只有异常类，无降级策略 |
-| **缓存策略** | ⭐ 低 | 🔴 高 | 只有配置项，无实现设计 |
-| **安全性** | ⭐ 低 | 🔴 高 | 缺少输入验证、认证、速率限制 |
-| **并发性能** | ⭐ 低 | 🟡 中 | 全同步设计，无异步考虑 |
-| **可观测性** | ⭐⭐ 较低 | 🟡 中 | 日志有配置，无指标/监控/告警 |
-| **测试策略** | ⭐⭐ 较低 | 🟡 中 | 只有文件列表，无方法论 |
-| **部署运维** | ⭐ 低 | 🔴 高 | 完全缺失 |
-| **数据一致性** | ⭐ 低 | 🟡 中 | 多源冲突未讨论 |
-| **LLM Enhancer** | ⭐⭐⭐ 中 | 🟡 中 | 在独立文档，未纳入主设计 |
+| **架构设计** | ⭐⭐⭐⭐⭐ 高 | 低 | 3层架构、接口契约、职责边界清晰 |
+| **模块接口** | ⭐⭐⭐⭐ 较高 | 低 | 核心类和方法签名完整 |
+| **多模式交互** | ⭐⭐⭐⭐ 较高 | 中 | CLI/Python/MCP/HTTP 都有示例 |
+| **错误处理** | ⭐⭐ 较低 | 高 | 只有异常类，无降级策略 |
+| **缓存策略** | ⭐ 低 | 高 | 只有配置项，无实现设计 |
+| **安全性** | ⭐ 低 | 高 | 缺少输入验证、认证、速率限制 |
+| **并发性能** | ⭐ 低 | 中 | 全同步设计，无异步考虑 |
+| **可观测性** | ⭐⭐ 较低 | 中 | 日志有配置，无指标/监控/告警 |
+| **测试策略** | ⭐⭐ 较低 | 中 | 只有文件列表，无方法论 |
+| **部署运维** | ⭐ 低 | 高 | 完全缺失 |
+| **数据一致性** | ⭐ 低 | 中 | 多源冲突未讨论 |
+| **LLM Enhancer** | ⭐⭐⭐ 中 | 中 | 在独立文档，未纳入主设计 |
 
 ---
 
 ## 二、详细薄弱环节分析
 
-### 2.1 错误处理与降级策略 —— 风险：🔴 高
+### 2.1 错误处理与降级策略 —— 风险： 高
 
 **当前状态**：
 - `errors.py` 保留异常类体系
@@ -49,35 +49,35 @@
 ```python
 # engine/fetchers.py — 增加降级策略
 class DataFetchers:
-    def fetch_quotes(self, market: str) -> dict[str, list[Quote]]:
-        """获取行情，带多级降级"""
-        try:
-            # L1: 实时获取
-            return self._fetch_live(market)
-        except ProviderExhaustedError:
-            # L2: 缓存降级（如果启用缓存）
-            if self.cache_enabled:
-                cached = self._fetch_from_cache(market)
-                if cached:
-                    logger.warning(f"Provider 全部失败，使用缓存数据: {market}")
-                    return cached
-            
-            # L3: 返回空数据 + 标记（不抛异常，让 Agent 决定）
-            logger.error(f"Provider 全部失败且无缓存: {market}")
-            return {
-                "status": "degraded",
-                "market": market,
-                "quotes": [],
-                "error": "所有数据源不可用",
-                "last_successful": self._get_last_success_time(market),
-            }
+def fetch_quotes(self, market: str) -> dict[str, list[Quote]]:
+"""获取行情，带多级降级"""
+try:
+# L1: 实时获取
+return self._fetch_live(market)
+except ProviderExhaustedError:
+# L2: 缓存降级（如果启用缓存）
+if self.cache_enabled:
+cached = self._fetch_from_cache(market)
+if cached:
+logger.warning(f"Provider 全部失败，使用缓存数据: {market}")
+return cached
+
+# L3: 返回空数据 + 标记（不抛异常，让 Agent 决定）
+logger.error(f"Provider 全部失败且无缓存: {market}")
+return {
+"status": "degraded",
+"market": market,
+"quotes": [],
+"error": "所有数据源不可用",
+"last_successful": self._get_last_success_time(market),
+}
 ```
 
 **需要新增设计章节**：`## 十一、错误处理与降级策略`
 
 ---
 
-### 2.2 缓存策略 —— 风险：🔴 高
+### 2.2 缓存策略 —— 风险： 高
 
 **当前状态**：
 - `engine.yaml` 有 `cache.enabled` 和 `quote_ttl`/`news_ttl`
@@ -100,25 +100,25 @@ class DataFetchers:
 ```yaml
 # engine.yaml
 engine:
-  mode: "stateless"  # stateless | cached | persistent
-  
-  # stateless: 每次调用独立，无缓存（默认，适合 Agent 调用）
-  # cached: 启用内存缓存，适合高频调用场景
-  # persistent: 启用文件缓存，适合定时任务场景
-  
-  cache:
-    backend: "memory"  # memory | file | redis
-    quote_ttl: 1800    # 30分钟（行情变化快）
-    news_ttl: 7200     # 2小时（新闻变化慢）
-    asset_ttl: 300     # 5分钟（用户资产可能随时更新）
-    max_size: 100      # 最多缓存 100 条
+mode: "stateless" # stateless | cached | persistent
+
+# stateless: 每次调用独立，无缓存（默认，适合 Agent 调用）
+# cached: 启用内存缓存，适合高频调用场景
+# persistent: 启用文件缓存，适合定时任务场景
+
+cache:
+backend: "memory" # memory | file | redis
+quote_ttl: 1800 # 30分钟（行情变化快）
+news_ttl: 7200 # 2小时（新闻变化慢）
+asset_ttl: 300 # 5分钟（用户资产可能随时更新）
+max_size: 100 # 最多缓存 100 条
 ```
 
 **需要新增设计章节**：`## 十二、缓存与状态管理`
 
 ---
 
-### 2.3 安全性 —— 风险：🔴 高
+### 2.3 安全性 —— 风险： 高
 
 **当前状态**：
 - API Key 存储在 `.secret/*-key.md` 中
@@ -128,12 +128,12 @@ engine:
 
 | 安全问题 | 风险 | 当前状态 |
 |---------|------|---------|
-| **输入验证** | SQL 注入、路径遍历、命令注入 | ❌ 未设计 |
-| **API Key 泄露** | 日志中可能打印 API Key | ❌ 未设计 |
-| **HTTP API 认证** | 任何人可以调用本地 HTTP API | ❌ 未设计 |
-| **速率限制** | 被恶意调用导致 API 配额耗尽 | ❌ 未设计 |
-| **敏感数据** | 用户资产数据是隐私 | ❌ 未设计 |
-| **CORS** | HTTP API 的跨域策略 | ❌ 未设计 |
+| **输入验证** | SQL 注入、路径遍历、命令注入 | 未设计 |
+| **API Key 泄露** | 日志中可能打印 API Key | 未设计 |
+| **HTTP API 认证** | 任何人可以调用本地 HTTP API | 未设计 |
+| **速率限制** | 被恶意调用导致 API 配额耗尽 | 未设计 |
+| **敏感数据** | 用户资产数据是隐私 | 未设计 |
+| **CORS** | HTTP API 的跨域策略 | 未设计 |
 
 **强化建议**：
 
@@ -148,40 +148,40 @@ app = FastAPI()
 security = HTTPBearer(auto_error=False)
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """验证 Bearer Token"""
-    if not credentials:
-        # 本地开发模式允许无认证
-        if not settings.allow_localhost_no_auth:
-            raise HTTPException(status_code=401, detail="Missing authentication")
-        return None
-    
-    token = credentials.credentials
-    if not validate_token(token):
-        raise HTTPException(status_code=403, detail="Invalid token")
-    return token
+"""验证 Bearer Token"""
+if not credentials:
+# 本地开发模式允许无认证
+if not settings.allow_localhost_no_auth:
+raise HTTPException(status_code=401, detail="Missing authentication")
+return None
+
+token = credentials.credentials
+if not validate_token(token):
+raise HTTPException(status_code=403, detail="Invalid token")
+return token
 
 # 2. 速率限制
 @app.middleware("http")
 async def rate_limit(request: Request, call_next):
-    client_ip = request.client.host
-    if not rate_limiter.allow(client_ip):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    return await call_next(request)
+client_ip = request.client.host
+if not rate_limiter.allow(client_ip):
+raise HTTPException(status_code=429, detail="Rate limit exceeded")
+return await call_next(request)
 
 # 3. 敏感数据脱敏
 class SensitiveDataFilter(logging.Filter):
-    """日志过滤器：脱敏 API Key"""
-    def filter(self, record):
-        if hasattr(record, 'msg') and isinstance(record.msg, str):
-            record.msg = mask_api_keys(record.msg)
-        return True
+"""日志过滤器：脱敏 API Key"""
+def filter(self, record):
+if hasattr(record, 'msg') and isinstance(record.msg, str):
+record.msg = mask_api_keys(record.msg)
+return True
 ```
 
 **需要新增设计章节**：`## 十三、安全设计`
 
 ---
 
-### 2.4 并发与性能 —— 风险：🟡 中
+### 2.4 并发与性能 —— 风险： 中
 
 **当前状态**：
 - 所有数据获取是同步顺序执行
@@ -204,38 +204,38 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 class DataFetchers:
-    def __init__(self, config):
-        self.executor = ThreadPoolExecutor(max_workers=5)
-        self.session = requests.Session()  # 连接池
-    
-    def build_context_async(self) -> AnalysisContext:
-        """并发获取所有数据"""
-        with ThreadPoolExecutor() as executor:
-            # 并行获取行情、新闻、资产
-            future_quotes = executor.submit(self.fetch_quotes)
-            future_news = executor.submit(self.fetch_news)
-            future_assets = executor.submit(self.load_assets)
-            
-            quotes = future_quotes.result()
-            news = future_news.result()
-            assets = future_assets.result()
-        
-        # 组合映射依赖资产数据，必须在资产获取后执行
-        mapping = self.analyze_portfolio(assets)
-        
-        return AnalysisContext(
-            quotes=quotes,
-            news=news,
-            assets=assets,
-            portfolio_mapping=mapping,
-        )
+def __init__(self, config):
+self.executor = ThreadPoolExecutor(max_workers=5)
+self.session = requests.Session() # 连接池
+
+def build_context_async(self) -> AnalysisContext:
+"""并发获取所有数据"""
+with ThreadPoolExecutor() as executor:
+# 并行获取行情、新闻、资产
+future_quotes = executor.submit(self.fetch_quotes)
+future_news = executor.submit(self.fetch_news)
+future_assets = executor.submit(self.load_assets)
+
+quotes = future_quotes.result()
+news = future_news.result()
+assets = future_assets.result()
+
+# 组合映射依赖资产数据，必须在资产获取后执行
+mapping = self.analyze_portfolio(assets)
+
+return AnalysisContext(
+quotes=quotes,
+news=news,
+assets=assets,
+portfolio_mapping=mapping,
+)
 ```
 
 **需要新增设计章节**：`## 十四、并发与性能优化`
 
 ---
 
-### 2.5 可观测性 —— 风险：🟡 中
+### 2.5 可观测性 —— 风险： 中
 
 **当前状态**：
 - `logging_utils.py` 保留 JSONL 日志
@@ -261,50 +261,50 @@ from datetime import datetime
 
 @dataclass
 class EngineMetrics:
-    """引擎运行指标"""
-    # Provider 指标
-    provider_success: dict[str, int]      # 各 Provider 成功次数
-    provider_failure: dict[str, int]    # 各 Provider 失败次数
-    provider_latency: dict[str, float]  # 各 Provider 平均延迟
-    
-    # LLM 指标
-    llm_calls: int = 0
-    llm_errors: int = 0
-    llm_latency: float = 0.0
-    llm_tokens_in: int = 0
-    llm_tokens_out: int = 0
-    
-    # 缓存指标
-    cache_hits: int = 0
-    cache_misses: int = 0
-    
-    # 系统指标
-    uptime_seconds: float = 0.0
-    last_health_check: datetime = None
+"""引擎运行指标"""
+# Provider 指标
+provider_success: dict[str, int] # 各 Provider 成功次数
+provider_failure: dict[str, int] # 各 Provider 失败次数
+provider_latency: dict[str, float] # 各 Provider 平均延迟
+
+# LLM 指标
+llm_calls: int = 0
+llm_errors: int = 0
+llm_latency: float = 0.0
+llm_tokens_in: int = 0
+llm_tokens_out: int = 0
+
+# 缓存指标
+cache_hits: int = 0
+cache_misses: int = 0
+
+# 系统指标
+uptime_seconds: float = 0.0
+last_health_check: datetime = None
 
 class MetricsCollector:
-    """指标收集器"""
-    
-    def record_provider_call(self, provider: str, success: bool, latency: float):
-        if success:
-            self.metrics.provider_success[provider] += 1
-        else:
-            self.metrics.provider_failure[provider] += 1
-        self.metrics.provider_latency[provider] = latency
-    
-    def get_health_score(self) -> float:
-        """计算健康分数 (0-1)"""
-        total = sum(self.metrics.provider_success.values()) + sum(self.metrics.provider_failure.values())
-        if total == 0:
-            return 1.0
-        return sum(self.metrics.provider_success.values()) / total
+"""指标收集器"""
+
+def record_provider_call(self, provider: str, success: bool, latency: float):
+if success:
+self.metrics.provider_success[provider] += 1
+else:
+self.metrics.provider_failure[provider] += 1
+self.metrics.provider_latency[provider] = latency
+
+def get_health_score(self) -> float:
+"""计算健康分数 (0-1)"""
+total = sum(self.metrics.provider_success.values()) + sum(self.metrics.provider_failure.values())
+if total == 0:
+return 1.0
+return sum(self.metrics.provider_success.values()) / total
 ```
 
 **需要新增设计章节**：`## 十五、可观测性设计`
 
 ---
 
-### 2.6 测试策略 —— 风险：🟡 中
+### 2.6 测试策略 —— 风险： 中
 
 **当前状态**：
 - 列出了测试文件列表
@@ -330,39 +330,39 @@ from unittest.mock import Mock, patch
 
 @pytest.fixture
 def mock_tencent_provider():
-    """Mock 腾讯 Provider"""
-    provider = Mock()
-    provider.get_quotes.return_value = [
-        Quote(
-            instrument=Instrument(code="000300", name="沪深300", market="a"),
-            price=3542.33,
-            change=12.45,
-            pct_change=0.35,
-        )
-    ]
-    return provider
+"""Mock 腾讯 Provider"""
+provider = Mock()
+provider.get_quotes.return_value = [
+Quote(
+instrument=Instrument(code="000300", name="沪深300", market="a"),
+price=3542.33,
+change=12.45,
+pct_change=0.35,
+)
+]
+return provider
 
 @pytest.fixture
 def mock_llm_client():
-    """Mock LLM 客户端"""
-    client = Mock()
-    client.generate.return_value = "{"importance": "high", "summary": "测试摘要"}"
-    return client
+"""Mock LLM 客户端"""
+client = Mock()
+client.generate.return_value = "{"importance": "high", "summary": "测试摘要"}"
+return client
 
 @pytest.fixture
 def test_engine(mock_tencent_provider, mock_llm_client):
-    """预配置的测试引擎"""
-    engine = StocksEngine(config_path="tests/fixtures/test_engine.yaml")
-    engine.fetchers.providers["a"]["tencent"] = mock_tencent_provider
-    engine.llm_enhancer.client = mock_llm_client
-    return engine
+"""预配置的测试引擎"""
+engine = StocksEngine(config_path="tests/fixtures/test_engine.yaml")
+engine.fetchers.providers["a"]["tencent"] = mock_tencent_provider
+engine.llm_enhancer.client = mock_llm_client
+return engine
 ```
 
 **需要新增设计章节**：`## 十六、测试策略`
 
 ---
 
-### 2.7 部署与运维 —— 风险：🔴 高
+### 2.7 部署与运维 —— 风险： 高
 
 **当前状态**：
 - 完全缺失
@@ -402,25 +402,25 @@ CMD ["uvicorn", "stocks.adapters.http:app", "--host", "0.0.0.0", "--port", "8787
 # docker-compose.yml
 version: '3.8'
 services:
-  stocks-claw:
-    build: .
-    ports:
-      - "8787:8787"
-    volumes:
-      - ./stocks/data:/app/stocks/data
-      - ./stocks/config:/app/stocks/config
-      - ./.secret:/app/.secret
-    environment:
-      - STOCKS_CONFIG_PATH=/app/stocks/config/engine.yaml
-      - STOCKS_LOG_LEVEL=info
-    restart: unless-stopped
+stocks-claw:
+build: .
+ports:
+- "8787:8787"
+volumes:
+- ./stocks/data:/app/stocks/data
+- ./stocks/config:/app/stocks/config
+- ./.secret:/app/.secret
+environment:
+- STOCKS_CONFIG_PATH=/app/stocks/config/engine.yaml
+- STOCKS_LOG_LEVEL=info
+restart: unless-stopped
 ```
 
 **需要新增设计章节**：`## 十七、部署与运维`
 
 ---
 
-### 2.8 数据一致性 —— 风险：🟡 中
+### 2.8 数据一致性 —— 风险： 中
 
 **当前状态**：
 - 未讨论多源数据冲突
@@ -438,47 +438,47 @@ services:
 ```python
 # engine/fetchers.py — 多源冲突解决
 class QuoteResolver:
-    """行情数据冲突解决器"""
-    
-    def resolve(self, quotes_from_multiple_sources: list[Quote]) -> Quote:
-        """多源数据冲突解决策略"""
-        
-        # 策略 1：优先使用最新时间戳的数据
-        # 策略 2：如果差异 < 0.1%，取平均值
-        # 策略 3：如果差异 > 1%，标记为异常，返回主源数据 + 警告
-        
-        if len(quotes_from_multiple_sources) == 1:
-            return quotes_from_multiple_sources[0]
-        
-        # 检查价格差异
-        prices = [q.price for q in quotes_from_multiple_sources if q.price]
-        if not prices:
-            return quotes_from_multiple_sources[0]
-        
-        max_price = max(prices)
-        min_price = min(prices)
-        diff_pct = (max_price - min_price) / min_price * 100
-        
-        if diff_pct > 1.0:
-            # 差异过大，标记异常
-            logger.warning(f"价格差异过大: {diff_pct:.2f}%")
-            # 返回主源数据
-            return quotes_from_multiple_sources[0]
-        
-        # 差异可接受，取平均值
-        avg_price = sum(prices) / len(prices)
-        return Quote(
-            instrument=quotes_from_multiple_sources[0].instrument,
-            price=avg_price,
-            # ... 其他字段
-        )
+"""行情数据冲突解决器"""
+
+def resolve(self, quotes_from_multiple_sources: list[Quote]) -> Quote:
+"""多源数据冲突解决策略"""
+
+# 策略 1：优先使用最新时间戳的数据
+# 策略 2：如果差异 < 0.1%，取平均值
+# 策略 3：如果差异 > 1%，标记为异常，返回主源数据 + 警告
+
+if len(quotes_from_multiple_sources) == 1:
+return quotes_from_multiple_sources[0]
+
+# 检查价格差异
+prices = [q.price for q in quotes_from_multiple_sources if q.price]
+if not prices:
+return quotes_from_multiple_sources[0]
+
+max_price = max(prices)
+min_price = min(prices)
+diff_pct = (max_price - min_price) / min_price * 100
+
+if diff_pct > 1.0:
+# 差异过大，标记异常
+logger.warning(f"价格差异过大: {diff_pct:.2f}%")
+# 返回主源数据
+return quotes_from_multiple_sources[0]
+
+# 差异可接受，取平均值
+avg_price = sum(prices) / len(prices)
+return Quote(
+instrument=quotes_from_multiple_sources[0].instrument,
+price=avg_price,
+# ... 其他字段
+)
 ```
 
 **需要新增设计章节**：`## 十八、数据一致性`
 
 ---
 
-### 2.9 MCP 协议细节 —— 风险：🟡 中
+### 2.9 MCP 协议细节 —— 风险： 中
 
 **当前状态**：
 - 展示了工具注册示例
@@ -505,41 +505,41 @@ server = Server("stocks-claw")
 
 @server.tool()
 def fetch_quote(market: str, code: str) -> list[TextContent]:
-    """获取股票/ETF 实时行情
-    
-    使用示例：
-    - 获取沪深300: market="sh", code="000300"
-    - 获取贵州茅台: market="sh", code="600519"
-    - 获取苹果美股: market="us", code="AAPL"
-    
-    返回格式：JSON 对象，包含 price, change, pct_change 等字段
-    """
-    try:
-        quote = engine.fetch_quote(market, code)
-        return [TextContent(type="text", text=json.dumps(quote.to_dict()))]
-    except ProviderExhaustedError:
-        return [TextContent(
-            type="text",
-            text=json.dumps({
-                "error": "所有数据源不可用",
-                "suggestion": "请稍后重试，或检查网络连接"
-            })
-        )]
-    except ResolverError as e:
-        return [TextContent(
-            type="text",
-            text=json.dumps({
-                "error": f"无法解析标的: {e.message}",
-                "suggestion": "请检查 market 和 code 是否正确"
-            })
-        )]
+"""获取股票/ETF 实时行情
+
+使用示例：
+- 获取沪深300: market="sh", code="000300"
+- 获取贵州茅台: market="sh", code="600519"
+- 获取苹果美股: market="us", code="AAPL"
+
+返回格式：JSON 对象，包含 price, change, pct_change 等字段
+"""
+try:
+quote = engine.fetch_quote(market, code)
+return [TextContent(type="text", text=json.dumps(quote.to_dict()))]
+except ProviderExhaustedError:
+return [TextContent(
+type="text",
+text=json.dumps({
+"error": "所有数据源不可用",
+"suggestion": "请稍后重试，或检查网络连接"
+})
+)]
+except ResolverError as e:
+return [TextContent(
+type="text",
+text=json.dumps({
+"error": f"无法解析标的: {e.message}",
+"suggestion": "请检查 market 和 code 是否正确"
+})
+)]
 ```
 
 **需要新增设计章节**：`## 十九、MCP 协议详细设计`
 
 ---
 
-### 2.10 HTTP API 细节 —— 风险：🟡 中
+### 2.10 HTTP API 细节 —— 风险： 中
 
 **当前状态**：
 - 展示了端点示例
@@ -565,60 +565,60 @@ from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
 app = FastAPI(
-    title="stocks-claw API",
-    version="2.0.0",
-    docs_url="/docs",  # Swagger UI
-    redoc_url="/redoc",  # ReDoc
+title="stocks-claw API",
+version="2.0.0",
+docs_url="/docs", # Swagger UI
+redoc_url="/redoc", # ReDoc
 )
 
 # 统一的错误响应模型
 class ErrorResponse(BaseModel):
-    error: str = Field(..., description="错误类型")
-    message: str = Field(..., description="错误描述")
-    suggestion: Optional[str] = Field(None, description="解决建议")
-    request_id: str = Field(..., description="请求 ID，用于排查")
+error: str = Field(..., description="错误类型")
+message: str = Field(..., description="错误描述")
+suggestion: Optional[str] = Field(None, description="解决建议")
+request_id: str = Field(..., description="请求 ID，用于排查")
 
 # 新闻查询参数
 class NewsQueryParams(BaseModel):
-    limit: int = Field(10, ge=1, le=100, description="返回条数")
-    sources: Optional[list[str]] = Field(None, description="指定新闻源")
-    language: Optional[Literal["zh", "en"]] = Field(None, description="语言过滤")
-    since: Optional[str] = Field(None, description="时间范围，如 2026-06-01")
-    detail_level: Literal["compact", "standard", "full"] = Field("standard")
+limit: int = Field(10, ge=1, le=100, description="返回条数")
+sources: Optional[list[str]] = Field(None, description="指定新闻源")
+language: Optional[Literal["zh", "en"]] = Field(None, description="语言过滤")
+since: Optional[str] = Field(None, description="时间范围，如 2026-06-01")
+detail_level: Literal["compact", "standard", "full"] = Field("standard")
 
 @app.get("/api/news", response_model=list[NewsItemResponse])
 async def get_news(params: NewsQueryParams = Depends()):
-    """获取财经新闻
-    
-    支持按来源、语言、时间过滤。
-    默认返回最近 24 小时的新闻。
-    """
-    try:
-        news = engine.fetch_news(
-            sources=params.sources,
-            limit=params.limit,
-            language=params.language,
-            since=params.since,
-            detail_level=params.detail_level,
-        )
-        return [n.to_dict() for n in news]
-    except FinancialMemoryError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                error="news_fetch_failed",
-                message=str(e),
-                suggestion="请检查新闻源配置",
-                request_id=get_request_id(),
-            ).dict()
-        )
+"""获取财经新闻
+
+支持按来源、语言、时间过滤。
+默认返回最近 24 小时的新闻。
+"""
+try:
+news = engine.fetch_news(
+sources=params.sources,
+limit=params.limit,
+language=params.language,
+since=params.since,
+detail_level=params.detail_level,
+)
+return [n.to_dict() for n in news]
+except FinancialMemoryError as e:
+raise HTTPException(
+status_code=500,
+detail=ErrorResponse(
+error="news_fetch_failed",
+message=str(e),
+suggestion="请检查新闻源配置",
+request_id=get_request_id(),
+).dict()
+)
 ```
 
 **需要新增设计章节**：`## 二十、HTTP API 详细设计`
 
 ---
 
-### 2.11 新闻 Provider 抽象 —— 风险：🟡 中
+### 2.11 新闻 Provider 抽象 —— 风险： 中
 
 **当前状态**：
 - 行情有 `QuoteProvider` 抽象基类
@@ -637,69 +637,69 @@ from typing import Optional
 from datetime import datetime
 
 class NewsProvider(ABC):
-    """新闻 Provider 抽象基类"""
-    
-    @property
-    @abstractmethod
-    def source_type(self) -> str:
-        """源类型标识，如 "rss", "gnews", "juhe_235"""
-        pass
-    
-    @property
-    @abstractmethod
-    def supported_languages(self) -> list[str]:
-        """支持的语言列表"""
-        pass
-    
-    @abstractmethod
-    def fetch(self, limit: int = 10, since: Optional[datetime] = None) -> list[RawNewsItem]:
-        """获取新闻
-        
-        返回原始格式的新闻数据，由 adapter 转换为标准 NewsItem
-        """
-        pass
-    
-    @abstractmethod
-    def health_check(self) -> dict:
-        """检查数据源健康状态"""
-        pass
+"""新闻 Provider 抽象基类"""
+
+@property
+@abstractmethod
+def source_type(self) -> str:
+"""源类型标识，如 "rss", "gnews", "juhe_235"""
+pass
+
+@property
+@abstractmethod
+def supported_languages(self) -> list[str]:
+"""支持的语言列表"""
+pass
+
+@abstractmethod
+def fetch(self, limit: int = 10, since: Optional[datetime] = None) -> list[RawNewsItem]:
+"""获取新闻
+
+返回原始格式的新闻数据，由 adapter 转换为标准 NewsItem
+"""
+pass
+
+@abstractmethod
+def health_check(self) -> dict:
+"""检查数据源健康状态"""
+pass
 
 # providers/rss_provider.py
 class RSSNewsProvider(NewsProvider):
-    source_type = "rss"
-    supported_languages = ["en", "zh"]
-    
-    def __init__(self, url: str, name: str):
-        self.url = url
-        self.name = name
-    
-    def fetch(self, limit: int = 10, since: Optional[datetime] = None) -> list[RawNewsItem]:
-        # 实现 RSS 获取逻辑
-        pass
-    
-    def health_check(self) -> dict:
-        # 检查 RSS 可访问性
-        pass
+source_type = "rss"
+supported_languages = ["en", "zh"]
+
+def __init__(self, url: str, name: str):
+self.url = url
+self.name = name
+
+def fetch(self, limit: int = 10, since: Optional[datetime] = None) -> list[RawNewsItem]:
+# 实现 RSS 获取逻辑
+pass
+
+def health_check(self) -> dict:
+# 检查 RSS 可访问性
+pass
 
 # providers/gnews_provider.py
 class GNewsProvider(NewsProvider):
-    source_type = "gnews"
-    supported_languages = ["en", "zh"]
-    
-    def __init__(self, api_key: str, query: str):
-        self.api_key = api_key
-        self.query = query
-    
-    def fetch(self, limit: int = 10, since: Optional[datetime] = None) -> list[RawNewsItem]:
-        # 实现 GNews API 调用
-        pass
+source_type = "gnews"
+supported_languages = ["en", "zh"]
+
+def __init__(self, api_key: str, query: str):
+self.api_key = api_key
+self.query = query
+
+def fetch(self, limit: int = 10, since: Optional[datetime] = None) -> list[RawNewsItem]:
+# 实现 GNews API 调用
+pass
 ```
 
 **需要修改**：`## 五、模块设计` 中增加新闻 Provider 抽象
 
 ---
 
-### 2.12 LLM Enhancer 模块 —— 风险：🟡 中
+### 2.12 LLM Enhancer 模块 —— 风险： 中
 
 **当前状态**：
 - 在 `LLM_ENHANCER_ANALYSIS.md` 中详细讨论
@@ -720,7 +720,7 @@ class GNewsProvider(NewsProvider):
 
 ---
 
-### 2.13 数据隐私 —— 风险：🔴 高
+### 2.13 数据隐私 —— 风险： 高
 
 **当前状态**：
 - 用户资产数据存储在 `financial_assets.json`
@@ -743,41 +743,41 @@ from cryptography.fernet import Fernet
 import os
 
 class SecurePersistence:
-    """加密持久化"""
-    
-    def __init__(self, key: Optional[str] = None):
-        # 从环境变量或文件加载加密密钥
-        key = key or os.environ.get("STOCKS_DATA_KEY")
-        if not key:
-            logger.warning("未配置数据加密密钥，资产数据将以明文存储")
-            self.cipher = None
-        else:
-            self.cipher = Fernet(key.encode())
-    
-    def save_assets(self, assets: list[FinancialAsset]):
-        data = json.dumps([a.to_dict() for a in assets])
-        
-        if self.cipher:
-            data = self.cipher.encrypt(data.encode()).decode()
-        
-        with open(self.assets_path, 'w') as f:
-            f.write(data)
-    
-    def load_assets(self) -> list[FinancialAsset]:
-        with open(self.assets_path, 'r') as f:
-            data = f.read()
-        
-        if self.cipher:
-            data = self.cipher.decrypt(data.encode()).decode()
-        
-        return [FinancialAsset(**item) for item in json.loads(data)]
+"""加密持久化"""
+
+def __init__(self, key: Optional[str] = None):
+# 从环境变量或文件加载加密密钥
+key = key or os.environ.get("STOCKS_DATA_KEY")
+if not key:
+logger.warning("未配置数据加密密钥，资产数据将以明文存储")
+self.cipher = None
+else:
+self.cipher = Fernet(key.encode())
+
+def save_assets(self, assets: list[FinancialAsset]):
+data = json.dumps([a.to_dict() for a in assets])
+
+if self.cipher:
+data = self.cipher.encrypt(data.encode()).decode()
+
+with open(self.assets_path, 'w') as f:
+f.write(data)
+
+def load_assets(self) -> list[FinancialAsset]:
+with open(self.assets_path, 'r') as f:
+data = f.read()
+
+if self.cipher:
+data = self.cipher.decrypt(data.encode()).decode()
+
+return [FinancialAsset(**item) for item in json.loads(data)]
 ```
 
 **需要新增设计章节**：`## 二十一、数据隐私与安全存储`
 
 ---
 
-### 2.14 配置管理 —— 风险：🟡 中
+### 2.14 配置管理 —— 风险： 中
 
 **当前状态**：
 - 有 `engine.yaml` 示例
@@ -802,40 +802,40 @@ from pydantic import BaseModel, Field, validator
 from typing import Optional, Literal
 
 class EngineConfig(BaseModel):
-    """引擎配置模型 —— 自动校验"""
-    
-    version: str = Field("2.0", regex=r"^\d+\.\d+$")
-    
-    class CacheConfig(BaseModel):
-        enabled: bool = False
-        backend: Literal["memory", "file", "redis"] = "memory"
-        quote_ttl: int = Field(1800, ge=60, le=86400)
-        news_ttl: int = Field(7200, ge=60, le=86400)
-        
-        @validator('backend')
-        def validate_redis(cls, v, values):
-            if v == 'redis' and not os.environ.get('REDIS_URL'):
-                raise ValueError("使用 redis 缓存需要设置 REDIS_URL 环境变量")
-            return v
-    
-    cache: CacheConfig = CacheConfig()
-    
-    class LLMConfig(BaseModel):
-        enabled: bool = False
-        model: str = "gpt-4o-mini"
-        url: str = Field("http://localhost:11434/v1/chat/completions", regex=r"^https?://")
-        timeout: int = Field(120, ge=10, le=300)
-        max_tokens: int = Field(1800, ge=100, le=8000)
-        temperature: float = Field(0.6, ge=0.0, le=2.0)
-    
-    llm: LLMConfig = LLMConfig()
+"""引擎配置模型 —— 自动校验"""
+
+version: str = Field("2.0", regex=r"^\d+\.\d+$")
+
+class CacheConfig(BaseModel):
+enabled: bool = False
+backend: Literal["memory", "file", "redis"] = "memory"
+quote_ttl: int = Field(1800, ge=60, le=86400)
+news_ttl: int = Field(7200, ge=60, le=86400)
+
+@validator('backend')
+def validate_redis(cls, v, values):
+if v == 'redis' and not os.environ.get('REDIS_URL'):
+raise ValueError("使用 redis 缓存需要设置 REDIS_URL 环境变量")
+return v
+
+cache: CacheConfig = CacheConfig()
+
+class LLMConfig(BaseModel):
+enabled: bool = False
+model: str = "gpt-4o-mini"
+url: str = Field("http://localhost:11434/v1/chat/completions", regex=r"^https?://")
+timeout: int = Field(120, ge=10, le=300)
+max_tokens: int = Field(1800, ge=100, le=8000)
+temperature: float = Field(0.6, ge=0.0, le=2.0)
+
+llm: LLMConfig = LLMConfig()
 ```
 
 **需要新增设计章节**：`## 二十二、配置管理`
 
 ---
 
-### 2.15 版本管理 —— 风险：🟡 中
+### 2.15 版本管理 —— 风险： 中
 
 **当前状态**：
 - `AnalysisContext` 有 `schema_version: int = 2`
@@ -856,39 +856,39 @@ class EngineConfig(BaseModel):
 # domain/models.py — 版本兼容
 @dataclass(frozen=True)
 class AnalysisContext:
-    schema_version: int = 2
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> "AnalysisContext":
-        """从字典创建，支持版本兼容"""
-        version = data.get("schema_version", 1)
-        
-        if version == 1:
-            # v1 → v2 迁移
-            data = cls._migrate_v1_to_v2(data)
-        elif version == 2:
-            pass  # 当前版本
-        else:
-            raise ValueError(f"不支持的 schema 版本: {version}")
-        
-        return cls(**data)
-    
-    @staticmethod
-    def _migrate_v1_to_v2(data: dict) -> dict:
-        """v1 到 v2 的迁移逻辑"""
-        # v1 的字段映射到 v2
-        data["schema_version"] = 2
-        # 新增字段的默认值
-        data.setdefault("market_summary", "")
-        data.setdefault("enhanced_news", [])
-        return data
+schema_version: int = 2
+
+@classmethod
+def from_dict(cls, data: dict) -> "AnalysisContext":
+"""从字典创建，支持版本兼容"""
+version = data.get("schema_version", 1)
+
+if version == 1:
+# v1 → v2 迁移
+data = cls._migrate_v1_to_v2(data)
+elif version == 2:
+pass # 当前版本
+else:
+raise ValueError(f"不支持的 schema 版本: {version}")
+
+return cls(**data)
+
+@staticmethod
+def _migrate_v1_to_v2(data: dict) -> dict:
+"""v1 到 v2 的迁移逻辑"""
+# v1 的字段映射到 v2
+data["schema_version"] = 2
+# 新增字段的默认值
+data.setdefault("market_summary", "")
+data.setdefault("enhanced_news", [])
+return data
 ```
 
 **需要新增设计章节**：`## 二十三、版本管理`
 
 ---
 
-### 2.16 定时任务 —— 风险：🟡 中
+### 2.16 定时任务 —— 风险： 中
 
 **当前状态**：
 - 提到"系统 cron 调用 CLI"
@@ -909,26 +909,26 @@ class AnalysisContext:
 ```yaml
 # config/scheduler.yaml
 scheduler:
-  enabled: false  # 默认禁用，由外部 cron 管理
-  
-  tasks:
-    - name: "daily_report"
-      schedule: "0 9 * * *"  # 每天 9:00
-      command: "stocks report --format markdown --save"
-      timeout: 300
-      retry: 3
-      
-    - name: "health_check"
-      schedule: "0 */6 * * *"  # 每 6 小时
-      command: "stocks health --format json"
-      timeout: 60
-      retry: 1
-      
-    - name: "news_refresh"
-      schedule: "0 8,12,18 * * *"  # 每天 8/12/18 点
-      command: "stocks news --limit 20 --save"
-      timeout: 120
-      retry: 2
+enabled: false # 默认禁用，由外部 cron 管理
+
+tasks:
+- name: "daily_report"
+schedule: "0 9 * * *" # 每天 9:00
+command: "stocks report --format markdown --save"
+timeout: 300
+retry: 3
+
+- name: "health_check"
+schedule: "0 */6 * * *" # 每 6 小时
+command: "stocks health --format json"
+timeout: 60
+retry: 1
+
+- name: "news_refresh"
+schedule: "0 8,12,18 * * *" # 每天 8/12/18 点
+command: "stocks news --limit 20 --save"
+timeout: 120
+retry: 2
 ```
 
 **需要新增设计章节**：`## 二十四、定时任务`
@@ -937,7 +937,7 @@ scheduler:
 
 ## 三、强化优先级排序
 
-### 🔴 P0 — 必须在开发前完成设计
+### P0 — 必须在开发前完成设计
 
 | 序号 | 薄弱环节 | 原因 |
 |------|---------|------|
@@ -946,7 +946,7 @@ scheduler:
 | 3 | **数据隐私** | 用户资产是敏感数据 |
 | 4 | **LLM Enhancer 纳入主设计** | 已讨论但未纳入 DESIGN.md |
 
-### 🟡 P1 — 应该在开发初期完成设计
+### P1 — 应该在开发初期完成设计
 
 | 序号 | 薄弱环节 | 原因 |
 |------|---------|------|
@@ -956,7 +956,7 @@ scheduler:
 | 8 | **新闻 Provider 抽象** | 影响代码可维护性 |
 | 9 | **配置管理** | 影响部署灵活性 |
 
-### 🟢 P2 — 可以在开发中后期补充
+### P2 — 可以在开发中后期补充
 
 | 序号 | 薄弱环节 | 原因 |
 |------|---------|------|
@@ -974,27 +974,27 @@ scheduler:
 ### 4.1 立即行动（今天）
 
 1. **将 LLM Enhancer 纳入 DESIGN.md**
-   - 在 `## 五、模块设计` 中增加 `engine/llm_enhancer.py`
-   - 在 `## 七、配置设计` 中增加 `llm_enhancer` 配置
-   - 在 `AnalysisContext` 中增加 `market_summary` 和 `enhanced_news` 字段
+- 在 `## 五、模块设计` 中增加 `engine/llm_enhancer.py`
+- 在 `## 七、配置设计` 中增加 `llm_enhancer` 配置
+- 在 `AnalysisContext` 中增加 `market_summary` 和 `enhanced_news` 字段
 
 2. **补充错误处理设计**
-   - 新增 `## 十一、错误处理与降级策略`
-   - 定义每个异常场景的降级行为
+- 新增 `## 十一、错误处理与降级策略`
+- 定义每个异常场景的降级行为
 
 ### 4.2 本周内完成
 
 3. **补充安全设计**
-   - 新增 `## 十三、安全设计`
-   - 设计输入验证、认证、速率限制
+- 新增 `## 十三、安全设计`
+- 设计输入验证、认证、速率限制
 
 4. **补充数据隐私设计**
-   - 新增 `## 二十一、数据隐私与安全存储`
-   - 设计数据加密和访问控制
+- 新增 `## 二十一、数据隐私与安全存储`
+- 设计数据加密和访问控制
 
 5. **补充缓存策略**
-   - 新增 `## 十二、缓存与状态管理`
-   - 明确 stateless/cached/persistent 三种模式
+- 新增 `## 十二、缓存与状态管理`
+- 明确 stateless/cached/persistent 三种模式
 
 ### 4.3 开发过程中逐步补充
 

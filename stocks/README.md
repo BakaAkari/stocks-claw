@@ -164,12 +164,12 @@
 
 **当前版本**：Phase 1/2 已完成，核心链路稳定运行
 
-- ✅ 金融记忆层（资产、偏好、约束）
-- ✅ 市场数据（A股/美股 quote）
-- ✅ 新闻输入（RSS + GNews）
-- ✅ LLM 建议生成（PersonalLLMReportService）
-- ✅ 投递链路（OpenClaw cron + Feishu）
-- ✅ 配置热重载
-- ✅ 冷却去重机制
-- ✅ 健康巡检
-- ✅ 极简事件日志
+- 金融记忆层（资产、偏好、约束）
+- 市场数据（A股/美股 quote）
+- 新闻输入（RSS + GNews）
+- LLM 建议生成（PersonalLLMReportService）
+- 投递链路（OpenClaw cron + Feishu）
+- 配置热重载
+- 冷却去重机制
+- 健康巡检
+- 极简事件日志

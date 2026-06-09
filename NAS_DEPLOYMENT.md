@@ -8,15 +8,15 @@
 
 ```
 飞书用户消息
-    ↓
+↓
 Hermes Agent (Docker @ NAS)
-    ↓ HTTP API 调用 (端口 8687)
+↓ HTTP API 调用 (端口 8687)
 stocks-claw (Docker @ NAS)
-    ↓
+↓
 行情/新闻/分析数据
-    ↓
+↓
 LLM Proxy (NAS 本地:8317)
-    ↓
+↓
 投资分析报告
 ```
 
@@ -26,9 +26,9 @@ LLM Proxy (NAS 本地:8317)
 
 | 组件 | 状态 | 说明 |
 |------|------|------|
-| Unraid NAS | ✅ 已有 | 运行 Docker |
-| Hermes Agent | ✅ 已有 | Docker 部署，飞书入口 |
-| LLM Proxy | ✅ 已有 | NAS 本地 `:8317`，OpenAI 兼容 |
+| Unraid NAS | 已有 | 运行 Docker |
+| Hermes Agent | 已有 | Docker 部署，飞书入口 |
+| LLM Proxy | 已有 | NAS 本地 `:8317`，OpenAI 兼容 |
 | stocks-claw 代码 | ⬜ 需复制 | 从 MacBook 复制到 NAS |
 
 ---
@@ -104,26 +104,26 @@ CMD ["python", "-m", "stocks.adapters.http", "--host", "0.0.0.0", "--port", "868
 version: "3.8"
 
 services:
-  stocks-claw:
-    build: /mnt/user/appdata/stocks-claw
-    container_name: stocks-claw
-    ports:
-      - "8687:8687"
-    volumes:
-      - /mnt/user/appdata/stocks-claw/config:/app/config
-      - /mnt/user/appdata/stocks-claw/data:/app/data
-      - /mnt/user/appdata/stocks-claw/.local:/app/.local
-      - /mnt/user/appdata/stocks-claw/.secret:/app/.secret
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-    networks:
-      - stocks-network
+stocks-claw:
+build: /mnt/user/appdata/stocks-claw
+container_name: stocks-claw
+ports:
+- "8687:8687"
+volumes:
+- /mnt/user/appdata/stocks-claw/config:/app/config
+- /mnt/user/appdata/stocks-claw/data:/app/data
+- /mnt/user/appdata/stocks-claw/.local:/app/.local
+- /mnt/user/appdata/stocks-claw/.secret:/app/.secret
+extra_hosts:
+- "host.docker.internal:host-gateway"
+restart: unless-stopped
+networks:
+- stocks-network
 
 networks:
-  stocks-network:
-    driver: bridge
-    name: stocks-claw-network
+stocks-network:
+driver: bridge
+name: stocks-claw-network
 ```
 
 ---
@@ -136,15 +136,15 @@ curl http://localhost:8687/api/v1/health
 
 # 预期返回
 {
-  "success": true,
-  "data": {
-    "status": "ok",
-    "providers": ["tencent_a", "eastmoney_a", "finnhub"],
-    "assets_loaded": 7,
-    "watchlist_loaded": 11,
-    "llm_enhancer_enabled": true,
-    "llm_analysis_enabled": true
-  }
+"success": true,
+"data": {
+"status": "ok",
+"providers": ["tencent_a", "eastmoney_a", "finnhub"],
+"assets_loaded": 7,
+"watchlist_loaded": 11,
+"llm_enhancer_enabled": true,
+"llm_analysis_enabled": true
+}
 }
 ```
 
@@ -160,14 +160,14 @@ Hermes Agent 内置 **Shell 工具**，可以直接 curl 调用 stocks-claw。
 
 ```
 你：帮我创建一个 Skill，命名为 "stocks-analysis"。
-    功能：调用 http://host.docker.internal:8687 获取投资分析数据。
-    支持 4 种查询：
-    1) portfolio — 获取组合摘要
-    2) quotes — 获取行情
-    3) news — 获取新闻
-    4) report — 获取完整投资报告
-    
-    用 curl 调用，JSON 输出，中文回复。
+功能：调用 http://host.docker.internal:8687 获取投资分析数据。
+支持 4 种查询：
+1) portfolio — 获取组合摘要
+2) quotes — 获取行情
+3) news — 获取新闻
+4) report — 获取完整投资报告
+
+用 curl 调用，JSON 输出，中文回复。
 ```
 
 Hermes 会自动生成类似这样的 Skill：
@@ -179,39 +179,39 @@ import subprocess, json
 BASE_URL = "http://host.docker.internal:8687"
 
 def get_portfolio():
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST", f"{BASE_URL}/api/v1/portfolio/summary",
-         "-H", "Content-Type: application/json", "-d", "{}"],
-        capture_output=True, text=True
-    )
-    return json.loads(result.stdout)
+result = subprocess.run(
+["curl", "-s", "-X", "POST", f"{BASE_URL}/api/v1/portfolio/summary",
+"-H", "Content-Type: application/json", "-d", "{}"],
+capture_output=True, text=True
+)
+return json.loads(result.stdout)
 
 def get_quotes(market=None):
-    body = json.dumps({"market": market}) if market else "{}"
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST", f"{BASE_URL}/api/v1/quotes",
-         "-H", "Content-Type: application/json", "-d", body],
-        capture_output=True, text=True
-    )
-    return json.loads(result.stdout)
+body = json.dumps({"market": market}) if market else "{}"
+result = subprocess.run(
+["curl", "-s", "-X", "POST", f"{BASE_URL}/api/v1/quotes",
+"-H", "Content-Type: application/json", "-d", body],
+capture_output=True, text=True
+)
+return json.loads(result.stdout)
 
 def get_news(limit=5):
-    body = json.dumps({"limit": limit})
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST", f"{BASE_URL}/api/v1/news",
-         "-H", "Content-Type: application/json", "-d", body],
-        capture_output=True, text=True
-    )
-    return json.loads(result.stdout)
+body = json.dumps({"limit": limit})
+result = subprocess.run(
+["curl", "-s", "-X", "POST", f"{BASE_URL}/api/v1/news",
+"-H", "Content-Type: application/json", "-d", body],
+capture_output=True, text=True
+)
+return json.loads(result.stdout)
 
 def get_report():
-    body = json.dumps({"include_news": True, "include_quotes": True})
-    result = subprocess.run(
-        ["curl", "-s", "-X", "POST", f"{BASE_URL}/api/v1/analysis/context",
-         "-H", "Content-Type: application/json", "-d", body],
-        capture_output=True, text=True
-    )
-    return json.loads(result.stdout)
+body = json.dumps({"include_news": True, "include_quotes": True})
+result = subprocess.run(
+["curl", "-s", "-X", "POST", f"{BASE_URL}/api/v1/analysis/context",
+"-H", "Content-Type: application/json", "-d", body],
+capture_output=True, text=True
+)
+return json.loads(result.stdout)
 ```
 
 **触发方式**：
@@ -227,23 +227,23 @@ Hermes Agent **原生支持 MCP 协议**。stocks-claw 已内置 MCPAdapter。
 ```bash
 # 在 Hermes 配置中添加 MCP Server
 hermes tools add mcp-server \
-  --name stocks-claw \
-  --command "docker exec stocks-claw python -m stocks.adapters.mcp --llm-enhancer --llm-analysis"
+--name stocks-claw \
+--command "docker exec stocks-claw python -m stocks.adapters.mcp --llm-enhancer --llm-analysis"
 ```
 
 或配置为 HTTP MCP（如果 Hermes 支持）：
 
 ```json
 {
-  "mcpServers": {
-    "stocks-claw": {
-      "url": "http://host.docker.internal:8687/mcp"
-    }
-  }
+"mcpServers": {
+"stocks-claw": {
+"url": "http://host.docker.internal:8687/mcp"
+}
+}
 }
 ```
 
-> ⚠️ 注意：当前 stocks-claw MCPAdapter 使用 stdio 传输，在 Docker 跨容器场景中需要改为 SSE/HTTP 传输。如需此方案，需额外开发 MCP HTTP 传输层。
+> ️ 注意：当前 stocks-claw MCPAdapter 使用 stdio 传输，在 Docker 跨容器场景中需要改为 SSE/HTTP 传输。如需此方案，需额外开发 MCP HTTP 传输层。
 
 ### 方案 C: 直接 HTTP Webhook（如果 Hermes 支持自定义 HTTP 节点）
 
@@ -272,17 +272,17 @@ hermes tools add mcp-server \
 **获取组合摘要（飞书用户说"看看我的持仓"）：**
 ```bash
 curl -s -X POST http://host.docker.internal:8687/api/v1/portfolio/summary \
-  -H "Content-Type: application/json" -d '{}'
+-H "Content-Type: application/json" -d '{}'
 ```
 
 **获取完整投资报告（飞书用户说"生成投资报告"）：**
 ```bash
 curl -s -X POST http://host.docker.internal:8687/api/v1/analysis/context \
-  -H "Content-Type: application/json" \
-  -d '{"include_news": true, "include_quotes": true, "include_history": true}'
+-H "Content-Type: application/json" \
+-d '{"include_news": true, "include_quotes": true, "include_history": true}'
 ```
 
-> ⚠️ `analysis/context` 端点会调用 LLM 生成报告，响应时间 20-60s，需在 Hermes 中配置超时。
+> ️ `analysis/context` 端点会调用 LLM 生成报告，响应时间 20-60s，需在 Hermes 中配置超时。
 
 ---
 
@@ -290,7 +290,7 @@ curl -s -X POST http://host.docker.internal:8687/api/v1/analysis/context \
 
 部署前请确认以下事项：
 
-### 1. LLM Proxy 可达性 ✅ 最关键
+### 1. LLM Proxy 可达性 最关键
 
 stocks-claw 容器需要能访问 NAS 上的 LLM Proxy (`:8317`)。
 
@@ -308,7 +308,7 @@ curl http://host.docker.internal:8317/v1/models
 - 或改用 NAS 实际内网 IP（如 `http://192.168.1.xxx:8317/v1`）
 - 或改用 `network_mode: host`（不推荐，会损失容器隔离性）
 
-### 2. 隐私数据挂载 ✅
+### 2. 隐私数据挂载
 
 确认 `.local/financial_assets.json` 已正确挂载到容器：
 
@@ -316,7 +316,7 @@ curl http://host.docker.internal:8317/v1/models
 docker exec stocks-claw cat /app/.local/financial_assets.json
 ```
 
-### 3. API Key 文件 ✅
+### 3. API Key 文件
 
 确认 secret 文件已挂载：
 
@@ -341,8 +341,8 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 #!/bin/bash
 # 每日 9:00 生成报告并推送到飞书（需 Hermes 支持）
 REPORT=$(curl -s -X POST http://localhost:8687/api/v1/analysis/context \
-  -H "Content-Type: application/json" \
-  -d '{"include_news": true, "include_quotes": true}')
+-H "Content-Type: application/json" \
+-d '{"include_news": true, "include_quotes": true}')
 # 通过 Hermes API 或飞书 Webhook 推送
 ```
 
