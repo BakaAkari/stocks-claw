@@ -8,9 +8,11 @@ services:
       - "8687:8687"
     volumes:
       # 配置文件（watchlist.json, markets.json, portfolio_constraints.json 等）
-      - /mnt/user/appdata/stocks-claw/config:/app/config
+      # 挂载到 Engine 实际查找的路径: /app/stocks/config/
+      - /mnt/user/appdata/stocks-claw/config:/app/stocks/config
       # 默认数据（示例资产模板）
-      - /mnt/user/appdata/stocks-claw/data:/app/data
+      # 挂载到 Engine 实际查找的路径: /app/stocks/data/
+      - /mnt/user/appdata/stocks-claw/data:/app/stocks/data
       # 隐私数据（真实资产，不提交 git）
       - /mnt/user/appdata/stocks-claw/.local:/app/.local
       # API Key（finnhub, openai）
@@ -20,6 +22,9 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
+    # 允许容器通过 host.docker.internal 访问宿主机上的 LLM Proxy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
       - stocks-network

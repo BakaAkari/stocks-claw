@@ -90,8 +90,8 @@ CMD ["python", "-m", "stocks.adapters.http", "--host", "0.0.0.0", "--port", "868
 | Repository | 留空（使用本地 build） |
 | Network Type | `Bridge` |
 | Port | `8687 → 8687` |
-| Path 1 | `/mnt/user/appdata/stocks-claw/config → /app/config` |
-| Path 2 | `/mnt/user/appdata/stocks-claw/data → /app/data` |
+| Path 1 | `/mnt/user/appdata/stocks-claw/config → /app/stocks/config` |
+| Path 2 | `/mnt/user/appdata/stocks-claw/data → /app/stocks/data` |
 | Path 3 | `/mnt/user/appdata/stocks-claw/.local → /app/.local` |
 | Path 4 | `/mnt/user/appdata/stocks-claw/.secret → /app/.secret` |
 | Extra Parameters | `--add-host=host.docker.internal:host-gateway` |
@@ -110,8 +110,8 @@ container_name: stocks-claw
 ports:
 - "8687:8687"
 volumes:
-- /mnt/user/appdata/stocks-claw/config:/app/config
-- /mnt/user/appdata/stocks-claw/data:/app/data
+- /mnt/user/appdata/stocks-claw/config:/app/stocks/config
+- /mnt/user/appdata/stocks-claw/data:/app/stocks/data
 - /mnt/user/appdata/stocks-claw/.local:/app/.local
 - /mnt/user/appdata/stocks-claw/.secret:/app/.secret
 extra_hosts:

@@ -2,10 +2,19 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 复制项目代码
+# 设置时区
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# 复制项目代码（包含 stocks/config/ 和 stocks/data/）
 COPY stocks/ ./stocks/
-COPY config/ ./config/
-COPY data/ ./data/
+
+# 创建隐私数据目录（空目录，实际数据通过卷挂载）
+RUN mkdir -p /app/.local /app/.secret
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8687/api/v1/health', timeout=5)" || exit 1
 
 # 暴露 HTTP 端口
 EXPOSE 8687
