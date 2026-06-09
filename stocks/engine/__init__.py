@@ -416,16 +416,16 @@ class StocksEngine:
             enhanced_news=enhanced_news if self.llm_enhancer.enabled else None,
         )
 
-        # 6. 如启用 LLM 增强，生成行情摘要（使用 2s 短超时，避免阻塞）
+        # 6. 如启用 LLM 增强，生成行情摘要（使用 10s 超时，匹配代理实际响应时间）
         if self.llm_enhancer.enabled and context.quotes:
             try:
                 market_summary = await asyncio.wait_for(
                     self.llm_enhancer.generate_market_summary(
                         context.quotes,
                         context.market_state.to_dict(),
-                        timeout=2,
+                        timeout=10,
                     ),
-                    timeout=3,
+                    timeout=12,
                 )
                 # 由于 AnalysisContext 是 frozen dataclass，需要重建
                 if market_summary:
