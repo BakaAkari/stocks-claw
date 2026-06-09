@@ -42,9 +42,9 @@
   {
     "name": "QCOM高通",
     "platform": "IBKR",
-    "amount": 450,
+    "amount": 653,
     "asset_type": "股票",
-    "notes": "3股，价格约150 USD（待实时更新）",
+    "notes": "3股，实时价格 217.77 USD",
     "confirmed": true,
     "currency": "USD"
   },
