@@ -12,6 +12,26 @@
           "code": "518880",
           "name": "华安黄金ETF",
           "market": "sh"
+        },
+        {
+          "code": "159110",
+          "name": "科创债ETF万家",
+          "market": "sz"
+        },
+        {
+          "code": "513390",
+          "name": "纳指100ETF博时",
+          "market": "sh"
+        },
+        {
+          "code": "588000",
+          "name": "科创50ETF华夏",
+          "market": "sh"
+        },
+        {
+          "code": "512810",
+          "name": "军工ETF华宝",
+          "market": "sh"
         }
       ]
     },
@@ -26,6 +46,11 @@
         {
           "code": "AAPL",
           "name": "AAPL",
+          "market": "us"
+        },
+        {
+          "code": "QCOM",
+          "name": "高通",
           "market": "us"
         }
       ]

@@ -12,6 +12,7 @@ _ASSET_TYPE_TO_BUCKET = {
     # 权益类
     "equity": "权益",
     "stock": "权益",
+    "股票": "权益",
     "fund": "权益",
     "股票ETF": "权益",
     "股票etf": "权益",
@@ -26,6 +27,7 @@ _ASSET_TYPE_TO_BUCKET = {
     "债券": "固收",
     # 现金类
     "cash": "现金",
+    "现金": "现金",
     "deposit": "现金",
     "money_market": "现金",
     "现金管理": "现金",
