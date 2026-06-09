@@ -1,60 +1,34 @@
 [
   {
-    "name": "科创债ETF万家",
-    "platform": "券商A股",
-    "amount": 30602,
-    "asset_type": "固收",
-    "notes": "159110，300股，价格约102.01",
-    "confirmed": true
-  },
-  {
-    "name": "纳指100ETF博时",
-    "platform": "券商A股",
-    "amount": 7606,
-    "asset_type": "股票ETF",
-    "notes": "513390，3200股，价格约2.38，QDII跟踪纳指100",
-    "confirmed": true
-  },
-  {
-    "name": "科创50ETF华夏",
-    "platform": "券商A股",
-    "amount": 3071,
-    "asset_type": "股票ETF",
-    "notes": "588000，1800股，价格约1.71",
-    "confirmed": true
-  },
-  {
-    "name": "军工ETF华宝",
-    "platform": "券商A股",
-    "amount": 71,
-    "asset_type": "股票ETF",
-    "notes": "512810，100股，价格约0.71",
-    "confirmed": true
-  },
-  {
-    "name": "A股可用资金",
-    "platform": "券商A股",
-    "amount": 38000,
+    "name": "示例：货币基金",
+    "platform": "支付宝/银行/券商",
+    "amount": 100000,
     "asset_type": "现金管理",
-    "notes": "现金余额",
+    "notes": "活期/货币基金，流动性储备",
     "confirmed": true
   },
   {
-    "name": "QCOM高通",
-    "platform": "IBKR",
-    "amount": 653,
-    "asset_type": "股票",
-    "notes": "3股，实时价格 217.77 USD",
-    "confirmed": true,
-    "currency": "USD"
+    "name": "示例：理财产品",
+    "platform": "银行/支付宝",
+    "amount": 200000,
+    "asset_type": "理财",
+    "notes": "稳健理财，R2风险等级",
+    "confirmed": true
   },
   {
-    "name": "美股可用资金",
-    "platform": "IBKR",
-    "amount": 13890,
-    "asset_type": "现金",
-    "notes": "USD现金余额",
-    "confirmed": true,
-    "currency": "USD"
+    "name": "示例：指数基金",
+    "platform": "券商/支付宝",
+    "amount": 50000,
+    "asset_type": "股票ETF",
+    "notes": "沪深300ETF/纳指ETF等",
+    "confirmed": true
+  },
+  {
+    "name": "示例：黄金ETF",
+    "platform": "支付宝/券商",
+    "amount": 30000,
+    "asset_type": "黄金ETF",
+    "notes": "华安黄金ETF等",
+    "confirmed": true
   }
 ]

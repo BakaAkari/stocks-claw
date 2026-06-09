@@ -4,6 +4,7 @@ from typing import Optional
 import asyncio
 from stocks.domain.models import Instrument, Quote, NewsItem
 from stocks.providers.registry import ProviderRegistry
+from stocks.providers.rss_news import RSSNewsProvider
 
 
 class DataFetcher:
@@ -54,9 +55,14 @@ class DataFetcher:
         sources: list[str],
         max_items: int = 20
     ) -> list[NewsItem]:
-        """获取新闻 — 目前先返回空列表（新闻源 Provider 后续实现），保留接口"""
-        # TODO: 接入新闻 Provider 后实现
-        return []
+        """获取新闻 — 使用 RSS News Provider 获取财经新闻。"""
+        # 使用 RSSNewsProvider 获取新闻
+        provider = RSSNewsProvider()
+        try:
+            items = await provider.fetch(max_items=max_items)
+            return items
+        except Exception:
+            return []
 
     def _pick_provider(
         self, market: str, preferred: Optional[str] = None
@@ -67,8 +73,8 @@ class DataFetcher:
             if p and market in p.supported_markets:
                 return p
 
-        candidates = self.registry.list_for_market(market)
-        return candidates[0] if candidates else None
+        # 使用 markets.json 配置的默认 Provider
+        return self.registry.get_default_for_market(market)
 
     async def _fetch_with_provider(self, provider, instruments: list[Instrument]) -> list[Quote]:
         """使用指定 Provider 批量获取行情"""

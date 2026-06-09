@@ -1,45 +1,17 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-build/
+# 本地隐私数据（不提交到 git）
+.local/
 
-# Secret files
+# 密钥文件（已跟踪的除外）
 .secret/*
 !.secret/README.md
-!.secret/*.example.md
 
-# Data files (user specific)
-stocks/data/*.json
-stocks/data/*.jsonl
-!stocks/data/financial_assets.json
+# Python
+__pycache__/
+*.pyc
+*.pyo
 
-# Logs
-*.log
-stocks/logs/
-stocks/events/
-
-# Reports
-stocks/reports/*.md
-stocks/reports/*.json
-!stocks/reports/.gitkeep
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
+# 系统文件
 .DS_Store
-Thumbs.db
 
-# Temp
-tmp/
-temp/
-*.tmp
+# 快照数据
+data/snapshots/

@@ -1,74 +1,63 @@
-{
-  "markets": {
-    "a": {
-      "label": "A股",
-      "watchlist": [
-        {
-          "code": "000300",
-          "name": "沪深300",
-          "market": "sz_index"
-        },
-        {
-          "code": "518880",
-          "name": "华安黄金ETF",
-          "market": "sh"
-        },
-        {
-          "code": "159110",
-          "name": "科创债ETF万家",
-          "market": "sz"
-        },
-        {
-          "code": "513390",
-          "name": "纳指100ETF博时",
-          "market": "sh"
-        },
-        {
-          "code": "588000",
-          "name": "科创50ETF华夏",
-          "market": "sh"
-        },
-        {
-          "code": "512810",
-          "name": "军工ETF华宝",
-          "market": "sh"
-        }
-      ]
-    },
-    "us": {
-      "label": "美股",
-      "watchlist": [
-        {
-          "code": "QQQ",
-          "name": "纳斯达克100ETF",
-          "market": "us"
-        },
-        {
-          "code": "AAPL",
-          "name": "AAPL",
-          "market": "us"
-        },
-        {
-          "code": "QCOM",
-          "name": "高通",
-          "market": "us"
-        }
-      ]
-    },
-    "crypto": {
-      "label": "加密货币",
-      "watchlist": [
-        {
-          "code": "BTCUSDT",
-          "name": "比特币",
-          "market": "crypto"
-        },
-        {
-          "code": "ETHUSDT",
-          "name": "以太坊",
-          "market": "crypto"
-        }
-      ]
-    }
+[
+  {
+    "code": "000300",
+    "name": "沪深300",
+    "market": "a",
+    "exchange": "sz_index"
+  },
+  {
+    "code": "518880",
+    "name": "华安黄金ETF",
+    "market": "a",
+    "exchange": "sh"
+  },
+  {
+    "code": "159110",
+    "name": "科创债ETF万家",
+    "market": "a",
+    "exchange": "sz"
+  },
+  {
+    "code": "513390",
+    "name": "纳指100ETF博时",
+    "market": "a",
+    "exchange": "sh"
+  },
+  {
+    "code": "588000",
+    "name": "科创50ETF华夏",
+    "market": "a",
+    "exchange": "sh"
+  },
+  {
+    "code": "512810",
+    "name": "军工ETF华宝",
+    "market": "a",
+    "exchange": "sh"
+  },
+  {
+    "code": "QQQ",
+    "name": "纳斯达克100ETF",
+    "market": "us"
+  },
+  {
+    "code": "AAPL",
+    "name": "AAPL",
+    "market": "us"
+  },
+  {
+    "code": "QCOM",
+    "name": "高通",
+    "market": "us"
+  },
+  {
+    "code": "BTCUSDT",
+    "name": "比特币",
+    "market": "crypto"
+  },
+  {
+    "code": "ETHUSDT",
+    "name": "以太坊",
+    "market": "crypto"
   }
-}
+]

@@ -6,12 +6,13 @@
 
 字段：
 
-- `asset_name`: 资产名称
+- `name`: 资产名称
 - `platform`: 平台 / 券商 / 银行 / 账户
 - `amount`: 当前金额（保留用户原始口径）
 - `asset_type`: 资产类型
 - `notes`: 备注
-- `confirmed_by_user`: 是否由用户确认
+- `confirmed`: 是否由用户确认
+- `currency`: 币种（默认 CNY，非 CNY 会自动换算）
 
 说明：
 

@@ -45,6 +45,7 @@ from stocks.providers.tencent_a import TencentAQuoteProvider
 # 默认配置路径
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+LOCAL_DATA_DIR = Path(__file__).resolve().parents[2] / ".local"
 SECRET_DIR = Path(__file__).resolve().parents[2] / ".secret"
 
 
@@ -195,11 +196,16 @@ class StocksEngine:
     def _load_assets_from_file(self) -> list[FinancialAsset]:
         """从 ``financial_assets.json`` 加载资产列表。
 
-        支持两种格式：
-        1. 旧版嵌套格式：{"assets": [...], "portfolio_constraints": ...}
-        2. 新版扁平格式：[...]
+        加载优先级：
+        1. ``.local/financial_assets.json`` — 本地隐私数据（不提交 git）
+        2. ``stocks/data/financial_assets.json`` — 项目默认数据
+
+        数据格式：扁平数组 [{"name": ..., "platform": ..., ...}, ...]
         """
-        path = self.data_dir / "financial_assets.json"
+        # 优先加载本地隐私数据
+        local_path = LOCAL_DATA_DIR / "financial_assets.json"
+        path = local_path if local_path.exists() else (self.data_dir / "financial_assets.json")
+        
         if not path.exists():
             return []
         try:
@@ -208,31 +214,20 @@ class StocksEngine:
         except (json.JSONDecodeError, OSError):
             return []
 
-        # 处理嵌套格式
-        if isinstance(data, dict) and "assets" in data:
-            raw_assets = data["assets"]
-            # 同时提取约束和画像（如果存在）
-            if "portfolio_constraints" in data and not self._constraints:
-                self._constraints = data["portfolio_constraints"]
-            if "portfolio_profile_notes" in data and not self._profile:
-                self._profile = data["portfolio_profile_notes"]
-        elif isinstance(data, list):
-            raw_assets = data
-        else:
+        if not isinstance(data, list):
             return []
 
         assets: list[FinancialAsset] = []
-        for item in raw_assets:
+        for item in data:
             if not isinstance(item, dict):
                 continue
             try:
-                # 兼容旧版字段名
-                name = item.get("asset_name") or item.get("name", "未知")
+                name = item.get("name", "未知")
                 platform = item.get("platform", "未知")
                 amount = float(item.get("amount", 0))
-                asset_type = item.get("asset_type") or item.get("type", "unknown")
+                asset_type = item.get("asset_type", "unknown")
                 notes = item.get("notes")
-                confirmed = item.get("confirmed_by_user", item.get("confirmed", True))
+                confirmed = item.get("confirmed", True)
                 currency = item.get("currency", "CNY")
 
                 # 多币种换算：统一为 CNY
@@ -262,35 +257,17 @@ class StocksEngine:
     def _load_watchlist(self) -> list[Instrument]:
         """从 ``watchlist.json`` 加载关注列表。
 
-        支持两种格式：
-        1. 旧版嵌套格式：{"markets": {"a": {"watchlist": [...]}}}
-        2. 新版扁平格式：{"instruments": [...]}
+        数据格式：扁平数组 [{"code": ..., "name": ..., "market": ..., "exchange": ...}, ...]
         """
         data = self._load_json("watchlist.json")
         if not data:
             return []
 
-        raw_instruments: list[dict] = []
-
-        # 尝试嵌套格式
-        if isinstance(data, dict) and "markets" in data:
-            for market_key, market_data in data["markets"].items():
-                if isinstance(market_data, dict) and "watchlist" in market_data:
-                    for item in market_data["watchlist"]:
-                        if isinstance(item, dict):
-                            # 补充 market 字段（如果缺失）
-                            if "market" not in item:
-                                item = dict(item)
-                                item["market"] = market_key
-                            raw_instruments.append(item)
-        # 尝试扁平格式
-        elif isinstance(data, dict) and "instruments" in data:
-            raw_instruments = data["instruments"]
-        elif isinstance(data, list):
-            raw_instruments = data
+        if not isinstance(data, list):
+            return []
 
         instruments: list[Instrument] = []
-        for item in raw_instruments:
+        for item in data:
             if not isinstance(item, dict):
                 continue
             try:
@@ -364,9 +341,12 @@ class StocksEngine:
         sources: Optional[list[str]] = None,
         limit: int = 10,
     ) -> list[NewsItem]:
-        """获取新闻数据（当前返回空列表，待新闻 Provider 实现）。"""
-        # TODO: 接入新闻 Provider 后实现
-        return []
+        """获取新闻数据 — 使用 RSS News Provider。"""
+        return await self.fetcher.fetch_news(
+            keywords=[],
+            sources=sources or [],
+            max_items=limit,
+        )
 
     async def enhance_news(self, news: list[NewsItem]) -> list[NewsItem]:
         """使用 LLM 增强新闻数据。"""
@@ -447,6 +427,43 @@ class StocksEngine:
             "llm_enhancer_enabled": self.llm_enhancer.enabled,
             "llm_analysis_enabled": self.llm_analysis.enabled,
         }
+
+    # ------------------------------------------------------------------
+    # 资产 CRUD 接口
+    # ------------------------------------------------------------------
+
+    def add_asset(self, asset: FinancialAsset) -> None:
+        """添加资产并持久化到本地文件。"""
+        self._assets.append(asset)
+        self._save_assets()
+
+    def remove_asset(self, name: str) -> bool:
+        """按名称移除资产并持久化。"""
+        original_len = len(self._assets)
+        self._assets = [a for a in self._assets if a.name != name]
+        if len(self._assets) < original_len:
+            self._save_assets()
+            return True
+        return False
+
+    def update_asset(self, name: str, **kwargs) -> bool:
+        """按名称更新资产字段并持久化。"""
+        for i, asset in enumerate(self._assets):
+            if asset.name == name:
+                # 由于 dataclass 是 frozen，需要重建
+                current = asset.to_dict()
+                current.update(kwargs)
+                self._assets[i] = FinancialAsset(**current)
+                self._save_assets()
+                return True
+        return False
+
+    def _save_assets(self) -> None:
+        """将当前资产列表保存到本地隐私文件。"""
+        local_path = LOCAL_DATA_DIR / "financial_assets.json"
+        LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(local_path, "w", encoding="utf-8") as f:
+            json.dump([a.to_dict() for a in self._assets], f, ensure_ascii=False, indent=2)
 
     # ------------------------------------------------------------------
     # 内部工具

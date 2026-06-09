@@ -8,7 +8,7 @@
 - GET  /api/v1/health
 
 使用方式：
-    python -m stocks.adapters.http --host 127.0.0.1 --port 8080
+    python -m stocks.adapters.http --host 127.0.0.1 --port 8687
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 class HTTPAdapter:
     """HTTP 适配器 — 使用标准库 http.server 启动 JSON API 服务。"""
 
-    def __init__(self, engine, host: str = "localhost", port: int = 8080):
+    def __init__(self, engine, host: str = "localhost", port: int = 8687):
         self.engine = engine
         self.host = host
         self.port = port
@@ -167,7 +167,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="stocks-claw HTTP 服务")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
-    parser.add_argument("--port", type=int, default=8080, help="监听端口")
+    parser.add_argument("--port", type=int, default=8687, help="监听端口")
     parser.add_argument("--llm-enhancer", action="store_true", help="启用 LLM 数据增强")
     parser.add_argument("--llm-analysis", action="store_true", help="启用 LLM 深度分析")
     parser.add_argument("--openai-key", default=None, help="OpenAI 兼容 API Key")

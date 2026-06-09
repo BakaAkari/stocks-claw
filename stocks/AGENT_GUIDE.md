@@ -24,9 +24,11 @@
 - Feishu 账号（用于接收报告）
 
 **外部 API**（需用户自行申请）：
-- Finnhub（美股行情）
-- GNews（英文新闻）
-- 聚合数据（中文新闻，可选）
+- Finnhub（美股/加密货币行情）
+- OpenAI 兼容 API（LLM 分析，如 deepseek/kimi 等）
+
+**新闻源**（无需 API key）：
+- 36kr RSS（默认中文财经新闻）
 
 ---
 
@@ -35,15 +37,14 @@
 ### Step 1: 配置文件初始化
 
 ```bash
-# 1. 复制配置文件模板
-cp stocks/config/example-watchlist.json stocks/config/watchlist.json
-cp stocks/config/example-financial_assets.json stocks/data/financial_assets.json
+# 1. 创建配置文件（如不存在则手动创建）
+# watchlist.json: 关注列表，格式为 [{"code": "...", "name": "...", "market": "..."}, ...]
+# financial_assets.json: 资产列表，格式为 [{"name": "...", "platform": "...", "amount": ...}, ...]
 
 # 2. 创建 API Key 文件
 touch .secret/finnhub-key.md
-touch .secret/gnews-key.md
-touch .secret/juhe-key.md
-touch .secret/juhe-caijing-key.md
+touch .secret/openai-key.md
+touch .secret/openai-base-url.md
 ```
 
 ### Step 2: 填写 API Key
@@ -65,7 +66,7 @@ touch .secret/juhe-caijing-key.md
 
 编辑 `stocks/data/financial_assets.json`：
 - 录入用户的现金、理财、基金、股票、黄金等资产
-- 填写 `confirmed_by_user: true` 标记已确认资产
+- 填写 `confirmed: true` 标记已确认资产
 
 ### Step 5: 设置定时任务
 
@@ -93,12 +94,13 @@ openclaw cron add --name "stocks-report-weekend" \
 
 ```json
 {
-  "asset_name": "资产名称",
+  "name": "资产名称",
   "platform": "平台/券商",
   "amount": 金额,
   "asset_type": "类型",
   "notes": "备注",
-  "confirmed_by_user": true
+  "confirmed": true,
+  "currency": "CNY"
 }
 ```
 
@@ -145,13 +147,13 @@ python3 stocks/services/news_fetch_service.py
 
 ### 新闻数据为空
 
-1. 检查 GNews/聚合数据 Key 是否有效
-2. 检查 API 配额是否用完
+1. 检查网络连接（RSS 源需要联网）
+2. 检查 36kr RSS 是否可访问
 
 ### 报告未推送
 
-1. 检查 Feishu target ID 是否正确
-2. 检查 OpenClaw cron 状态
+1. 检查 OpenClaw cron 状态
+2. 检查 LLM API Key 是否有效
 3. 检查冷却去重机制（60分钟内不重复推送相似内容）
 
 ---
@@ -178,9 +180,8 @@ stocks/
 ## 限制说明
 
 - **不是自动交易系统**：只提供建议，不执行交易
-- **依赖 OpenClaw**：无法独立运行
 - **需要人工确认**：资产更新需用户确认后才写入
-- **API 配额限制**：免费额度有限，超限需付费
+- **API 配额限制**：Finnhub 免费额度有限，超限需付费或等待
 
 ---
 

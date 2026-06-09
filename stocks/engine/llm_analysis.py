@@ -201,7 +201,7 @@ class LLMAnalysis:
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.4,
-            "max_tokens": 1024,
+            "max_tokens": 8192,
         }
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 

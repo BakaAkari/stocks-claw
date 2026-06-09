@@ -1,8 +1,8 @@
 {
   "a": {
     "label": "A股",
-    "providers": ["tencent", "eastmoney"],
-    "default_provider": "tencent"
+    "providers": ["tencent_a", "eastmoney_a"],
+    "default_provider": "tencent_a"
   },
   "us": {
     "label": "美股",

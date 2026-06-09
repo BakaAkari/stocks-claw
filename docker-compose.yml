@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  stocks-claw:
+    build: .
+    container_name: stocks-claw
+    ports:
+      - "8687:8687"
+    volumes:
+      # 配置文件（watchlist.json, markets.json, portfolio_constraints.json 等）
+      - /mnt/user/appdata/stocks-claw/config:/app/config
+      # 默认数据（示例资产模板）
+      - /mnt/user/appdata/stocks-claw/data:/app/data
+      # 隐私数据（真实资产，不提交 git）
+      - /mnt/user/appdata/stocks-claw/.local:/app/.local
+      # API Key（finnhub, openai）
+      - /mnt/user/appdata/stocks-claw/.secret:/app/.secret
+    environment:
+      # 可选：通过环境变量传入 LLM 配置（会覆盖 .secret 文件）
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
+    restart: unless-stopped
+    networks:
+      - stocks-network
+
+networks:
+  stocks-network:
+    driver: bridge
+    name: stocks-claw-network
