@@ -6,7 +6,6 @@ from typing import Optional
 
 from stocks.providers.base import QuoteProvider
 
-
 # 默认 markets.json 路径
 DEFAULT_MARKETS_CONFIG = Path(__file__).resolve().parents[1] / "config" / "markets.json"
 

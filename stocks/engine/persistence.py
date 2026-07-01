@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime
 from typing import Optional
+
 from stocks.domain.models import AnalysisContext
 
 

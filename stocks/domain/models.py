@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 from datetime import datetime
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -12,7 +12,7 @@ class Instrument:
     name: str
     market: str                    # "a" / "us"
     exchange: Optional[str] = None  # "sh" / "sz" / "us"
-    
+
     def to_dict(self) -> dict:
         return {
             "code": self.code,
@@ -35,7 +35,7 @@ class Quote:
     high: Optional[float] = None
     low: Optional[float] = None
     prev_close: Optional[float] = None
-    
+
     def to_dict(self) -> dict:
         return {
             "instrument": {
@@ -59,7 +59,7 @@ class Quote:
 @dataclass(frozen=True)
 class NewsItem:
     """新闻条目 — 原始数据模型（适配后）
-    
+
     字段说明：
     - summary: 可能为 None（如 Juhe 源不返回摘要）
     - published_at: 可能为 None（时间解析失败时）
@@ -75,7 +75,7 @@ class NewsItem:
     language: str = "unknown"            # "en" | "zh" | "unknown"
     tags: list[str] = field(default_factory=list)
     raw_metadata: dict = field(default_factory=dict)  # 原始字段保留
-    
+
     def to_dict(self) -> dict:
         return {
             "title": self.title,
@@ -93,7 +93,7 @@ class NewsItem:
 @dataclass(frozen=True)
 class EnhancedNewsItem(NewsItem):
     """增强后的新闻条目 — 包含 LLM Enhancer 生成的附加字段
-    
+
     当 llm_enhancer.enabled = true 时，engine 返回此类型替代 NewsItem。
     """
     importance: str = "unknown"         # high / medium / low
@@ -103,7 +103,7 @@ class EnhancedNewsItem(NewsItem):
     relevance_tags: list[str] = field(default_factory=list)
     llm_generated_summary: Optional[str] = None  # LLM 生成的摘要（原始缺失时）
     enhanced_by_llm: bool = False      # 标记是否经过 LLM 增强
-    
+
     def to_dict(self) -> dict:
         base = super().to_dict()
         base.update({
@@ -128,7 +128,7 @@ class FinancialAsset:
     notes: Optional[str] = None
     confirmed: bool = True
     currency: str = "CNY"  # 币种: CNY / USD / HKD 等
-    
+
     def to_dict(self) -> dict:
         return {
             "name": self.name,
@@ -151,7 +151,7 @@ class PortfolioMapping:
     buffer_strength: str = "none"           # strong / moderate / light / none
     liquidity_status: str = "thin"        # ample / adequate / thin
     locked_assets_present: bool = False
-    
+
     def to_dict(self) -> dict:
         return {
             "buckets": {k: [a.to_dict() for a in v] for k, v in self.buckets.items()},
@@ -173,7 +173,7 @@ class MarketState:
     china_state: str = "unknown"          # stable_positive / stable / mixed_pressure / under_pressure / unknown
     rates_state: str = "unknown"          # bonds_bid / rates_pressure / neutral / unknown
     cross_asset_summary: list[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> dict:
         return {
             "risk_appetite": self.risk_appetite,
@@ -194,7 +194,7 @@ class DriftCheck:
     target_max: Optional[float]
     status: str                          # within_range / below_min / above_max
     gap: float
-    
+
     def to_dict(self) -> dict:
         return {
             "bucket": self.bucket,
@@ -209,7 +209,7 @@ class DriftCheck:
 @dataclass(frozen=True)
 class AnalysisContext:
     """统一分析上下文 — 核心接口契约
-    
+
     这是 stocks-claw 向 Agent 提供的"完整分析原料包"。
     Agent 可以：
     1. 直接读取其中的结构化数据做展示
@@ -218,38 +218,38 @@ class AnalysisContext:
     """
     # 元信息
     generated_at: str
-    
+
     # 用户金融记忆（权威输入）
     assets: list[FinancialAsset]
     asset_count: int
     portfolio_constraints: dict
     portfolio_profile: dict
-    
+
     # 市场输入
     quotes: dict[str, list[Quote]]       # 按市场分组的所有行情
     news: list[NewsItem]                   # 原始新闻（或 EnhancedNewsItem）
     news_count: int
-    
+
     # 轻量脚手架（辅助信号）
     market_state: MarketState
     portfolio_mapping: PortfolioMapping
     drift_checks: list[DriftCheck]
-    
+
     # 历史上下文
     recent_snapshots: list[dict]         # 最近 N 次报告摘要
-    
+
     # 原始输入（供 LLM 阅读）
     raw_prompt_input: str                # 人类可读格式的完整上下文文本
-    
+
     # LLM 增强输出（当 llm_enhancer.enabled = true 时填充）
     market_summary_nl: str = ""            # 行情自然语言摘要（LLM 生成）
     enhanced_news_count: int = 0           # 增强后的新闻数量
-    
+
     # 元信息（带默认值）
     schema_version: int = 2
     llm_enhancer_enabled: bool = False   # 本次上下文是否经过 LLM 增强
     llm_enhancer_model: str = ""         # 使用的增强模型
-    
+
     def to_dict(self) -> dict:
         return {
             "generated_at": self.generated_at,

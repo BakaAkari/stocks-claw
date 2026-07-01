@@ -14,7 +14,6 @@ from typing import Optional
 
 from stocks.domain.models import NewsItem
 
-
 # 默认 RSS 源
 _DEFAULT_RSS_URL = "https://www.36kr.com/feed"
 

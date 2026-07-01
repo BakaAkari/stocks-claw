@@ -81,16 +81,7 @@ class CLIAdapter:
             include_history=True,
         )
 
-        # 3. 如启用 LLM 增强，调用 engine 增强数据
-        if args.llm_enhancer and hasattr(self.engine, "enhance_news"):
-            enhanced_news = await self.engine.enhance_news(context.news)
-            # 将增强后的新闻回填到 context（通过重建或属性更新）
-            # 由于 dataclass 是 frozen，这里通过 to_dict 再重建的方式不现实，
-            # 实际由 engine.build_context 内部根据配置决定是否增强。
-            # CLI 层仅传递意图，engine 负责具体实现。
-            pass
-
-        # 4. 如启用 LLM 分析，生成报告
+        # 3. 如启用 LLM 分析，生成报告
         report: Optional[str] = None
         if args.llm_analysis and hasattr(self.engine, "generate_report"):
             try:
@@ -223,10 +214,10 @@ class CLIAdapter:
 def main():
     """CLI 入口 — 自动导入并构造 engine。"""
     # 延迟导入，避免循环依赖
-    from stocks.engine import StocksEngine  # type: ignore[import-not-found]
-
     # 先解析一次参数，提取 openai 配置传给 engine
     import argparse
+
+    from stocks.engine import StocksEngine  # type: ignore[import-not-found]
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--openai-key", default=None)
     pre_parser.add_argument("--openai-base-url", default=None)

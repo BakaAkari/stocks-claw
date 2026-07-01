@@ -11,7 +11,6 @@ from typing import Optional
 from stocks.domain.models import Instrument, Quote
 from stocks.providers.base import QuoteProvider
 
-
 ROOT = Path(__file__).resolve().parents[2]
 FINNHUB_KEY_PATH = ROOT / ".secret" / "finnhub-key.md"
 

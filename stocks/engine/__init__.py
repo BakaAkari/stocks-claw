@@ -29,6 +29,7 @@ from stocks.domain.models import (
     PortfolioMapping,
     Quote,
 )
+from stocks.engine.config_loader import load_engine_config
 from stocks.engine.context_builder import ContextBuilder
 from stocks.engine.exchange_rate import convert_to_cny
 from stocks.engine.fetchers import DataFetcher
@@ -41,6 +42,8 @@ from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
 from stocks.providers.finnhub_quote import FinnhubQuoteProvider
 from stocks.providers.registry import ProviderRegistry
 from stocks.providers.tencent_a import TencentAQuoteProvider
+
+logger = logging.getLogger(__name__)
 
 # 默认配置路径
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
@@ -56,8 +59,8 @@ class StocksEngine:
         self,
         config_dir: Optional[str] = None,
         data_dir: Optional[str] = None,
-        llm_enhancer_enabled: bool = True,
-        llm_analysis_enabled: bool = True,
+        llm_enhancer_enabled: Optional[bool] = None,
+        llm_analysis_enabled: Optional[bool] = None,
         openai_api_key: Optional[str] = None,
         openai_base_url: Optional[str] = None,
     ):
@@ -66,25 +69,51 @@ class StocksEngine:
         Args:
             config_dir: 配置文件目录，默认 ``stocks/config/``。
             data_dir: 数据文件目录，默认 ``stocks/data/``。
-            llm_enhancer_enabled: 是否启用 LLM 数据增强（默认 True，无 key 时自动降级禁用）。
-            llm_analysis_enabled: 是否启用 LLM 深度分析（默认 True，无 key 时自动降级禁用）。
+            llm_enhancer_enabled: 是否启用 LLM 数据增强（传参优先于配置）。
+            llm_analysis_enabled: 是否启用 LLM 深度分析（传参优先于配置）。
             openai_api_key: OpenAI 兼容 API Key（传参优先，其次环境变量，其次.secret文件）。
             openai_base_url: OpenAI 兼容 API Base URL（传参优先，其次环境变量，其次.secret文件）。
         """
-        self.config_dir = Path(config_dir) if config_dir else DEFAULT_CONFIG_DIR
-        self.data_dir = Path(data_dir) if data_dir else DEFAULT_DATA_DIR
+        # 加载 engine.yaml 配置（环境变量 > YAML > 代码默认值）
+        self._config = load_engine_config()
+
+        # 路径配置：传参 > YAML > 代码默认值
+        self.config_dir = (
+            Path(config_dir) if config_dir
+            else Path(self._config["paths"]["config_dir"]) if self._config["paths"]["config_dir"]
+            else DEFAULT_CONFIG_DIR
+        )
+        self.data_dir = (
+            Path(data_dir) if data_dir
+            else Path(self._config["paths"]["data_dir"]) if self._config["paths"]["data_dir"]
+            else DEFAULT_DATA_DIR
+        )
+        # 允许 YAML 覆盖 local/secret 路径
+        local_dir_cfg = self._config["paths"]["local_data_dir"]
+        self._local_data_dir = Path(local_dir_cfg) if local_dir_cfg else LOCAL_DATA_DIR
+        secret_dir_cfg = self._config["paths"]["secret_dir"]
+        self._secret_dir = Path(secret_dir_cfg) if secret_dir_cfg else SECRET_DIR
 
         # 自动加载 LLM 配置（传参 > 环境变量 > .secret 文件）
         api_key, base_url = self._load_openai_config(openai_api_key, openai_base_url)
 
-        # 1. 初始化 Provider Registry
+        # 1. 初始化 Provider Registry（根据配置启用/禁用）
         self.registry = ProviderRegistry()
-        self.registry.register(TencentAQuoteProvider())
-        self.registry.register(EastmoneyAQuoteProvider())
-        self.registry.register(FinnhubQuoteProvider())
+        prov_cfg = self._config["providers"]
+        if prov_cfg.get("tencent_a", {}).get("enabled", True):
+            self.registry.register(TencentAQuoteProvider())
+        if prov_cfg.get("eastmoney_a", {}).get("enabled", True):
+            self.registry.register(EastmoneyAQuoteProvider())
+        if prov_cfg.get("finnhub", {}).get("enabled", True):
+            self.registry.register(FinnhubQuoteProvider())
 
-        # 2. 初始化 Engine 组件
-        self.fetcher = DataFetcher(self.registry)
+        # 2. 初始化 Engine 组件（使用配置参数）
+        fetcher_cfg = self._config["fetcher"]
+        self.fetcher = DataFetcher(
+            self.registry,
+            max_retries=fetcher_cfg.get("max_retries", 1),
+            retry_delay=fetcher_cfg.get("retry_delay", 1.0),
+        )
         self.portfolio_scaffold = PortfolioScaffold()
         self.market_scaffold = MarketScaffold()
         self.context_builder = ContextBuilder(
@@ -94,14 +123,17 @@ class StocksEngine:
         )
         self.persistence = DataPersistence()
 
-        # 3. 初始化 LLM 模块（默认启用，如有配置则自动启用）
+        # 3. 初始化 LLM 模块（配置默认值，传参可覆盖）
+        llm_cfg = self._config["llm"]
+        enhancer_on = llm_enhancer_enabled if llm_enhancer_enabled is not None else llm_cfg.get("enhancer_enabled", True)
+        analysis_on = llm_analysis_enabled if llm_analysis_enabled is not None else llm_cfg.get("analysis_enabled", False)
         self.llm_enhancer = LLMEnhancer(
-            enabled=llm_enhancer_enabled and bool(api_key),
+            enabled=enhancer_on and bool(api_key),
             api_key=api_key,
             base_url=base_url,
         )
         self.llm_analysis = LLMAnalysis(
-            enabled=llm_analysis_enabled and bool(api_key),
+            enabled=analysis_on and bool(api_key),
             api_key=api_key,
             base_url=base_url,
         )
@@ -165,7 +197,7 @@ class StocksEngine:
             if env_key:
                 key = env_key
             else:
-                key_file = SECRET_DIR / "openai-key.md"
+                key_file = self._secret_dir / "openai-key.md"
                 if key_file.exists():
                     key = key_file.read_text(encoding="utf-8").strip()
 
@@ -176,7 +208,7 @@ class StocksEngine:
             if env_url:
                 url = env_url
             else:
-                url_file = SECRET_DIR / "openai-base-url.md"
+                url_file = self._secret_dir / "openai-base-url.md"
                 if url_file.exists():
                     url = url_file.read_text(encoding="utf-8").strip()
 
@@ -203,9 +235,9 @@ class StocksEngine:
         数据格式：扁平数组 [{"name": ..., "platform": ..., ...}, ...]
         """
         # 优先加载本地隐私数据
-        local_path = LOCAL_DATA_DIR / "financial_assets.json"
+        local_path = self._local_data_dir / "financial_assets.json"
         path = local_path if local_path.exists() else (self.data_dir / "financial_assets.json")
-        
+
         if not path.exists():
             return []
         try:
@@ -460,8 +492,8 @@ class StocksEngine:
 
     def _save_assets(self) -> None:
         """将当前资产列表保存到本地隐私文件。"""
-        local_path = LOCAL_DATA_DIR / "financial_assets.json"
-        LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        local_path = self._local_data_dir / "financial_assets.json"
+        self._local_data_dir.mkdir(parents=True, exist_ok=True)
         with open(local_path, "w", encoding="utf-8") as f:
             json.dump([a.to_dict() for a in self._assets], f, ensure_ascii=False, indent=2)
 

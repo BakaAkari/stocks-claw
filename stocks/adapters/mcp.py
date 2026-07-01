@@ -17,7 +17,6 @@ MCP 是 Anthropic 推出的协议，允许 LLM 调用外部工具。
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 
 class MCPAdapter:

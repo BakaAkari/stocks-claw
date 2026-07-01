@@ -1,11 +1,8 @@
 """分析脚手架 — 轻量规则计算，供 LLM 参考"""
 
 from typing import Optional
-from stocks.domain.models import (
-    FinancialAsset, PortfolioMapping, MarketState,
-    DriftCheck, Quote
-)
 
+from stocks.domain.models import DriftCheck, FinancialAsset, MarketState, PortfolioMapping, Quote
 
 # 资产类型到 bucket 的映射规则
 _ASSET_TYPE_TO_BUCKET = {
