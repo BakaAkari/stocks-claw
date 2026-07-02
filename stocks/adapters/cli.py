@@ -91,6 +91,16 @@ class CLIAdapter:
             metavar="JSON",
             help="更新投资者画像字段",
         )
+        asset_actions.add_argument(
+            "--advice-list",
+            action="store_true",
+            help="列出已确认保存的建议摘要",
+        )
+        asset_actions.add_argument(
+            "--advice-save",
+            metavar="JSON",
+            help="保存一条建议摘要；值为 AdviceRecord 字段的 JSON 对象",
+        )
         parser.add_argument(
             "--confirmed",
             action="store_true",
@@ -158,6 +168,8 @@ class CLIAdapter:
     def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
         if args.profile_get:
             return {"success": True, "data": self.engine.get_profile()}
+        if args.advice_list:
+            return {"success": True, "data": self.engine.list_advice()}
         if args.assets_list:
             return {
                 "success": True,
@@ -165,17 +177,28 @@ class CLIAdapter:
             }
 
         write_requested = any(
-            (args.asset_add, args.asset_update, args.asset_remove, args.profile_update)
+            (
+                args.asset_add,
+                args.asset_update,
+                args.asset_remove,
+                args.profile_update,
+                args.advice_save,
+            )
         )
         if not write_requested:
             return None
         if not args.confirmed:
             return {
                 "success": False,
-                "error": "Asset writes require --confirmed",
+                "error": "Memory writes require --confirmed",
             }
 
         try:
+            if args.advice_save:
+                advice = self.engine.save_advice(
+                    self._parse_json_object(args.advice_save)
+                )
+                return {"success": True, "data": advice, "action": "advice_saved"}
             if args.profile_update:
                 profile = self.engine.update_profile(
                     self._parse_json_object(args.profile_update)

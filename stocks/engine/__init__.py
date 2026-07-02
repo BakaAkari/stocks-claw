@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from stocks.domain.models import (
+    AdviceRecord,
     AnalysisContext,
     FinancialAsset,
     Instrument,
@@ -456,6 +457,34 @@ class StocksEngine:
             encoding="utf-8",
         )
         return dict(self._profile)
+
+    def save_advice(self, payload: dict) -> dict:
+        """保存用户确认过的建议摘要。"""
+        if not isinstance(payload, dict):
+            raise ValueError("Advice payload must be an object")
+        allowed = {
+            "instruments",
+            "direction",
+            "rationale_summary",
+            "based_on",
+            "boundary",
+        }
+        unknown = set(payload) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported advice fields: {sorted(unknown)}")
+        record = AdviceRecord.create(
+            instruments=payload.get("instruments", []),
+            direction=payload.get("direction", {}),
+            rationale_summary=payload.get("rationale_summary", ""),
+            based_on=payload.get("based_on", []),
+            boundary=payload.get("boundary", []),
+        )
+        self.persistence.save_advice(record)
+        return record.to_dict()
+
+    def list_advice(self) -> list[dict]:
+        """列出已确认保存的建议摘要。"""
+        return self.persistence.list_advice()
 
     def analyze_portfolio(self, assets: list[FinancialAsset]) -> PortfolioMapping:
         """分析投资组合结构。"""

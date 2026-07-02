@@ -64,12 +64,18 @@ uv run python -m stocks.adapters.cli --asset-remove '现金' --confirmed
 uv run python -m stocks.adapters.cli \
   --profile-update '{"risk_tolerance":"moderate","investment_horizon":"long_term"}' \
   --confirmed
+
+uv run python -m stocks.adapters.cli \
+  --advice-save '{"instruments":[{"market":"a","code":"000001","name":"平安银行"}],"direction":{"a:000001":"watch"},"rationale_summary":"现金占比较高，银行股继续观察。","based_on":["quotes","portfolio"],"boundary":[{"type":"fact","text":"现金占比较高"},{"type":"inference","text":"银行股继续观察"}]}' \
+  --confirmed
+
+uv run python -m stocks.adapters.cli --advice-list
 ```
 
 资产保存在 `.local/financial_assets.json`，画像保存在
 `.local/investor_profile.json`。没有本地资产文件时才读取
 `stocks/data/financial_assets.json` 示例。画像结构示例见
-`stocks/data/investor_profile.example.json`。
+`stocks/data/investor_profile.example.json`。确认保存的建议摘要位于 `.local/advice/`。
 
 MCP 对应工具：
 
@@ -77,6 +83,7 @@ MCP 对应工具：
 - `asset_add`、`asset_update`、`asset_remove`，参数必须含
   `"confirmed": true`
 - `profile_get`、`profile_update`，写操作同样必须确认
+- `advice_list`、`advice_save`，保存建议必须确认
 - `get_analysis_context`、`get_quotes`、`get_news`、
   `get_portfolio_summary`
 

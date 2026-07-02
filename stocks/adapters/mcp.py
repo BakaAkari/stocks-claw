@@ -60,6 +60,10 @@ class MCPAdapter:
             return {"success": True, "data": self.engine.get_profile()}
         elif method == "profile_update":
             return self._profile_update(params)
+        elif method == "advice_list":
+            return {"success": True, "data": self.engine.list_advice()}
+        elif method == "advice_save":
+            return self._advice_save(params)
         else:
             return {"error": f"Unknown method: {method}"}
 
@@ -95,7 +99,7 @@ class MCPAdapter:
             return None
         return {
             "success": False,
-            "error": "Asset writes require confirmed: true",
+            "error": "Memory writes require confirmed: true",
         }
 
     def _asset_add(self, params: dict) -> dict:
@@ -156,6 +160,19 @@ class MCPAdapter:
         try:
             profile = self.engine.update_profile(updates)
             return {"success": True, "data": profile, "action": "profile_updated"}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _advice_save(self, params: dict) -> dict:
+        confirmation_error = self._confirmed(params)
+        if confirmation_error:
+            return confirmation_error
+        advice = params.get("advice")
+        if not isinstance(advice, dict):
+            return {"success": False, "error": "advice object is required"}
+        try:
+            record = self.engine.save_advice(advice)
+            return {"success": True, "data": record, "action": "advice_saved"}
         except (TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
 
@@ -344,6 +361,23 @@ class MCPAdapter:
                     "required": ["profile", "confirmed"],
                     "properties": {
                         "profile": {"type": "object"},
+                        "confirmed": {"type": "boolean", "const": True},
+                    },
+                },
+            },
+            {
+                "name": "advice_list",
+                "description": "列出已确认保存的建议摘要。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "advice_save",
+                "description": "在用户明确确认后保存建议摘要。",
+                "parameters": {
+                    "type": "object",
+                    "required": ["advice", "confirmed"],
+                    "properties": {
+                        "advice": {"type": "object"},
                         "confirmed": {"type": "boolean", "const": True},
                     },
                 },

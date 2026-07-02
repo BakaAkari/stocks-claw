@@ -124,6 +124,59 @@ def test_profile_update_requires_confirmation_and_persists(adapter_engine, tmp_p
     assert adapter.handle_request({"method": "profile_get"})["data"] == stored
 
 
+def _advice_payload() -> dict:
+    return {
+        "instruments": [{"market": "a", "code": "000001", "name": "平安银行"}],
+        "direction": {"a:000001": "watch"},
+        "rationale_summary": "现金占比较高，银行股继续观察。",
+        "based_on": ["quotes", "portfolio", "profile"],
+        "boundary": [
+            {"type": "fact", "text": "现金占比较高"},
+            {"type": "inference", "text": "银行股继续观察"},
+        ],
+    }
+
+
+def test_mcp_advice_save_requires_confirmation_and_lists(adapter_engine, tmp_path):
+    adapter = MCPAdapter(adapter_engine)
+    denied = adapter.handle_request({
+        "method": "advice_save",
+        "params": {"advice": _advice_payload()},
+    })
+    assert denied["success"] is False
+    assert not (tmp_path / "advice").exists()
+
+    saved = adapter.handle_request({
+        "method": "advice_save",
+        "params": {"advice": _advice_payload(), "confirmed": True},
+    })
+
+    assert saved["success"] is True
+    assert saved["data"]["created_at"]
+    assert saved["data"]["direction"]["a:000001"] == "watch"
+    listed = adapter.handle_request({"method": "advice_list"})
+    assert listed["data"][0]["rationale_summary"] == "现金占比较高，银行股继续观察。"
+
+
+def test_cli_advice_save_requires_confirmation_and_lists(adapter_engine, capsys):
+    adapter = CLIAdapter(adapter_engine)
+
+    adapter.run(["--advice-save", json.dumps(_advice_payload(), ensure_ascii=False)])
+    denied = json.loads(capsys.readouterr().out)
+    assert denied["success"] is False
+
+    adapter.run([
+        "--advice-save",
+        json.dumps(_advice_payload(), ensure_ascii=False),
+        "--confirmed",
+    ])
+    assert json.loads(capsys.readouterr().out)["success"] is True
+
+    adapter.run(["--advice-list"])
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["data"][0]["direction"]["a:000001"] == "watch"
+
+
 def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engine):
     """Agent 可经 MCP 改持仓、改偏好，并立即取得个人建议上下文。"""
     adapter_engine._watchlist = []
