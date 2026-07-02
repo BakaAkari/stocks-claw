@@ -119,7 +119,7 @@ Agent 的统一入口：
 `stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
 精确值仍存在于结构化 `assets`，供受控调用方按需使用。
 
-## data_quality v2
+## data_quality v3
 
 `data_quality` 包含：
 
@@ -130,10 +130,20 @@ Agent 的统一入口：
 - `macro`：来源、已填充/缺失字段和错误
 - `technical_indicators`：覆盖与缺失标的
 - `market_events`：提取数量、紧急度和持仓命中数
+- `history_backfill`：启动时历史 K 线回填的结构化上报。字段包括
+  `status`、`requested_count`、`ok_count`、`skipped_cached_count`、
+  `failed_count` 与 `items`。每个 item 结构为
+  `{symbol, market, source, rows, status, error}`，其中 `status ∈ {ok, skipped_cached, failed}`
+  且 `source` 显式标注 `eastmoney_kline` / `yahoo_kline` / `unknown`。
+  失败标的记录 `error` 字符串；全部失败会触发 10 分钟冷却而非静默重试。
 
 通用状态包括 `ok`、`partial`、`degraded`、`missing`、
 `not_requested` 和 `not_configured`。美股单源失败额外标记
 `single_source_failed`，历史价格回填标记为 stale。
+
+`schema_version` 语义：v3 相对 v2 新增 `history_backfill` 节点；
+其余六个节点结构不变。字段增减为破坏性变更，须同步更新本文件、
+`_build_data_quality` 与 tests 断言(见 PLAN §4 红线)。
 
 ## 最小历史快照
 

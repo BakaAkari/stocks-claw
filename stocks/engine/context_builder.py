@@ -59,6 +59,7 @@ class ContextBuilder:
         watchlist: Optional[list] = None,
         news: Optional[list[NewsItem]] = None,
         news_requested: Optional[bool] = None,
+        history_backfill_report: Optional[list[dict]] = None,
     ) -> AnalysisContext:
         """构建完整分析上下文"""
         generated_at = datetime.now(timezone.utc).isoformat()
@@ -147,6 +148,7 @@ class ContextBuilder:
             technical_indicators=technical_indicators,
             market_events=market_events,
             news_digest=news_digest,
+            history_backfill_report=history_backfill_report or [],
         )
 
         # 10. 组装 AnalysisContext
@@ -252,10 +254,11 @@ class ContextBuilder:
         technical_indicators: dict[str, dict],
         market_events: list,
         news_digest: dict,
+        history_backfill_report: list[dict],
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "generated_at": generated_at,
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
@@ -273,6 +276,45 @@ class ContextBuilder:
                 market_events,
                 news_digest,
             ),
+            "history_backfill": self._history_backfill_quality(history_backfill_report),
+        }
+
+    @staticmethod
+    def _history_backfill_quality(report: list[dict]) -> dict:
+        """D0-3: 汇总历史回填结果为 data_quality 节点。
+
+        - status = ok:       所有标的 ok 或 skipped_cached
+        - status = partial:  至少一个 ok/skipped_cached 且至少一个 failed
+        - status = failed:   全部 failed
+        - status = not_requested: report 为空(未尝试回填)
+        """
+        if not report:
+            return {
+                "status": "not_requested",
+                "requested_count": 0,
+                "ok_count": 0,
+                "skipped_cached_count": 0,
+                "failed_count": 0,
+                "items": [],
+            }
+        ok_count = sum(1 for r in report if r.get("status") == "ok")
+        skipped = sum(1 for r in report if r.get("status") == "skipped_cached")
+        failed = sum(1 for r in report if r.get("status") == "failed")
+        effective = ok_count + skipped
+        total = len(report)
+        if failed == 0:
+            status = "ok"
+        elif effective == 0:
+            status = "failed"
+        else:
+            status = "partial"
+        return {
+            "status": status,
+            "requested_count": total,
+            "ok_count": ok_count,
+            "skipped_cached_count": skipped,
+            "failed_count": failed,
+            "items": list(report),
         }
 
     @staticmethod

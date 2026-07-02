@@ -267,9 +267,17 @@ class TestCompositeKLineProvider:
 # warm_history_cache
 # ------------------------------------------------------------------
 
+def _find_report(report: list[dict], symbol: str) -> dict:
+    """辅助: 从结构化报告中按 symbol 挑一项。"""
+    for item in report:
+        if item["symbol"] == symbol:
+            return item
+    raise AssertionError(f"symbol {symbol} not in report: {report}")
+
+
 class TestWarmHistoryCache:
     async def test_warm_empty_cache(self, tmp_path, sample_instrument_a):
-        """空缓存应 warm 数据"""
+        """空缓存应 warm 数据,并返回 status=ok 的结构化条目(D0-3)"""
         cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
         provider = Mock()
         provider.fetch = AsyncMock(return_value=pd.DataFrame({
@@ -285,14 +293,19 @@ class TestWarmHistoryCache:
             "volume_lot": [1_000_000] * 5,
         }))
 
-        warmed = await warm_history_cache(cache, provider, [sample_instrument_a], 5)
+        report = await warm_history_cache(cache, provider, [sample_instrument_a], 5)
         await cache.close()
 
-        assert warmed["a:000300"] == 5
+        assert isinstance(report, list) and len(report) == 1
+        item = _find_report(report, "a:000300")
+        assert item["status"] == "ok"
+        assert item["rows"] == 5
+        assert item["source"] == "eastmoney_kline"
+        assert item["error"] is None
         provider.fetch.assert_called_once_with(sample_instrument_a, 5)
 
     async def test_skip_sufficient_cache(self, tmp_path, sample_instrument_a):
-        """数据充足时跳过 warm"""
+        """数据充足时跳过 warm,状态为 skipped_cached(D0-3)"""
         cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
         # 先 warm 足够数据
         df = pd.DataFrame({
@@ -312,14 +325,17 @@ class TestWarmHistoryCache:
         provider = Mock()
         provider.fetch = AsyncMock(return_value=pd.DataFrame())
 
-        warmed = await warm_history_cache(cache, provider, [sample_instrument_a], 5)
+        report = await warm_history_cache(cache, provider, [sample_instrument_a], 5)
         await cache.close()
 
-        assert warmed["a:000300"] == 0
+        item = _find_report(report, "a:000300")
+        assert item["status"] == "skipped_cached"
+        assert item["error"] is None
+        assert item["rows"] >= 5
         provider.fetch.assert_not_called()
 
     async def test_warm_failure_continues(self, tmp_path, sample_instrument_a, sample_instrument_us):
-        """单个标的失败不影响其他"""
+        """单个标的失败不影响其他;失败项记录 error 字符串(D0-3)"""
         cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
         provider = Mock()
         provider.fetch = AsyncMock(side_effect=[
@@ -339,14 +355,22 @@ class TestWarmHistoryCache:
             }),
         ])
 
-        warmed = await warm_history_cache(cache, provider, [sample_instrument_a, sample_instrument_us], 5)
+        report = await warm_history_cache(cache, provider, [sample_instrument_a, sample_instrument_us], 5)
         await cache.close()
 
-        assert warmed["a:000300"] == 0
-        assert warmed["us:QQQ"] == 3
+        a_item = _find_report(report, "a:000300")
+        us_item = _find_report(report, "us:QQQ")
+        assert a_item["status"] == "failed"
+        assert a_item["rows"] == 0
+        assert a_item["error"] is not None and "API down" in a_item["error"]
+        assert a_item["source"] == "eastmoney_kline"
+        assert us_item["status"] == "ok"
+        assert us_item["rows"] == 3
+        assert us_item["source"] == "yahoo_kline"
+        assert us_item["error"] is None
 
     async def test_warm_empty_provider_response(self, tmp_path, sample_instrument_a):
-        """Provider 返回空数据时 warmed=0"""
+        """Provider 返回空数据时 status=failed(D0-3)"""
         cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
         provider = Mock()
         provider.fetch = AsyncMock(return_value=pd.DataFrame(columns=[
@@ -354,7 +378,10 @@ class TestWarmHistoryCache:
             "high", "low", "prev_close", "volume_lot",
         ]))
 
-        warmed = await warm_history_cache(cache, provider, [sample_instrument_a], 5)
+        report = await warm_history_cache(cache, provider, [sample_instrument_a], 5)
         await cache.close()
 
-        assert warmed["a:000300"] == 0
+        item = _find_report(report, "a:000300")
+        assert item["status"] == "failed"
+        assert item["rows"] == 0
+        assert item["error"] == "provider returned empty frame"

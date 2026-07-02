@@ -133,7 +133,7 @@ class TestBasicBuild:
         assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
-        assert context.data_quality["schema_version"] == 2
+        assert context.data_quality["schema_version"] == 3
         assert context.data_quality["quotes"]["status"] == "ok"
         assert context.data_quality["quotes"]["item_count"] == 1
         assert context.data_quality["news"]["status"] == "not_requested"
@@ -725,3 +725,112 @@ class TestAnalysisContextSerialization:
         assert data["technical_indicators"]["a:000001"]["status"] == "missing"
         assert data["technical_indicators"]["a:000001"]["data_points"] == 1
         assert data["data_quality"]["technical_indicators"]["status"] == "missing"
+
+
+class TestHistoryBackfillQuality:
+    """D0-3:_history_backfill_quality 聚合语义(纯单元,不走 build)。"""
+
+    def test_not_requested_when_empty_report(self, mock_fetcher, mock_scaffolds):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        node = builder._history_backfill_quality([])
+        assert node["status"] == "not_requested"
+        assert node["requested_count"] == 0
+        assert node["ok_count"] == 0
+        assert node["failed_count"] == 0
+        assert node["items"] == []
+
+    def test_ok_when_all_ok_or_skipped(self, mock_fetcher, mock_scaffolds):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        report = [
+            {"symbol": "a:000300", "market": "a", "source": "eastmoney_kline",
+             "rows": 60, "status": "ok", "error": None},
+            {"symbol": "us:QQQ", "market": "us", "source": "yahoo_kline",
+             "rows": 50, "status": "skipped_cached", "error": None},
+        ]
+        node = builder._history_backfill_quality(report)
+        assert node["status"] == "ok"
+        assert node["requested_count"] == 2
+        assert node["ok_count"] == 1
+        assert node["skipped_cached_count"] == 1
+        assert node["failed_count"] == 0
+
+    def test_partial_when_mixed(self, mock_fetcher, mock_scaffolds):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        report = [
+            {"symbol": "a:000300", "market": "a", "source": "eastmoney_kline",
+             "rows": 60, "status": "ok", "error": None},
+            {"symbol": "us:QQQ", "market": "us", "source": "yahoo_kline",
+             "rows": 0, "status": "failed", "error": "HTTPError: 429"},
+        ]
+        node = builder._history_backfill_quality(report)
+        assert node["status"] == "partial"
+        assert node["ok_count"] == 1
+        assert node["failed_count"] == 1
+
+    def test_failed_when_all_failed(self, mock_fetcher, mock_scaffolds):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        report = [
+            {"symbol": "a:000300", "market": "a", "source": "eastmoney_kline",
+             "rows": 0, "status": "failed", "error": "Timeout"},
+            {"symbol": "us:QQQ", "market": "us", "source": "yahoo_kline",
+             "rows": 0, "status": "failed", "error": "Timeout"},
+        ]
+        node = builder._history_backfill_quality(report)
+        assert node["status"] == "failed"
+        assert node["ok_count"] == 0
+        assert node["failed_count"] == 2
+
+    async def test_build_emits_schema_v3_with_history_backfill(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+        sample_assets,
+        sample_instruments,
+    ):
+        """D0-3: build() 未传 report 时,data_quality 出现 history_backfill=not_requested,schema=3"""
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        context = await builder.build(
+            assets=sample_assets,
+            constraints={},
+            profile={},
+            instruments=sample_instruments,
+            recent_snapshots=[],
+        )
+        assert context.data_quality["schema_version"] == 3
+        assert "history_backfill" in context.data_quality
+        assert context.data_quality["history_backfill"]["status"] == "not_requested"
+
+    async def test_build_propagates_history_backfill_report(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+        sample_assets,
+        sample_instruments,
+    ):
+        """D0-3: build() 传入 report,data_quality.history_backfill 反映聚合状态与 items"""
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        report = [
+            {"symbol": "a:000001", "market": "a", "source": "eastmoney_kline",
+             "rows": 60, "status": "ok", "error": None},
+            {"symbol": "a:000002", "market": "a", "source": "eastmoney_kline",
+             "rows": 0, "status": "failed", "error": "ConnectError"},
+        ]
+        context = await builder.build(
+            assets=sample_assets,
+            constraints={},
+            profile={},
+            instruments=sample_instruments,
+            recent_snapshots=[],
+            history_backfill_report=report,
+        )
+        node = context.data_quality["history_backfill"]
+        assert node["status"] == "partial"
+        assert node["ok_count"] == 1
+        assert node["failed_count"] == 1
+        assert len(node["items"]) == 2

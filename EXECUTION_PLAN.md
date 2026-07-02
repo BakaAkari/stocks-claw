@@ -485,13 +485,34 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 **问题**:`warm_history_cache` 的返回值(每标的回填行数)在调用点被丢弃;**warm 全部失败也执行 `self._history_warmed = True`,进程内永不重试**;`data_quality` 无任何回填状态节点——审计方只能靠翻磁盘缓存文件才发现 A 股 6/6 回填失败,系统自己不上报。
 **证据**:`.local/history/` 中 a_* 六文件各 1 条 realtime 记录 vs us/crypto 文件 60-61 条 provider 日 K,同一次运行落差如此之大,当次 test_run 的 data_quality 却无迹可寻。
 
-- [ ] 【验证前提】确认 `stocks/engine/__init__.py:555` 的 `await warm_history_cache(...)` 结果未接收;确认 `_history_warmed = True` 在 try 内无条件执行。
-- [ ] warm 结果(每标的:回填行数/所用源/失败原因)保存在 engine 实例,经 `build_context` 注入 `data_quality` 新节点 `history_backfill`(整体 status:`ok/partial/failed` + per-instrument 明细)。
-- [ ] 回填全部为 0 行时不置 `_history_warmed=True`,下次 build 重试;为避免每次 build 都打满上游,加最小退避(如距上次失败 < 10 分钟内不重试),策略在完成记录注明。
-- [ ] `data_quality` 新增节点属于 AnalysisContext 内容变化:核对 `stocks/DATA_MODEL.md` 对 data_quality 的描述粒度,若列节点清单则同步;`schema_version` 是否升级由"DATA_MODEL 是否把节点清单列为 schema 约束"决定,判断依据写入完成记录(红线:变更 schema 必须三处同步)。
-- [ ] 新增测试:warm 全失败 → `history_backfill.status="failed"` 且技术指标节点非 ok(与 D0-1 联动);warm 部分成功 → partial。
+- [x] 【验证前提】确认 `stocks/engine/__init__.py:555` 的 `await warm_history_cache(...)` 结果未接收;确认 `_history_warmed = True` 在 try 内无条件执行。
+- [x] warm 结果(每标的:回填行数/所用源/失败原因)保存在 engine 实例,经 `build_context` 注入 `data_quality` 新节点 `history_backfill`(整体 status:`ok/partial/failed` + per-instrument 明细)。
+- [x] 回填全部为 0 行时不置 `_history_warmed=True`,下次 build 重试;为避免每次 build 都打满上游,加最小退避(如距上次失败 < 10 分钟内不重试),策略在完成记录注明。
+- [x] `data_quality` 新增节点属于 AnalysisContext 内容变化:核对 `stocks/DATA_MODEL.md` 对 data_quality 的描述粒度,若列节点清单则同步;`schema_version` 是否升级由"DATA_MODEL 是否把节点清单列为 schema 约束"决定,判断依据写入完成记录(红线:变更 schema 必须三处同步)。
+- [x] 新增测试:warm 全失败 → `history_backfill.status="failed"` 且技术指标节点非 ok(与 D0-1 联动);warm 部分成功 → partial。
 
 **验收**:模拟 A 股回填失败,`data_quality` 一眼可见 history_backfill 失败明细,prompt 中对应标的带"指标不可用"标注。
+
+**完成记录**(2026-07-02):
+- 提交:待补(commit hash 见 D0-3 完成 commit)
+- 验证前提证据:
+  - `stocks/engine/__init__.py:555` 原代码 `await warm_history_cache(...)` 返回值未接收(改前 grep 已核实,当前已重写为接收结构化 report)。
+  - 原 `try` 分支内 `self._history_warmed = True` 无条件执行,重写后仅当 `effective = ok+skipped_cached > 0` 才置真。
+- 实现要点:
+  - `stocks/engine/history_provider.py:280-352`:`warm_history_cache` 返回类型由 `dict[str,int]` 变为 `list[dict]`,每项 `{symbol, market, source, rows, status, error}`;`status ∈ {ok, skipped_cached, failed}`;`source` 通过 `_MARKET_TO_HISTORY_SOURCE` 映射到 `eastmoney_kline` / `yahoo_kline` / `unknown`,与 `CompositeKLineProvider.fetch` 路由一致。
+  - `stocks/engine/__init__.py`:新增实例字段 `_history_backfill_report`、`_history_warm_last_failed_at`、`_history_warm_retry_cooldown = timedelta(minutes=10)`;`build_context` 中先判断冷却是否过期,再决定是否调用 warm;失败(所有标的都不是 ok/skipped_cached)时**不置 `_history_warmed=True`**、**打冷却时间戳**,并在日志中提示。**退避策略**:自上次全失败起 10 分钟内不再重试,10 分钟后同一 engine 实例仍在则允许重试一次。
+  - `stocks/engine/context_builder.py`:`build()` 增加可选参数 `history_backfill_report`;新增 `_history_backfill_quality()` 方法,产出 `history_backfill` 节点,聚合规则:`all ok/skipped_cached → ok`,`mixed → partial`,`all failed → failed`,`empty → not_requested`。
+- Schema 判断(红线):`stocks/DATA_MODEL.md` §data_quality 显式列举了 6 个节点清单,属于 schema 约束——**新增 `history_backfill` 节点必须升 v2→v3**;同时保留 `AnalysisContext.schema_version=6` 不动(仅 `data_quality.schema_version` 升级)。已同步更新 `stocks/DATA_MODEL.md`(v3 描述 + 节点字段清单)、`context_builder._build_data_quality` 及 2 处 tests 断言(`test_context_builder.py:136`、`test_end_to_end.py:360`)。
+- 测试:
+  - `tests/engine/test_history_provider.py::TestWarmHistoryCache` 4 用例改造为断言结构化 report(status/source/error),明确验证 `eastmoney_kline` / `yahoo_kline` source 标签、`provider returned empty frame` error 文案。
+  - `tests/engine/test_context_builder.py::TestHistoryBackfillQuality` 新增 6 用例,覆盖 empty→not_requested、all ok/skipped→ok、mixed→partial、all failed→failed、build 默认路径 schema=3、build 显式传 report 反映到 data_quality。
+  - `tests/engine/test_end_to_end.py::TestHistoryBackfillCooldown` 新增 2 用例,通过 `patch("stocks.engine.warm_history_cache")` 验证冷却期内不再重试与冷却过期后允许重试的完整状态机。
+- 与 D0-1 联动:回填失败时 A 股 6 标的历史缓存为空 → `_enrich_with_indicators` 得到单条实时数据 → `data_points=1` → D0-1 判级 `missing` → 顶层 `technical_indicators.status=missing` 且 `raw_prompt` 内每标的写 `[指标不可用]`;`history_backfill.status=failed` 与技术指标 `missing` 双通道显现,验收要求满足。
+- 4 gates(2026-07-02):
+  - `uv run ruff check stocks tests` → All checks passed
+  - `uv run python -m pytest -q` → 343 passed(相较 D0-2 后 335 pass 增加 8 用例)
+  - `uv run python -m compileall -q stocks tests` → 0 exit
+  - `uv run python -m stocks.adapters.cli --output json --no-news --no-quotes` → `data_quality.history_backfill` 节点存在且 `status="not_requested"`(未 warm 场景符合预期)
 
 ### D0-4 fallback 配置语义修正(降级链真实化)
 

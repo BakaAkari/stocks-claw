@@ -265,60 +265,88 @@ class CompositeKLineProvider:
 # 辅助：初始化时 warm HistoryCache
 # ------------------------------------------------------------------
 
+# D0-3:市场 → 主历史 provider 名称映射,与 CompositeKLineProvider.fetch 路由保持一致。
+_MARKET_TO_HISTORY_SOURCE: dict[str, str] = {
+    "a": "eastmoney_kline",
+    "us": "yahoo_kline",
+    "crypto": "yahoo_kline",
+}
+
+
+def _resolve_history_source(market: str) -> str:
+    return _MARKET_TO_HISTORY_SOURCE.get(market, "unknown")
+
+
 async def warm_history_cache(
     cache: HistoryCache,
     provider: CompositeKLineProvider,
     instruments: list[Instrument],
     lookback_days: int = 60,
-) -> dict[str, int]:
-    """为给定标的列表 warm HistoryCache
-
-    只 warm 当前缓存中数据不足 lookback_days 的标的。
-    单个标的失败不阻塞整体流程，且仅记录 info 级别日志避免噪音。
+) -> list[dict]:
+    """为给定标的列表 warm HistoryCache,返回结构化回填报告(D0-3)。
 
     Returns:
-        dict: {instrument_key: warmed_rows}
+        list[dict]: 每标的一项 {symbol, market, source, rows, status, error},
+        status ∈ {"ok","skipped_cached","failed"}。上层据此可拼装 data_quality.history_backfill。
     """
-    warmed = {}
+    report: list[dict] = []
 
     for inst in instruments:
         key = f"{inst.market}:{inst.code}"
-        # 检查当前缓存数据量
+        source = _resolve_history_source(inst.market)
+
+        # 检查当前缓存数据量;≥80% 视为已足
         try:
             df = await cache.get_history(inst, lookback_bars=lookback_days, include_disk=True)
         except Exception:
             df = pd.DataFrame()
-        if len(df) >= lookback_days * 0.8:  # 已有 80% 数据，跳过
-            warmed[key] = 0
+        if len(df) >= lookback_days * 0.8:
+            report.append({
+                "symbol": key, "market": inst.market, "source": source,
+                "rows": len(df), "status": "skipped_cached", "error": None,
+            })
             continue
 
-        # 拉取历史数据（带一次退避重试）
+        # 拉取历史数据(带一次退避重试)
         hist_df = pd.DataFrame(columns=_HISTORY_COLUMNS)
+        last_error: str | None = None
         for attempt in range(2):
             try:
                 hist_df = await provider.fetch(inst, lookback_days)
                 if not hist_df.empty:
+                    last_error = None
                     break
             except Exception as e:
+                last_error = f"{type(e).__name__}: {e}"
                 if attempt == 0:
                     await asyncio.sleep(1.0)
                     continue
                 logger.info(f"Warm failed for {inst.code} after retry: {e}")
-                warmed[key] = 0
-                break
-        else:
-            if hist_df.empty:
-                logger.info(f"Warm empty for {inst.code}")
-                warmed[key] = 0
-                continue
 
-        if not hist_df.empty:
-            try:
-                await cache.warm(inst, hist_df)
-                warmed[key] = len(hist_df)
-                logger.info(f"Warmed {inst.code} with {len(hist_df)} rows")
-            except Exception as e:
-                logger.info(f"Warm cache write failed for {inst.code}: {e}")
-                warmed[key] = 0
+        if hist_df.empty:
+            if last_error is None:
+                last_error = "provider returned empty frame"
+            logger.info(f"Warm empty for {inst.code}: {last_error}")
+            report.append({
+                "symbol": key, "market": inst.market, "source": source,
+                "rows": 0, "status": "failed", "error": last_error,
+            })
+            continue
 
-    return warmed
+        try:
+            await cache.warm(inst, hist_df)
+            rows = len(hist_df)
+            logger.info(f"Warmed {inst.code} with {rows} rows")
+            report.append({
+                "symbol": key, "market": inst.market, "source": source,
+                "rows": rows, "status": "ok", "error": None,
+            })
+        except Exception as e:
+            logger.info(f"Warm cache write failed for {inst.code}: {e}")
+            report.append({
+                "symbol": key, "market": inst.market, "source": source,
+                "rows": 0, "status": "failed",
+                "error": f"cache_write:{type(e).__name__}: {e}",
+            })
+
+    return report

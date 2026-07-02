@@ -357,7 +357,7 @@ class TestJSONSerialization:
         d = context.to_dict()
 
         quality = d["data_quality"]
-        assert quality["schema_version"] == 2
+        assert quality["schema_version"] == 3
         assert quality["quotes"]["item_count"] == 1
         assert quality["news"]["sources"] == {"rss:36kr": 1}
         assert quality["market_events"]["event_count"] == 1
@@ -418,3 +418,66 @@ class TestDegradation:
         assert context is not None
         assert context.asset_count == 0
         assert context.raw_prompt_input != ""
+
+
+class TestHistoryBackfillCooldown:
+    """D0-3:历史回填失败后进入冷却,冷却期不再打上游;冷却过期后允许重试。"""
+
+    async def test_backfill_failure_sets_cooldown_and_reports_failed(self, e2e_engine):
+        """全部失败时:_history_warm_last_failed_at 被设置,data_quality.history_backfill.status=failed"""
+        # 缩短冷却便于验证过期分支
+        e2e_engine._history_warm_retry_cooldown = timedelta(milliseconds=50)
+
+        failed_report = [
+            {"symbol": f"{inst.market}:{inst.code}", "market": inst.market,
+             "source": "eastmoney_kline" if inst.market == "a" else "yahoo_kline",
+             "rows": 0, "status": "failed", "error": "HTTPError: 429"}
+            for inst in e2e_engine._watchlist
+        ]
+
+        with patch(
+            "stocks.engine.warm_history_cache",
+            new=AsyncMock(return_value=failed_report),
+        ) as mocked:
+            context = await e2e_engine.build_context()
+            assert mocked.await_count == 1
+            assert e2e_engine._history_warmed is False
+            assert e2e_engine._history_warm_last_failed_at is not None
+            node = context.data_quality["history_backfill"]
+            assert node["status"] == "failed"
+            assert node["failed_count"] == len(failed_report)
+
+            # 冷却期内再次 build:不再调用 warm_history_cache
+            context2 = await e2e_engine.build_context()
+            assert mocked.await_count == 1
+            # 报告字段沿用上次;data_quality 节点仍反映"上次全失败"的历史
+            assert context2.data_quality["history_backfill"]["status"] == "failed"
+
+    async def test_cooldown_expiry_allows_retry(self, e2e_engine):
+        """冷却过期后允许重试;成功后 _history_warmed=True 且不再打上游"""
+        e2e_engine._history_warm_retry_cooldown = timedelta(milliseconds=1)
+
+        ok_report = [
+            {"symbol": f"{inst.market}:{inst.code}", "market": inst.market,
+             "source": "eastmoney_kline" if inst.market == "a" else "yahoo_kline",
+             "rows": 60, "status": "ok", "error": None}
+            for inst in e2e_engine._watchlist
+        ]
+
+        # 让上一次失败在遥远过去,冷却肯定过期
+        e2e_engine._history_warm_last_failed_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        e2e_engine._history_warmed = False
+
+        with patch(
+            "stocks.engine.warm_history_cache",
+            new=AsyncMock(return_value=ok_report),
+        ) as mocked:
+            context = await e2e_engine.build_context()
+            assert mocked.await_count == 1  # 冷却已过,重新尝试
+            assert e2e_engine._history_warmed is True
+            assert e2e_engine._history_warm_last_failed_at is None
+            assert context.data_quality["history_backfill"]["status"] == "ok"
+
+            # 已 warmed,再次 build 不再调用
+            await e2e_engine.build_context()
+            assert mocked.await_count == 1

@@ -19,7 +19,7 @@ import logging
 import os
 import re
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -196,6 +196,11 @@ class StocksEngine:
         # 2.4 初始化历史 K 线提供者（用于启动时回填历史数据）
         self._history_provider = CompositeKLineProvider()
         self._history_warmed = False
+        # D0-3:历史回填状态与冷却
+        self._history_backfill_report: list[dict] = []
+        self._history_warm_last_failed_at: datetime | None = None
+        # 距上次失败 < 10 分钟内不重试,防止每次 build 打满上游
+        self._history_warm_retry_cooldown = timedelta(minutes=10)
 
         # 3. 初始化可选的兼容分析模块（主分析仍由外部 Agent 完成）
         llm_cfg = self._config["llm"]
@@ -548,20 +553,46 @@ class StocksEngine:
         # 0. 确定要获取行情的标的
         instruments = self._watchlist if include_quotes else []
 
-        # 1. Warm history cache if not yet warmed (fetch historical klines for technical indicators)
-        if not self._history_warmed and self.history_cache and instruments:
+        # 1. Warm history cache if not yet warmed (D0-3:结构化上报 + 冷却重试)
+        cooldown_active = False
+        if self._history_warm_last_failed_at is not None:
+            elapsed = datetime.now(timezone.utc) - self._history_warm_last_failed_at
+            cooldown_active = elapsed < self._history_warm_retry_cooldown
+
+        if (
+            not self._history_warmed
+            and not cooldown_active
+            and self.history_cache
+            and instruments
+        ):
             try:
                 logger.info(f"Warming history cache for {len(instruments)} instruments...")
-                await warm_history_cache(
+                report = await warm_history_cache(
                     self.history_cache,
                     self._history_provider,
                     instruments,
                     lookback_days=60,
                 )
-                self._history_warmed = True
-                logger.info("History cache warm complete")
+                self._history_backfill_report = report
+                # 只要有任一标的真正成功回填或缓存已足,视为进程内不再重试;
+                # 全部失败(无 ok/skipped_cached)则保留 _history_warmed=False 允许下次重试,
+                # 并置冷却时间戳避免每次 build 都打上游。
+                effective = [
+                    r for r in report if r["status"] in ("ok", "skipped_cached")
+                ]
+                if effective:
+                    self._history_warmed = True
+                    self._history_warm_last_failed_at = None
+                    logger.info(f"History cache warm complete: {len(effective)}/{len(report)} usable")
+                else:
+                    self._history_warm_last_failed_at = datetime.now(timezone.utc)
+                    logger.warning(
+                        f"History cache warm all-failed for {len(report)} instruments; "
+                        f"cooldown {self._history_warm_retry_cooldown} before retry"
+                    )
             except Exception as e:
-                logger.warning(f"History cache warm failed: {e}")
+                logger.warning(f"History cache warm raised: {e}")
+                self._history_warm_last_failed_at = datetime.now(timezone.utc)
 
         # 2. 获取新闻（或空列表）
         news: list[NewsItem] = []
@@ -586,6 +617,7 @@ class StocksEngine:
             watchlist=self._watchlist,
             news=news,
             news_requested=include_news,
+            history_backfill_report=self._history_backfill_report,
         )
 
         # 保存最小快照，供下一次上下文进行前后对照。
