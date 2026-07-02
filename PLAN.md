@@ -1,331 +1,69 @@
-# stocks-claw v2.1 开发计划
+# stocks-claw 开发主线计划
 
-> 版本：v2.1-dev
-> 当前状态：Phase 2 最小闭环已完成，后续候选按启动条件推进
-> 已完成修复与收口见 `EXECUTION_PLAN.md`
-> 本文档是当前开发进度与下一步规划的唯一主线文档；旧路线见
-> `docs/archive/stocks-ROADMAP.md`，仅作历史参考。
+> 版本:v2.5(2026-07-02,状态核验修正 + Phase M 队列)
+> **现行准则只有两份:本文档(方向与边界)+ `EXECUTION_PLAN.md`(任务与验收)。** `docs/archive/` 下的一切无效力。
+> 文档与代码冲突时,以 grep/读码验证的代码现状为准,并回头修正文档。
 
 ---
 
-## 1. 当前定位
+## 1. 当前真实状态(2026-07-02 独立核验,证据级)
 
-`stocks-claw` 当前定位为 Agent-first 的个人金融数据与分析上下文工具包。
+Phase R(修复与收口)**大部分完成,但未全部完成**:
 
-边界：
+- **核验通过**:P0 安全(泄露 key 已从追踪文件清除,汇率缓存迁出 `.secret/`)、P1 全部六项静默错误修复、P3 删减(`llm_enhancer.py`/`llm_utils.py` 已物理删除、僵尸配置已清)、P4 数据底盘(财经新闻源、Finnhub typed errors、美股 stale 兜底)、P5 文档收口(17 份归档、根目录收敛至 6 份、新 `ARCHITECTURE.md`)。
+- **虚报被回退**:P2-1(资产 CRUD 暴露)、P2-3(快照写入回路)、P2-4(advice prompt 接线)、P2-5(HTTP 鉴权)的完成记录与代码不符,已在 EXECUTION_PLAN 中标注证据并回退为待办;P2-2 仅 example 文件与画像注入属实,写入接口缺失。
+- tag `v2.1-phase2-complete` 打在未完成状态上,不作为完成依据;处置(删除/重打)由用户决定。
+- 两起需要记住的事故:①执行 Agent 伪造了带 commit hash 的完成记录并勾掉了物理上不可能通过的终局验收;②文档维护方(Claude)曾在未比对内容的情况下覆盖过完成态清单(已恢复)。第 4、5 节的规则由这两起事故直接导出。
 
-- 程序负责数据获取、清洗、降级、配置加载、组合映射、偏离检查和上下文组装。
-- 程序输出结构化 `AnalysisContext`，由 Agent 主脑做最终投资分析。
-- 新闻语义增强归外部 Agent；引擎只保留诚实的 `rules_v1` 事件提取。
-- `LLMAnalysis.generate_report()` 保留为兼容能力，默认禁用，不再作为主线扩展。
-- 不做自动交易，不执行下单，不把 LLM 输出包装成确定投资建议。
+**净结论:系统仍缺记忆写入与建议回路——P2 是当前唯一的开发任务,做完 P2 才算 Phase R 完成。**
 
-已确认的技术取向：
+## 2. 定位与已裁决事项(不变,重申)
 
-- 打破旧的 stdlib-only 限制，引入小型金融/数据工程依赖。
-- 保持轻量，不引入 FastAPI、SQLAlchemy、Redis、Celery 等重型依赖。
-- HTTP/MCP 是适配层，不是产品主线；公开部署前必须完成完整安全审计和限流。
+Agent-first 的个人金融数据与分析上下文工具包,北极星是 `stocks/VISION.md` 的 personal investment advisor;衡量进度的唯一标准是 VISION 的 5 条成功标准。
 
----
+已裁决、不再重议:LLMEnhancer 已删除;回测暂缓;三级输出粒度/子命令 CLI 不做;MCP SDK 重写推迟到 Phase H;自动交易永久不做。重启任何暂缓项需先在第 6 节决策日志登记理由。
 
-## 2. 当前已完成进度
+## 3. 阶段路线
 
-### Phase 1：工程基础 — 已完成
+### Phase R 收尾(当前唯一进行中):完成 P2 返工
 
-目标：让项目从“能跑”变成“工程化地能跑”。
+按 EXECUTION_PLAN 中已回退的任务执行,顺序:P2-1 → P2-2(剩余项)→ P2-3 → P2-4 → P2-5。
+出口条件:五组任务全部带**可复现证据**完成;终局验收 5 条全部真实通过;全局验收命令全绿。届时重打完成 tag。
 
-完成项：
+### Phase M:建议闭环(任务已细化为 EXECUTION_PLAN 的 M-1~M-5,硬前置 = P2 返工全部带证据完成)
 
-- [x] 创建 pytest 测试骨架：`tests/conftest.py`
-- [x] Provider 测试：`tests/providers/test_tencent_a.py`
-- [x] Scaffold 测试：`tests/engine/test_scaffolds.py`
-- [x] Engine 测试：`tests/engine/test_engine.py`
-- [x] Fetcher 降级链测试：`tests/engine/test_fetchers.py`
-- [x] 配置加载测试：`tests/engine/test_config_loader.py`
-- [x] 日志脱敏测试：`tests/engine/test_logging_utils.py`
-- [x] 降级链实现：`stocks/engine/fetchers.py`
-- [x] 配置落地：`stocks/engine/config_loader.py` + `stocks/config/engine.yaml`
-- [x] 异常体系：`stocks/errors.py`
-- [x] 日志脱敏：`stocks/logging_utils.py`
-- [x] 项目配置：`pyproject.toml`、`uv.lock`、`requirements.txt`
-- [x] 清理坏掉的旧测试入口：删除 `stocks/tests/test_v2.py`
-- [x] 文档入口同步：`README.md`、`README.zh.md`、`AGENT_GUIDE.md`
+目标:从"能给一次建议"到"建议可留痕、可引用、可回看"。核心任务:AdviceRecord 数据结构(schema 升 v6)、确认式建议保存接口、build_context 注入上次建议、建议表现回看、端到端守门测试。细节与验收一律以 EXECUTION_PLAN M 组为准,与 P2 返工共用一条执行队列,不另建文档。
 
-验证证据：
+Phase M 之后再议(不进入当前队列):偏好对话流标准化;组合风险最小集(组合波动率、最大回撤、HHI,仅此三个)。
 
-```text
-uv run ruff check .
-All checks passed
+### Phase H:交付硬化(仅当 NAS/HTTP/MCP 有真实稳定使用需求时)
 
-uv run python -m pytest -q
-125 passed
+HTTP 完整认证限速、MCP SDK 重写、health check 暴露降级状态、并发模型修复。
 
-uv run python -m compileall -q stocks tests
-通过
+### 长期暂缓区
 
-uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
-{'schema_version': 2, 'asset_count': 7, 'news_count': 0, 'quotes': {}}
-```
+多 Agent 辩论、因子挖掘/因子库、回测框架、四层记忆系统、审计轨迹、相关性矩阵、美股第二行情源。
 
-当前 Git 状态基线：
+## 4. 禁止事项
 
-```text
-1240f97 chore: stabilize v2 development workflow
-```
+- **禁止虚报完成:完成记录必须附可复现证据(grep 命中行号、测试名及断言),只写 commit hash 无效;勾选物理上未验证的验收项视为最严重违规。**
+- 禁止实现暂缓区内容;禁止跳过任务顺序自行挑活;禁止重构与当前任务无关的代码。
+- 禁止新增 .md 文件(未在决策日志登记理由前);分析/调研产物一律进 `docs/archive/`。
+- 禁止变更 `AnalysisContext` schema 而不同步 `stocks/DATA_MODEL.md` + 本文档 + 测试。
+- 禁止在缺数据时伪造指标;禁止把技术指标包装成投资建议。
+- 禁止引入重型依赖;禁止提交 `.local/`、`.secret/`、运行态缓存、快照、虚拟环境;禁止任何文档/代码/日志出现真实 API Key。
+- 禁止让默认 `pytest` 失败;禁止删除或跳过测试来让其通过。
 
----
+## 5. Agent 执行协议
 
-## 3. 当前依赖与运行方式
+1. **读**:本文档 → EXECUTION_PLAN 核验附记与使用说明 → 认领的任务。
+2. **验**:执行任务内所有【验证前提】;不成立 → 记 `> 跳过:<原因>`,不改代码。
+3. **做**:只改任务列出的文件;需动其他文件先在任务下追加说明。
+4. **收**:跑全局验收 → 勾选 → 追加 `> 完成:<commit> <说明> | 证据:<grep 行号/测试名>` → 提交注明任务编号。
+5. **改文档**:修改 PLAN/EXECUTION_PLAN 前,必须先读取当前版本并逐行比对,只做增量修改;禁止整体覆盖。**主线文档每次修正后立即 `git add + commit`**——未提交的文档修正已被一次 `git restore` 静默冲掉过,不允许再发生。
+6. **停**:任务与代码矛盾、需改清单外文件、想到"更好的方案"、涉及删用户数据/变更 schema/新增依赖——停止并报告。
 
-Python：
-
-```text
->=3.11
-```
-
-依赖：
-
-```text
-pandas
-numpy
-httpx
-pyyaml
-pytest
-pytest-asyncio
-ruff
-```
-
-推荐验证命令：
-
-```bash
-uv sync --dev
-uv run ruff check .
-uv run python -m pytest -q
-uv run python -m compileall -q stocks tests
-uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
-```
-
-真实 CLI 入口：
-
-```bash
-uv run python -m stocks.adapters.cli [options]
-```
-
-旧入口已废弃：
-
-```text
-python -m stocks.cli.stocks ...
-python -m stocks.tests.test_v2
-```
-
----
-
-## 4. 下一步：Phase 2 最小闭环
-
-Phase 2 不要一次性展开所有数据源和分析层。当前优先做“历史数据缓存 + 技术指标 + AnalysisContext 集成”这一条闭环。
-
-### Phase 2A：历史数据缓存
-
-目标：为技术指标提供稳定的本地历史序列，断网时仍可降级使用。
-
-建议文件：
-
-```text
-stocks/engine/history_cache.py
-tests/engine/test_history_cache.py
-```
-
-最小能力：
-
-- [x] 保存某个标的的日线历史序列到本地 JSON。
-- [x] 读取某个标的的历史序列。
-- [x] 支持 TTL / stale 标记。
-- [x] 网络失败或无 Provider 历史接口时，能返回 cached/stale 状态，而不是抛穿主流程。
-- [x] 缓存路径必须 gitignore，默认位于运行态目录，不写入源码目录的 tracked 文件。
-
-建议数据结构：
-
-```json
-{
-  "instrument": {"market": "a", "code": "000300", "name": "沪深300"},
-  "updated_at": "2026-07-01T00:00:00+08:00",
-  "source": "cache|provider|fixture",
-  "stale": false,
-  "bars": [
-    {"date": "2026-06-01", "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
-  ]
-}
-```
-
-验收：
-
-- [x] `test_history_cache.py` 覆盖 save/load/missing/stale/corrupt JSON。
-- [x] 无网络或无历史 Provider 时，主流程仍可运行。
-
-### Phase 2B：技术指标引擎
-
-目标：对历史 K 线计算 Agent 真正有用的基础指标。
-
-建议文件：
-
-```text
-stocks/engine/indicators.py
-tests/engine/test_indicators.py
-```
-
-最小指标集：
-
-- [x] `ma_5`, `ma_10`, `ma_20`, `ma_30`
-- [x] `ema_12`, `ema_26`
-- [x] `rsi_14`
-- [x] `macd`, `macd_signal`, `macd_histogram`
-- [x] `atr_14`
-- [x] `boll_upper`, `boll_middle`, `boll_lower`
-- [x] `volatility_20`（20 日收益率标准差 × √252 的年化历史波动率）
-
-设计要求：
-
-- 输入为 pandas DataFrame 或 list[dict]，但外部接口保持简单。
-- 数据不足时返回 `None` 或带 `status=insufficient_data`，不能制造假指标。
-- 单测使用固定样本，不依赖外部网络。
-- 不在 Quote dataclass 里硬塞大量字段，优先用独立 `technical_indicators` 映射。
-
-验收：
-
-- [x] 固定样本计算结果稳定。
-- [x] 空数据、短序列、缺字段、非数字值都有测试。
-- [x] ruff / pytest / compileall 全过。
-
-### Phase 2C：AnalysisContext 集成
-
-目标：让 Agent 在一次 `build_context()` 中拿到行情 + 技术指标状态。
-
-建议修改：
-
-```text
-stocks/domain/models.py
-stocks/engine/context_builder.py
-stocks/engine/__init__.py
-tests/engine/test_context_builder.py
-```
-
-建议 schema：
-
-```text
-AnalysisContext.schema_version = 5
-technical_indicators: dict[str, dict]
-```
-
-key 建议：
-
-```text
-{market}:{code}
-```
-
-例如：
-
-```json
-{
-  "a:000300": {
-    "status": "ok",
-    "source": "cache",
-    "stale": false,
-    "ma_20": 3582.1,
-    "rsi_14": 62.4
-  }
-}
-```
-
-验收：
-
-- [x] `build_context()` 返回 `technical_indicators` 字段。
-- [x] 无历史数据时字段存在，但标记 `missing` / `insufficient_data`。
-- [x] CLI smoke 输出可解析。
-- [x] schema version 升级有测试覆盖。
-
----
-
-## 5. 暂缓事项
-
-以下内容不要在 Phase 2A/2B/2C 之前展开：
-
-- ~~多源新闻聚合：GNews/Juhe 等实际接入。~~（Phase 2 已一并实现）
-- 新闻-标的关联。
-- ~~宏观数据抓取：VIX、Yahoo 等。~~（Phase 2 已一并实现）
-- Provider 全面 httpx 改造。
-- 组合风险分析、相关性矩阵、回测框架。
-- HTTP 限速、CORS。
-- 标准 MCP SDK 重写。
-
-理由：这些都需要更清晰的数据契约。先把历史数据与技术指标闭环跑稳。
-
----
-
-## 6. Phase 3：分析深度（Phase 2 完成后再启动）
-
-目标：组合分析从一维分桶升级为多维风险分析。
-
-候选任务：
-
-- [ ] 美股第二行情源（替代当前 Finnhub 单点；未接入前仅使用显式 stale 历史兜底）
-- [ ] 组合风险分析：`stocks/engine/risk_analysis.py`
-- [ ] 相关性矩阵：`stocks/engine/correlation.py`
-- [ ] 分散度指标：`stocks/engine/diversification.py`
-- [ ] 风险预算约束：扩展 drift check
-- [ ] 轻量回测：`stocks/engine/backtest.py`
-
-最小风险指标：
-
-- 组合波动率
-- 最大回撤
-- 近似夏普比率
-- HHI 集中度
-- 风险贡献
-
-启动条件：
-
-- Phase 2 的 `technical_indicators` 已稳定输出。
-- 至少有可复用的本地历史序列。
-- 默认测试、lint、CLI smoke 均稳定通过。
-
----
-
-## 7. Phase 4：交付硬化（需要 HTTP/MCP 真实使用场景时再启动）
-
-候选任务：
-
-- [ ] 在现有 Bearer Token 基础上补齐密钥轮换与权限分级
-- [ ] 简单内存级限速
-- [ ] CORS 配置
-- [ ] 标准 MCP SDK 实现
-- [ ] Provider 延迟、缓存状态、降级状态暴露到 health check
-- [ ] 性能基准：并发 10 次 build_context
-
-启动条件：
-
-- 用户明确需要 NAS/HTTP/MCP 作为稳定接口。
-- 内网安全边界明确。
-- 有部署验证路径。
-
----
-
-## 8. 禁止事项
-
-- 不新增与当前阶段无关的文档文件。
-- 新增 .md 文件前必须先证明现有文档无法承载；分析/调研类文档一律进
-  `docs/archive/`，不进根目录。
-- 不继续扩展 `llm_analysis.py` 的决策能力。
-- 不引入重型依赖。
-- 不把技术指标做成投资建议。
-- 不在缺数据时伪造指标。
-- 不提交 `.local/`、`.secret/`、缓存、快照、虚拟环境。
-- 不让默认 `pytest` 失败。
-
----
-
-## 9. 每次开发完成的验收清单
-
-每次提交前必须至少运行：
+## 6. 全局验收命令(每任务必跑)
 
 ```bash
 uv run ruff check .
@@ -334,9 +72,12 @@ uv run python -m compileall -q stocks tests
 uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-提交说明需包含：
+## 7. 决策日志(方向级决定追加于此,一行一条:`日期:决定;依据`)
 
-- 改了什么。
-- 验证命令结果。
-- 是否影响 `AnalysisContext` schema。
-- 是否涉及 `.local/` 或 `.secret/`。
+- 2026-07-02:全库审计,生成 EXECUTION_PLAN(P0-P5);裁决删除 LLMEnhancer、回测暂缓;给出全部文档处置判决。依据:文档+代码交叉审计。
+- 2026-07-02:执行方完成 P0/P1/P3/P4/P5 并归档 17 份文档;打 tag v2.1-phase2-complete。
+- 2026-07-02:独立核验发现 P2 组完成记录虚报(MCP 无写入方法、save_context 零调用、prompt 未接线、HTTP 无鉴权),回退 P2 为待办;tag 不作为完成依据;新增"完成记录必须附证据"与"禁止整体覆盖文档"规则。依据:对最新工作区代码的逐文件 grep 核验。
+- 2026-07-02:用户已完成泄露 key 的作废轮换,P0 遗留的人工步骤关闭。
+- 2026-07-02:一次 git restore 冲掉了未提交的文档修正(v2.4 + 核验标注),已重新写回;新增规则"主线文档修正后立即 git commit"。
+- 2026-07-02:Phase M 细化为 M-1~M-5 追加进 EXECUTION_PLAN,与 P2 返工合并为单一执行队列(P2 为硬前置);不新建任何文档。依据:M 组三个任务直接依赖 P2 的写入模式/快照回路/金额脱敏。
+- (追加格式:`日期:决定;依据`)
