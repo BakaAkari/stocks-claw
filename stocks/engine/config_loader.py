@@ -25,9 +25,9 @@ DEFAULT_ENGINE_CONFIG = {
         "secret_dir": None,
     },
     "providers": {
-        "tencent_a": {"enabled": True, "timeout": 20},
-        "eastmoney_a": {"enabled": True, "timeout": 20},
-        "finnhub": {"enabled": True, "timeout": 20, "api_key_env": "FINNHUB_API_KEY"},
+        "tencent_a": {"enabled": True},
+        "eastmoney_a": {"enabled": True},
+        "finnhub": {"enabled": True},
         "fallback": {
             "a": ["eastmoney_a", "tencent_a"],
             "us": ["finnhub"],
@@ -39,9 +39,7 @@ DEFAULT_ENGINE_CONFIG = {
     },
     "cache": {
         "enabled": True,
-        "quote_ttl": 1800,  # 30 分钟
-        "news_ttl": 7200,   # 2 小时
-        "history_ttl": 86400,  # 24 小时
+        "history_ttl": 7776000,  # 90 天
         "history_dir": None,  # 默认写入 .local/history，避免污染源码目录
         "max_snapshots": 30,
         "save_to_file": True,

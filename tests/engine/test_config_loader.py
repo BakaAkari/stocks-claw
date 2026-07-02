@@ -119,7 +119,7 @@ class TestLoadEngineConfig:
         assert config["fetcher"]["max_retries"] == 1
         assert config["fetcher"]["retry_delay"] == 1.0
         assert config["providers"]["tencent_a"]["enabled"] is True
-        assert config["cache"]["quote_ttl"] == 1800
+        assert config["cache"]["history_ttl"] == 7776000
         assert config["cache"]["history_dir"] is None
         assert config["llm"]["analysis_enabled"] is False
 
@@ -149,7 +149,6 @@ class TestLoadEngineConfig:
             config = load_engine_config(config_path=yaml_path)
 
         assert config["providers"]["tencent_a"]["enabled"] is False
-        assert config["providers"]["tencent_a"]["timeout"] == 20  # 默认值
         assert config["providers"]["eastmoney_a"]["enabled"] is True  # 未覆盖
 
     def test_env_override(self, monkeypatch):
@@ -173,9 +172,9 @@ class TestLoadEngineConfig:
 
     def test_env_nested(self, monkeypatch):
         """环境变量多级嵌套路径"""
-        monkeypatch.setenv("STOCKS_CACHE__QUOTE_TTL", "3600")
+        monkeypatch.setenv("STOCKS_CACHE__HISTORY_TTL", "3600")
         config = load_engine_config(config_path=Path("/nonexistent"))
-        assert config["cache"]["quote_ttl"] == 3600
+        assert config["cache"]["history_ttl"] == 3600
 
     def test_yaml_error(self):
         """YAML 格式错误时抛出 ConfigError"""
@@ -240,20 +239,20 @@ class TestConfigIntegration:
         with tempfile.TemporaryDirectory() as tmpdir:
             yaml_path = Path(tmpdir) / "engine.yaml"
             yaml_path.write_text(
-                "fetcher:\n  max_retries: 5\ncache:\n  quote_ttl: 3600\n",
+                "fetcher:\n  max_retries: 5\ncache:\n  history_ttl: 3600\n",
                 encoding="utf-8",
             )
             # 环境变量覆盖 YAML
             monkeypatch.setenv("STOCKS_FETCHER__MAX_RETRIES", "10")
             # 环境变量覆盖默认值（YAML 中未设置）
-            monkeypatch.setenv("STOCKS_CACHE__NEWS_TTL", "7200")
+            monkeypatch.setenv("STOCKS_CACHE__MAX_SNAPSHOTS", "12")
             config = load_engine_config(config_path=yaml_path)
 
         # 环境变量覆盖 YAML
         assert config["fetcher"]["max_retries"] == 10
         # YAML 覆盖默认值
-        assert config["cache"]["quote_ttl"] == 3600
+        assert config["cache"]["history_ttl"] == 3600
         # 环境变量覆盖默认值
-        assert config["cache"]["news_ttl"] == 7200
+        assert config["cache"]["max_snapshots"] == 12
         # 默认值未改变
         assert config["fetcher"]["retry_delay"] == 1.0

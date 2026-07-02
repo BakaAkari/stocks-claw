@@ -85,7 +85,11 @@ class TestFetchQuotesNormal:
         registry, provider = registry_with_single_provider
         provider.fetch_batch.return_value = success_quotes
 
-        fetcher = DataFetcher(registry, max_retries=0)
+        fetcher = DataFetcher(
+            registry,
+            max_retries=0,
+            fallback_order={"a": ["eastmoney_a"]},
+        )
         result = await fetcher.fetch_quotes(sample_instruments)
 
         assert "a" in result
@@ -237,6 +241,20 @@ class TestFetchQuotesFallbackFail:
         assert log[0].result == "empty"
         assert log[0].fallback_provider is None
         assert log[0].primary_provider == "tencent_a"
+
+    def test_fallback_provider_respects_configured_order(
+        self,
+        registry_with_two_providers,
+    ):
+        registry, primary, fallback = registry_with_two_providers
+        fetcher = DataFetcher(
+            registry,
+            fallback_order={"a": [primary.name, fallback.name]},
+        )
+
+        selected = fetcher._pick_fallback_provider("a", primary.name)
+
+        assert selected is fallback
 
 
 # ------------------------------------------------------------------

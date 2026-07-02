@@ -16,15 +16,11 @@ providers:
   # A 股行情 Provider
   tencent_a:
     enabled: true
-    timeout: 20
   eastmoney_a:
     enabled: true
-    timeout: 20
   # 美股/加密货币 Provider
   finnhub:
     enabled: true
-    timeout: 20
-    api_key_env: FINNHUB_API_KEY
   # 备用 Provider 映射：市场 -> [备用1, 备用2]
   fallback:
     a:
@@ -42,12 +38,8 @@ fetcher:
 cache:
   # 启用本地缓存
   enabled: true
-  # 行情缓存 TTL（秒）
-  quote_ttl: 1800
-  # 新闻缓存 TTL（秒）
-  news_ttl: 7200
-  # 历史数据缓存 TTL（秒）
-  history_ttl: 86400
+  # 历史数据保留期（秒，90 天）
+  history_ttl: 7776000
   # 历史缓存目录；默认写入 .local/history，避免污染源码目录
   history_dir: null
   # 保留最大快照数

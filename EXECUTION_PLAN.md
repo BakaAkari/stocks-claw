@@ -213,11 +213,13 @@
 **文件**:`stocks/engine/llm_enhancer.py`、`stocks/engine/llm_utils.py`、`stocks/engine/__init__.py`
 **问题**:逐条新闻串行 1-2 次 LLM 调用(20 条 = 最多 40 次请求,单次超时 360s),产出仅 importance/sentiment 标签,下游只作可选覆盖;违反 v2"语义处理归 Agent"的边界哲学,投入产出比全库最差。
 
-- [ ] 【验证前提】确认 enhancer 输出在下游仅被 `MarketEventExtractor` 可选消费。
-- [ ] 删除 `llm_enhancer.py` 及其装配、后台模型校验线程(`_validate_in_background`,同时消除其无锁竞态)、`_ENHANCER_FALLBACK_CHAIN`;CLI 的 `--llm-enhancer` flag 移除或改为报错提示已移除。
-- [ ] `MarketEventExtractor` 固定走 `rules_v1` 路径(它对自己"关键词启发式"的定位是诚实的,保留)。
-- [ ] 若不愿删除:降级方案为"单次批量调用"(一次请求处理全部新闻)+ 30s 超时,但**默认仍禁用**。倾向直接删。
-- [ ] 更新 README / AGENT_GUIDE 中相关段落。
+- [x] 【验证前提】确认 enhancer 输出在下游仅被 `MarketEventExtractor` 可选消费。
+- [x] 删除 `llm_enhancer.py` 及其装配、后台模型校验线程(`_validate_in_background`,同时消除其无锁竞态)、`_ENHANCER_FALLBACK_CHAIN`;CLI 的 `--llm-enhancer` flag 移除或改为报错提示已移除。
+- [x] `MarketEventExtractor` 固定走 `rules_v1` 路径(它对自己"关键词启发式"的定位是诚实的,保留)。
+- [x] 若不愿删除:降级方案为"单次批量调用"(一次请求处理全部新闻)+ 30s 超时,但**默认仍禁用**。倾向直接删。
+- [x] 更新 README / AGENT_GUIDE 中相关段落。
+
+> 完成:022132c 删除 Enhancer 主链路与后台模型校验，事件提取固定为诚实的 rules_v1。
 
 **验收**:全量 build_context(含新闻)耗时回到秒级;pytest 全过。
 

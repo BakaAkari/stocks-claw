@@ -24,16 +24,14 @@ MINIMAL_CONFIG = {
         "secret_dir": None,
     },
     "providers": {
-        "tencent_a": {"enabled": True, "timeout": 20},
-        "eastmoney_a": {"enabled": True, "timeout": 20},
-        "finnhub": {"enabled": True, "timeout": 20},
+        "tencent_a": {"enabled": True},
+        "eastmoney_a": {"enabled": True},
+        "finnhub": {"enabled": True},
     },
     "fetcher": {"max_retries": 1, "retry_delay": 1.0},
     "cache": {
         "enabled": True,
-        "quote_ttl": 1800,
-        "news_ttl": 7200,
-        "history_ttl": 86400,
+        "history_ttl": 7776000,
         "history_dir": None,
         "max_snapshots": 30,
         "save_to_file": True,
@@ -475,4 +473,3 @@ class TestFetchNewsIntegration:
         minimal_engine.news_aggregator.fetch = AsyncMock(return_value=[])
         result = await minimal_engine.fetch_news()
         assert result == []
-

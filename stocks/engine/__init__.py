@@ -124,6 +124,7 @@ class StocksEngine:
             self.registry,
             max_retries=fetcher_cfg.get("max_retries", 1),
             retry_delay=fetcher_cfg.get("retry_delay", 1.0),
+            fallback_order=prov_cfg.get("fallback", {}),
         )
         self.portfolio_scaffold = PortfolioScaffold()
         self.market_scaffold = MarketScaffold()
@@ -216,9 +217,13 @@ class StocksEngine:
         返回 (api_key, base_url)。
         """
         # API Key
+        llm_cfg = self._config.get("llm", {})
         key = api_key
         if not key:
-            env_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            env_key = os.environ.get(
+                llm_cfg.get("api_key_env", "OPENAI_API_KEY"),
+                "",
+            ).strip()
             if env_key:
                 key = env_key
             else:
@@ -229,7 +234,10 @@ class StocksEngine:
         # Base URL
         url = base_url
         if not url:
-            env_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+            env_url = os.environ.get(
+                llm_cfg.get("base_url_env", "OPENAI_BASE_URL"),
+                "",
+            ).strip()
             if env_url:
                 url = env_url
             else:
@@ -536,8 +544,9 @@ class StocksEngine:
         if self.history_cache:
             try:
                 await self.history_cache.flush()
+                await self.history_cache.prune()
             except Exception as e:
-                logger.warning(f"History cache flush failed: {e}")
+                logger.warning(f"History cache maintenance failed: {e}")
 
         return context
 
@@ -619,21 +628,3 @@ class StocksEngine:
             conversion_source=conversion.source,
             conversion_rate=conversion.rate,
         )
-
-    # ------------------------------------------------------------------
-    # 内部工具
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _replace_context_field(
-        context: AnalysisContext, field: str, value
-    ) -> AnalysisContext:
-        """替换 AnalysisContext 的单个字段（frozen dataclass 辅助）。"""
-        # 使用 dataclasses.replace 的等效实现
-        from dataclasses import fields
-
-        kwargs = {}
-        for f in fields(context):
-            kwargs[f.name] = getattr(context, f.name)
-        kwargs[field] = value
-        return AnalysisContext(**kwargs)

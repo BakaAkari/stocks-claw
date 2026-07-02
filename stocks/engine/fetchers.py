@@ -1,4 +1,4 @@
-"""数据获取编排 — 并行获取行情和新闻，带降级链（Degradation Chain）"""
+"""行情获取编排 — 按配置执行 Provider 降级链。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 import urllib.error
 from typing import Optional
 
-from stocks.domain.models import Instrument, NewsItem, Quote
+from stocks.domain.models import Instrument, Quote
 from stocks.errors import (
     DegradationRecord,
     ProviderDataError,
@@ -15,7 +15,6 @@ from stocks.errors import (
     ProviderTimeoutError,
 )
 from stocks.providers.registry import ProviderRegistry
-from stocks.providers.rss_news import RSSNewsProvider
 
 
 class DataFetcher:
@@ -36,10 +35,12 @@ class DataFetcher:
         *,
         max_retries: int = 1,
         retry_delay: float = 1.0,
+        fallback_order: Optional[dict[str, list[str]]] = None,
     ):
         self.registry = registry
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.fallback_order = fallback_order or {}
         self._degradation_log: list[DegradationRecord] = []
 
     def get_degradation_log(self) -> list[DegradationRecord]:
@@ -89,21 +90,6 @@ class DataFetcher:
                     self._degradation_log.append(record)
 
         return quotes_by_market
-
-    async def fetch_news(
-        self,
-        keywords: list[str],
-        sources: list[str],
-        max_items: int = 20
-    ) -> list[NewsItem]:
-        """获取新闻 — 使用 RSS News Provider 获取财经新闻。"""
-        provider = RSSNewsProvider()
-        try:
-            items = await provider.fetch(max_items=max_items)
-            return items
-        except Exception:
-            # 新闻获取不阻断主流程，静默降级
-            return []
 
     # ------------------------------------------------------------------
     # 内部降级链
@@ -235,8 +221,16 @@ class DataFetcher:
         self, market: str, exclude: str
     ) -> Optional[object]:
         """为指定市场选择备用 Provider（排除已失败的主 Provider）"""
-        # 遍历所有 Provider，找支持该市场且不是 exclude 的
-        for name, provider in self.registry._providers.items():
-            if name != exclude and market in getattr(provider, "supported_markets", []):
+        configured = self.fallback_order.get(market, [])
+        candidates = configured or [
+            provider.name for provider in self.registry.list_for_market(market)
+        ]
+        for name in candidates:
+            provider = self.registry.get(name)
+            if (
+                provider is not None
+                and name != exclude
+                and market in getattr(provider, "supported_markets", [])
+            ):
                 return provider
         return None
