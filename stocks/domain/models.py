@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -265,6 +265,91 @@ class DriftCheck:
         }
 
 
+_ADVICE_DIRECTIONS = {"buy", "sell", "watch", "hold"}
+_ADVICE_BASED_ON = {"quotes", "news", "indicators", "macro", "portfolio", "profile"}
+_ADVICE_BOUNDARY_TYPES = {"fact", "inference"}
+
+
+@dataclass(frozen=True)
+class AdviceRecord:
+    """用户确认保存的建议摘要，不保存 LLM 长文。"""
+
+    created_at: str
+    instruments: list[dict]
+    direction: dict[str, str]
+    rationale_summary: str
+    based_on: list[str]
+    boundary: list[dict]
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        instruments: list[dict],
+        direction: dict[str, str],
+        rationale_summary: str,
+        based_on: list[str],
+        boundary: list[dict],
+    ) -> "AdviceRecord":
+        return cls(
+            created_at=datetime.now(timezone.utc).isoformat(),
+            instruments=instruments,
+            direction=direction,
+            rationale_summary=rationale_summary,
+            based_on=based_on,
+            boundary=boundary,
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AdviceRecord":
+        return cls(
+            created_at=str(data.get("created_at", "")),
+            instruments=list(data.get("instruments", [])),
+            direction=dict(data.get("direction", {})),
+            rationale_summary=str(data.get("rationale_summary", "")),
+            based_on=list(data.get("based_on", [])),
+            boundary=list(data.get("boundary", [])),
+        )
+
+    def __post_init__(self) -> None:
+        if not self.created_at:
+            raise ValueError("created_at is required")
+        if len(self.rationale_summary) > 500:
+            raise ValueError("rationale_summary must be 500 characters or fewer")
+        if not isinstance(self.instruments, list) or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("market"), str)
+            and isinstance(item.get("code"), str)
+            and isinstance(item.get("name"), str)
+            for item in self.instruments
+        ):
+            raise ValueError("instruments must be a list of {market, code, name}")
+        invalid_directions = set(self.direction.values()) - _ADVICE_DIRECTIONS
+        if invalid_directions:
+            raise ValueError(f"Unsupported advice directions: {sorted(invalid_directions)}")
+        invalid_sources = set(self.based_on) - _ADVICE_BASED_ON
+        if invalid_sources:
+            raise ValueError(f"Unsupported based_on values: {sorted(invalid_sources)}")
+        if not isinstance(self.boundary, list) or not all(
+            isinstance(item, dict)
+            and item.get("type") in _ADVICE_BOUNDARY_TYPES
+            and isinstance(item.get("text"), str)
+            and item.get("text")
+            for item in self.boundary
+        ):
+            raise ValueError("boundary must contain {type: fact|inference, text}")
+
+    def to_dict(self) -> dict:
+        return {
+            "created_at": self.created_at,
+            "instruments": self.instruments,
+            "direction": self.direction,
+            "rationale_summary": self.rationale_summary,
+            "based_on": self.based_on,
+            "boundary": self.boundary,
+        }
+
+
 @dataclass(frozen=True)
 class AnalysisContext:
     """统一分析上下文 — 核心接口契约
@@ -313,8 +398,11 @@ class AnalysisContext:
     # 数据质量与溯源摘要
     data_quality: dict[str, dict] = field(default_factory=dict)
 
+    # 最近确认保存的建议摘要
+    recent_advice: list[dict] = field(default_factory=list)
+
     # 元信息（带默认值）
-    schema_version: int = 5
+    schema_version: int = 6
 
     def to_dict(self) -> dict:
         return {
@@ -337,4 +425,5 @@ class AnalysisContext:
             "macro_snapshot": self.macro_snapshot,
             "technical_indicators": self.technical_indicators,
             "data_quality": self.data_quality,
+            "recent_advice": self.recent_advice,
         }

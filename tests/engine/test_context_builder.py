@@ -122,7 +122,7 @@ class TestBasicBuild:
         )
 
         assert isinstance(context, AnalysisContext)
-        assert context.schema_version == 5
+        assert context.schema_version == 6
         assert context.asset_count == 2
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
@@ -502,7 +502,7 @@ class TestDataQuality:
 
 
 class TestAnalysisContextSerialization:
-    async def test_to_dict_includes_schema_v4_indicators_and_data_quality(
+    async def test_to_dict_includes_schema_v6_indicators_data_quality_and_advice(
         self,
         mock_fetcher,
         mock_scaffolds,
@@ -510,7 +510,7 @@ class TestAnalysisContextSerialization:
         sample_instruments,
         temp_dir,
     ):
-        """to_dict 输出 schema v5、顶层事件、指标与 data_quality"""
+        """to_dict 输出 schema v6、顶层事件、指标、建议与 data_quality"""
         portfolio_scaffold, market_scaffold = mock_scaffolds
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
         builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold, history_cache=cache)
@@ -526,11 +526,12 @@ class TestAnalysisContextSerialization:
         await cache.close()
 
         data = context.to_dict()
-        assert data["schema_version"] == 5
+        assert data["schema_version"] == 6
         assert "market_events" in data
         assert "news_digest" in data
         assert "technical_indicators" in data
         assert "data_quality" in data
+        assert data["recent_advice"] == []
         assert data["technical_indicators"]["a:000001"]["status"] == "ok"
         assert data["technical_indicators"]["a:000001"]["data_points"] == 1
         assert data["data_quality"]["technical_indicators"]["status"] == "ok"

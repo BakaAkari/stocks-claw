@@ -158,7 +158,7 @@ class ContextBuilder:
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
             technical_indicators=technical_indicators,
             data_quality=data_quality,
-            schema_version=5,
+            schema_version=6,
         )
 
     def _get_fetcher_degradation_log(self) -> list[dict]:

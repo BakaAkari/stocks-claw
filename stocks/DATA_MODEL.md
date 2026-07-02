@@ -1,7 +1,7 @@
 # 现行数据模型
 
 本文只描述当前代码中的 schema。权威实现位于 `stocks/domain/models.py`，
-`AnalysisContext.schema_version` 当前为 `5`。
+`AnalysisContext.schema_version` 当前为 `6`。
 
 ## FinancialAsset
 
@@ -26,6 +26,18 @@
 - `preferences`
 - `constraints`
 - `updated_at`：写入时由系统更新
+
+## AdviceRecord
+
+用户确认保存的建议摘要，位于 `.local/advice/`，最多保留 30 条。它只保存摘要，
+不保存 LLM 长文：
+
+- `created_at`：系统生成的 UTC ISO 时间
+- `instruments`：`[{market, code, name}]`
+- `direction`：`{"market:code": "buy|sell|watch|hold"}`
+- `rationale_summary`：500 字以内摘要
+- `based_on`：`quotes`、`news`、`indicators`、`macro`、`portfolio`、`profile`
+- `boundary`：`[{type: "fact"|"inference", text}]`
 
 ## Instrument 与 Quote
 
@@ -85,7 +97,7 @@
 
 目标资产桶缺失时，当前占比按 0% 检查，不能跳过。
 
-## AnalysisContext v5
+## AnalysisContext v6
 
 Agent 的统一入口：
 
@@ -95,7 +107,7 @@ Agent 的统一入口：
 - 市场输入：`quotes`、`news`、`news_count`
 - 结构化事件：`market_events`、`news_digest`
 - 脚手架：`market_state`、`portfolio_mapping`、`drift_checks`
-- 历史：`recent_snapshots`
+- 历史：`recent_snapshots`、`recent_advice`
 - Agent 输入：`raw_prompt_input`
 - 扩展数据：`macro_snapshot`、`technical_indicators`
 - 质量与溯源：`data_quality`

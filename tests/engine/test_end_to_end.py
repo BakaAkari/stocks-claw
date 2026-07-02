@@ -289,7 +289,7 @@ class TestJSONSerialization:
         # 反序列化验证
         parsed = json.loads(json_str)
         assert parsed["asset_count"] == 2
-        assert parsed["schema_version"] == 5
+        assert parsed["schema_version"] == 6
         assert "quotes" in parsed
         assert "a" in parsed["quotes"]
         assert parsed["news_count"] == 1
@@ -299,6 +299,7 @@ class TestJSONSerialization:
         assert "technical_indicators" in parsed
         assert parsed["technical_indicators"]["a:000001"]["status"] == "ok"
         assert "data_quality" in parsed
+        assert "recent_advice" in parsed
         assert parsed["data_quality"]["quotes"]["status"] == "ok"
         assert parsed["data_quality"]["news"]["status"] == "ok"
         assert parsed["data_quality"]["macro"]["status"] == "ok"

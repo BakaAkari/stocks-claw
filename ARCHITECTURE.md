@@ -8,7 +8,7 @@
 `stocks-claw` 是 Agent 的个人金融上下文工具，不是自动交易系统。
 
 - Engine 负责读取确认过的金融记忆、获取市场数据、计算轻量脚手架、记录质量与溯源，
-  最终构建 `AnalysisContext v5`。
+  最终构建 `AnalysisContext v6`。
 - 外部 Agent 读取上下文并完成最终判断。
 - 可选 `LLMAnalysis` 能生成兼容报告，但默认关闭，不改变主边界。
 - 系统没有券商连接和下单能力。
@@ -27,7 +27,7 @@ assets/profile         quotes/news      snapshots/cache
   +-----------> ContextBuilder <------------+
                   |
                   v
-          AnalysisContext v5
+          AnalysisContext v6
                   |
                   v
              external Agent
@@ -65,7 +65,7 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - `news_sources.py` / `market_events.py`：新闻聚合、去重和规则事件提取。
 - `macro_data.py`：静态配置与 Yahoo Finance 宏观数据组合。
 - `exchange_rate.py`：外币估值与显式换算质量。
-- `persistence.py`：滚动最小上下文快照。
+- `persistence.py`：滚动最小上下文快照与确认建议摘要。
 - `llm_analysis.py`：默认关闭的兼容报告模块。
 
 ### domain
@@ -103,7 +103,7 @@ Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实�
 7. 记录行情、计算技术指标与宏观快照。
 8. 提取市场事件、构建组合映射、偏离检查和市场状态。
 9. 生成 `raw_prompt_input` 与 `data_quality`。
-10. 返回 `AnalysisContext v5`，随后保存本次最小快照。
+10. 返回 `AnalysisContext v6`，随后保存本次最小快照。
 
 由于“先读后写”，同一次运行不会把自身当作历史；第二次运行可以引用第一次快照。
 
