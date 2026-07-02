@@ -1,0 +1,13 @@
+{
+  "risk_tolerance": "moderate",
+  "investment_horizon": "long_term",
+  "preferences": [
+    "偏好低成本指数产品",
+    "保留充足流动性"
+  ],
+  "constraints": {
+    "prohibited_assets": [],
+    "notes": []
+  },
+  "updated_at": "2026-07-02T00:00:00+00:00"
+}

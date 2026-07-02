@@ -56,6 +56,10 @@ class MCPAdapter:
             return self._asset_update(params)
         elif method == "asset_remove":
             return self._asset_remove(params)
+        elif method == "profile_get":
+            return {"success": True, "data": self.engine.get_profile()}
+        elif method == "profile_update":
+            return self._profile_update(params)
         else:
             return {"error": f"Unknown method: {method}"}
 
@@ -141,6 +145,19 @@ class MCPAdapter:
             return {"success": False, "error": "name is required"}
         removed = self.engine.remove_asset(name)
         return {"success": removed, "data": name, "action": "removed"}
+
+    def _profile_update(self, params: dict) -> dict:
+        confirmation_error = self._confirmed(params)
+        if confirmation_error:
+            return confirmation_error
+        updates = params.get("profile")
+        if not isinstance(updates, dict):
+            return {"success": False, "error": "profile object is required"}
+        try:
+            profile = self.engine.update_profile(updates)
+            return {"success": True, "data": profile, "action": "profile_updated"}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
 
     def _get_quotes(self, params: dict) -> dict:
         """获取行情数据。
@@ -310,6 +327,23 @@ class MCPAdapter:
                     "required": ["name", "confirmed"],
                     "properties": {
                         "name": {"type": "string"},
+                        "confirmed": {"type": "boolean", "const": True},
+                    },
+                },
+            },
+            {
+                "name": "profile_get",
+                "description": "读取投资者偏好记忆。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "profile_update",
+                "description": "在用户明确确认后更新投资者偏好记忆。",
+                "parameters": {
+                    "type": "object",
+                    "required": ["profile", "confirmed"],
+                    "properties": {
+                        "profile": {"type": "object"},
                         "confirmed": {"type": "boolean", "const": True},
                     },
                 },

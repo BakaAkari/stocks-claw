@@ -125,6 +125,7 @@ class TestBasicBuild:
         assert context.asset_count == 2
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
+        assert "risk_tolerance: moderate" in context.raw_prompt_input
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
         assert context.data_quality["schema_version"] == 1

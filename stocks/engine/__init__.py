@@ -20,6 +20,7 @@ import logging
 import os
 import re
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -239,7 +240,7 @@ class StocksEngine:
         """加载所有配置文件。"""
         self._assets = self._load_assets_from_file()
         self._constraints = self._load_json("portfolio_constraints.json") or {}
-        self._profile = self._load_json("investor_profile.json") or {}
+        self._profile = self._load_profile()
         self._watchlist = self._load_watchlist()
 
     def _load_openai_config(
@@ -344,6 +345,18 @@ class StocksEngine:
                 continue
         return assets
 
+    def _load_profile(self) -> dict:
+        """加载本地投资者画像；兼容旧配置目录但不加载 example。"""
+        local_path = self._local_data_dir / "investor_profile.json"
+        if local_path.exists():
+            try:
+                data = json.loads(local_path.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else {}
+            except (json.JSONDecodeError, OSError):
+                return {}
+        legacy = self._load_json("investor_profile.json")
+        return legacy if isinstance(legacy, dict) else {}
+
     @staticmethod
     def _recover_legacy_currency(
         amount: float,
@@ -412,6 +425,49 @@ class StocksEngine:
     def load_assets(self) -> list[FinancialAsset]:
         """加载并返回用户资产列表。"""
         return list(self._assets)
+
+    def get_profile(self) -> dict:
+        """返回投资者偏好记忆副本。"""
+        return dict(self._profile)
+
+    def update_profile(self, updates: dict) -> dict:
+        """校验、合并并持久化投资者偏好记忆。"""
+        if not isinstance(updates, dict):
+            raise ValueError("Profile update must be an object")
+        allowed = {
+            "risk_tolerance",
+            "investment_horizon",
+            "preferences",
+            "constraints",
+        }
+        unknown = set(updates) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported profile fields: {sorted(unknown)}")
+        if "risk_tolerance" in updates and not isinstance(updates["risk_tolerance"], str):
+            raise ValueError("risk_tolerance must be a string")
+        if "investment_horizon" in updates and not isinstance(
+            updates["investment_horizon"], str
+        ):
+            raise ValueError("investment_horizon must be a string")
+        if "preferences" in updates and not (
+            isinstance(updates["preferences"], list)
+            and all(isinstance(item, str) for item in updates["preferences"])
+        ):
+            raise ValueError("preferences must be a string array")
+        if "constraints" in updates and not isinstance(
+            updates["constraints"], (list, dict)
+        ):
+            raise ValueError("constraints must be an array or object")
+
+        self._profile.update(updates)
+        self._profile["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._local_data_dir.mkdir(parents=True, exist_ok=True)
+        path = self._local_data_dir / "investor_profile.json"
+        path.write_text(
+            json.dumps(self._profile, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return dict(self._profile)
 
     def analyze_portfolio(self, assets: list[FinancialAsset]) -> PortfolioMapping:
         """分析投资组合结构。"""

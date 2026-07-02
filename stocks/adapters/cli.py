@@ -85,6 +85,16 @@ class CLIAdapter:
             metavar="NAME",
             help="按名称删除资产",
         )
+        asset_actions.add_argument(
+            "--profile-get",
+            action="store_true",
+            help="读取投资者画像并退出",
+        )
+        asset_actions.add_argument(
+            "--profile-update",
+            metavar="JSON",
+            help="更新投资者画像字段",
+        )
         parser.add_argument(
             "--confirmed",
             action="store_true",
@@ -150,13 +160,17 @@ class CLIAdapter:
             print(output_text)
 
     def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
+        if args.profile_get:
+            return {"success": True, "data": self.engine.get_profile()}
         if args.assets_list:
             return {
                 "success": True,
                 "data": [asset.to_dict() for asset in self.engine.load_assets()],
             }
 
-        write_requested = any((args.asset_add, args.asset_update, args.asset_remove))
+        write_requested = any(
+            (args.asset_add, args.asset_update, args.asset_remove, args.profile_update)
+        )
         if not write_requested:
             return None
         if not args.confirmed:
@@ -166,6 +180,11 @@ class CLIAdapter:
             }
 
         try:
+            if args.profile_update:
+                profile = self.engine.update_profile(
+                    self._parse_json_object(args.profile_update)
+                )
+                return {"success": True, "data": profile, "action": "profile_updated"}
             if args.asset_add:
                 data = self._parse_json_object(args.asset_add)
                 asset = FinancialAsset(**self._storage_asset_fields(data))

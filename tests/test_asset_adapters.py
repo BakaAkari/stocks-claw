@@ -93,3 +93,32 @@ def test_cli_asset_crud_round_trip(adapter_engine, tmp_path, capsys):
     adapter.run(["--asset-remove", "黄金", "--confirmed"])
     assert json.loads(capsys.readouterr().out)["success"] is True
     assert json.loads((tmp_path / "financial_assets.json").read_text()) == []
+
+
+def test_profile_update_requires_confirmation_and_persists(adapter_engine, tmp_path):
+    adapter = MCPAdapter(adapter_engine)
+    denied = adapter.handle_request({
+        "method": "profile_update",
+        "params": {"profile": {"risk_tolerance": "moderate"}},
+    })
+    assert denied["success"] is False
+    assert not (tmp_path / "investor_profile.json").exists()
+
+    updated = adapter.handle_request({
+        "method": "profile_update",
+        "params": {
+            "profile": {
+                "risk_tolerance": "moderate",
+                "investment_horizon": "long_term",
+                "preferences": ["低费率"],
+                "constraints": {"prohibited_assets": ["高杠杆"]},
+            },
+            "confirmed": True,
+        },
+    })
+
+    assert updated["success"] is True
+    stored = json.loads((tmp_path / "investor_profile.json").read_text())
+    assert stored["risk_tolerance"] == "moderate"
+    assert stored["updated_at"]
+    assert adapter.handle_request({"method": "profile_get"})["data"] == stored
