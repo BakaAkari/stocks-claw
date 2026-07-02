@@ -36,10 +36,6 @@ MINIMAL_CONFIG = {
         "max_snapshots": 30,
         "save_to_file": True,
     },
-    "news_sources": {
-        "rss": ["https://www.36kr.com/feed"],
-        "max_source_items": 20,
-    },
     "macro": {"enabled": True, "static_config": {}},
     "llm": {
         "analysis_enabled": False,
@@ -403,7 +399,7 @@ class TestNewModuleIntegration:
     def test_news_aggregator_initialized(self, minimal_engine):
         """NewsAggregator 正确初始化"""
         assert minimal_engine.news_aggregator is not None
-        assert len(minimal_engine.news_aggregator._providers) == 1
+        assert len(minimal_engine.news_aggregator._providers) == 3
 
     def test_macro_provider_initialized(self, minimal_engine):
         """默认启用 macro provider"""
@@ -433,7 +429,7 @@ class TestHealthCheckNewModules:
         assert "history_cache_enabled" in health
         assert health["history_cache_enabled"] is True
         assert "news_providers" in health
-        assert health["news_providers"] == 1
+        assert health["news_providers"] == 3
         assert "macro_provider_enabled" in health
         assert health["macro_provider_enabled"] is True
 
@@ -447,7 +443,7 @@ class TestHealthCheckNewModules:
         health = engine.health_check()
         assert health["history_cache_enabled"] is False
         assert health["macro_provider_enabled"] is False
-        assert health["news_providers"] == 1  # news 不受 cache 影响
+        assert health["news_providers"] == 3  # news 不受 cache 影响
 
 
 class TestFetchNewsIntegration:

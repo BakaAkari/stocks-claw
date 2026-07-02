@@ -1,26 +1,33 @@
 {
   "sources": [
     {
-      "name": "Yahoo Finance World News",
+      "name": "中新网财经",
       "type": "rss",
-      "url": "https://finance.yahoo.com/news/rssindex"
+      "url": "https://www.chinanews.com.cn/rss/finance.xml",
+      "language": "zh",
+      "enabled": true
     },
     {
-      "name": "GNews Multi-Asset",
-      "type": "gnews",
-      "query": "stock market gold nasdaq",
-      "lang": "en"
+      "name": "Google News 中文财经",
+      "type": "rss",
+      "url": "https://news.google.com/rss/search?q=%E8%B4%A2%E7%BB%8F%20OR%20A%E8%82%A1%20OR%20%E9%87%91%E8%9E%8D&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+      "language": "zh",
+      "enabled": true
     },
     {
-      "name": "Juhe Finance News",
-      "type": "juhe",
-      "category": "caijing",
-      "note": "中文财经新闻，免费额度100次/天，需配置 .secret/juhe-key.md"
+      "name": "Yahoo Finance",
+      "type": "rss",
+      "url": "https://finance.yahoo.com/news/rssindex",
+      "language": "en",
+      "enabled": true
     },
     {
-      "name": "Juhe Caijing News (ID 743)",
-      "type": "juhe_caijing",
-      "note": "中文财经新闻(澎湃新闻等)，需配置 .secret/juhe-caijing-key.md"
+      "name": "36kr",
+      "type": "rss",
+      "url": "https://www.36kr.com/feed",
+      "language": "zh",
+      "enabled": false,
+      "note": "科技创业媒体，仅作为可选补充源"
     }
   ]
 }

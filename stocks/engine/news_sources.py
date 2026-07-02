@@ -8,8 +8,8 @@
 
 使用方式：
     aggregator = NewsAggregator([
-        RSSNewsProvider("https://www.36kr.com/feed"),
-        RSSNewsProvider("https://rss.sina.com.cn/roll/finance/hot_roll.xml"),
+        RSSNewsProvider("https://www.chinanews.com.cn/rss/finance.xml"),
+        RSSNewsProvider("https://finance.yahoo.com/news/rssindex"),
     ])
     news = await aggregator.fetch(max_items=20)
 """

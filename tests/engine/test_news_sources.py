@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
 from stocks.domain.models import NewsItem
 from stocks.engine.news_sources import NewsAggregator
+from stocks.providers.rss_news import _parse_rss_item
 
 
 # Mock Provider 辅助类
@@ -82,6 +84,20 @@ class TestBasic:
         titles = [n.title for n in result]
         assert "News A" in titles
         assert "News B" in titles
+
+    def test_generic_rss_parser_preserves_source_metadata(self):
+        item = ET.fromstring(
+            "<item><title>财经新闻</title><link>https://example.com/finance</link>"
+            "<pubDate>Wed, 01 Jul 2026 10:00:00 +0800</pubDate>"
+            "<description>市场更新</description></item>"
+        )
+
+        news = _parse_rss_item(item, source_name="测试财经", language="zh")
+
+        assert news is not None
+        assert news.source_name == "测试财经"
+        assert news.language == "zh"
+        assert news.published_at is not None
 
 
 # ------------------------------------------------------------------

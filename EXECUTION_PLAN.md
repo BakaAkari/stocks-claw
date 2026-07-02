@@ -235,7 +235,7 @@
   - [x] `providers.*.timeout` → 传给 provider 或删;
   - [x] `cache.quote_ttl` / `news_ttl` → 实现或删;
   - [x] `save_to_file` / `max_snapshots` → 已由 P2-3 接线;
-  - [ ] `logging.desensitize` → 见 P3-3。
+  - [x] `logging.desensitize` → 见 P3-3。
 - [x] `HistoryCache.prune()`:在 engine 启动或每次 build 后调用,磁盘缓存获得清理路径。
 
 > 完成:290be6e 删除重复入口与手工替换器，配置驱动 fallback，清除假配置并接通缓存清理。
@@ -247,8 +247,10 @@
 **文件**:`stocks/logging_utils.py`、`stocks/engine/config_loader.py`
 **问题**:`desensitize: True` 是全库唯一出现"desensitize"的地方,无任何实现消费它——空头支票。
 
-- [ ] 实现最小脱敏 filter:日志消息中金额模式(`\d{4,}(\.\d+)?` 邻近资产上下文)与 key 模式(长十六进制/`sk-` 前缀)打码;挂到根 logger。
-- [ ] 或者:删除该配置项并在文档中如实说明"日志不脱敏,勿在共享环境开 DEBUG"。二选一,不允许保留假配置。
+- [x] 实现最小脱敏 filter:日志消息中金额模式(`\d{4,}(\.\d+)?` 邻近资产上下文)与 key 模式(长十六进制/`sk-` 前缀)打码;挂到根 logger。
+- [x] 或者:删除该配置项并在文档中如实说明"日志不脱敏,勿在共享环境开 DEBUG"。二选一,不允许保留假配置。（已选择实现配置行为）
+
+> 完成:caa40b4 engine 初始化应用 logging.level/desensitize，日志参数格式化后统一脱敏。
 
 **验收**:配置行为与实际一致。
 

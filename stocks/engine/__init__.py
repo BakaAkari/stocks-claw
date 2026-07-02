@@ -148,12 +148,24 @@ class StocksEngine:
             )
 
         # 2.2 初始化新闻聚合器
-        news_cfg = self._config.get("news_sources", {})
-        rss_urls = news_cfg.get("rss", ["https://www.36kr.com/feed"])
-        news_providers = [RSSNewsProvider(url) for url in rss_urls]
+        news_cfg = self._load_json("news_sources.json") or {}
+        rss_sources = [
+            source
+            for source in news_cfg.get("sources", [])
+            if source.get("type") == "rss" and source.get("enabled", True)
+        ]
+        news_providers = [
+            RSSNewsProvider(
+                source["url"],
+                source_name=source.get("name", "RSS"),
+                language=source.get("language", "unknown"),
+            )
+            for source in rss_sources
+            if source.get("url")
+        ]
         self.news_aggregator = NewsAggregator(
             providers=news_providers,
-            max_source_items=news_cfg.get("max_source_items", 20),
+            max_source_items=20,
         )
 
         # 2.3 初始化宏观数据提供者

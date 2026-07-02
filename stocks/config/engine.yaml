@@ -47,13 +47,6 @@ cache:
   # build_context 成功后保存最小化快照
   save_to_file: true
 
-news_sources:
-  # RSS 新闻源列表
-  rss:
-    - https://www.36kr.com/feed
-  # 每个源最大获取条数
-  max_source_items: 20
-
 macro:
   # 启用宏观数据采集
   enabled: true
