@@ -583,6 +583,7 @@ class StocksEngine:
             instruments=instruments,
             recent_snapshots=recent_snapshots,
             recent_advice=recent_advice,
+            watchlist=self._watchlist,
             news=news,
             news_requested=include_news,
         )

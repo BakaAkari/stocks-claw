@@ -13,6 +13,7 @@ from stocks.domain.models import (
     PortfolioMapping,
     Quote,
 )
+from stocks.engine.advice_review import attach_advice_performance
 from stocks.engine.fetchers import DataFetcher
 from stocks.engine.history_cache import HistoryCache
 from stocks.engine.indicators import TechnicalIndicators
@@ -55,6 +56,7 @@ class ContextBuilder:
         instruments: list,  # 要获取行情的标的列表
         recent_snapshots: list[dict],
         recent_advice: Optional[list[dict]] = None,
+        watchlist: Optional[list] = None,
         news: Optional[list[NewsItem]] = None,
         news_requested: Optional[bool] = None,
     ) -> AnalysisContext:
@@ -108,7 +110,14 @@ class ContextBuilder:
         # 7. 构建 MarketState
         market_state = self.market_scaffold.build(quotes)
 
-        # 8. 生成 raw_prompt_input（人类可读文本）
+        # 8. 对最近建议做历史表现事实回看
+        reviewed_advice = await attach_advice_performance(
+            recent_advice or [],
+            watchlist=watchlist or instruments,
+            history_cache=self.history_cache,
+        )
+
+        # 9. 生成 raw_prompt_input（人类可读文本）
         raw_prompt = self._build_raw_prompt(
             assets=assets,
             quotes=quotes,
@@ -122,7 +131,7 @@ class ContextBuilder:
             market_events=market_events,
             news_digest=news_digest,
             recent_snapshots=recent_snapshots,
-            recent_advice=recent_advice or [],
+            recent_advice=reviewed_advice,
         )
 
         data_quality = self._build_data_quality(
@@ -140,7 +149,7 @@ class ContextBuilder:
             news_digest=news_digest,
         )
 
-        # 9. 组装 AnalysisContext
+        # 10. 组装 AnalysisContext
         return AnalysisContext(
             generated_at=generated_at,
             assets=assets,
@@ -160,7 +169,7 @@ class ContextBuilder:
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
             technical_indicators=technical_indicators,
             data_quality=data_quality,
-            recent_advice=recent_advice or [],
+            recent_advice=reviewed_advice,
             schema_version=6,
         )
 
@@ -701,6 +710,24 @@ class ContextBuilder:
                         for item in boundary
                     )
                     lines.append(f" 边界: {boundary_text}")
+                performance = advice.get("performance", [])
+                if performance:
+                    for item in performance:
+                        instrument = item.get("instrument", {})
+                        label = (
+                            f"{instrument.get('name', '')}"
+                            f"({instrument.get('market', '')}:{instrument.get('code', '')})"
+                        )
+                        if item.get("status") == "ok":
+                            lines.append(
+                                f" 表现: {label} | 当时方向 {item.get('direction')} | "
+                                f"此后涨跌幅 {item.get('pct_change'):.2f}%"
+                            )
+                        else:
+                            lines.append(
+                                f" 表现: {label} | 当时方向 {item.get('direction')} | "
+                                f"status: no_data ({item.get('reason', 'unknown')})"
+                            )
             lines.append("")
 
         # 组合结构

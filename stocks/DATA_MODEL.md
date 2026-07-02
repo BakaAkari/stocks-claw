@@ -39,6 +39,9 @@
 - `based_on`：`quotes`、`news`、`indicators`、`macro`、`portfolio`、`profile`
 - `boundary`：`[{type: "fact"|"inference", text}]`
 
+`AnalysisContext.recent_advice` 会在构建上下文时附加派生的 `performance` 字段，
+用于并列展示建议日至最近历史收盘价的价格事实。该字段不写回 `.local/advice/`。
+
 ## Instrument 与 Quote
 
 `Instrument`：
