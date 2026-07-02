@@ -390,8 +390,10 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes --save 
 **文件**:`stocks/engine/context_builder.py`(若超 100 行则独立为 `advice_review.py` 并在任务下注明)
 **依赖**:M-1、已有 `HistoryCache`。
 
-- [ ] 对上次建议提及且在 watchlist 内的标的,用 HistoryCache 收盘价计算**自建议日至今的涨跌幅**;历史不足时输出 `status: "no_data"`,禁止伪造。
-- [ ] 结果并入【上次建议】段:每条建议附"当时方向 vs 此后实际表现"。**只并列事实,不打分、不下结论**——"说对了没有"的判断留给 Agent 主脑。
+- [x] 对上次建议提及且在 watchlist 内的标的,用 HistoryCache 收盘价计算**自建议日至今的涨跌幅**;历史不足时输出 `status: "no_data"`,禁止伪造。
+- [x] 结果并入【上次建议】段:每条建议附"当时方向 vs 此后实际表现"。**只并列事实,不打分、不下结论**——"说对了没有"的判断留给 Agent 主脑。
+
+> 完成:d555aab 用 HistoryCache 为最近建议附加 watchlist 标的表现事实。| 证据:`stocks/engine/advice_review.py:18` 计算派生 performance,`stocks/engine/context_builder.py:114`/`:713` 接入并输出【上次建议】表现事实,`tests/engine/test_advice_review.py:66`/`:85` 覆盖涨跌幅与 no_data。说明:`advice_review.py` 为 115 行,按本任务约定从 `context_builder.py` 拆出。
 
 **验收**:固定 fixture 测试(建议日 + 若干日 K → 涨跌幅正确;缺历史 → no_data)。
 
