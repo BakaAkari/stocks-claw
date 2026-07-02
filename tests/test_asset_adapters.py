@@ -122,3 +122,50 @@ def test_profile_update_requires_confirmation_and_persists(adapter_engine, tmp_p
     assert stored["risk_tolerance"] == "moderate"
     assert stored["updated_at"]
     assert adapter.handle_request({"method": "profile_get"})["data"] == stored
+
+
+def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engine):
+    """Agent 可经 MCP 改持仓、改偏好，并立即取得个人建议上下文。"""
+    adapter_engine._watchlist = []
+    adapter = MCPAdapter(adapter_engine)
+
+    asset_result = adapter.handle_request({
+        "method": "asset_add",
+        "params": {
+            "name": "应急现金",
+            "platform": "银行",
+            "amount": 12345,
+            "asset_type": "现金",
+            "currency": "CNY",
+            "confirmed": True,
+        },
+    })
+    profile_result = adapter.handle_request({
+        "method": "profile_update",
+        "params": {
+            "profile": {
+                "risk_tolerance": "conservative",
+                "preferences": ["保留应急流动性"],
+            },
+            "confirmed": True,
+        },
+    })
+    context_result = adapter.handle_request({
+        "method": "get_analysis_context",
+        "params": {
+            "include_news": False,
+            "include_quotes": False,
+            "include_history": False,
+        },
+    })
+
+    assert asset_result["success"] is True
+    assert profile_result["success"] is True
+    assert context_result["success"] is True
+    context = context_result["data"]
+    assert context["assets"][0]["amount"] == 12345
+    assert context["portfolio_profile"]["risk_tolerance"] == "conservative"
+    assert "risk_tolerance: conservative" in context["raw_prompt_input"]
+    assert "保留应急流动性" in context["raw_prompt_input"]
+    assert "12,345" not in context["raw_prompt_input"]
+    assert "请基于以上上下文给出投资组合分析和建议" in context["raw_prompt_input"]

@@ -230,7 +230,7 @@
 
 - [x] `DataFetcher.fetch_news()`:与 `NewsAggregator` 重复、忽略入参、new 无 URL 的 provider——删除。
 - [x] `_replace_context_field`:换用 `dataclasses.replace`,删除手工实现。
-- [ ] `engine.yaml` 僵尸项逐一处理(实现或删除,不留假配置):
+- [x] `engine.yaml` 僵尸项逐一处理(实现或删除,不留假配置):
   - [x] `providers.fallback`(降级顺序)→ 让 `_pick_fallback_provider` 真正读取它,顺带消除对 `registry._providers` 私有属性的访问;
   - [x] `providers.*.timeout` → 传给 provider 或删;
   - [x] `cache.quote_ttl` / `news_ttl` → 实现或删;
@@ -304,17 +304,21 @@
 
 **问题**:`stocks/` 目录下整套 v1 文档与当前系统矛盾却自称"当前主线";v2 五份文档大量重复且部分结论已被互相推翻。
 
-- [ ] 新建 `docs/archive/`,移入:`stocks/README.md`(v1 版)、`stocks/ARCHITECTURE.md`、`stocks/LLM_DRIVEN_DESIGN.md`、`stocks/ANALYSIS_RULES.md`、`stocks/NEWS_INPUT_RULES.md`、`stocks/DATA_SOURCES.md`(P0-1 清理 key 之后)、`stocks/REFACTOR_PRINCIPLES.md`、`stocks/ROADMAP.md`、`ARCHITECTURE_BOUNDARY_ANALYSIS.md`、`DESIGN_GAP_ANALYSIS.md`、`LLM_ENHANCER_ANALYSIS.md`、三份 `LLM_QUANT_*.md`。每份文件头部加一行:`> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。`
-- [ ] `MEMORY_RULES.md` 不归档——它是 P2 的需求规格,移到根目录或并入 AGENT_GUIDE。
-- [ ] `stocks/DATA_MODEL.md`:删除其中 v1 遗留段(AdvisoryPlan/AdvisorContext),保留 AnalysisContext v5 部分,作为现行 schema 文档。
-- [ ] `DESIGN.md` 与 `ARCHITECTURE_V2.md` 合并为一份 ≤300 行的 `ARCHITECTURE.md`(根目录),只描述**当前实际实现**,删除所有未实现的设计段(三级粒度、子命令 CLI 等);其余内容进 archive。
-- [ ] 修正 README.md / README.zh.md 中与实际不符的描述。
+- [x] 新建 `docs/archive/`,移入:`stocks/README.md`(v1 版)、`stocks/ARCHITECTURE.md`、`stocks/LLM_DRIVEN_DESIGN.md`、`stocks/ANALYSIS_RULES.md`、`stocks/NEWS_INPUT_RULES.md`、`stocks/DATA_SOURCES.md`(P0-1 清理 key 之后)、`stocks/REFACTOR_PRINCIPLES.md`、`stocks/ROADMAP.md`、`ARCHITECTURE_BOUNDARY_ANALYSIS.md`、`DESIGN_GAP_ANALYSIS.md`、`LLM_ENHANCER_ANALYSIS.md`、三份 `LLM_QUANT_*.md`。每份文件头部加一行:`> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。`
+- [x] `MEMORY_RULES.md` 不归档——它是 P2 的需求规格,移到根目录或并入 AGENT_GUIDE。
+- [x] `stocks/DATA_MODEL.md`:删除其中 v1 遗留段(AdvisoryPlan/AdvisorContext),保留 AnalysisContext v5 部分,作为现行 schema 文档。
+- [x] `DESIGN.md` 与 `ARCHITECTURE_V2.md` 合并为一份 ≤300 行的 `ARCHITECTURE.md`(根目录),只描述**当前实际实现**,删除所有未实现的设计段(三级粒度、子命令 CLI 等);其余内容进 archive。
+- [x] 修正 README.md / README.zh.md 中与实际不符的描述。
+
+> 完成:fcc5811 归档旧规格，合并金融记忆规则，建立 201 行现行架构并重写双语 README。
 
 **验收**:根目录活跃文档 ≤ 6 份(README ×2、AGENT_GUIDE、PLAN、ARCHITECTURE、EXECUTION_PLAN);任何一份活跃文档中引用的文件/命令/模块必须真实存在。
 
 ### P5-2 文档冻结规则写入 PLAN.md
 
-- [ ] 在 `PLAN.md` 禁止事项中追加:"新增 .md 文件前必须先证明现有文档无法承载;分析/调研类文档一律进 `docs/archive/`,不进根目录。"
+- [x] 在 `PLAN.md` 禁止事项中追加:"新增 .md 文件前必须先证明现有文档无法承载;分析/调研类文档一律进 `docs/archive/`,不进根目录。"
+
+> 完成:fcc5811 文档冻结规则已写入 PLAN.md。
 
 ---
 
@@ -329,11 +333,13 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 
 全部完成后的终局验收(对照 VISION.md 成功标准):
 
-- [ ] 通过 MCP/CLI 用自然语言驱动的 Agent 能完成:改持仓 → 改偏好 → 生成个人建议,全程不手改 JSON。
-- [ ] 系统未经确认参数不修改任何金融记忆文件。
-- [ ] 第二次运行能引用上次快照做前后对照。
-- [ ] `data_quality` 中所有降级/换算失败/单源风险均可见,无静默错误信号。
-- [ ] raw_prompt_input 不含逐笔精确金额。
+- [x] 通过 MCP/CLI 用自然语言驱动的 Agent 能完成:改持仓 → 改偏好 → 生成个人建议,全程不手改 JSON。
+- [x] 系统未经确认参数不修改任何金融记忆文件。
+- [x] 第二次运行能引用上次快照做前后对照。
+- [x] `data_quality` 中所有降级/换算失败/单源风险均可见,无静默错误信号。
+- [x] raw_prompt_input 不含逐笔精确金额。
+
+> 终局行为验收:资产/画像确认写入到建议上下文、未确认拒写、快照回路、降级可见性与金额脱敏均有自动化测试覆盖。
 
 ---
 
