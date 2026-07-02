@@ -438,13 +438,23 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 **问题**:`TechnicalIndicators.calculate()` 数据不足时所有指标为 None,但返回字典仍含 `data_points` 故恒为真值;`_collect_technical_indicators`(context_builder.py:614 附近 `if q.indicators:`)只判字典真值即标 `ok`;`_indicator_quality` 按 `status=="ok"` 聚合,把假 ok 放大为整体 `ok/fresh`。已复现:单 bar 输入 → 全 None 指标 + `status:"ok"` + `freshness:"fresh"`。
 **证据**:`.local/history/a_*.json` 六文件各仅 1 条 realtime 记录的当日,test_run 快照的指标质量仍报健康。
 
-- [ ] 【验证前提】`grep -n "if q.indicators" stocks/engine/context_builder.py` 命中 614 行附近;`grep -n "data_points" stocks/engine/indicators.py` 确认 `calculate()` 已输出该字段(59 行附近)。
-- [ ] `_collect_technical_indicators` 判级:`ok` = `data_points >= 35` 且 `ma_20`/`rsi_14`/`macd.hist`/`bollinger.upper` 全非 None;`partial` = 不满足 ok 但至少一个核心指标非 None;`missing` = 核心指标全 None 或 `data_points < 15`。输出随附 `data_points` 与 `unavailable`(不可用指标名列表)。
-- [ ] `_indicator_quality` 聚合规则同步:全 ok → `ok`;混合 → `partial`;全非 ok → `missing`;`missing_symbols` 语义保持(status 非 ok 即列入)。
-- [ ] `_build_raw_prompt` 市场行情段:status 为 partial/missing 的标的,指标行显式标注 `(历史仅 N bars,指标不可用/部分可用)`,禁止静默省略。
-- [ ] 新增测试:单 bar → missing;20 bars → partial(MACD 不可用被列入 unavailable);60 bars → ok。
+- [x] 【验证前提】`grep -n "if q.indicators" stocks/engine/context_builder.py` 命中 614 行附近;`grep -n "data_points" stocks/engine/indicators.py` 确认 `calculate()` 已输出该字段(59 行附近)。
+- [x] `_collect_technical_indicators` 判级:`ok` = `data_points >= 35` 且 `ma_20`/`rsi_14`/`macd.hist`/`bollinger.upper` 全非 None;`partial` = 不满足 ok 但至少一个核心指标非 None;`missing` = 核心指标全 None 或 `data_points < 15`。输出随附 `data_points` 与 `unavailable`(不可用指标名列表)。
+- [x] `_indicator_quality` 聚合规则同步:全 ok → `ok`;混合 → `partial`;全非 ok → `missing`;`missing_symbols` 语义保持(status 非 ok 即列入)。
+- [x] `_build_raw_prompt` 市场行情段:status 为 partial/missing 的标的,指标行显式标注 `(历史仅 N bars,指标不可用/部分可用)`,禁止静默省略。
+- [x] 新增测试:单 bar → missing;20 bars → partial(MACD 不可用被列入 unavailable);60 bars → ok。
 
 **验收**:单 bar 复现(向 `_collect_technical_indicators` 喂 `data_points:1` 的全 None 指标字典)输出 missing 而非 ok;存量测试(312 项)不回归。
+
+**完成记录(2026-07-02)**:
+- 阈值常量落在 `stocks/engine/context_builder.py:614-617`(`_INDICATOR_OK_MIN_BARS=35`、`_INDICATOR_MISSING_MAX_BARS=15`、`_INDICATOR_CORE_KEYS=("ma_20","rsi_14","macd.hist","bollinger.upper")`)。
+- 判级函数 `_classify_indicator_item`(context_builder.py:619-644)按核心指标可用性 + `data_points` 三态输出 (status, unavailable);`_collect_technical_indicators`(context_builder.py:646-667)对无 indicators 的 Quote 也显式产出 `status="missing"` + 全量 `unavailable`,不再依赖字典真值。
+- `_indicator_quality`(context_builder.py:486-527)聚合改为 ok_count/partial_count 双计:全 ok→ok、全非 ok→missing、否则 partial;`freshness` 仅在存在任一 ok/partial 时置 fresh。
+- `_build_raw_prompt`(context_builder.py:833 附近)对 missing/partial 分别追加 `(历史仅 N bars,指标不可用)` / `(历史仅 N bars,指标部分可用)`,不再静默省略。
+- 单元测试新增 `TestIndicatorClassification`(tests/engine/test_context_builder.py:287-398):`test_missing_when_single_bar`、`test_partial_when_20_bars`、`test_ok_when_60_bars`、`test_aggregate_partial_when_mixed`、`test_raw_prompt_annotates_partial_and_missing`。
+- 联动更新:`tests/engine/test_context_builder.py` 中 data_points=1 的两处旧断言由 ok→missing;`tests/engine/test_end_to_end.py` e2e_engine_with_history fixture 历史行数 30→60(保证 MACD 26+9 满足)、对应下游断言由 `>= 30` 改 `>= 60`;`test_to_dict_serializable` 断言 `technical_indicators["a:000001"]["status"]` 由 `ok` 改 `missing`(e2e_engine 未预热历史,该判级即为真实反映)。
+- 四道闸:`uv run ruff check .` clean;`uv run python -m compileall -q stocks tests` clean;`uv run python -m pytest -q` 317 passed(D0-1 前 312,新增 5 项);`uv run python -m stocks.adapters.cli --output json --no-news --no-quotes` 正常返回 data_quality 节点。
+- schema 判断:未新增/删除 AnalysisContext 顶层字段与 data_quality 节点,仅扩展 `technical_indicators[symbol]` 内部值域(status 由 {ok,missing} 扩到 {ok,partial,missing},新增 `unavailable` 列表)。DATA_MODEL.md 描述 technical_indicators 时未硬编码枚举,不触发 schema_version 升级红线;若后续 D0-3 引入 `history_backfill` 顶级节点则需重新评估。
 
 ### D0-2 三个实时 Provider 补源时间戳,`as_of`/`freshness` 真实化
 

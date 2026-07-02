@@ -118,14 +118,14 @@ def e2e_engine(tmp_path):
 
 @pytest.fixture
 async def e2e_engine_with_history(e2e_engine):
-    """预热 HistoryCache 使技术指标计算有意义"""
+    """预热 HistoryCache 使技术指标计算有意义(D0-1:MACD 需 ≥35 bars 才可用,写 60 天使核心指标全部 ok)"""
     engine = e2e_engine
     if engine.history_cache:
-        # 写入 30 天历史数据
+        # 写入 60 天历史数据(足以让 MACD/Bollinger/RSI/MA20 全部计算成功 → status=ok)
         import pandas as pd
         records = []
         base = datetime.now(timezone.utc)
-        for i in range(30):
+        for i in range(60):
             records.append({
                 "timestamp": base - timedelta(days=i),
                 "code": SAMPLE_INSTRUMENT.code,
@@ -288,12 +288,12 @@ class TestRawPromptContent:
         # 检查 quotes 对象有 indicators
         q = context.quotes["a"][0]
         assert q.indicators is not None
-        assert q.indicators.get("data_points") >= 30
-        # MA、RSI 等应有值（30条数据足够）
+        assert q.indicators.get("data_points") >= 60
+        # MA、RSI、MACD、Bollinger 应有值（60条数据满足 MACD 26+9 要求）
         assert q.indicators.get("ma_5") is not None
         assert q.indicators.get("rsi_14") is not None
         assert context.technical_indicators["a:000001"]["status"] == "ok"
-        assert context.technical_indicators["a:000001"]["data_points"] >= 30
+        assert context.technical_indicators["a:000001"]["data_points"] >= 60
 
 
 # ------------------------------------------------------------------
@@ -321,7 +321,8 @@ class TestJSONSerialization:
         assert parsed["news_digest"]["event_count"] == 1
         assert parsed["macro_snapshot"] is not None
         assert "technical_indicators" in parsed
-        assert parsed["technical_indicators"]["a:000001"]["status"] == "ok"
+        # D0-1:e2e_engine 无历史预热,SAMPLE_QUOTE 不携带 indicators → missing 是正确判级
+        assert parsed["technical_indicators"]["a:000001"]["status"] == "missing"
         assert "data_quality" in parsed
         assert "recent_advice" in parsed
         assert parsed["data_quality"]["quotes"]["status"] == "ok"

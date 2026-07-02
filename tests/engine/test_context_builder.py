@@ -253,13 +253,15 @@ class TestIndicatorEnrichment:
         assert len(quotes) == 1
         q = quotes[0]
         assert q.indicators is not None
-        # 数据点只有 1 条（刚写入），所以 MA 等应为 None
+        # 数据点只有 1 条(刚写入),核心指标 MA/RSI/MACD/Bollinger 应全为 None
         assert q.indicators.get("data_points") == 1
         assert q.indicators.get("ma_5") is None  # 数据不足
-        assert context.technical_indicators["a:000001"]["status"] == "ok"
+        # D0-1:data_points=1 < 15 → 单项 missing,聚合 missing(不再报假 ok)
+        assert context.technical_indicators["a:000001"]["status"] == "missing"
         assert context.technical_indicators["a:000001"]["source"] == "history_cache"
         assert context.technical_indicators["a:000001"]["data_points"] == 1
-        assert context.data_quality["technical_indicators"]["status"] == "ok"
+        assert "ma_20" in context.technical_indicators["a:000001"]["unavailable"]
+        assert context.data_quality["technical_indicators"]["status"] == "missing"
         assert context.data_quality["technical_indicators"]["source"] == "history_cache"
 
     async def test_raw_prompt_with_indicators(self, mock_fetcher, mock_scaffolds, sample_assets, sample_instruments, sample_quotes, temp_dir):
@@ -280,6 +282,120 @@ class TestIndicatorEnrichment:
 
         assert "【市场行情与技术指标】" in context.raw_prompt_input
         assert "平安银行" in context.raw_prompt_input
+
+
+class TestIndicatorClassification:
+    """D0-1:技术指标按 data_points 三态判级(单元级,不走 build)。"""
+
+    def _make_builder(self, mock_fetcher, mock_scaffolds):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        return ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+
+    def test_missing_when_single_bar(self, mock_fetcher, mock_scaffolds):
+        """单 bar 输入(D0-1 复现):所有指标为 None,单项判 missing,聚合 missing。"""
+        builder = self._make_builder(mock_fetcher, mock_scaffolds)
+        indicators = {
+            "ma_5": None, "ma_20": None, "ma_60": None,
+            "rsi_14": None,
+            "macd": {"macd": None, "signal": None, "hist": None},
+            "bollinger": {"upper": None, "middle": None, "lower": None, "bandwidth": None},
+            "volume_ratio": None, "price_position": None, "volatility_20": None,
+            "data_points": 1,
+        }
+        status, unavailable = builder._classify_indicator_item(indicators)
+        assert status == "missing"
+        assert set(unavailable) == set(ContextBuilder._INDICATOR_CORE_KEYS)
+
+        # 聚合:全 missing → missing / freshness=missing
+        inst = Instrument(code="000001", name="平安银行", market="a")
+        q = Quote(instrument=inst, price=10.0, indicators=indicators)
+        by_symbol = builder._collect_technical_indicators({"a": [q]})
+        assert by_symbol["a:000001"]["status"] == "missing"
+        quality = builder._indicator_quality(
+            "2026-07-02T00:00:00+00:00", [inst], {"a": [q]}, by_symbol,
+        )
+        assert quality["status"] == "missing"
+        assert quality["freshness"] == "missing"
+        assert "a:000001" in quality["missing_symbols"]
+
+    def test_partial_when_20_bars(self, mock_fetcher, mock_scaffolds):
+        """20 bars:MA20/RSI14/Bollinger 可算,MACD(需 26+9=35)不可用 → 单项 partial。"""
+        builder = self._make_builder(mock_fetcher, mock_scaffolds)
+        indicators = {
+            "ma_5": 10.2, "ma_20": 10.0, "ma_60": None,
+            "rsi_14": 55.0,
+            "macd": {"macd": None, "signal": None, "hist": None},
+            "bollinger": {"upper": 10.5, "middle": 10.0, "lower": 9.5, "bandwidth": 0.1},
+            "volume_ratio": 1.1, "price_position": 50.0, "volatility_20": 0.2,
+            "data_points": 20,
+        }
+        status, unavailable = builder._classify_indicator_item(indicators)
+        assert status == "partial"
+        assert "macd.hist" in unavailable
+        assert "ma_20" not in unavailable
+
+    def test_ok_when_60_bars(self, mock_fetcher, mock_scaffolds):
+        """60 bars:核心指标全部可用 → 单项 ok,聚合 ok / freshness=fresh。"""
+        builder = self._make_builder(mock_fetcher, mock_scaffolds)
+        indicators = {
+            "ma_5": 10.2, "ma_20": 10.0, "ma_60": 9.8,
+            "rsi_14": 55.0,
+            "macd": {"macd": 0.1, "signal": 0.05, "hist": 0.05},
+            "bollinger": {"upper": 10.5, "middle": 10.0, "lower": 9.5, "bandwidth": 0.1},
+            "volume_ratio": 1.1, "price_position": 50.0, "volatility_20": 0.2,
+            "data_points": 60,
+        }
+        status, unavailable = builder._classify_indicator_item(indicators)
+        assert status == "ok"
+        assert unavailable == []
+
+        inst = Instrument(code="000001", name="平安银行", market="a")
+        q = Quote(instrument=inst, price=10.0, indicators=indicators)
+        by_symbol = builder._collect_technical_indicators({"a": [q]})
+        assert by_symbol["a:000001"]["status"] == "ok"
+        quality = builder._indicator_quality(
+            "2026-07-02T00:00:00+00:00", [inst], {"a": [q]}, by_symbol,
+        )
+        assert quality["status"] == "ok"
+        assert quality["freshness"] == "fresh"
+        assert quality["missing_symbols"] == []
+
+    def test_aggregate_partial_when_mixed(self, mock_fetcher, mock_scaffolds):
+        """混合(至少一个 partial 或一个 ok) → 聚合 partial。"""
+        builder = self._make_builder(mock_fetcher, mock_scaffolds)
+        by_symbol = {
+            "a:000001": {"status": "ok"},
+            "a:000002": {"status": "partial"},
+        }
+        inst1 = Instrument(code="000001", name="A", market="a")
+        inst2 = Instrument(code="000002", name="B", market="a")
+        q1 = Quote(instrument=inst1, price=10.0, indicators={"data_points": 60})
+        q2 = Quote(instrument=inst2, price=10.0, indicators={"data_points": 20})
+        quality = builder._indicator_quality(
+            "2026-07-02T00:00:00+00:00", [inst1, inst2], {"a": [q1, q2]}, by_symbol,
+        )
+        assert quality["status"] == "partial"
+        assert quality["freshness"] == "fresh"
+        assert quality["missing_symbols"] == ["a:000002"]
+
+    async def test_raw_prompt_annotates_partial_and_missing(self, mock_fetcher, mock_scaffolds, sample_assets, sample_instruments, temp_dir):
+        """raw_prompt 行情段:partial/missing 标的显式标注 bars 数与不可用等级。"""
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        cache = HistoryCache(base_dir=temp_dir, ttl=86400)
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold, history_cache=cache)
+
+        context = await builder.build(
+            assets=sample_assets,
+            constraints={},
+            profile={},
+            instruments=sample_instruments,
+            recent_snapshots=[],
+        )
+        await cache.close()
+
+        prompt = context.raw_prompt_input
+        # 单 bar 场景 → missing 标注必须出现
+        assert "指标不可用" in prompt
 
 
 # ------------------------------------------------------------------
@@ -532,6 +648,7 @@ class TestAnalysisContextSerialization:
         assert "technical_indicators" in data
         assert "data_quality" in data
         assert data["recent_advice"] == []
-        assert data["technical_indicators"]["a:000001"]["status"] == "ok"
+        # D0-1:data_points=1 → 单项 missing,聚合 missing(不再报假 ok)
+        assert data["technical_indicators"]["a:000001"]["status"] == "missing"
         assert data["technical_indicators"]["a:000001"]["data_points"] == 1
-        assert data["data_quality"]["technical_indicators"]["status"] == "ok"
+        assert data["data_quality"]["technical_indicators"]["status"] == "missing"

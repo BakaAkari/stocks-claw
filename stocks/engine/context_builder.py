@@ -498,15 +498,18 @@ class ContextBuilder:
             status = "missing"
             freshness = "missing"
         else:
-            ok_count = sum(1 for item in technical_indicators.values() if item.get("status") == "ok")
-            missing_count = len(technical_indicators) - ok_count
-            if ok_count == 0:
-                status = "missing"
-            elif missing_count:
-                status = "partial"
-            else:
+            statuses = [item.get("status") for item in technical_indicators.values()]
+            ok_count = sum(1 for s in statuses if s == "ok")
+            partial_count = sum(1 for s in statuses if s == "partial")
+            total = len(statuses)
+            # D0-1:全 ok → ok;混合(至少一个 ok 但非全) 或至少一个 partial → partial;全非 ok → missing
+            if ok_count == total:
                 status = "ok"
-            freshness = "fresh" if ok_count else "missing"
+            elif ok_count == 0 and partial_count == 0:
+                status = "missing"
+            else:
+                status = "partial"
+            freshness = "fresh" if ok_count or partial_count else "missing"
 
         missing_symbols = [
             symbol
@@ -605,22 +608,61 @@ class ContextBuilder:
             enriched[market] = enriched_quotes
         return enriched
 
+    # 技术指标可用性判级阈值(D0-1)：
+    # - ok:  data_points >= _INDICATOR_OK_MIN_BARS 且核心指标全部非 None
+    # - partial: 不满足 ok 但至少一个核心指标非 None(通常 >= 15 bars 后 MA/RSI 可算)
+    # - missing: 核心指标全 None,或 data_points < _INDICATOR_MISSING_MAX_BARS
+    _INDICATOR_OK_MIN_BARS = 35
+    _INDICATOR_MISSING_MAX_BARS = 15
+    _INDICATOR_CORE_KEYS = ("ma_20", "rsi_14", "macd.hist", "bollinger.upper")
+
+    @classmethod
+    def _classify_indicator_item(cls, indicators: dict) -> tuple[str, list[str]]:
+        """按 data_points 与核心指标可用性判级,返回 (status, unavailable 列表)。
+
+        核心指标:ma_20 / rsi_14 / macd.hist / bollinger.upper。
+        """
+        data_points = indicators.get("data_points") or 0
+        core_present: dict[str, bool] = {}
+        for key in cls._INDICATOR_CORE_KEYS:
+            if "." in key:
+                parent, child = key.split(".", 1)
+                sub = indicators.get(parent) or {}
+                value = sub.get(child) if isinstance(sub, dict) else None
+            else:
+                value = indicators.get(key)
+            core_present[key] = value is not None
+
+        unavailable = [k for k, present in core_present.items() if not present]
+
+        if data_points < cls._INDICATOR_MISSING_MAX_BARS or not any(core_present.values()):
+            status = "missing"
+        elif data_points >= cls._INDICATOR_OK_MIN_BARS and all(core_present.values()):
+            status = "ok"
+        else:
+            status = "partial"
+        return status, unavailable
+
     def _collect_technical_indicators(self, quotes: dict[str, list[Quote]]) -> dict[str, dict]:
-        """汇总 Quote 上的技术指标，便于 Agent 稳定按标的读取。"""
+        """汇总 Quote 上的技术指标，按 data_points 三态判级(D0-1)。"""
         indicators_by_symbol: dict[str, dict] = {}
         for market, market_quotes in quotes.items():
             for q in market_quotes:
                 key = f"{market}:{q.instrument.code}"
                 if q.indicators:
+                    status, unavailable = self._classify_indicator_item(q.indicators)
                     indicators_by_symbol[key] = {
-                        "status": "ok",
+                        "status": status,
                         "source": "history_cache",
+                        "unavailable": unavailable,
                         **q.indicators,
                     }
                 else:
                     indicators_by_symbol[key] = {
                         "status": "missing",
                         "source": "none",
+                        "data_points": 0,
+                        "unavailable": list(self._INDICATOR_CORE_KEYS),
                     }
         return indicators_by_symbol
 
@@ -787,9 +829,11 @@ class ContextBuilder:
                         f" {q.instrument.name} ({q.instrument.code}): "
                         f"{price_str}{change_str}{stale_str}"
                     )
-                    # 附加技术指标
+                    # 附加技术指标(D0-1:按 data_points 判级,非 ok 显式标注不可用)
                     if q.indicators:
                         ind = q.indicators
+                        status, _ = self._classify_indicator_item(ind)
+                        data_points = ind.get("data_points") or 0
                         ind_parts = []
                         if ind.get("ma_5") is not None and ind.get("ma_20") is not None:
                             ind_parts.append(f"MA5={ind['ma_5']:.2f}, MA20={ind['ma_20']:.2f}")
@@ -808,7 +852,15 @@ class ContextBuilder:
                             vr = ind["volume_ratio"]
                             vr_state = "放量" if vr > 1.5 else "缩量" if vr < 0.8 else "平量"
                             ind_parts.append(f"量比={vr:.2f}({vr_state})")
-                        if ind_parts:
+                        if status == "missing":
+                            lines.append(
+                                f"  指标: (历史仅 {data_points} bars,指标不可用)"
+                            )
+                        elif status == "partial":
+                            suffix = f" | (历史仅 {data_points} bars,指标部分可用)"
+                            body = " | ".join(ind_parts) if ind_parts else ""
+                            lines.append(f"  指标: {body}{suffix}" if body else f"  指标:{suffix}")
+                        elif ind_parts:
                             lines.append(f"  指标: {' | '.join(ind_parts)}")
         else:
             lines.append(" 暂无行情数据")
