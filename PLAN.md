@@ -82,4 +82,5 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-02:Phase M 细化为 M-1~M-5 追加进 EXECUTION_PLAN,与 P2 返工合并为单一执行队列(P2 为硬前置);不新建任何文档。依据:M 组三个任务直接依赖 P2 的写入模式/快照回路/金额脱敏。
 - 2026-07-02:P2-1~P2-5 已补齐代码行号、测试名与全局验收证据,Phase R 代码核验收口;Phase M 成为当前唯一开发任务。依据:EXECUTION_PLAN P2 完成记录与全局验收。
 - 2026-07-02:Phase M M-1~M-5 全部完成并通过端到端守门测试;当前无新的进行中阶段。依据:EXECUTION_PLAN M 组完成记录与最终全局验收。
+- 2026-07-02:立即收尾:清理 4 个未追踪空目录(stocks/cli、stocks/tests/test_{adapters,engine,providers});推送本地领先的 16 个 commit 到 origin/master;删除虚报状态的 tag v2.1-phase2-complete,在 a64c83e 重打 v2.7-phase-m-complete 作为 Phase M 出口标记。依据:全局验收 ruff/compileall/pytest 312 passed/CLI smoke 全通过。
 - (追加格式:`日期:决定;依据`)
