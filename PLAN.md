@@ -180,7 +180,7 @@ tests/engine/test_indicators.py
 - [ ] `macd`, `macd_signal`, `macd_histogram`
 - [ ] `atr_14`
 - [ ] `boll_upper`, `boll_middle`, `boll_lower`
-- [ ] `volatility_20`
+- [ ] `volatility_20`（20 日收益率标准差 × √252 的年化历史波动率）
 
 设计要求：
 

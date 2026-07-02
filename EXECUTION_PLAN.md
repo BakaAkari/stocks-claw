@@ -69,10 +69,12 @@
 (c) BTC/ETH 涨跌完全被忽略(crypto 不匹配任何分支);
 (d) 科技股靠名字子串匹配("nvda"/"aapl"…),中文名标的(如"高通"QCOM)匹配不上。
 
-- [ ] 【验证前提】逐条在代码中确认上述四点。
-- [ ] 引入标的分类配置:在 `stocks/config/watchlist.json` 每项增加可选 `category` 字段(如 `equity_cn / equity_us / tech / gold / bond / crypto`),或新建轻量映射表;分类判断一律走配置,**删除名字子串匹配**。
-- [ ] 基于 category 修复:黄金 ETF 归入 safe_haven 分支;crypto 涨跌纳入独立 `crypto_state`;无对应类别数据时输出 `"no_data"` 而非伪装的 `"unknown"`。
-- [ ] 新增测试:518880 不进中国权益、进 safe_haven;BTCUSDT 波动反映到 crypto_state;QCOM 按配置归类。
+- [x] 【验证前提】逐条在代码中确认上述四点。
+- [x] 引入标的分类配置:在 `stocks/config/watchlist.json` 每项增加可选 `category` 字段(如 `equity_cn / equity_us / tech / gold / bond / crypto`),或新建轻量映射表;分类判断一律走配置,**删除名字子串匹配**。
+- [x] 基于 category 修复:黄金 ETF 归入 safe_haven 分支;crypto 涨跌纳入独立 `crypto_state`;无对应类别数据时输出 `"no_data"` 而非伪装的 `"unknown"`。
+- [x] 新增测试:518880 不进中国权益、进 safe_haven;BTCUSDT 波动反映到 crypto_state;QCOM 按配置归类。
+
+> 完成:c2470d1 市场状态改为 category 驱动，新增 crypto_state，并统一缺类数据为 no_data。
 
 **验收**:用当前 watchlist 跑 `build_context`,`market_state` 中不再出现恒定 `"unknown"`(除非确实无该类标的,此时为 `"no_data"`)。
 

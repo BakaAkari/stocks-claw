@@ -251,15 +251,28 @@ class TestVolatility:
         prices = [10.0 + np.sin(i) * 2 for i in range(30)]
         df = make_df(prices)
         vol = TechnicalIndicators.volatility(df, 20)
+        expected = df["price"].pct_change().dropna().tail(20).std() * np.sqrt(252)
         assert vol is not None
-        assert vol > 0
+        assert np.isclose(vol, expected)
 
     def test_volatility_flat(self):
-        """价格不变时波动率应为 None（因为收益率全为 0）"""
+        """价格不变时年化波动率应为 0。"""
         prices = [10.0] * 30
         df = make_df(prices)
         vol = TechnicalIndicators.volatility(df, 20)
-        assert vol is None  # mean=0, abs(mean)<1e-12
+        assert vol == 0.0
+
+    def test_volatility_near_zero_mean_is_finite(self):
+        """平均收益接近零时不应因除以均值而爆炸。"""
+        prices = [100.0]
+        for daily_return in [0.01, -0.01] * 10:
+            prices.append(prices[-1] * (1 + daily_return))
+
+        vol = TechnicalIndicators.volatility(make_df(prices), 20)
+
+        assert vol is not None
+        assert np.isfinite(vol)
+        assert 0.1 < vol < 0.3
 
     def test_volatility_insufficient(self):
         df = make_df([10.0] * 5)

@@ -10,7 +10,7 @@
 - Bollinger(20,2): 布林带
 - Volume Ratio: 量比（成交量 / 5 日均量）
 - Price Position: 当前价格在布林带中的位置百分比
-- Volatility: 20 日价格波动率（标准差 / 均值）
+- Volatility: 20 日收益率年化历史波动率
 
 使用方式：
     from stocks.engine.indicators import TechnicalIndicators
@@ -199,9 +199,9 @@ class TechnicalIndicators:
 
     @staticmethod
     def volatility(df: pd.DataFrame, period: int = 20) -> Optional[float]:
-        """价格波动率：period 日收益率标准差 / 均值
+        """年化历史波动率：period 日收益率标准差 × sqrt(252)。
 
-        用于衡量近期波动剧烈程度。
+        使用日收益率样本标准差，并按一年 252 个交易日年化。
         """
         if len(df) < period + 1:
             return None
@@ -214,9 +214,8 @@ class TechnicalIndicators:
 
         recent_returns = returns.tail(period)
         std = recent_returns.std()
-        mean = recent_returns.mean()
 
-        if mean == 0 or pd.isna(mean) or pd.isna(std):
+        if pd.isna(std):
             return None
 
-        return float(std / abs(mean)) if abs(mean) > 1e-12 else None
+        return float(std * np.sqrt(252))
