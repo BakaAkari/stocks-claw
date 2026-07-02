@@ -365,9 +365,11 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes --save 
 **文件**:`stocks/adapters/cli.py`、`stocks/adapters/mcp.py`
 **依赖**:P2-1(复用其确认式写入模式)。
 
-- [ ] MCP 新增 `advice_save`(要求显式 `confirmed: true`,缺失即拒绝)与 `advice_list`。
-- [ ] CLI 新增对应入口(与现有单命令风格一致)。
-- [ ] 新增测试:确认式保存成功落盘;未确认拒写。
+- [x] MCP 新增 `advice_save`(要求显式 `confirmed: true`,缺失即拒绝)与 `advice_list`。
+- [x] CLI 新增对应入口(与现有单命令风格一致)。
+- [x] 新增测试:确认式保存成功落盘;未确认拒写。
+
+> 完成:cee3492 暴露 CLI/MCP 确认式建议保存与列表接口。| 证据:`stocks/adapters/mcp.py:63-66`/`:166`/`:369` 路由、保存与工具声明,`stocks/adapters/cli.py:95-100`/`:197` 暴露并处理 flags,`tests/test_asset_adapters.py:140`/`:161` 覆盖 MCP/CLI 未确认拒写、确认保存和列表读取。说明:为 adapters 提供最小调用面,同步新增 `stocks/engine/__init__.py:461`/`:485` 的 `save_advice`/`list_advice`。
 
 **验收**:外部 Agent 能通过 MCP/CLI 保存建议摘要,未确认的写入被拒绝。
 
