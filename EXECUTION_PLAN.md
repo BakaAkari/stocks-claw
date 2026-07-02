@@ -464,12 +464,12 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 
 - [ ] 【验证前提】grep 三个 `Quote(` 构造点行号;确认 finnhub `_data_to_quote` 未读 `data["t"]`;确认 eastmoney 实时请求 fields 参数(eastmoney_a.py:46)不含 `f86`;确认 tencent 使用 `s_` 简版格式(`_build_symbol` 返回 `s_` 前缀,简版响应**无**时间字段)。
 - [ ] finnhub:`as_of` = `data["t"]`(unix 秒)→ UTC ISO;`source="finnhub"`。
-- [ ] eastmoney 实时:fields 追加 `f86`(行情 unix 时间戳),`as_of` = f86 → UTC ISO;`source="eastmoney_a"`。
-- [ ] tencent:二选一并在完成记录注明——(a) 改用完整格式(去 `s_` 前缀,行情时间在 index 30,格式 YYYYMMDDHHMMSS 北京时间;**全部字段索引随之变化,解析与测试整体重写**);(b) 维持简版,`as_of` 如实留 None,`source="tencent_a"`。倾向 (b) 先行、(a) 若做则另立任务;**禁止用抓取时刻伪造 as_of**。
-- [ ] `_quote_quality`:`as_of` 改为所有 Quote 真实 `as_of` 中的最旧值(最保守口径);`freshness` 由该值经 `_freshness_from_datetime` 判定;全部 Quote 无 as_of 时 `as_of=None`、`freshness="unknown"`——**禁止回退 generated_at 冒充**。
-- [ ] 新增测试:带昨日 `as_of` 的 quote 经 `record()` 归属昨日交易日(激活 history_cache 死代码路径);finnhub mock 含 `t` → as_of 正确;混合 as_of → quote_quality 取最旧且 freshness 正确;全无 as_of → unknown。
+- [ ] eastmoney 实时:fields 追加 `f86`(行情 unix 时间戳),`as_of` = f86 → UTC ISO;`source="eastmoney_a"`。**裁决(2026-07-02,用户侧确认)**:接受该 query 参数变化——同端点同响应结构,仅每行多一个字段;f86 缺失/为 0/为 "-" 时 `as_of` 如实 None;fixture 同步补 f86 字段。
+- [ ] tencent:**裁决(2026-07-02,用户侧确认)——走完整格式(原选项 a),不拆分任务**。理由:tencent 是 markets.json 里 A 股的 `default_provider`,主源缺 as_of 会让本任务对用户主市场落空;完整格式还顺带补齐简版缺失的 open/high/low/prev_close。实现:`_build_symbol` 去 `s_` 前缀(如 `q=sh000300`);`_parse_line` 按完整格式重写——已知锚点索引:3=price、4=prev_close、5=open、30=行情时间(YYYYMMDDHHMMSS,北京时间 → UTC ISO 写入 `as_of`)、31=change、32=pct_change、33=high、34=low;成交量/成交额索引**以一次真实响应做 fixture 逐字段核对后再写死,禁止凭记忆填未核对的索引**;解析前校验字段数下限,时间字段空/长度异常时 `as_of` 如实 None;`source="tencent_a"`。`tests/providers/test_tencent_a.py` fixture 用真实完整格式响应重建、全量更新。**禁止用抓取时刻伪造 as_of**(不变)。
+- [ ] `_quote_quality`:**口径裁决(2026-07-02,用户侧确认)——顶层 `as_of` 改为全部 Quote 真实 `as_of` 中的最旧值**(最保守口径)。细则:as_of 为 None 的 Quote 不参与取最旧,但计入新增字段 `missing_as_of`(数量);`by_market` 每市场同法增加市场级 `as_of`;全部 Quote 均无 as_of 时顶层 `as_of=None`、`freshness="unknown"`——**禁止回退 generated_at 冒充**;`data_quality` 顶层 `generated_at` 保留不动,语义仍为"上下文组装时刻"。随附:`data_quality.schema_version` 由 1 升 2;若 `stocks/DATA_MODEL.md` 记载了 data_quality 结构则同步;存量断言 `as_of == generated_at` 的测试按新口径更新,更新的每个断言在完成记录中列名——**预期内行为变化,不是回归**。
+- [ ] 新增测试:带昨日 `as_of` 的 quote 经 `record()` 归属昨日交易日;finnhub mock 含 `t` → as_of 正确;tencent 完整格式 fixture → as_of 与 OHLC 正确;混合 as_of → 顶层取最旧、by_market 各自正确、missing_as_of 计数正确;全无 as_of → unknown。
 
-**验收**:`data_quality.quotes.as_of` 不再等于 `generated_at`;用收盘后时间戳构造的行情,freshness 不为 fresh。
+**验收**:`data_quality.quotes.as_of` 不再等于 `generated_at`;用收盘后时间戳构造的行情,freshness 不为 fresh;tencent 行情含 OHLC 与真实 as_of。
 
 ### D0-3 历史回填结果显性上报 + 失败可重试
 
