@@ -80,7 +80,6 @@ def _build_e2e_config():
     config = deepcopy(MINIMAL_CONFIG)
     config["cache"]["enabled"] = True
     config["macro"]["enabled"] = True
-    config["llm"]["enhancer_enabled"] = False
     config["llm"]["analysis_enabled"] = False
     return config
 

@@ -47,11 +47,8 @@ DEFAULT_ENGINE_CONFIG = {
         "save_to_file": True,
     },
     "llm": {
-        "enhancer_enabled": True,
         "analysis_enabled": False,
-        "enhancer_model": "deepseek-v4-flash",
         "analysis_model": "kimi-k2.6",
-        "validate_models": False,
         "api_key_env": "OPENAI_API_KEY",
         "base_url_env": "OPENAI_BASE_URL",
     },

@@ -44,11 +44,8 @@ MINIMAL_CONFIG = {
     },
     "macro": {"enabled": True, "static_config": {}},
     "llm": {
-        "enhancer_enabled": False,
         "analysis_enabled": False,
-        "enhancer_model": "",
         "analysis_model": "",
-        "validate_models": False,
     },
     "logging": {"level": "INFO", "desensitize": True},
 }
@@ -91,7 +88,6 @@ class TestEngineInit:
 
     def test_init_llm_disabled_by_config(self, minimal_engine):
         """配置中 LLM 禁用时，初始化后 LLM 模块禁用"""
-        assert minimal_engine.llm_enhancer.enabled is False
         assert minimal_engine.llm_analysis.enabled is False
 
     def test_init_empty_assets(self, minimal_engine):
@@ -182,7 +178,6 @@ class TestHealthCheck:
         assert len(health["providers"]) == 3
         assert health["assets_loaded"] == 0
         assert health["watchlist_loaded"] == 0
-        assert health["llm_enhancer_enabled"] is False
         assert health["llm_analysis_enabled"] is False
 
     def test_health_check_with_assets(self, minimal_engine):
@@ -481,41 +476,3 @@ class TestFetchNewsIntegration:
         result = await minimal_engine.fetch_news()
         assert result == []
 
-
-class TestLLMModelValidation:
-    """LLM 模型校验开关测试"""
-
-    def test_model_validation_disabled_by_default_even_with_api_config(self):
-        """默认不请求 /models，避免 CLI 在未启用 LLM 时产生后台网络噪音"""
-        config = deepcopy(MINIMAL_CONFIG)
-        config["llm"]["enhancer_enabled"] = False
-        config["llm"]["analysis_enabled"] = False
-        config["llm"]["validate_models"] = False
-
-        with patch("stocks.engine.load_engine_config", return_value=config):
-            with patch("stocks.engine.validate_llm_models") as validate:
-                engine = StocksEngine(
-                    openai_api_key="test-key",
-                    openai_base_url="https://example.com/v1",
-                )
-
-        assert engine._model_validation_done is False
-        validate.assert_not_called()
-
-    def test_model_validation_skipped_when_llm_modules_disabled(self):
-        """即使显式要求校验，LLM 模块都禁用时也不请求 /models"""
-        config = deepcopy(MINIMAL_CONFIG)
-        config["llm"]["enhancer_enabled"] = False
-        config["llm"]["analysis_enabled"] = False
-        config["llm"]["validate_models"] = True
-
-        with patch("stocks.engine.load_engine_config", return_value=config):
-            with patch("stocks.engine.validate_llm_models") as validate:
-                engine = StocksEngine(
-                    openai_api_key="test-key",
-                    openai_base_url="https://example.com/v1",
-                )
-
-        assert engine.llm_enhancer.enabled is False
-        assert engine.llm_analysis.enabled is False
-        validate.assert_not_called()

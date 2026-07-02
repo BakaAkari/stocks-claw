@@ -121,9 +121,7 @@ class TestLoadEngineConfig:
         assert config["providers"]["tencent_a"]["enabled"] is True
         assert config["cache"]["quote_ttl"] == 1800
         assert config["cache"]["history_dir"] is None
-        assert config["llm"]["enhancer_enabled"] is True
         assert config["llm"]["analysis_enabled"] is False
-        assert config["llm"]["validate_models"] is False
 
     def test_yaml_override(self):
         """YAML 文件覆盖默认值"""
@@ -208,16 +206,13 @@ class TestLoadEngineConfig:
         with tempfile.TemporaryDirectory() as tmpdir:
             yaml_path = Path(tmpdir) / "engine.yaml"
             yaml_path.write_text(
-                "llm:\n  enhancer_enabled: false\n  analysis_enabled: true\n  enhancer_model: custom-model\n",
+                "llm:\n  analysis_enabled: true\n  analysis_model: custom-model\n",
                 encoding="utf-8",
             )
             config = load_engine_config(config_path=yaml_path)
 
-        assert config["llm"]["enhancer_enabled"] is False
         assert config["llm"]["analysis_enabled"] is True
-        assert config["llm"]["enhancer_model"] == "custom-model"
-        assert config["llm"]["analysis_model"] == "kimi-k2.6"  # 默认值
-        assert config["llm"]["validate_models"] is False
+        assert config["llm"]["analysis_model"] == "custom-model"
 
     def test_logging_config(self):
         """日志配置正确加载"""

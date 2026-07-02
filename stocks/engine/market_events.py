@@ -165,22 +165,10 @@ class MarketEventExtractor:
             item.title or "",
             item.summary or "",
             " ".join(item.tags),
-            " ".join(getattr(item, "relevance_tags", [])),
-            getattr(item, "category", ""),
         ]
         return " ".join(parts).lower()
 
     def _event_type(self, text: str, item: NewsItem) -> tuple[str, int]:
-        category = getattr(item, "category", "unknown")
-        if category == "宏观政策":
-            return "macro_policy", 2
-        if category == "行业动态":
-            return "industry_theme", 2
-        if category == "个股新闻":
-            return "company_news", 2
-        if category == "国际市场":
-            return "market_movement", 2
-
         best_type = "other"
         best_hits = 0
         for event_type, keywords in _EVENT_KEYWORDS.items():
@@ -196,7 +184,6 @@ class MarketEventExtractor:
             for theme, keywords in _THEME_KEYWORDS.items()
             if any(keyword.lower() in text for keyword in keywords)
         }
-        themes.update(getattr(item, "relevance_tags", []) or [])
         return sorted(themes)
 
     def _affected_markets(self, text: str, instruments: list[Instrument]) -> list[str]:
@@ -230,10 +217,6 @@ class MarketEventExtractor:
         return sorted(set(matched))
 
     def _sentiment(self, text: str, item: NewsItem) -> str:
-        llm_sentiment = getattr(item, "sentiment", "unknown")
-        if llm_sentiment in {"positive", "negative", "neutral"}:
-            return llm_sentiment
-
         positive = sum(1 for keyword in _POSITIVE_KEYWORDS if keyword.lower() in text)
         negative = sum(1 for keyword in _NEGATIVE_KEYWORDS if keyword.lower() in text)
         if positive > negative:
@@ -243,9 +226,6 @@ class MarketEventExtractor:
         return "neutral"
 
     def _urgency(self, text: str, item: NewsItem, generated_at: str) -> str:
-        llm_urgency = getattr(item, "urgency", "unknown")
-        if llm_urgency in {"immediate", "high", "medium", "low"}:
-            return llm_urgency
         if any(keyword.lower() in text for keyword in _IMMEDIATE_KEYWORDS):
             return "immediate"
         if any(keyword.lower() in text for keyword in _HIGH_URGENCY_KEYWORDS):
@@ -281,8 +261,6 @@ class MarketEventExtractor:
             score += 0.12
         if matched_holdings:
             score += 0.12
-        if getattr(item, "enhanced_by_llm", False):
-            score += 0.08
         return round(min(score, 0.95), 2)
 
     def _rationale(

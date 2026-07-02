@@ -14,7 +14,6 @@ StocksEngine 是 stocks-claw 的核心门面类，负责：
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -39,8 +38,6 @@ from stocks.engine.fetchers import DataFetcher
 from stocks.engine.history_cache import HistoryCache
 from stocks.engine.history_provider import CompositeKLineProvider, warm_history_cache
 from stocks.engine.llm_analysis import LLMAnalysis
-from stocks.engine.llm_enhancer import LLMEnhancer
-from stocks.engine.llm_utils import validate_llm_models
 from stocks.engine.macro_data import (
     CompositeMacroProvider,
     StaticMacroProvider,
@@ -69,13 +66,12 @@ _LEGACY_CONVERSION_NOTE = re.compile(
 
 
 class StocksEngine:
-    """stocks-claw 核心引擎 — 数据获取、分析上下文构建、LLM 增强的统一入口。"""
+    """stocks-claw 核心引擎 — 数据获取与分析上下文构建入口。"""
 
     def __init__(
         self,
         config_dir: Optional[str] = None,
         data_dir: Optional[str] = None,
-        llm_enhancer_enabled: Optional[bool] = None,
         llm_analysis_enabled: Optional[bool] = None,
         openai_api_key: Optional[str] = None,
         openai_base_url: Optional[str] = None,
@@ -85,7 +81,6 @@ class StocksEngine:
         Args:
             config_dir: 配置文件目录，默认 ``stocks/config/``。
             data_dir: 数据文件目录，默认 ``stocks/data/``。
-            llm_enhancer_enabled: 是否启用 LLM 数据增强（传参优先于配置）。
             llm_analysis_enabled: 是否启用 LLM 深度分析（传参优先于配置）。
             openai_api_key: OpenAI 兼容 API Key（传参优先，其次环境变量，其次.secret文件）。
             openai_base_url: OpenAI 兼容 API Base URL（传参优先，其次环境变量，其次.secret文件）。
@@ -182,52 +177,15 @@ class StocksEngine:
         self._history_provider = CompositeKLineProvider()
         self._history_warmed = False
 
-        # 3. 初始化 LLM 模块（配置默认值，传参可覆盖）
+        # 3. 初始化可选的兼容分析模块（主分析仍由外部 Agent 完成）
         llm_cfg = self._config["llm"]
-        enhancer_on = llm_enhancer_enabled if llm_enhancer_enabled is not None else llm_cfg.get("enhancer_enabled", True)
         analysis_on = llm_analysis_enabled if llm_analysis_enabled is not None else llm_cfg.get("analysis_enabled", False)
-        self.llm_enhancer = LLMEnhancer(
-            model=llm_cfg.get("enhancer_model", "deepseek-v4-flash"),
-            enabled=enhancer_on and bool(api_key),
-            api_key=api_key,
-            base_url=base_url,
-        )
         self.llm_analysis = LLMAnalysis(
             model=llm_cfg.get("analysis_model", "kimi-k2.6"),
             enabled=analysis_on and bool(api_key),
             api_key=api_key,
             base_url=base_url,
         )
-
-        # 3.5 校验模型可用性（后台线程异步执行，不阻塞初始化）
-        self._model_validation_done = False
-        should_validate_models = (
-            bool(api_key)
-            and bool(base_url)
-            and llm_cfg.get("validate_models", False)
-            and (self.llm_enhancer.enabled or self.llm_analysis.enabled)
-        )
-        if should_validate_models:
-            import threading
-            def _validate_in_background():
-                try:
-                    resolved_e, resolved_a, e_available, a_available = validate_llm_models(
-                        enhancer_model=self.llm_enhancer.model,
-                        analysis_model=self.llm_analysis.model,
-                        api_key=api_key,
-                        base_url=base_url,
-                    )
-                    self.llm_enhancer.model = resolved_e
-                    self.llm_analysis.model = resolved_a
-                    if not e_available:
-                        self.llm_enhancer.enabled = False
-                    if not a_available:
-                        self.llm_analysis.enabled = False
-                except Exception:
-                    pass
-                finally:
-                    self._model_validation_done = True
-            threading.Thread(target=_validate_in_background, daemon=True).start()
 
         # 4. 加载配置
         self._assets: list[FinancialAsset] = []
@@ -518,10 +476,6 @@ class StocksEngine:
             logger.warning(f"News fetch failed: {e}")
             return []
 
-    async def enhance_news(self, news: list[NewsItem]) -> list[NewsItem]:
-        """使用 LLM 增强新闻数据。"""
-        return await self.llm_enhancer.enhance_news(news)
-
     async def generate_report(self, context: AnalysisContext) -> str:
         """使用 LLM 生成投资分析报告。"""
         return await self.llm_analysis.generate_report(context)
@@ -559,12 +513,7 @@ class StocksEngine:
         if include_news:
             news = await self.fetch_news()
 
-        # 3. 如启用 LLM 增强，增强新闻
-        enhanced_news: list[NewsItem] = list(news)
-        if self.llm_enhancer.enabled and news:
-            enhanced_news = await self.llm_enhancer.enhance_news(news)
-
-        # 4. 加载历史快照
+        # 3. 加载历史快照
         recent_snapshots: list[dict] = []
         if include_history:
             recent_snapshots = self.persistence.load_recent(count=5)
@@ -576,9 +525,7 @@ class StocksEngine:
             profile=self._profile,
             instruments=instruments,
             recent_snapshots=recent_snapshots,
-            llm_enhancer_enabled=self.llm_enhancer.enabled,
-            llm_enhancer_model=self.llm_enhancer.model if self.llm_enhancer.enabled else "",
-            enhanced_news=enhanced_news,
+            news=news,
             news_requested=include_news,
         )
 
@@ -592,25 +539,6 @@ class StocksEngine:
             except Exception as e:
                 logger.warning(f"History cache flush failed: {e}")
 
-        # 7. 如启用 LLM 增强，生成行情摘要（使用 360s 超时，追求质量）
-        if self.llm_enhancer.enabled and context.quotes:
-            try:
-                market_summary = await asyncio.wait_for(
-                    self.llm_enhancer.generate_market_summary(
-                        context.quotes,
-                        context.market_state.to_dict(),
-                        timeout=360,
-                    ),
-                    timeout=365,
-                )
-                # 由于 AnalysisContext 是 frozen dataclass，需要重建
-                if market_summary:
-                    context = self._replace_context_field(
-                        context, "market_summary_nl", market_summary
-                    )
-            except asyncio.TimeoutError:
-                logger.warning("Market summary generation timed out, skipping")
-
         return context
 
     def health_check(self) -> dict:
@@ -623,7 +551,6 @@ class StocksEngine:
             "history_cache_enabled": self.history_cache is not None,
             "news_providers": len(self.news_aggregator._providers) if self.news_aggregator else 0,
             "macro_provider_enabled": self.macro_provider is not None,
-            "llm_enhancer_enabled": self.llm_enhancer.enabled,
             "llm_analysis_enabled": self.llm_analysis.enabled,
         }
 

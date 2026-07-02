@@ -391,7 +391,7 @@ class TestRawPromptStructure:
             profile={},
             instruments=sample_instruments,
             recent_snapshots=[],
-            enhanced_news=news,
+            news=news,
         )
 
         assert context.news_count == 1

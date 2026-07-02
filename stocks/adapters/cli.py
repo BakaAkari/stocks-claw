@@ -41,10 +41,6 @@ class CLIAdapter:
         )
         parser.add_argument("--save", help="保存结果到文件路径")
         parser.add_argument(
-            "--llm-enhancer", action="store_true",
-            help="启用 LLM 数据增强（行情摘要、新闻分级等）"
-        )
-        parser.add_argument(
             "--llm-analysis", action="store_true",
             help="启用 LLM 深度分析（生成投资建议报告）"
         )
@@ -318,9 +314,6 @@ class CLIAdapter:
         lines.append("")
         lines.append("【新闻】")
         lines.append(f"  新闻数量: {context.news_count}")
-        if context.llm_enhancer_enabled:
-            lines.append(f"  LLM 增强: 已启用 ({context.llm_enhancer_model})")
-            lines.append(f"  增强新闻数: {context.enhanced_news_count}")
         for item in context.news[:5]:
             lines.append(f"  - {item.title} ({item.source_name})")
         if len(context.news) > 5:
@@ -346,12 +339,10 @@ def main():
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--openai-key", default=None)
     pre_parser.add_argument("--openai-base-url", default=None)
-    pre_parser.add_argument("--llm-enhancer", action="store_true")
     pre_parser.add_argument("--llm-analysis", action="store_true")
     pre_args, _ = pre_parser.parse_known_args()
 
     engine = StocksEngine(
-        llm_enhancer_enabled=pre_args.llm_enhancer,
         llm_analysis_enabled=pre_args.llm_analysis,
         openai_api_key=pre_args.openai_key,
         openai_base_url=pre_args.openai_base_url,

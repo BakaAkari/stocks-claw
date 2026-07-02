@@ -72,14 +72,9 @@ macro:
     # us_10y_yield: 4.2
 
 llm:
-  # LLM 增强模块（新闻摘要、分级）
-  enhancer_enabled: true
-  enhancer_model: deepseek-v4-flash
   # LLM 深度分析模块（投资建议生成）— 建议由 Agent 主脑处理，此处可禁用
   analysis_enabled: false
   analysis_model: kimi-k2.6
-  # 默认不在初始化时请求 /models，避免定时任务因代理鉴权/网络产生噪音
-  validate_models: false
   # API Key 从环境变量读取，也可通过 .secret/openai-key.md
   api_key_env: OPENAI_API_KEY
   base_url_env: OPENAI_BASE_URL

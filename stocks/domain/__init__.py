@@ -3,7 +3,6 @@
 from stocks.domain.models import (
     AnalysisContext,
     DriftCheck,
-    EnhancedNewsItem,
     FinancialAsset,
     Instrument,
     MarketState,
@@ -15,7 +14,6 @@ from stocks.domain.models import (
 __all__ = [
     "AnalysisContext",
     "DriftCheck",
-    "EnhancedNewsItem",
     "FinancialAsset",
     "Instrument",
     "MarketState",

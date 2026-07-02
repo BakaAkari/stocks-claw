@@ -97,34 +97,6 @@ class NewsItem:
 
 
 @dataclass(frozen=True)
-class EnhancedNewsItem(NewsItem):
-    """增强后的新闻条目 — 包含 LLM Enhancer 生成的附加字段
-
-    当 llm_enhancer.enabled = true 时，engine 返回此类型替代 NewsItem。
-    """
-    importance: str = "unknown"         # high / medium / low
-    urgency: str = "unknown"            # immediate / high / medium / low
-    category: str = "unknown"           # 宏观政策 / 行业动态 / 个股新闻 / 国际市场 / 其他
-    sentiment: str = "unknown"          # positive / negative / neutral
-    relevance_tags: list[str] = field(default_factory=list)
-    llm_generated_summary: Optional[str] = None  # LLM 生成的摘要（原始缺失时）
-    enhanced_by_llm: bool = False      # 标记是否经过 LLM 增强
-
-    def to_dict(self) -> dict:
-        base = super().to_dict()
-        base.update({
-            "importance": self.importance,
-            "urgency": self.urgency,
-            "category": self.category,
-            "sentiment": self.sentiment,
-            "relevance_tags": self.relevance_tags,
-            "llm_generated_summary": self.llm_generated_summary,
-            "enhanced_by_llm": self.enhanced_by_llm,
-        })
-        return base
-
-
-@dataclass(frozen=True)
 class MarketEvent:
     """由新闻提取出的结构化市场事件。"""
 
@@ -308,7 +280,7 @@ class AnalysisContext:
 
     # 市场输入
     quotes: dict[str, list[Quote]]       # 按市场分组的所有行情
-    news: list[NewsItem]                   # 原始新闻（或 EnhancedNewsItem）
+    news: list[NewsItem]
     news_count: int
 
     # 轻量脚手架（辅助信号）
@@ -335,14 +307,8 @@ class AnalysisContext:
     # 数据质量与溯源摘要
     data_quality: dict[str, dict] = field(default_factory=dict)
 
-    # LLM 增强输出（当 llm_enhancer.enabled = true 时填充）
-    market_summary_nl: str = ""            # 行情自然语言摘要（LLM 生成）
-    enhanced_news_count: int = 0           # 增强后的新闻数量
-
     # 元信息（带默认值）
     schema_version: int = 5
-    llm_enhancer_enabled: bool = False   # 本次上下文是否经过 LLM 增强
-    llm_enhancer_model: str = ""         # 使用的增强模型
 
     def to_dict(self) -> dict:
         return {
@@ -357,8 +323,6 @@ class AnalysisContext:
             "news_count": self.news_count,
             "market_events": [e.to_dict() for e in self.market_events],
             "news_digest": self.news_digest,
-            "market_summary_nl": self.market_summary_nl,
-            "enhanced_news_count": self.enhanced_news_count,
             "market_state": self.market_state.to_dict(),
             "portfolio_mapping": self.portfolio_mapping.to_dict(),
             "drift_checks": [d.to_dict() for d in self.drift_checks],
@@ -367,6 +331,4 @@ class AnalysisContext:
             "macro_snapshot": self.macro_snapshot,
             "technical_indicators": self.technical_indicators,
             "data_quality": self.data_quality,
-            "llm_enhancer_enabled": self.llm_enhancer_enabled,
-            "llm_enhancer_model": self.llm_enhancer_model,
         }

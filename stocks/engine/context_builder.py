@@ -48,15 +48,12 @@ class ContextBuilder:
         profile: dict,
         instruments: list,  # 要获取行情的标的列表
         recent_snapshots: list[dict],
-        llm_enhancer_enabled: bool = False,
-        llm_enhancer_model: str = "",
-        market_summary_nl: str = "",
-        enhanced_news: list = None,
+        news: Optional[list[NewsItem]] = None,
         news_requested: Optional[bool] = None,
     ) -> AnalysisContext:
         """构建完整分析上下文"""
         generated_at = datetime.now(timezone.utc).isoformat()
-        news_was_requested = news_requested if news_requested is not None else enhanced_news is not None
+        news_was_requested = news_requested if news_requested is not None else news is not None
 
         # 1. 获取行情
         quotes: dict[str, list[Quote]] = {}
@@ -80,11 +77,8 @@ class ContextBuilder:
                 logger = get_logger("context_builder")
                 logger.warning(f"Macro data fetch failed: {e}")
 
-        # 4. 获取新闻（或接收已增强的新闻）
-        news: list[NewsItem] = enhanced_news if enhanced_news is not None else []
-        if not news:
-            # 预留：后续可通过 fetcher 获取新闻
-            news = []
+        # 4. 接收规则事件提取使用的原始新闻
+        news = news or []
 
         market_events, news_digest = self.market_event_extractor.extract(
             news,
@@ -145,8 +139,6 @@ class ContextBuilder:
             news_count=len(news),
             market_events=market_events,
             news_digest=news_digest,
-            market_summary_nl=market_summary_nl,
-            enhanced_news_count=len(enhanced_news) if enhanced_news else 0,
             market_state=market_state,
             portfolio_mapping=mapping,
             drift_checks=drift_checks,
@@ -155,8 +147,6 @@ class ContextBuilder:
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
             technical_indicators=technical_indicators,
             data_quality=data_quality,
-            llm_enhancer_enabled=llm_enhancer_enabled,
-            llm_enhancer_model=llm_enhancer_model,
             schema_version=5,
         )
 

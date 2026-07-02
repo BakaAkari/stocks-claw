@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from stocks.domain.models import EnhancedNewsItem, FinancialAsset, Instrument, NewsItem
+from stocks.domain.models import FinancialAsset, Instrument, NewsItem
 from stocks.engine.market_events import MarketEventExtractor
 
 
@@ -56,41 +56,6 @@ def test_extract_macro_and_theme_event_with_holding_match():
     assert digest["event_count"] == 1
     assert digest["matched_holdings"] == ["QCOM高通"]
     assert digest["affected_markets"]["us"] == 1
-
-
-def test_extract_uses_enhanced_news_classification_hints():
-    extractor = MarketEventExtractor()
-    generated_at = datetime.now(timezone.utc).isoformat()
-    news = [
-        EnhancedNewsItem(
-            title="某公司发布财报",
-            url="https://example.com/earnings",
-            source_name="test",
-            source_type="rss",
-            published_at=datetime.now(timezone.utc),
-            summary="营收增长",
-            language="zh",
-            category="个股新闻",
-            sentiment="positive",
-            urgency="immediate",
-            relevance_tags=["财报"],
-            enhanced_by_llm=True,
-        )
-    ]
-
-    events, digest = extractor.extract(
-        news,
-        assets=[],
-        instruments=[],
-        generated_at=generated_at,
-    )
-
-    assert events[0].event_type == "company_news"
-    assert events[0].sentiment == "positive"
-    assert events[0].urgency == "immediate"
-    assert "财报" in events[0].themes
-    assert events[0].confidence >= 0.5
-    assert digest["urgency"]["immediate"] == 1
 
 
 def test_empty_news_returns_empty_digest():
