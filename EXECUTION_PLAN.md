@@ -1,19 +1,23 @@
 # EXECUTION_PLAN.md — 修复与收口执行清单
 
 > 生成时间:2026-07-02
+> 最近修订:2026-07-03(Phase F 状态纠偏 + Phase G 决策产品化/双路径交付)
 > 来源:对全部文档(约 9,600 行)与全部核心代码(约 5,900 行)的交叉审计
 > 用途:供执行 Agent 按顺序落地。本文档是**唯一的行动清单**,与 `PLAN.md`(阶段规划)互补,不新增其他文档。
 > 执行原则:每个任务动手前先用 grep/读码验证前提(标注为【验证前提】的行),防止基于过时快照误改。
 
 ---
 
-## 状态核验附记(2026-07-02,基于对工作区代码的逐文件独立核验与后续证据收口)
+## 状态核验附记(2026-07-03,基于对工作区代码的逐文件独立核验与后续证据收口)
 
 本清单曾被标记为全部完成并打 tag `v2.1-phase2-complete`,后续独立核验发现 P2 组存在虚报完成记录。当前已完成 P2 证据收口与 Phase M 建议闭环实现。已核验的真实状态:
 
 - **核验通过,维持完成**:P0 全部、P1 全部(文件修改与任务描述吻合)、P3 全部(`llm_enhancer.py`/`llm_utils.py` 已物理删除、engine.yaml 已清理)、P4 全部、P5 全部(docs/archive 17 份、根目录 6 份文档)。
 - **P2 已重新核验完成**:P2-1、P2-2 剩余项、P2-3、P2-4、P2-5 均已补齐代码行号、测试名与全局验收证据。
 - **Phase M 已完成**:M-1~M-5 均已带证据完成,并通过 `tests/engine/test_advice_loop.py` 端到端守门测试。
+- **Phase D 未完成**:D0-1~D0-3 已完成;D0-4、D1、D2 与各出口验收均未完成。
+- **Phase F 撤销完成结论**:最新提交虽落盘 upcoming_events/rotation/action_signals/prompt/triggers schema,但 2026-07-03 本机复核收集 383 tests,全量运行已出现至少 10 failures;定向 Phase F 40 tests 中 6 个 trigger_review 用例失败,且 `stocks/engine/advice_review.py` 无触发器核对代码。运行态 37 标的仅 10 个可排名、27 个 no_data(26 个扫描池均无本地历史);已过 `time_utc` 的当日事件仍被标 upcoming。F 只能记为“组件部分落盘、出口失败”。
+- **新增 Phase G**:按用户裁决规划内部 LLM 默认开启 + 用户 Agent delegate 双路径、结构化 DecisionPlan、持仓映射/仓位计算、机会评分、事件生命周期、触发监控与轻量效果校准;G 的硬前置是 F0 修复及 Phase D 出口通过。
 - tag `v2.1-phase2-complete` 曾打在未完成状态上,不作为完成依据;是否删除/重打由用户决定。
 - 对执行 Agent 的新增硬性要求:**完成记录必须附可复现的验证证据**(如 `grep -n` 的命中行号、测试名),只写 commit hash 不再被接受;虚报完成视为最严重违规。
 
@@ -21,11 +25,12 @@
 
 ## 使用说明(执行 Agent 必读)
 
-1. **当前执行队列(2026-07-02 第二次更新)**:P0/P1/P2/P3/P4/P5/M 已核验完成,勿重做。当前唯一进行中阶段为 **Phase D — 数据可信底盘与冗余**(见本文档 D 组),按 D0 → D1 → D2 顺序执行;启动依据与证据见 `PLAN.md` 决策日志 2026-07-02 数据可靠性审计条目及 `docs/archive/DATA_RELIABILITY_AUDIT_20260702.md`(证据留存,无准则效力,任务以 D 组任务卡为准)。
+1. **当前执行队列(2026-07-03 更新)**:P0/P1/P2/P3/P4/P5/M 已核验完成,勿重做。严格顺序改为 **F0 基线修复 → D0-4 → D1 → D2 → G0~G7**。F0 先恢复默认测试与真实触发闭环;D 组补齐可靠数据和第一方事件源;G 组才把证据层产品化为个人 DecisionPlan。任一阶段出口未通过不得越级。
 2. 每完成一个任务,运行全局验收(见文末),全部通过后才能进入下一任务。
 3. 勾选格式:完成后把 `- [ ]` 改为 `- [x]`,并在任务末尾追加一行 `> 完成:<commit hash> <一句话说明>`。
 4. 遵守 `PLAN.md` 第 4 节禁止事项:不引入重型依赖、不伪造指标、不提交 `.local/`、`.secret/`、缓存。
-5. 任何任务如果发现前提不成立(代码已改过、文件不存在等),不要硬改——在任务下记录 `> 跳过:<原因>` 并继续。
+5. **LLM/Agent 双路径不得绕过结构化校验**:internal_llm 与 agent_delegate 必须生成同一 DecisionPlan schema;URL/key 缺失返回 setup_required 或显式选择 agent_delegate,禁止静默返回普通摘要。
+6. 任何任务如果发现前提不成立(代码已改过、文件不存在等),不要硬改——在任务下记录 `> 跳过:<原因>` 并继续。
 
 ---
 
@@ -414,13 +419,41 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes --save 
 
 ---
 
-## D — 数据可信底盘与冗余(Phase D,2026-07-02 数据可靠性审计导出,当前执行队列)
+## F0 — Phase F 基线修复与完成状态纠偏(当前第一任务)
+
+**背景**:2026-07-03 对提交 `b54dc3d` 独立复核。`ruff`/`compileall` 通过,但默认 pytest 收集 383 项后已出现至少 10 failures;Phase F 定向 40 项为 34 passed / 6 failed。F-3 文档声称存在的 `_review_trigger` 在 `stocks/engine/advice_review.py` 中不存在;旧 schema/提示词断言未同步;部分 Engine 测试因真实 `sector_scan.json` 被加载而触发外网历史回填,破坏测试隔离。此阶段只恢复诚实基线,不扩功能。
+
+### F0-1 恢复默认测试与 schema 契约
+
+- [ ] 【验证前提】重跑 `uv run python -m pytest -q --maxfail=20`,逐个列出失败测试;至少核对 `tests/engine/test_advice_triggers.py` 6 项、`test_context_builder.py` 的 schema v6→v7/data_quality v3→v4/旧 prompt 文案、`tests/test_asset_adapters.py` 旧 prompt 文案。
+- [ ] 更新所有被 v7/v4 与决策导向 prompt **预期改变**的旧断言;不得删除测试、不得放宽成“字段存在即可”。新增 schema 三处一致性测试:`models/context_builder/DATA_MODEL`。
+- [ ] Engine/端到端测试显式注入空扫描池或 mock 历史 provider,默认 pytest 禁止访问真实网络;增加守门测试,patch `urllib.request.urlopen` 为失败时全量测试仍完成。
+- [ ] 修复后跑四道闸并记录准确总数;在通过前,下列原 F 组所有“完成”记录只代表组件曾落盘,不代表阶段完成。
+
+### F0-2 补齐真实 trigger_review
+
+- [ ] 在 `stocks/engine/advice_review.py` 实现 `_review_trigger` 与批量附加:price_above/price_below 必须按“建议后首次跨越”而非“任一价格已在阈值外”判 fired;百分比触发以建议后首个有效收盘为基准;不在 watchlist、历史缺失、时间非法均返回 no_data + reason。
+- [ ] `attach_advice_performance` 对每条建议始终附 `trigger_review`(无 triggers 时 `[]`);不写回 advice 源文件。
+- [ ] 让 `tests/engine/test_advice_triggers.py` 全部通过,并新增“建议时已在阈值上方但未发生上穿”不误触发测试。
+
+### F0-3 修正事件“未来”语义与配置事实
+
+- [ ] `UpcomingEvent` 引入可比较的完整事件时点(`scheduled_at` 含 timezone/UTC);只有日期没有时间时保留 date-only 并显式精度。
+- [ ] EventCalendar 以构建时刻过滤已发生事件;同日 `time_utc` 已过不得继续进入 upcoming/event_watch;状态至少区分 scheduled/imminent/released_or_expired。
+- [ ] 时区测试覆盖 Asia/Shanghai 已跨日、美国仍在前一交易日、事件发生前后 1 分钟;禁止只按 UTC `date()` 判断。
+- [ ] 核对 `engine.yaml` 实际是否存在 calendar 节;不存在则原 F-1 对应项改为待办并补配置/默认值一致性测试。
+
+**F0 出口验收**:`uv run python -m pytest -q` 全过且不访问真实网络;6 个 trigger_review 失败清零;事件发生后一秒不再出现在 upcoming;文档不再把 Phase F 标为已完成。
+
+---
+
+## D — 数据可信底盘与冗余(Phase D,2026-07-02 数据可靠性审计导出,F0 后继续)
 
 **目标**:让系统先"诚实"再"博学"——任何数据源失败必须在 `data_quality` 显性可见,任何时间戳必须来自数据源本身,缺数据的指标绝不报 `ok`;在此之上为关键数据源建立真实冗余。对照 VISION 成功标准第 4 条(区分市场信息/用户记忆/LLM 推断边界)与第 5 条(对决策真有帮助)。
 
 **审计证据**(全文见 `docs/archive/DATA_RELIABILITY_AUDIT_20260702.md`,下列任务卡内只引用与该任务直接相关的证据):外部 GPT 审计 5 条结论经行号级独立核验全部成立;2026-07-02 现场网络诊断(`.local/verify_data_sources.py`)实测:eastmoney 日 K 0/6(RemoteDisconnected)、腾讯日 K 6/6(60-61 bars)、新浪日 K 窗口异常(每支 2 bars)、Yahoo 日 K 与宏观全线 HTTP 429(0/5、0/6)、三个新闻源均有产出(30/100/42 条)、Finnhub quote 与财报日历可用、Binance/SEC EDGAR/巨潮/上交所/FRED 全部可达。
 
-**硬前置**:无(Phase R 与 Phase M 均已收口)。组内顺序是硬约束:D0 全部完成并通过 D0 出口验收后才能开工 D1;D1-1/D1-2/D1-3 完成后才能开工 D2。理由:D1 的降级链上报依赖 D0-3 的 `history_backfill` 节点;D2 的事件质量依赖 D0-2 的真实时间戳。
+**硬前置**:F0 出口通过(先恢复默认测试与真实事件/触发语义)。组内顺序是硬约束:D0 全部完成并通过 D0 出口验收后才能开工 D1;D1-1/D1-2/D1-3 完成后才能开工 D2。理由:D1 的降级链上报依赖 D0-3 的 `history_backfill` 节点;D2 的事件质量依赖 D0-2 的真实时间戳。
 
 **开工基线**(D0-1 动工前跑一次并留存输出):
 
@@ -563,20 +596,21 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 - [ ] `CompositeMacroProvider` 改为**按字段合并**:主源缺的字段由备源补,而非首个非空快照短路。
 - [ ] 每字段携带 `source` 与 `as_of`(FRED 为日度序列的观测日期,**它不是实时值,必须如实标注日期,禁止冒充实时**);`MacroSnapshot` 扩展 `field_sources`;`_macro_quality` 的 as_of/freshness 按字段级最旧值计算。
 - [ ] 新增官方统计组(月度,磁盘缓存 24h):`CPIAUCSL`→cpi(换算同比,换算逻辑加单测)、`UNRATE`→us_unemployment、`FEDFUNDS`→fed_funds_rate,归入 `official_stats` 子结构;raw_prompt 宏观段分组展示"市场定价代理"与"官方统计(滞后月度)"。
-- [ ] `macro_snapshot` 结构扩展属于 AnalysisContext schema 变更:`schema_version` 升 **v7**,红线三处同步(`stocks/DATA_MODEL.md` + context_builder/models + schema 断言测试)。
+- [ ] `macro_snapshot` 结构扩展属于 AnalysisContext schema 变更;任务开工时以 F0 收口后的现行版本为基线单调 +1(当前代码已是 v7,若无其他先行 schema 变更则应升 **v8**,禁止倒写/重复 v7),红线三处同步(`stocks/DATA_MODEL.md` + context_builder/models + schema 断言测试)。
 - [ ] 新增测试:FRED CSV fixture 解析;字段级降级合并;official_stats 缓存命中;schema v7 三处同步断言。
 
 **验收**:mock Yahoo 全 429 时宏观仍 ≥ 5 字段有值且逐字段来源可溯;LLM 上下文能区分市场代理与官方统计;全局验收通过。
 
 **D1 出口验收**:重跑 `.local/verify_data_sources.py` + 真实全流程 build_context,对照 D0 出口留存输出:A 股/美股/crypto 历史、宏观在任一主源失败下仍有数据且降级全程可见。**通过后才能开工 D2。**
 
-### D2-1 财报日历注入(Finnhub 免费 tier,已实测可用)
+### D2-1 财报日历可靠化(Finnhub 免费 tier,合并现有 F-1,禁止另建平行模块)
 
 **文件**:`stocks/engine/market_events.py` 或新增独立模块、`stocks/engine/context_builder.py`、`tests/`
 
-- [ ] watchlist 中 us 标的:`/calendar/earnings?from=<今-7d>&to=<今+14d>&symbol=`,逐标的查询(复用 finnhub provider 的节流);结果缓存 12h(磁盘,gitignore 目录)。
-- [ ] 注入两处:`market_events`(event_type=`earnings`,urgency 按临近程度)与 raw_prompt 独立【财报日历】段;失败在 `data_quality` 标注,不阻塞主流程。
-- [ ] 新增测试:fixture 解析、临近财报进入事件、接口失败降级。
+- [ ] 在现有 `stocks/engine/event_calendar.py::FinnhubEarningsCalendarProvider` 上增量实现,不新增第二个财报模块;watchlist 中 us 标的调用 `/calendar/earnings?from=<今-7d>&to=<今+14d>&symbol=`,复用 finnhub provider 的节流/typed errors。
+- [ ] 结果缓存 12h(磁盘,gitignore 目录),缓存携带 fetched_at/source/window;单标的失败不应中止其余标的,按标的记录 partial errors。
+- [ ] 注入 `upcoming_events` 并可投影为 `market_events(event_type=earnings)`;raw_prompt 复用【未来催化剂日历】而非再建重复【财报日历】段;失败在 `data_quality` 标注,不阻塞主流程。
+- [ ] 新增测试:fixture 解析、临近财报进入事件、单标的失败仍保留其他结果、缓存命中/过期、typed error 降级;与 F0 的已过时点过滤联动。
 
 **验收**:真实跑通一次,持仓相关财报日出现在上下文;失败场景 data_quality 可见。
 
@@ -607,21 +641,23 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 
 ---
 
-## F — 前瞻决策层(Phase F,2026-07-02 用户裁决启动,与 Phase D 并行不冲突)
+## F — 前瞻决策层组件(2026-07-03 复核:部分落盘,出口失败)
 
 > 背景:用户对实际分析输出的直接反馈——回顾式总结"有数据只分析"无实质意义,
 > 要求系统在当下时间节点给出"提前布置哪些板块/调整哪些仓位"的条件化预案。
 > 决策日志见 PLAN.md 2026-07-02 Phase F 条目。
+>
+> **状态纠偏**:原说明“与 Phase D 并行不冲突”不成立。rotation/action_signals 对历史回填有硬依赖,而 D1 未完成导致当前 26 个扫描池标的全部无本地历史。保留已落盘组件,但 F0 修复与 D1 数据覆盖通过前不得验收 Phase F。
 
 ### F-1 事件日历(upcoming_events)
 
 - [x] 新增 `stocks/engine/event_calendar.py`:StaticEventCalendarProvider(读 `stocks/config/event_calendar.json` 官方日程) + FinnhubEarningsCalendarProvider(watchlist 美股财报日) + EventCalendar 组合器(lookahead 窗口过滤、days_until、按类别匹配 watchlist 标的)。
 - [x] 新增 `stocks/config/event_calendar.json`:2026 下半年 FOMC/CPI/非农官方日程(来源 federalreserve.gov / bls.gov,2026-07-02 核对)。
-- [x] `engine.yaml` 增 `calendar` 节(enabled/lookahead_days/earnings.enabled);StocksEngine 装配并注入 ContextBuilder。
+- [ ] `engine.yaml` 增 `calendar` 节(enabled/lookahead_days/earnings.enabled);StocksEngine 已装配并注入 ContextBuilder,但 2026-07-03 复核 `engine.yaml`/`DEFAULT_ENGINE_CONFIG` 均无 calendar 节,配置任务未完成。
 - [x] `AnalysisContext` 增 `upcoming_events`(v6→v7);`data_quality` 增 `upcoming_events` 节点(v3→v4);raw_prompt_input 增【未来催化剂日历】小节。
 - [x] 失败语义:无 Provider → not_configured;部分 Provider 失败 → partial + errors 明细;全失败 → missing。Finnhub key 缺失显式报错不静默。
 
-> 完成:代码与测试已落盘(commit 待本机提交) | 证据:`tests/engine/test_event_calendar.py` 9 个用例(窗口过滤/days_until/标的匹配/partial/missing/not_configured/财报映射/key 缺失);CLI 冒烟输出 upcoming_events 2 条+dq.upcoming_events.status=partial(见 F 组验收段)。
+> 历史落盘记录:`b54dc3d` 已含事件日历代码与测试;但未覆盖“事件时点已过”与跨时区,且配置项未落盘,本任务保持未验收。
 
 ### F-2 板块轮动脚手架(rotation)
 
@@ -634,16 +670,16 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 ### F-3 建议触发闭环(triggers)
 
 - [x] `AdviceRecord` 增可选 `triggers` 字段:{instrument:"market:code", type∈{price_above,price_below,pct_change_above,pct_change_below}, level:number, action:非空, invalidation?};严格校验,旧记录兼容按 [] 加载。
-- [x] `advice_review.py` 增 `_review_trigger`:按建议日之后收盘价序列核对 fired/not_fired/no_data,附 observed 价格事实;并入 recent_advice 的 `trigger_review` 派生字段。
+- [ ] `advice_review.py` 增 `_review_trigger`:2026-07-03 复核确认当前文件只有 performance 回看,无触发器核对实现;由 F0-2 补齐。
 - [x] `engine.save_advice` 允许 triggers 透传;MCP advice_save 描述更新;raw_prompt_input【上次建议】增触发器核对行。
 
-> 完成:代码与测试已落盘(commit 待本机提交) | 证据:`tests/engine/test_advice_triggers.py` 13 个用例(校验 5 组非法输入拒绝/往返序列化/旧记录兼容/fired/not_fired/pct 触发/非 watchlist/无历史/无触发器)。
+> 复核:`AdviceRecord.triggers` schema/保存透传已落盘;trigger_review 的 6 个行为测试全部失败(KeyError),不得记完成。
 
 ### F-4 决策导向分析契约(prompt)
 
 - [x] 重写 `stocks/prompts/personal_advice_prompt.txt`:六节强制结构(核心结论/上期预案复盘/催化剂情景预案/调仓触发清单/下一个机会/风险与数据边界);触发条件必须可验证;禁止无条件"观察/等待";"下一个机会"不允许空章节;保留金额脱敏与不编造红线。
 - [x] raw_prompt_input 收尾指令同步指向新契约。
-- [x] `stocks/DATA_MODEL.md`(v7/data_quality v4/UpcomingEvent/rotation/triggers)、`ARCHITECTURE.md`、`AGENT_GUIDE.md`、PLAN 决策日志同步。
+- [ ] `stocks/DATA_MODEL.md`(v7/data_quality v4/UpcomingEvent/rotation/triggers)、`ARCHITECTURE.md`、`AGENT_GUIDE.md`、PLAN 决策日志同步;2026-07-03 复核 ARCHITECTURE 头部/图仍写 AnalysisContext v6,需在 F0 同步。
 
 > 完成:文档已同步(commit 待本机提交) | 证据:DATA_MODEL "AnalysisContext v7"/"data_quality v4"/"UpcomingEvent"/"rotation" 小节;AGENT_GUIDE triggers 示例。
 
@@ -661,12 +697,129 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 
 > 完成:代码与测试已落盘(commit 待本机提交) | 证据:`tests/engine/test_action_signals.py` 用例覆盖 7 类信号规则/事件叠加/缺数据/可序列化。
 
-**F 组验收(2026-07-02 云端执行记录,pytest 需在本机补跑)**:
+**F 组历史验收记录(2026-07-02 云端;已被 2026-07-03 本机复核否决)**:
 
 - [x] `ruff check .` 全通过
 - [x] `python -m compileall -q stocks tests` 全通过
 - [x] CLI 冒烟 `--output json --no-news --no-quotes`:schema_version=7、data_quality.schema_version=4、upcoming_events 2 条(非农 T+0/CPI T+12)、dq.upcoming_events=partial(finnhub key 未配置显式报错)、rotation=no_data(无历史,诚实缺失)
 - [ ] `uv run python -m pytest -q` 全量通过(云端无 pytest 网络权限,待本机执行;新增用例已用等价 runner 全部通过)
+
+**Phase F 重新验收条件**:F0 出口通过;D1 出口后真实扫描池至少 90% 标的有 ≥40 根可用日 K,不足者逐项列明;rotation 不混用过期数据且顶层 as_of 采用最保守口径;action signal 不再以近20根仅略大于 0 的噪声直接产出 accumulate_candidate;一份真实上下文必须至少能解释“为什么有/没有下一个机会”,不能靠提示词强制编造。
+
+---
+
+## G — 决策产品化与个人组合行动系统(Phase G,2026-07-03 用户裁决)
+
+**愿景**:工具在对话当下不是只返回数据或市场总结,而是稳定交付“下一个机会 + 提前布局/调仓预案”。`AnalysisContext` 继续作为证据层;新增 `DecisionPlan` 作为决策层唯一权威中间产物;内部 LLM 或用户 Agent 只负责在证据约束内生成/完善 DecisionPlan;用户 Agent最后结合当前对话做完整分析。系统不自动下单。
+
+**硬前置**:F0、D0、D1、D2 全部通过出口验收。原因:持仓动作和机会排序不能建立在缺历史、过期事件或单源静默失败之上。G 内严格按 G0→G7 顺序执行。
+
+### G0 现有交付路径审计 + DecisionEnvelope 契约冻结
+
+**文件**:`stocks/adapters/mcp.py`、`stocks/adapters/cli.py`、`stocks/adapters/http.py`、`stocks/engine/llm_analysis.py`、`stocks/DATA_MODEL.md`、`tests/`
+
+- [ ] 【验证前提】证明当前 MCP 只有 `get_analysis_context`,不暴露决策生成工具;证明内部 LLM 默认 `analysis_enabled:false`;证明 raw_prompt 只引用本地 `personal_advice_prompt` 名称,外部 Agent 未必获得完整契约。
+- [ ] 定义 `DecisionEnvelope` 顶层协议:`status ∈ {ok,degraded,setup_required,validation_failed,failed}`、`mode_requested`、`mode_used ∈ {internal_llm,agent_delegate,deterministic_only}`、`decision_plan`、`agent_task`、`setup_required`、`quality`、`errors`、`final_analysis_instructions`。
+- [ ] 明确三层职责:deterministic engine 产事实/候选/仓位边界;决策生成器产结构化 DecisionPlan;用户 Agent审查后产最终自然语言分析。最终分析不是系统事实,不得反写市场数据。
+- [ ] schema 写入 `stocks/DATA_MODEL.md`;使用 JSON Schema 或等价本地校验器作为唯一契约,禁止只靠 prompt 文案约束。
+
+**验收**:同一个 mock 上下文分别走 internal_llm/agent_delegate,二者返回同形 DecisionEnvelope;外部 Agent不读取仓库文件也能从 envelope 理解下一步。
+
+### G1 持仓—标的身份映射与可交易事实
+
+**文件**:`stocks/domain/models.py`、资产 CRUD/持久化、`stocks/DATA_MODEL.md`、`tests/`
+
+- [ ] `FinancialAsset` 增可选、向后兼容字段:`instrument_key`(`market:code`,非证券资产为 None)、`quantity`、`cost_basis`、`position_role`(core/satellite/hedge/cash/buffer/locked)、`tradable`、`liquidity_note`;源币种/源金额保持不变。
+- [ ] 映射只接受用户确认或明确配置,禁止按资产名称模糊猜证券代码;未映射资产仍参与资产桶,但任何标的级调仓必须标 `position_unknown`/`not_linked`。
+- [ ] watchlist、持仓和扫描池统一使用 `instrument_key`;同一标的多平台持仓可聚合但保留来源明细;候选池未持有标的当前权重明确为 0。
+- [ ] 资产迁移/round-trip/CRUD/MCP/CLI 测试覆盖旧记录缺字段、外币持仓、非交易资产、同标的多账户;未经确认不得写映射。
+
+**验收**:任一 DecisionPlan 动作都能回答“当前是否持有/持有多少权重/是否可交易”;回答不了时显式阻断仓位幅度,不让 LLM猜。
+
+### G2 PortfolioActionEngine:仓位影响、幅度与资金来源
+
+**文件**:`stocks/engine/portfolio_actions.py`(新增)、`scaffolds.py`、`context_builder.py`、`stocks/DATA_MODEL.md`、`tests/`
+
+- [ ] 实现纯函数 `build_portfolio_actions(holdings,mapping,constraints,candidates,risk_metrics)`:输出动作候选而非下单,含 `action ∈ {add,increase,reduce,exit,replace,hold,no_action}`、`current_weight`、`target_weight_range`、`delta_weight_range`、`funding_source`、`constraint_effects`、`blocked_reasons`。
+- [ ] 最小风险集正式解禁并实现:组合年化波动率、最大回撤、HHI、候选与组合/核心持仓相关性;数据不足逐项 no_data,不得用默认 0。
+- [ ] 仓位幅度首先服从用户 min/max、现金缓冲、锁定资产、单标的/类别上限和风险偏好;没有足够可用资金时不得输出加仓;减仓释放资金与新增资金来源必须守恒。
+- [ ] 输出相对比例给 prompt/Agent;精确金额只留在受控结构化层,沿用金额脱敏规则;不生成订单数量、不连接券商。
+- [ ] 增加不变量测试:调整后权重和≈100%、不突破硬约束、资金来源守恒、锁定资产不被出售、缺持仓映射不伪造 delta。
+
+**验收**:固定组合能明确产出“从哪个层/标的减多少比例,转给哪个候选,调整后约束和风险如何”;不是泛泛“增加权益/关注科技”。
+
+### G3 OpportunityEngine:可比较的机会评分与轻量校准
+
+**文件**:`stocks/engine/opportunities.py`(新增)、`rotation.py`、`action_signals.py`、配置、`tests/`
+
+- [ ] 候选先按市场/资产类型分组,禁止直接用跨市场绝对 20 日涨幅混排;为每组配置基准(如 A 股宽基/美股 SPY/crypto BTC),计算 5/20/60 日相对强弱。
+- [ ] 最小特征:趋势与相对强弱、成交量确认、年化波动率、近期最大回撤、距均线/过热度、数据 freshness、事件/公告催化剂、与现有组合相关性;每个特征保留 source/as_of/缺失状态。
+- [ ] 输出 `OpportunityCandidate`:`score`、`rank_within_market`、`thesis_facts`、`entry_zone_or_trigger`、`invalidation`、`horizon`、`portfolio_fit`、`missing_inputs`;分数是排序工具,不是收益概率。
+- [ ] 设最低有效强度与 freshness 门槛:近20根仅略大于 0、过期数据或缺关键特征不得直接变 accumulate_candidate;旧 rotation/action_signals 保留兼容但降为 OpportunityEngine 的输入之一。
+- [ ] 实现轻量 walk-forward 校准(不是通用回测平台):统计信号后 5/10/20 根 K 线收益、最大有利/不利波动、样本数;阈值没有最小样本时标 `uncalibrated`,禁止宣称胜率。
+- [ ] fixture 测试覆盖跨市场分组、基准相对强弱、过热/下跌刀、陈旧数据排除、缺失特征、校准样本不足。
+
+**验收**:扫描池中每个入选机会都能解释“相对谁更强、承担多少波动/回撤、为何适合当前组合”;不再把微小正收益包装成布局机会。
+
+### G4 事件生命周期、预期差与候选映射
+
+**文件**:`event_calendar.py`、D2 Provider、`market_events.py`、`opportunities.py`、`tests/`
+
+- [ ] 在 F0 的 scheduled_at 基础上统一事件状态:`scheduled/imminent/released/expired`;事件发生后从 upcoming 移出,进入 released 观察窗口,禁止继续写“T+0 未来催化剂”。
+- [ ] 对支持的数据源增加 `consensus/actual/previous/unit`;没有一致预期时,情景树只能写定性条件并标 `consensus_missing`,禁止编造“超预期”阈值。
+- [ ] 统一 category taxonomy,事件影响范围同时匹配持仓、watchlist 和扫描池;当前 generic `tech/bond/gold` 与 `us_tech/us_rates/...` 必须有显式映射表,禁止字符串碰运气。
+- [ ] 财报/公告事件复用 D2 的缓存、限流、来源和质量记录;同一事件跨 RSS/公告/日历去重但保留多来源。
+- [ ] 事件落地后重算 OpportunityCandidate 与受影响 PortfolioAction,记录“预案分支 → 事实结果”,不自动执行动作。
+
+**验收**:事件前能生成条件化预案;事件发生后一秒旧事件不再 upcoming;有 actual/consensus 时选择正确分支,无数据时明确无法判定。
+
+### G5 DecisionPlan:结构化决策产物与确定性校验
+
+**文件**:`stocks/domain/models.py`、`stocks/engine/decision_plan.py`(新增)、`stocks/DATA_MODEL.md`、`tests/`
+
+- [ ] 定义 `DecisionPlan`:`schema_version/generated_at/horizon/portfolio_diagnosis/immediate_actions/opportunities/scenario_plans/no_action_conditions/data_boundary/evidence_index`。
+- [ ] 每条 action/opportunity 必含:`instrument_key 或 asset_bucket`、`action`、`current_weight`、`target/delta range`、`funding_source`、`entry_trigger`、`invalidation`、`catalyst`、`horizon`、`confidence`、`evidence_refs`、`quality_flags`;不存在的信息显式 None + reason。
+- [ ] 先由 deterministic planner 将 OpportunityCandidate + PortfolioAction 拼成可用草案;即使没有 LLM也返回 `deterministic_only` 的结构化 plan,但不得补写推断型 thesis。
+- [ ] Validator 强制:标的必须存在于持仓/watchlist/扫描池;证据引用必须能在 context 定位;仓位约束/资金守恒必须通过;事件不得过期;缺关键数据的 action 必须 blocked/no_action;禁止收益承诺与精确金额泄漏。
+- [ ] LLM 输出只允许补充 inference/rationale/scenario,不能改写事实字段;事实冲突以 deterministic 层为准并记录 validation error。
+- [ ] `AnalysisContext` 不再作为主要用户交付;新增 `StocksEngine.build_decision()` 先构建 context 再生成 DecisionEnvelope。CLI 普通分析默认调用 build_decision;MCP 将 `decision_generate` 列为首要用户决策工具;原 `get_analysis_context` 保留给调试/高级 Agent并明确标注“仅证据,不可直接作为最终建议”。
+
+**验收**:无 LLM也能返回可执行结构和明确缺口;任意伪造标的、无资金来源加仓、过期事件或不存在 evidence_ref 均被拒绝。
+
+### G6 内部 LLM 默认开启 + 用户 Agent delegate 双路径
+
+**文件**:`engine.yaml`、`config_loader.py`、`llm_analysis.py`(可重构为 decision generator)、Adapters、`AGENT_GUIDE.md`、`README*`、`tests/`
+
+- [ ] 新配置 `decision_generation.enabled:true`(默认开启)、`mode:auto`、`model`、`api_key_env`、`base_url_env`;API URL/key 从环境变量或 `.secret/` 安全读取,不得作为 MCP/HTTP 普通参数传递。默认开启作用于 `build_decision/decision_generate`,纯 `build_context` 保持确定性且不产生付费 LLM 调用;默认开启不等于缺 key 时伪装成功。
+- [ ] `auto` 模式:URL+key 可用 → `internal_llm`;缺任一项 → DecisionEnvelope.status=`setup_required`,列出缺失字段、环境变量名、CLI/`.secret` 安全配置方式,由用户 Agent向用户说明;错误/日志/响应永不回显 key。
+- [ ] 用户 Agent得到 setup_required 后提供两项选择:①用户在安全环境配置 URL/key 后重试;②明确选择 `agent_delegate`,不要求用户把 key 粘贴进普通对话。不得静默改用旧 summary 报告。
+- [ ] `internal_llm`:输入完整 DecisionTask(证据摘要+deterministic plan+DecisionPlan schema+决策契约),输出严格 JSON DecisionPlan;本地 validator 失败允许一次带错误列表的修复重试,再失败返回 validation_failed + agent_task。
+- [ ] `agent_delegate`:工具返回自包含 `agent_task`,其中嵌入完整决策契约、脱敏上下文、deterministic plan、schema、evidence index 和校验要求,不能只写“请读取本地 prompt”。用户 Agent先扮演内部决策生成器产 DecisionPlan,调用 `decision_validate` 校验后,再切换到最终分析阶段。
+- [ ] 无论 internal_llm 或 agent_delegate,DecisionEnvelope 都附 `final_analysis_instructions`:用户 Agent必须审查数据质量、指出采纳/推翻项、结合当前对话和用户临时意图输出最终完整分析;禁止原样复述内部报告。
+- [ ] MCP 增 `decision_generate(mode=auto|internal_llm|agent_delegate)`、`decision_validate(plan)`,并在工具排序/描述中把 decision_generate 定义为“面向用户建议的默认入口”;CLI 无特殊 flag 时默认生成决策,另提供显式 `--context-only` 调试开关;HTTP 如暴露则沿用认证/金额脱敏。保留 `get_analysis_context` 但工具描述明确它只是证据接口。
+- [ ] mock 测试覆盖:默认凭据齐全、缺 URL、缺 key、401/429/timeout、空 content、非法 JSON、validator 修复成功/失败、agent_delegate 无仓库文件访问、secret 不泄漏。
+
+**验收**:Agent 调工具时,有凭据直接得到内部 DecisionPlan;无凭据必定收到可执行配置提示或 agent_delegate 任务;两条路径均能通过同一 validator,随后由用户 Agent完成最终分析。
+
+### G7 触发监控、建议留痕、效果复盘与端到端出口
+
+**文件**:`advice_review.py`、`persistence.py`、Adapters、`tests/`
+
+- [ ] trigger schema 扩展为可校验类型:价格/涨跌幅、MA cross、event outcome、time window;每类有明确数据源、时点和 fired 语义。无法自动核对的自然语言 invalidation 单独标 manual。
+- [ ] 每次 `decision_generate` 先检查上期 plan:输出 pending/approaching/fired/invalidated/no_data;接近触发与已触发不自动下单,只进入 DecisionPlan immediate_actions 并由用户 Agent提示。
+- [ ] 用户确认后保存 DecisionPlan 摘要、triggers、关键 evidence refs 与 mode_used;未确认不写。internal_llm 原始思维链/长文不持久化。
+- [ ] 提供显式 `decision_review` MCP/CLI 工具用于随时核对触发;后台定时/通知若实现必须另有用户授权,不在本阶段暗中运行。
+- [ ] 轻量效果复盘按建议后 5/10/20 bars 记录事实,区分“触发器是否执行条件成立”和“建议后表现”,不把单次结果当模型胜率。
+- [ ] 端到端双路径测试A:配置 mock URL/key → internal DecisionPlan → validator → 用户 Agent final handoff → 确认保存 → 下一次触发回看。测试B:无凭据 → setup_required → agent_delegate → validate → final handoff。测试C:数据源大面积失败 → no_action/blocked,不得编造机会。
+
+**Phase G 出口验收**:
+
+- [ ] 全量测试、ruff、compileall 全过且默认测试零外网。
+- [ ] 真实数据源冒烟:候选池 ≥90% 有 ≥40 bars;所有入选机会 freshness 合格、来源可追溯;低于门槛则本次出口失败而不是降标准。
+- [ ] MCP 默认调用返回 DecisionEnvelope,不再只有 AnalysisContext;内部 LLM 凭据缺失路径能指导用户安全配置或委托用户 Agent。
+- [ ] 真实个人组合样本中,每条建议都有动作/幅度/资金来源/触发/证伪/期限/证据;无法计算时明确 blocked reason。
+- [ ] 用户 Agent最终输出必须体现对 DecisionPlan 的审查,至少一项明确采纳或有理由推翻,证明它不是机械复述内部 LLM。
+- [ ] 自动交易仍不存在;任何资产/建议持久化继续要求用户确认。
 
 ## 全局验收(每个任务完成后必跑)
 
@@ -677,7 +830,7 @@ uv run python -m compileall -q stocks tests
 uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-全部完成后的终局验收(对照 VISION.md 成功标准):
+Phase R 历史终局验收(只证明 P/P2/M 当时出口,**不代表 D/F/G 已完成**):
 
 - [x] 通过 MCP/CLI 用自然语言驱动的 Agent 能完成:改持仓 → 改偏好 → 生成个人建议,全程不手改 JSON。
 - [x] 系统未经确认参数不修改任何金融记忆文件。
@@ -691,8 +844,8 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 
 ## 明确不做(防止执行 Agent 跑偏)
 
-- 不做回测框架、因子库、多 Agent 辩论(已被 LLM_QUANT_RESEARCH_VERIFICATION 否决)。
-- 不引入 FastAPI / SQLAlchemy / Redis / MCP SDK 重写(PLAN.md Phase 4 之前不动)。
+- 不做通用重型回测平台、因子库、多 Agent 辩论;G3 只允许为现有机会/动作信号做轻量 walk-forward 校准。
+- 不引入 FastAPI / SQLAlchemy / Redis / MCP SDK 重写;G6 在现有轻量 MCP 适配器新增决策工具不属于 SDK 重写。
 - 不做资产文件加密(单机 NAS 场景,gitignore + 文件权限足够,过度工程)。
 - 不新增任何分析/设计/调研类 markdown。
-- 不扩展 `llm_analysis.py` 的决策能力边界(它输出参考报告,最终判断归外部 Agent)。
+- 不让内部 LLM 成为最终裁决者或直接执行交易;允许将 `llm_analysis.py` 重构为受 DecisionPlan schema/validator 约束的内部决策生成器,最终完整分析仍由用户 Agent完成。
