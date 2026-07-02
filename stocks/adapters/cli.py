@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from stocks.domain.models import FinancialAsset
+
 
 class CLIAdapter:
     """CLI 适配器 — 将 stocks-claw 引擎能力暴露为命令行工具。"""
@@ -62,12 +64,43 @@ class CLIAdapter:
             "--no-quotes", action="store_true",
             help="构建上下文时不包含行情"
         )
+        asset_actions = parser.add_mutually_exclusive_group()
+        asset_actions.add_argument(
+            "--assets-list",
+            action="store_true",
+            help="列出当前资产并退出",
+        )
+        asset_actions.add_argument(
+            "--asset-add",
+            metavar="JSON",
+            help="添加资产；值为 FinancialAsset 字段的 JSON 对象",
+        )
+        asset_actions.add_argument(
+            "--asset-update",
+            metavar="JSON",
+            help='更新资产；格式为 {"name":"目标","changes":{...}}',
+        )
+        asset_actions.add_argument(
+            "--asset-remove",
+            metavar="NAME",
+            help="按名称删除资产",
+        )
+        parser.add_argument(
+            "--confirmed",
+            action="store_true",
+            help="确认执行资产或画像写操作",
+        )
 
         parsed = parser.parse_args(args)
         asyncio.run(self._execute(parsed))
 
     async def _execute(self, args: argparse.Namespace):
         """执行命令。"""
+        asset_result = self._handle_asset_action(args)
+        if asset_result is not None:
+            print(json.dumps(asset_result, ensure_ascii=False, indent=2))
+            return
+
         # 1. 加载外部 JSON 数据（如提供）
         external_assets = self._load_json_file(args.assets)
         external_constraints = self._load_json_file(args.constraints)
@@ -115,6 +148,76 @@ class CLIAdapter:
             print(f"结果已保存至: {args.save}")
         else:
             print(output_text)
+
+    def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
+        if args.assets_list:
+            return {
+                "success": True,
+                "data": [asset.to_dict() for asset in self.engine.load_assets()],
+            }
+
+        write_requested = any((args.asset_add, args.asset_update, args.asset_remove))
+        if not write_requested:
+            return None
+        if not args.confirmed:
+            return {
+                "success": False,
+                "error": "Asset writes require --confirmed",
+            }
+
+        try:
+            if args.asset_add:
+                data = self._parse_json_object(args.asset_add)
+                asset = FinancialAsset(**self._storage_asset_fields(data))
+                self.engine.add_asset(asset)
+                return {"success": True, "data": asset.name, "action": "added"}
+            if args.asset_update:
+                data = self._parse_json_object(args.asset_update)
+                name = str(data.get("name", "")).strip()
+                changes = data.get("changes")
+                if not name or not isinstance(changes, dict):
+                    raise ValueError("asset_update requires name and changes object")
+                updated = self.engine.update_asset(
+                    name,
+                    **self._storage_asset_fields(changes, partial=True),
+                )
+                return {"success": updated, "data": name, "action": "updated"}
+            removed = self.engine.remove_asset(args.asset_remove)
+            return {
+                "success": removed,
+                "data": args.asset_remove,
+                "action": "removed",
+            }
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    @staticmethod
+    def _parse_json_object(value: str) -> dict:
+        data = json.loads(value)
+        if not isinstance(data, dict):
+            raise ValueError("Expected a JSON object")
+        return data
+
+    @staticmethod
+    def _storage_asset_fields(data: dict, partial: bool = False) -> dict:
+        allowed = {
+            "name",
+            "platform",
+            "amount",
+            "asset_type",
+            "notes",
+            "confirmed",
+            "currency",
+        }
+        unknown = set(data) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported asset fields: {sorted(unknown)}")
+        fields = {key: value for key, value in data.items() if key in allowed}
+        if not partial:
+            missing = {"name", "platform", "amount"} - set(fields)
+            if missing:
+                raise ValueError(f"Missing asset fields: {sorted(missing)}")
+        return fields
 
     @staticmethod
     def _load_json_file(path: Optional[str]) -> Optional[dict]:

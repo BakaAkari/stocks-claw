@@ -121,8 +121,10 @@
 **文件**:`stocks/engine/history_cache.py`
 **问题**:`_merge_and_deduplicate` 按精确 timestamp 去重;provider 日 K(00:00 UTC)与实时 `record()`(当前时刻)可能同一交易日双计,污染指标计算。
 
-- [ ] 去重粒度改为"交易日"(按标的市场时区取日期);同日多条时保留 provider 日 K 优先、实时记录次之。
-- [ ] 新增测试:同日一条日 K + 一条实时 record → 合并后仅一根 bar。
+- [x] 去重粒度改为"交易日"(按标的市场时区取日期);同日多条时保留 provider 日 K 优先、实时记录次之。
+- [x] 新增测试:同日一条日 K + 一条实时 record → 合并后仅一根 bar。
+
+> 完成:d923254 HistoryCache 按市场时区交易日去重，同日优先 provider 日 K，并兼容旧缓存。
 
 **验收**:指标输入序列无同日重复。
 

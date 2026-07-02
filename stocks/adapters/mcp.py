@@ -17,6 +17,9 @@ MCP 是 Anthropic 推出的协议，允许 LLM 调用外部工具。
 from __future__ import annotations
 
 import json
+from typing import Optional
+
+from stocks.domain.models import FinancialAsset
 
 
 class MCPAdapter:
@@ -45,6 +48,14 @@ class MCPAdapter:
             return self._get_news(params)
         elif method == "get_portfolio_summary":
             return self._get_portfolio_summary(params)
+        elif method == "assets_list":
+            return self._assets_list()
+        elif method == "asset_add":
+            return self._asset_add(params)
+        elif method == "asset_update":
+            return self._asset_update(params)
+        elif method == "asset_remove":
+            return self._asset_remove(params)
         else:
             return {"error": f"Unknown method: {method}"}
 
@@ -67,6 +78,69 @@ class MCPAdapter:
             }
         except Exception as exc:
             return {"success": False, "error": str(exc)}
+
+    def _assets_list(self) -> dict:
+        return {
+            "success": True,
+            "data": [asset.to_dict() for asset in self.engine.load_assets()],
+        }
+
+    @staticmethod
+    def _confirmed(params: dict) -> Optional[dict]:
+        if params.get("confirmed") is True:
+            return None
+        return {
+            "success": False,
+            "error": "Asset writes require confirmed: true",
+        }
+
+    def _asset_add(self, params: dict) -> dict:
+        confirmation_error = self._confirmed(params)
+        if confirmation_error:
+            return confirmation_error
+        try:
+            fields = {
+                key: value
+                for key, value in params.items()
+                if key in {
+                    "name", "platform", "amount", "asset_type", "notes", "currency"
+                }
+            }
+            asset = FinancialAsset(**fields)
+            self.engine.add_asset(asset)
+            return {"success": True, "data": asset.name, "action": "added"}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _asset_update(self, params: dict) -> dict:
+        confirmation_error = self._confirmed(params)
+        if confirmation_error:
+            return confirmation_error
+        name = str(params.get("name", "")).strip()
+        changes = params.get("changes")
+        if not name or not isinstance(changes, dict):
+            return {"success": False, "error": "name and changes are required"}
+        allowed = {
+            "name", "platform", "amount", "asset_type", "notes", "confirmed", "currency"
+        }
+        unknown = set(changes) - allowed
+        if unknown:
+            return {"success": False, "error": f"Unsupported asset fields: {sorted(unknown)}"}
+        try:
+            updated = self.engine.update_asset(name, **changes)
+            return {"success": updated, "data": name, "action": "updated"}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _asset_remove(self, params: dict) -> dict:
+        confirmation_error = self._confirmed(params)
+        if confirmation_error:
+            return confirmation_error
+        name = str(params.get("name", "")).strip()
+        if not name:
+            return {"success": False, "error": "name is required"}
+        removed = self.engine.remove_asset(name)
+        return {"success": removed, "data": name, "action": "removed"}
 
     def _get_quotes(self, params: dict) -> dict:
         """获取行情数据。
@@ -213,7 +287,61 @@ class MCPAdapter:
                     },
                 },
             },
+            {
+                "name": "assets_list",
+                "description": "列出金融资产记忆。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "asset_add",
+                "description": "在用户明确确认后添加金融资产。",
+                "parameters": self._asset_write_schema("add"),
+            },
+            {
+                "name": "asset_update",
+                "description": "在用户明确确认后更新金融资产。",
+                "parameters": self._asset_write_schema("update"),
+            },
+            {
+                "name": "asset_remove",
+                "description": "在用户明确确认后按名称删除金融资产。",
+                "parameters": {
+                    "type": "object",
+                    "required": ["name", "confirmed"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "confirmed": {"type": "boolean", "const": True},
+                    },
+                },
+            },
         ]
+
+    @staticmethod
+    def _asset_write_schema(action: str) -> dict:
+        properties = {
+            "name": {"type": "string"},
+            "platform": {"type": "string"},
+            "amount": {"type": "number"},
+            "asset_type": {"type": "string"},
+            "notes": {"type": ["string", "null"]},
+            "currency": {"type": "string"},
+            "confirmed": {"type": "boolean", "const": True},
+        }
+        if action == "update":
+            return {
+                "type": "object",
+                "required": ["name", "changes", "confirmed"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "changes": {"type": "object"},
+                    "confirmed": properties["confirmed"],
+                },
+            }
+        return {
+            "type": "object",
+            "required": ["name", "platform", "amount", "confirmed"],
+            "properties": properties,
+        }
 
 
 def _stdio_loop(adapter: MCPAdapter) -> None:
