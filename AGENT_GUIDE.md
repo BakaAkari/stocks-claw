@@ -213,3 +213,10 @@ uv run ruff check .
 - 任何资产写入都需要用户确认。
 - 不把 LLM 输出当成投资事实或确定建议。
 - HTTP 服务不要直接暴露公网。
+# 统一分析宪法
+
+无论由内置 LLM 还是外部 Agent 生成个人分析，都必须先读取
+`stocks/prompts/personal_advice_prompt.txt`。该文件是共用的分析宪法：约束反幻觉、
+金额脱敏、输出结构和能力边界。外部 Agent 应将 `AnalysisContext.raw_prompt_input`
+作为分析输入；逐笔精确金额只存在于结构化 `AnalysisContext.to_dict()` 中，是否使用
+由调用方明确决定。

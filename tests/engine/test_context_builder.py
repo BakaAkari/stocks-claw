@@ -126,6 +126,10 @@ class TestBasicBuild:
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
         assert "risk_tolerance: moderate" in context.raw_prompt_input
+        assert "50,000.00" not in context.raw_prompt_input
+        assert "30,000.00" not in context.raw_prompt_input
+        assert "占比" in context.raw_prompt_input
+        assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
         assert context.data_quality["schema_version"] == 1

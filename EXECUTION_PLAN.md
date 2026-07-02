@@ -166,11 +166,13 @@
 **文件**:`stocks/engine/__init__.py`、`stocks/engine/persistence.py`
 **问题**:`build_context` 读 `load_recent(5)` 但 `save_context()` 全库零调用,`recent_snapshots` 永远为空,系统不记得上次说过什么。
 
-- [ ] 【验证前提】grep 确认 `save_context` 零调用。
-- [ ] `build_context` 成功后按配置写入快照(`engine.yaml` 的 `save_to_file` / `max_snapshots` 真正生效——同时消灭这两个僵尸配置);快照目录 gitignore。
-- [ ] 快照内容最小化:时间戳、组合概要、market_state、drift 结果,不必存全量新闻。
-- [ ] 实现 `max_snapshots` 滚动清理。
-- [ ] 新增测试:连续两次 build_context,第二次的 `recent_snapshots` 非空且能对照差异。
+- [x] 【验证前提】grep 确认 `save_context` 零调用。
+- [x] `build_context` 成功后按配置写入快照(`engine.yaml` 的 `save_to_file` / `max_snapshots` 真正生效——同时消灭这两个僵尸配置);快照目录 gitignore。
+- [x] 快照内容最小化:时间戳、组合概要、market_state、drift 结果,不必存全量新闻。
+- [x] 实现 `max_snapshots` 滚动清理。
+- [x] 新增测试:连续两次 build_context,第二次的 `recent_snapshots` 非空且能对照差异。
+
+> 完成:c6e5c87 build_context 保存最小滚动快照，第二次构建注入上次组合状态用于对照。
 
 **验收**:第二次运行的上下文中包含"上次快照"信息,LLM 可做前后对照。
 

@@ -581,7 +581,7 @@ class ContextBuilder:
         # 资产明细
         lines.append("【资产明细】")
         total = sum(a.valuation_cny or 0.0 for a in assets) if assets else 0
-        lines.append(f" 总资产: {total:,.2f}")
+        lines.append(f" 总资产量级: {self._amount_band(total)}")
         lines.append(f" 资产数量: {len(assets)}")
         for asset in assets:
             value_cny = asset.valuation_cny
@@ -589,7 +589,7 @@ class ContextBuilder:
             pct = (numeric_value / total * 100) if total > 0 else 0
             status = "" if asset.confirmed else "?"
             value_text = (
-                f"{value_cny:,.2f} ({pct:.1f}%)"
+                f"占比 {pct:.1f}% | 量级 {self._amount_band(value_cny)}"
                 if value_cny is not None
                 else "换算失败（未计入合计）"
             )
@@ -771,3 +771,15 @@ class ContextBuilder:
         lines.append("=" * 50)
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _amount_band(value: float) -> str:
+        if value < 1_000:
+            return "不足 1 千元"
+        if value < 10_000:
+            return "1 千至 1 万元"
+        if value < 100_000:
+            return "1 万至 10 万元"
+        if value < 1_000_000:
+            return "10 万至 100 万元"
+        return "100 万元以上"
