@@ -18,8 +18,10 @@ logger = logging.getLogger(__name__)
 # 默认汇率 API（免费，无需 key）
 _DEFAULT_RATE_API = "https://api.exchangerate-api.com/v4/latest/USD"
 
-# 缓存文件
-_RATE_CACHE_FILE = Path(__file__).resolve().parents[2] / ".secret" / "exchange-rate-cache.json"
+# 运行态缓存与凭据目录分离；该目录由 .gitignore 排除。
+_RATE_CACHE_FILE = (
+    Path(__file__).resolve().parents[2] / "data" / "cache" / "exchange-rate-cache.json"
+)
 
 # 缓存有效期（秒）
 _CACHE_TTL = 3600 * 6  # 6 小时
