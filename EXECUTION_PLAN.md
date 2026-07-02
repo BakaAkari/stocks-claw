@@ -317,7 +317,7 @@
 
 - [x] 新建 `docs/archive/`,移入:`stocks/README.md`(v1 版)、`stocks/ARCHITECTURE.md`、`stocks/LLM_DRIVEN_DESIGN.md`、`stocks/ANALYSIS_RULES.md`、`stocks/NEWS_INPUT_RULES.md`、`stocks/DATA_SOURCES.md`(P0-1 清理 key 之后)、`stocks/REFACTOR_PRINCIPLES.md`、`stocks/ROADMAP.md`、`ARCHITECTURE_BOUNDARY_ANALYSIS.md`、`DESIGN_GAP_ANALYSIS.md`、`LLM_ENHANCER_ANALYSIS.md`、三份 `LLM_QUANT_*.md`。每份文件头部加一行:`> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。`
 - [x] `MEMORY_RULES.md` 不归档——它是 P2 的需求规格,移到根目录或并入 AGENT_GUIDE。
-- [x] `stocks/DATA_MODEL.md`:删除其中 v1 遗留段(AdvisoryPlan/AdvisorContext),保留 AnalysisContext v5 部分,作为现行 schema 文档。
+- [x] `stocks/DATA_MODEL.md`:删除其中 v1 遗留段(AdvisoryPlan/AdvisorContext),保留现行 AnalysisContext schema 部分,作为现行 schema 文档。
 - [x] `DESIGN.md` 与 `ARCHITECTURE_V2.md` 合并为一份 ≤300 行的 `ARCHITECTURE.md`(根目录),只描述**当前实际实现**,删除所有未实现的设计段(三级粒度、子命令 CLI 等);其余内容进 archive。
 - [x] 修正 README.md / README.zh.md 中与实际不符的描述。
 
@@ -352,9 +352,11 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes --save 
 
 **文件**:`stocks/domain/models.py`、`stocks/engine/persistence.py`、`stocks/DATA_MODEL.md`
 
-- [ ] 定义 `AdviceRecord`:`created_at`、`instruments`(list[{market, code, name}])、`direction`(每标的 buy/sell/watch/hold)、`rationale_summary`(≤500 字摘要,**不存 LLM 长文**)、`based_on`(引用的事实类别:quotes/news/indicators/macro)、`boundary`(每条理由标注 fact / inference,守住"建议、事实、推断"三者边界)。
-- [ ] 存储于 `.local/advice/`(gitignore),滚动上限 30 条,超限删最旧。
-- [ ] `AnalysisContext` 新增 `recent_advice` 字段 → `schema_version` 升 **v6**,同步 `stocks/DATA_MODEL.md` + 测试(红线:三处缺一即回滚)。
+- [x] 定义 `AdviceRecord`:`created_at`、`instruments`(list[{market, code, name}])、`direction`(每标的 buy/sell/watch/hold)、`rationale_summary`(≤500 字摘要,**不存 LLM 长文**)、`based_on`(引用的事实类别:quotes/news/indicators/macro/portfolio/profile)、`boundary`(每条理由标注 fact / inference,守住"建议、事实、推断"三者边界)。
+- [x] 存储于 `.local/advice/`(gitignore),滚动上限 30 条,超限删最旧。
+- [x] `AnalysisContext` 新增 `recent_advice` 字段 → `schema_version` 升 **v6**,同步 `stocks/DATA_MODEL.md` + 测试(红线:三处缺一即回滚)。
+
+> 完成:a8fe792 定义 AdviceRecord、advice 滚动持久化与 AnalysisContext v6。| 证据:`stocks/domain/models.py:274`/`:402`/`:405` 定义 AdviceRecord、recent_advice 与 schema v6,`stocks/engine/persistence.py:86`/`:101` 保存和读取 advice,`stocks/DATA_MODEL.md:4`/`:100` 同步 v6 文档,`tests/engine/test_persistence.py:60`/`:78`/`:90` 覆盖 round-trip、滚动与校验,`tests/engine/test_context_builder.py:529-534` 覆盖 schema v6 与 recent_advice。说明:同步 schema 还必须更新 `context_builder.py`、`ARCHITECTURE.md` 和 schema 断言测试。
 
 **验收**:AdviceRecord 落盘/读回 round-trip 测试;schema v6 三处同步有测试覆盖。
 
