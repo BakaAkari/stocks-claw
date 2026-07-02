@@ -1,190 +1,114 @@
-<div align="center">
-
 # stocks-claw
 
-**Agent 优先的个人金融上下文工具包**
+面向 Agent 的个人金融上下文工具包。系统把用户已确认的持仓和投资偏好，与行情、新闻、
+宏观数据、技术指标、组合映射及数据质量信息组装成 `AnalysisContext`，交给外部 Agent
+完成最终分析。
 
-[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-支持-2496ED?logo=docker&logoColor=white)](NAS_DEPLOYMENT.md)
-[![Deps](https://img.shields.io/badge/Deps-pandas%20%7C%20numpy%20%7C%20httpx%20%7C%20pytest-informational)](requirements.txt)
+系统不下单。Engine 只负责事实、降级处理和轻量信号，最终判断归 Agent。
 
-[English](README.md) · [中文](README.zh.md) · [Agent 指南](AGENT_GUIDE.md) · [NAS 部署](NAS_DEPLOYMENT.md)
-
-</div>
-
----
-
-## 项目概览
-
-`stocks-claw` 是给 AI Agent 使用的本地金融数据工具包。它读取个人资产、关注标的、市场行情、新闻、组合约束和轻量分析脚手架，然后输出结构化 `AnalysisContext`，供 Agent 进一步分析。
-
-当前定位：
-
-- Engine 负责数据、清洗、降级、组合映射、偏离检查和上下文组装。
-- Agent 主脑负责最终投资分析。
-- 内部 LLM enhancer / analysis 是可选能力，不是默认主链路。
-- 不是自动交易系统，不执行下单。
-
----
-
-## 架构
-
-```text
-Agent / CLI / HTTP / MCP
-        ↓
-stocks.adapters.*
-        ↓
-StocksEngine
-        ↓
-DataFetcher + ProviderRegistry + PortfolioScaffold + MarketScaffold + ContextBuilder
-        ↓
-Tencent / Eastmoney / Finnhub / RSS + local config/data
-        ↓
-AnalysisContext JSON
-```
-
-主要目录：
-
-```text
-stocks/
-  adapters/     CLI、HTTP、MCP 适配器
-  domain/       dataclass 模型：Instrument、Quote、NewsItem、FinancialAsset、AnalysisContext
-  engine/       StocksEngine、fetchers、scaffolds、context builder、persistence、可选 LLM 模块
-  providers/    腾讯 A股、东方财富 A股、Finnhub、RSS 新闻 Provider
-  config/       watchlist、市场/新闻配置、组合约束、engine.yaml
-  data/         示例资产模板
-```
-
----
+[English](README.md) · [Agent 指南](AGENT_GUIDE.md) ·
+[架构](ARCHITECTURE.md) · [计划](PLAN.md)
 
 ## 环境要求
 
 - Python 3.11+
-- `requirements.txt` 中的小型数据工程依赖：
-  - pandas
-  - numpy
-  - httpx
-  - pyyaml
-  - pytest / pytest-asyncio
-  - ruff
+- `uv`
+- `requirements.txt` 中的依赖
 
-项目已不再是纯标准库；当前明确引入小型金融/数据处理栈。
-
----
+```bash
+uv venv --python 3.11 .venv
+uv pip install -r requirements.txt
+```
 
 ## 快速开始
 
+构建不访问行情和新闻的本地上下文：
+
 ```bash
-git clone https://github.com/BakaAkari/stocks-claw.git
-cd stocks-claw
-
-uv venv --python 3.11 .venv
-uv pip install -r requirements.txt
-
-uv run python -m pytest
 uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-人类可读上下文：
-
-```bash
-uv run python -m stocks.adapters.cli --output text --no-news --no-quotes
-```
-
-包含行情和新闻的完整上下文：
+获取配置中的行情与新闻：
 
 ```bash
 uv run python -m stocks.adapters.cli --output json
 ```
 
-启用 LLM 数据增强：
-
-```bash
-uv run python -m stocks.adapters.cli --output json --llm-enhancer
-```
-
-启用内部 LLM 报告生成：
+可选内部 LLM 报告：
 
 ```bash
 uv run python -m stocks.adapters.cli --output text --llm-analysis
 ```
 
----
+已删除的 `--llm-enhancer` 参数不再支持。
 
-## 配置
+## 需确认的金融记忆写入
 
-隐私数据只保存在本地：
+读取不需要确认：
 
-```text
-.local/financial_assets.json    真实持仓，git-ignored
-.secret/                        API keys，git-ignored
+```bash
+uv run python -m stocks.adapters.cli --assets-list
+uv run python -m stocks.adapters.cli --profile-get
 ```
 
-纳入版本管理的配置：
+任何持仓或画像写入都必须带 `--confirmed`：
+
+```bash
+uv run python -m stocks.adapters.cli \
+  --asset-add '{"name":"现金","platform":"银行","amount":10000,"currency":"CNY"}' \
+  --confirmed
+
+uv run python -m stocks.adapters.cli \
+  --profile-update '{"risk_tolerance":"moderate"}' \
+  --confirmed
+```
+
+更新和删除分别使用 `--asset-update`、`--asset-remove`。对应 MCP 写工具必须传
+`"confirmed": true`。
+
+## 数据与配置
 
 ```text
-stocks/config/watchlist.json
+.local/financial_assets.json          私有持仓
+.local/investor_profile.json          私有投资偏好
+.local/history/                       行情历史缓存
+.local/snapshots/                     滚动最小快照
+.secret/                              本地 API key 与 HTTP token
+stocks/config/engine.yaml             运行配置
+stocks/config/watchlist.json          关注标的
+stocks/config/news_sources.json       RSS/Atom 新闻源
 stocks/config/portfolio_constraints.json
-stocks/config/news_sources.json
-stocks/config/markets.json
-stocks/config/engine.yaml
 ```
 
-资产文件格式：
+没有私有持仓文件时，系统使用 `stocks/data/financial_assets.json` 作为示例输入。画像
+示例位于 `stocks/data/investor_profile.example.json`。
 
-```json
-[
-  {
-    "name": "科创50ETF华夏",
-    "platform": "券商A股",
-    "amount": 3071.0,
-    "asset_type": "股票ETF",
-    "notes": "588000，1800股",
-    "confirmed": true,
-    "currency": "CNY"
-  }
-]
-```
-
-关注列表格式：
-
-```json
-[
-  {"code": "000300", "name": "沪深300", "market": "a", "exchange": "sz_index"},
-  {"code": "QQQ", "name": "纳斯达克100ETF", "market": "us"}
-]
-```
-
----
-
-## HTTP 模式
-
-HTTP 模式可用于本地/NAS 集成，但在认证、限速等硬化完成前，应视为内网服务。
+嵌套环境变量使用双下划线：
 
 ```bash
-uv run python -m stocks.adapters.http --host 127.0.0.1 --port 8687
-curl http://127.0.0.1:8687/api/v1/health
+STOCKS_FETCHER__MAX_RETRIES=3
 ```
 
-Docker/NAS 部署见 `NAS_DEPLOYMENT.md`。
+Finnhub 使用 `FINNHUB_API_KEY`。可选 OpenAI-compatible 报告使用
+`OPENAI_API_KEY` 和 `OPENAI_BASE_URL`。
 
----
+## 接口
 
-## 开发验证
+- CLI：`python -m stocks.adapters.cli`
+- stdio MCP：`python -m stocks.adapters.mcp`
+- 本地 HTTP：`python -m stocks.adapters.http --host 127.0.0.1 --port 8687`
+
+HTTP 非回环监听必须同时提供 `--allow-remote` 和 `.secret/http-token`。当前 HTTP
+适配器没有限速与 CORS 策略，不应作为公网服务。
+
+## 验证
 
 ```bash
-uv run python -m pytest
-uv run python -m compileall -q stocks tests
 uv run ruff check .
+uv run python -m pytest -q
+uv run python -m compileall -q stocks tests
+uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-默认测试根目录是 `tests/`。旧的 `stocks/tests/test_v2.py` 已删除，因为它是过期且缩进损坏的测试入口。
-
----
-
-## 安全与免责声明
-
-本项目仅用于个人分析、学习和参考，不构成投资建议。所有投资决策由用户自行负责。
-
-不要提交 `.local/`、`.secret/`、运行快照、缓存或虚拟环境。
+现行 schema 见 `stocks/DATA_MODEL.md`。本项目只用于分析、学习与参考，不构成确定性
+投资建议。

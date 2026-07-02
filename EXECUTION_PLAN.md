@@ -289,8 +289,10 @@
 
 **问题**:美股 quote 只有 Finnhub 单源,`_pick_fallback_provider` 找不到第二个 us provider。完整第二源(如接入免费额度的其他 API)成本较高,本阶段只做诚实标注:
 
-- [ ] 美股行情失败时,`data_quality` 明确标注 `us_quotes: single_source_failed`,并尝试用 `HistoryCache` 最近收盘价作 stale 兜底(带 `stale: true` 标记)。
-- [ ] 第二数据源列为 Phase 3 候选,写入 `PLAN.md` 暂缓区,本清单不展开。
+- [x] 美股行情失败时,`data_quality` 明确标注 `us_quotes: single_source_failed`,并尝试用 `HistoryCache` 最近收盘价作 stale 兜底(带 `stale: true` 标记)。
+- [x] 第二数据源列为 Phase 3 候选,写入 `PLAN.md` 暂缓区,本清单不展开。
+
+> 完成:4084a00 美股单源失败显式标注并回填 stale 历史收盘价，第二源列入 Phase 3。
 
 **验收**:Finnhub 挂掉时上下文仍有带 stale 标记的美股参考价。
 

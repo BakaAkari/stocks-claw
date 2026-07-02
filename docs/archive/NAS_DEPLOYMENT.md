@@ -1,3 +1,5 @@
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。
+
 # stocks-claw NAS Docker 部署指南（Hermes Agent 接入版）
 
 > 目标：在 Unraid NAS 上通过 Docker 部署 stocks-claw HTTP 服务（端口 **8687**），供 Hermes Agent（飞书入口）调用。
@@ -388,3 +390,4 @@ REPORT=$(curl -s -X POST http://localhost:8687/api/v1/analysis/context \
 ---
 
 *端口: 8687 | 协议: HTTP JSON API | 容器: Docker | 接入: Hermes Agent Skill*
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。

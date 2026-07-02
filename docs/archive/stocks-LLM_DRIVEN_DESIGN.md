@@ -1,3 +1,5 @@
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。
+
 # LLM_DRIVEN_DESIGN.md - 为什么这个系统必须由 LLM 驱动
 
 ## 结论
@@ -91,3 +93,4 @@
 而这个项目追求的状态应该是：
 
 > 没有 LLM，就没有这套 personal investment advisor 最核心的价值。
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。

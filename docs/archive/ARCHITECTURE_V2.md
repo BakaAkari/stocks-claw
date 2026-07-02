@@ -1,3 +1,5 @@
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。
+
 # stocks-claw v2 架构设计 — Agent 可驱动的金融分析引擎
 
 > 设计目标：让 OpenClaw / Hermes / 任何 LLM Agent 能够直接调用 stocks-claw 的能力，或驱动其内部 LLM 完成金融资产分析。
@@ -960,3 +962,4 @@ Claude 自动调用 `build_analysis_context()` 工具，获取完整上下文，
 *设计版本：v2.0*
 *设计日期：2026-06-05*
 *状态：设计完成，待实现*
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。

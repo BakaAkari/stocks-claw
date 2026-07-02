@@ -1,3 +1,5 @@
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。
+
 # ROADMAP.md - Legacy historical roadmap
 
 > 状态：Legacy / 历史参考
@@ -57,3 +59,4 @@ stocks-claw = Agent-first personal finance context toolkit
 - 旧 `stocks/tests/test_v2.py` 测试入口
 
 当前开发从 `PLAN.md` 的 Phase 2 最小闭环继续。
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。

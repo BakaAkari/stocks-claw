@@ -20,3 +20,4 @@ __pycache__/
 # 快照数据
 data/snapshots/
 data/cache/
+stocks/data/history/

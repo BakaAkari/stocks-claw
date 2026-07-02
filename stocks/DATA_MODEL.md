@@ -1,244 +1,132 @@
-# DATA_MODEL.md - Advisor Data Model
+# 现行数据模型
 
-## 1. FinancialAssetRecord
+本文只描述当前代码中的 schema。权威实现位于 `stocks/domain/models.py`，
+`AnalysisContext.schema_version` 当前为 `5`。
 
-单条用户金融资产记录。
+## FinancialAsset
 
-字段：
+用户确认的单条金融资产：
 
-- `name`: 资产名称
-- `platform`: 平台 / 券商 / 银行 / 账户
-- `amount`: 当前金额（保留用户原始口径）
-- `asset_type`: 资产类型
-- `notes`: 备注
-- `confirmed`: 是否由用户确认
-- `currency`: 币种（默认 CNY，非 CNY 会自动换算）
+- `name`、`platform`、`amount`
+- `asset_type`、`notes`、`confirmed`
+- `currency`：用户输入的原始币种
+- `amount_cny`：运行时派生的人民币估值，不写回资产文件
+- `conversion_status`：`ok` / `degraded` / `failed`
+- `conversion_source`、`conversion_rate`
 
-说明：
+持久化只写原始资产字段。换算失败的外币资产仍保留原金额和币种，但
+`valuation_cny` 为 `null`，不能静默计入组合总值。
 
-- 当前允许不同币种并存
-- 若用户明确要求外币不折算，则保持原币种描述
-- 这是 advisor 最重要的基础事实之一
+## Investor profile
 
----
+画像保存在 `.local/investor_profile.json`，是可扩展 JSON 对象。当前示例字段：
 
-## 2. FinancialMemoryPayload
+- `risk_tolerance`
+- `investment_horizon`
+- `preferences`
+- `constraints`
+- `updated_at`：写入时由系统更新
 
-长期金融记忆载荷。
+## Instrument 与 Quote
 
-字段：
+`Instrument`：
 
-- `schema_version`
-- `updated_at`
-- `assets`: `FinancialAssetRecord[]`
-- `portfolio_profile_notes`: 用户画像与分析口径
-- `portfolio_constraints`: 用户约束（可逐步补齐）
-- `notes`: 用户级补充备注（可选）
+- `code`、`name`、`market`
+- `exchange`、`category`
 
-`portfolio_profile_notes` 常见内容：
+`Quote`：
 
-- `investment_preference`
-- `portfolio_focus`
-- `analysis_expectation`
-- `base_currency_policy`
+- 价格：`price`、`change`、`pct_change`、`prev_close`
+- 日内：`open_price`、`high`、`low`
+- 成交：`volume_lot`、`amount_10k`
+- 溯源：`source`、`stale`、`as_of`
+- `indicators`：可选技术指标
 
-`portfolio_constraints` 结构（v1）：
+美股实时源失败时可用最近历史收盘价生成 `stale: true` 的 Quote；它不是实时价格。
 
-```json
-{
-  "schema_version": 1,
-  "updated_at": "2026-03-29 01:00:00",
-  "target_bucket_ranges": {
-    "growth_total": {"min": 0.10, "max": 0.30, "rationale": "稳健偏成长，成长暴露控制在30%以内"},
-    "gold_buffer": {"min": 0.10, "max": 0.25},
-    "defense": {"min": 0.20, "max": 0.40},
-    "liquidity": {"min": 0.05, "max": 0.20}
-  },
-  "locked_assets": ["香港中国银行5年期寿险"],
-  "tactical_budget_ratio": 0.10,
-  "max_drawdown_tolerance": 0.20,
-  "allow_stop_loss": false,
-  "allow_take_profit": false,
-  "rebalance_trigger": "only_when_drifted"
-}
-```
+## NewsItem 与 MarketEvent
 
-字段说明：
+`NewsItem` 保存标准化新闻：
 
-- `target_bucket_ranges`: 各资产桶目标区间
-  - `min`: 最低占比（如低于此值视为不足）
-  - `max`: 最高占比（如高于此值视为超配）
-  - `rationale`: 设置理由（可选，帮助理解用户意图）
-- `locked_assets`: 长期锁定资产列表（不考虑调仓）
-- `tactical_budget_ratio`: 机动资金比例（可用于战术调整）
-- `max_drawdown_tolerance`: 最大回撤容忍度（如0.20表示20%）
-- `allow_stop_loss`: 是否允许止损建议
-- `allow_take_profit`: 是否允许止盈建议
-- `rebalance_trigger`: 再平衡触发条件
+- `title`、`url`
+- `source_name`、`source_type`
+- `published_at`、`summary`、`language`、`tags`
+- `raw_metadata` 仅供内部调试，不进入序列化输出
 
----
+`MarketEvent` 是从新闻中规则提取的事件，包含：
 
-## 3. NewsItem
+- 事件：`event_type`、`themes`、`rationale`
+- 影响：`affected_markets`、`affected_symbols`、`matched_holdings`
+- 判断：`sentiment`、`urgency`、`impact_horizon`、`confidence`
+- 原新闻字段与 `raw_news_index`
 
-标准新闻输入对象。
+## PortfolioMapping、MarketState 与 DriftCheck
 
-字段：
+`PortfolioMapping`：
 
-- `source`
-- `title`
-- `summary`
-- `url`
-- `published_at`
-- `tags`
-- `quality_flag`
+- `buckets`、`ratios`、`dominant_layers`
+- `growth_exposure`、`buffer_strength`、`liquidity_status`
+- `locked_assets_present`
 
-说明：
+`MarketState`：
 
-- 新闻属于临时输入
-- 不属于用户长期金融记忆
-
----
-
-## 4. MarketState
-
-轻量市场状态对象。
-
-主要维度：
-
-- `risk_appetite`
-- `tech_state`
-- `safe_haven_state`
-- `china_state`
+- `risk_appetite`、`tech_state`、`safe_haven_state`
+- `china_state`、`rates_state`、`crypto_state`
 - `cross_asset_summary`
 
-说明：
+没有对应行情时状态必须为 `no_data`，不能生成中性或乐观默认值。
 
-- 这是给 advisor 用的轻量状态脚手架
-- 不是最终建议本身
+`DriftCheck`：
 
----
+- `bucket`、`current_ratio`
+- `target_min`、`target_max`
+- `status`：`within_range` / `below_min` / `above_max`
+- `gap`
 
-## 5. PortfolioMapping
+目标资产桶缺失时，当前占比按 0% 检查，不能跳过。
 
-程序对用户组合做的轻量映射对象。
+## AnalysisContext v5
 
-主要内容：
+Agent 的统一入口：
 
-- 资产桶归类
-- 桶占比
-- 市场影响映射
-- 压力映射
-- 解释性提示
+- 元信息：`generated_at`、`schema_version`
+- 金融记忆：`assets`、`asset_count`、`portfolio_constraints`、
+  `portfolio_profile`
+- 市场输入：`quotes`、`news`、`news_count`
+- 结构化事件：`market_events`、`news_digest`
+- 脚手架：`market_state`、`portfolio_mapping`、`drift_checks`
+- 历史：`recent_snapshots`
+- Agent 输入：`raw_prompt_input`
+- 扩展数据：`macro_snapshot`、`technical_indicators`
+- 质量与溯源：`data_quality`
 
-说明：
+`raw_prompt_input` 遵循
+`stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
+精确值仍存在于结构化 `assets`，供受控调用方按需使用。
 
-- 这只是帮助 LLM 理解组合结构
-- 不直接替代最终建议
+## data_quality v1
 
----
+`data_quality` 包含：
 
-## 6. AdvisoryPlan
+- `currency_conversion`：每项外币换算状态、来源与失败统计
+- `quotes`：请求/返回数量、按市场状态、Provider 与降级记录
+- `news`：请求状态、来源分布和时效
+- `macro`：来源、已填充/缺失字段和错误
+- `technical_indicators`：覆盖与缺失标的
+- `market_events`：提取数量、紧急度和持仓命中数
 
-程序输出的轻量建议脚手架。
+通用状态包括 `ok`、`partial`、`degraded`、`missing`、
+`not_requested` 和 `not_configured`。美股单源失败额外标记
+`single_source_failed`，历史价格回填标记为 stale。
 
-主要内容：
+## 最小历史快照
 
-- `posture`
-- `constraint_policy`
+`.local/snapshots/` 中每份快照只保存：
+
+- `generated_at`、`asset_count`
+- 组合摘要
+- `market_state`
 - `drift_checks`
-- `allocation_advice`
-- `conditional_recommendations`
-- `risk_flags`
-- `monitoring_focus`
-- `boundaries`
 
-说明：
-
-- 这是 advisor 的辅助建议层
-- 不是自动交易逻辑
-- 不应继续无限膨胀成重型规则引擎
-
----
-
-## 7. SnapshotHistoryEntry
-
-历史快照摘要对象。
-
-字段示例：
-
-- `generated_at`
-- `conclusion`
-- `hot_state`
-- `portfolio_health_label`
-
-说明：
-
-- 用于给 LLM 提供近期变化的短时记忆
-- 不是完整历史仓库
-
----
-
-## 8. AnalysisContext v5
-
-Agent 主入口上下文对象。
-
-新增稳定结构：
-
-- `schema_version`: 当前为 `5`
-- `macro_snapshot`: 宏观数据快照
-- `technical_indicators`: 按 `{market}:{code}` 汇总的技术指标
-- `data_quality`: 数据质量与溯源摘要
-- `market_events`: 从新闻提取的结构化市场事件列表
-- `news_digest`: 市场事件摘要，包含主题、市场、情绪、紧急度和持仓匹配聚合
-
-`data_quality` 子结构：
-
-- `schema_version`: 当前为 `1`
-- `generated_at`: 本次质量摘要生成时间
-- `quotes`: 行情数据状态、Provider、降级链、请求数和返回数
-- `news`: 新闻请求状态、来源分布、最新发布时间和 freshness
-- `macro`: 宏观数据来源、填充字段、缺失字段、错误信息和 freshness
-- `technical_indicators`: 指标来源、覆盖标的数、缺失标的和 freshness
-- `market_events`: 新闻事件提取状态、事件数、最高紧急度、持仓匹配数
-
-状态枚举：
-
-- `ok`: 数据可用且未发现明显缺失
-- `partial`: 有数据，但字段、标的或来源存在缺失
-- `degraded`: 通过备用来源成功获取
-- `missing`: 已请求但没有可用数据
-- `not_requested`: 本次未请求该类数据
-- `not_configured`: 对应 provider 未启用
-
-`market_events` 事件字段：
-
-- `event_type`: `monetary_policy` / `macro_policy` / `industry_theme` / `company_news` / `earnings` / `market_movement` / `geopolitical` / `other`
-- `themes`: 主题标签，如 AI、半导体、利率、金融
-- `affected_markets`: 影响市场，如 `a`、`us`、`hk`、`global`
-- `affected_symbols`: 命中的关注标的，格式为 `{market}:{code}`
-- `matched_holdings`: 命中的当前持仓名称
-- `sentiment`: `positive` / `negative` / `neutral` / `unknown`
-- `urgency`: `immediate` / `high` / `medium` / `low`
-- `impact_horizon`: 影响窗口，如 `intraday_to_short_term`、`short_to_medium_term`
-- `confidence`: 规则置信度，0 到 1
-
----
-
-## 9. AdvisorContext
-
-送给 LLM 的核心上下文对象。
-
-应至少包含：
-
-- 完整金融记忆
-- 用户偏好与约束
-- 新闻输入
-- 市场状态
-- 组合映射
-- 建议脚手架
-- 近期快照变化
-
-说明：
-
-- LLM 应基于这个上下文生成个人投资建议
-- 不是为了生成“更整齐的报告”，而是为了做更有用的判断
+默认最多保留 30 份。构建新上下文时先加载近期快照，新快照在成功构建后写入，因此第二次
+运行能够看到第一次的摘要。

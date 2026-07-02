@@ -1,3 +1,5 @@
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。
+
 # ARCHITECTURE.md - Personal Investment Advisor Architecture
 
 ## 总原则
@@ -133,3 +135,4 @@
 - 不把短期新闻写入长期金融记忆
 - 不让程序把 LLM 压成模板润色器
 - 不为未来平台化继续横向扩张
+> ARCHIVED 2026-07:结论已吸收或废弃,勿作为开发依据。

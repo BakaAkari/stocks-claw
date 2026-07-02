@@ -1,9 +1,10 @@
 # stocks-claw v2.1 开发计划
 
 > 版本：v2.1-dev
-> 当前状态：Phase 1 已完成，准备进入 Phase 2 最小闭环
-> 最近收口提交：`1240f97 chore: stabilize v2 development workflow`
-> 本文档是当前开发进度与下一步规划的唯一主线文档；旧路线见 `stocks/ROADMAP.md`，仅作历史参考。
+> 当前状态：Phase 2 最小闭环已完成，后续候选按启动条件推进
+> 已完成修复与收口见 `EXECUTION_PLAN.md`
+> 本文档是当前开发进度与下一步规划的唯一主线文档；旧路线见
+> `docs/archive/stocks-ROADMAP.md`，仅作历史参考。
 
 ---
 
@@ -23,7 +24,7 @@
 
 - 打破旧的 stdlib-only 限制，引入小型金融/数据工程依赖。
 - 保持轻量，不引入 FastAPI、SQLAlchemy、Redis、Celery 等重型依赖。
-- HTTP/MCP 是适配层，不是产品主线；公开部署前必须完成认证和限流。
+- HTTP/MCP 是适配层，不是产品主线；公开部署前必须完成完整安全审计和限流。
 
 ---
 
@@ -293,7 +294,7 @@ key 建议：
 
 候选任务：
 
-- [ ] HTTP Bearer Token / API Key 认证
+- [ ] 在现有 Bearer Token 基础上补齐密钥轮换与权限分级
 - [ ] 简单内存级限速
 - [ ] CORS 配置
 - [ ] 标准 MCP SDK 实现
@@ -311,6 +312,8 @@ key 建议：
 ## 8. 禁止事项
 
 - 不新增与当前阶段无关的文档文件。
+- 新增 .md 文件前必须先证明现有文档无法承载；分析/调研类文档一律进
+  `docs/archive/`，不进根目录。
 - 不继续扩展 `llm_analysis.py` 的决策能力。
 - 不引入重型依赖。
 - 不把技术指标做成投资建议。

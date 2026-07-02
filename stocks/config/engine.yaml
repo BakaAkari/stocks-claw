@@ -1,6 +1,6 @@
 # stocks-claw 引擎配置
 # 优先级：环境变量 > 本文件 > 代码默认值
-# 环境变量格式：STOCKS_<section>_<key>，如 STOCKS_FETCHER_MAX_RETRIES=3
+# 嵌套环境变量使用双下划线，如 STOCKS_FETCHER__MAX_RETRIES=3
 
 paths:
   # 配置目录，默认相对 stocks/ 包目录
