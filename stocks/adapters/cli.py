@@ -175,6 +175,7 @@ class CLIAdapter:
         lines.append(f"  避险资产: {ms.safe_haven_state}")
         lines.append(f"  中国资产: {ms.china_state}")
         lines.append(f"  利率状态: {ms.rates_state}")
+        lines.append(f"  加密资产: {ms.crypto_state}")
         for summary in ms.cross_asset_summary:
             lines.append(f"  - {summary}")
 

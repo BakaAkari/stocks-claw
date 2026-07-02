@@ -291,16 +291,19 @@ class TestMarketScaffoldBuild:
     def test_empty_quotes(self, scaffold):
         """空行情 — 返回未知状态"""
         state = scaffold.build({})
-        assert state.risk_appetite == "unknown"
-        assert state.tech_state == "unknown"
-        assert state.china_state == "unknown"
+        assert state.risk_appetite == "no_data"
+        assert state.tech_state == "no_data"
+        assert state.china_state == "no_data"
+        assert state.safe_haven_state == "no_data"
+        assert state.rates_state == "no_data"
+        assert state.crypto_state == "no_data"
 
     def test_risk_on(self, scaffold):
         """权益平均涨 > 1.5% → risk_on"""
         quotes = {
             "a": [
-                Quote(Instrument("000300", "沪深300", "a"), price=3600, pct_change=2.0),
-                Quote(Instrument("000001", "平安", "a"), price=12, pct_change=1.8),
+                Quote(Instrument("000300", "沪深300", "a", category="equity_cn"), price=3600, pct_change=2.0),
+                Quote(Instrument("000001", "平安", "a", category="equity_cn"), price=12, pct_change=1.8),
             ],
         }
         state = scaffold.build(quotes)
@@ -310,8 +313,8 @@ class TestMarketScaffoldBuild:
         """权益平均涨 0.3-1.5% → cooling"""
         quotes = {
             "a": [
-                Quote(Instrument("000300", "沪深300", "a"), price=3600, pct_change=0.8),
-                Quote(Instrument("000001", "平安", "a"), price=12, pct_change=0.5),
+                Quote(Instrument("000300", "沪深300", "a", category="equity_cn"), price=3600, pct_change=0.8),
+                Quote(Instrument("000001", "平安", "a", category="equity_cn"), price=12, pct_change=0.5),
             ],
         }
         state = scaffold.build(quotes)
@@ -321,8 +324,8 @@ class TestMarketScaffoldBuild:
         """权益平均跌 > 1.0% → broad_risk_off"""
         quotes = {
             "a": [
-                Quote(Instrument("000300", "沪深300", "a"), price=3500, pct_change=-1.5),
-                Quote(Instrument("000001", "平安", "a"), price=11, pct_change=-1.2),
+                Quote(Instrument("000300", "沪深300", "a", category="equity_cn"), price=3500, pct_change=-1.5),
+                Quote(Instrument("000001", "平安", "a", category="equity_cn"), price=11, pct_change=-1.2),
             ],
         }
         state = scaffold.build(quotes)
@@ -332,8 +335,8 @@ class TestMarketScaffoldBuild:
         """涨跌幅在 [-1.0, 0.3] 之间 → mixed"""
         quotes = {
             "a": [
-                Quote(Instrument("000300", "沪深300", "a"), price=3540, pct_change=0.1),
-                Quote(Instrument("000001", "平安", "a"), price=11.5, pct_change=-0.5),
+                Quote(Instrument("000300", "沪深300", "a", category="equity_cn"), price=3540, pct_change=0.1),
+                Quote(Instrument("000001", "平安", "a", category="equity_cn"), price=11.5, pct_change=-0.5),
             ],
         }
         state = scaffold.build(quotes)
@@ -343,7 +346,7 @@ class TestMarketScaffoldBuild:
         """A股平均 > 1.0% → stable_positive"""
         quotes = {
             "a": [
-                Quote(Instrument("000300", "沪深300", "a"), price=3600, pct_change=1.5),
+                Quote(Instrument("000300", "沪深300", "a", category="equity_cn"), price=3600, pct_change=1.5),
             ],
         }
         state = scaffold.build(quotes)
@@ -353,7 +356,7 @@ class TestMarketScaffoldBuild:
         """A股平均 < -1.0% → under_pressure"""
         quotes = {
             "a": [
-                Quote(Instrument("000300", "沪深300", "a"), price=3500, pct_change=-1.5),
+                Quote(Instrument("000300", "沪深300", "a", category="equity_cn"), price=3500, pct_change=-1.5),
             ],
         }
         state = scaffold.build(quotes)
@@ -361,10 +364,10 @@ class TestMarketScaffoldBuild:
 
     def test_tech_state(self, scaffold):
         """科技标的状态判断"""
-        # 含 NVDA 的标的被视为科技
+        # 中文名称不参与推断，category 明确标记科技属性
         quotes = {
             "us": [
-                Quote(Instrument("NVDA", "英伟达", "us"), price=460, pct_change=2.5),
+                Quote(Instrument("QCOM", "高通", "us", category="tech"), price=460, pct_change=2.5),
             ],
         }
         state = scaffold.build(quotes)
@@ -373,21 +376,22 @@ class TestMarketScaffoldBuild:
     def test_safe_haven_strengthening(self, scaffold):
         """避险资产上涨 → strengthening"""
         quotes = {
-            "gold": [
-                Quote(Instrument("518880", "黄金ETF", "gold"), price=4.6, pct_change=1.0),
+            "a": [
+                Quote(Instrument("518880", "黄金ETF", "a", category="gold"), price=4.6, pct_change=1.0),
             ],
         }
         state = scaffold.build(quotes)
         assert state.safe_haven_state == "strengthening"
+        assert state.china_state == "no_data"
 
     def test_cross_asset_summary(self, scaffold):
         """跨资产摘要生成"""
         quotes = {
             "a": [
-                Quote(Instrument("000300", "沪深300", "a"), price=3500, pct_change=-1.5),
+                Quote(Instrument("000300", "沪深300", "a", category="equity_cn"), price=3500, pct_change=-1.5),
             ],
             "gold": [
-                Quote(Instrument("518880", "黄金ETF", "gold"), price=4.6, pct_change=1.0),
+                Quote(Instrument("518880", "黄金ETF", "a", category="gold"), price=4.6, pct_change=1.0),
             ],
         }
         state = scaffold.build(quotes)
@@ -398,10 +402,38 @@ class TestMarketScaffoldBuild:
         """pct_change 为 None 的标的应被忽略"""
         quotes = {
             "a": [
-                Quote(Instrument("000300", "沪深300", "a"), price=3540, pct_change=None),
-                Quote(Instrument("000001", "平安", "a"), price=12, pct_change=2.0),
+                Quote(Instrument("000300", "沪深300", "a", category="equity_cn"), price=3540, pct_change=None),
+                Quote(Instrument("000001", "平安", "a", category="equity_cn"), price=12, pct_change=2.0),
             ],
         }
         state = scaffold.build(quotes)
         # 只有平安被计入，平均 2.0% → risk_on
         assert state.risk_appetite == "risk_on"
+
+    def test_crypto_state_uses_configured_category(self, scaffold):
+        quotes = {
+            "crypto": [
+                Quote(
+                    Instrument("BTCUSDT", "比特币", "crypto", category="crypto"),
+                    price=70000,
+                    pct_change=2.5,
+                ),
+            ],
+        }
+
+        state = scaffold.build(quotes)
+
+        assert state.crypto_state == "strong"
+        assert state.risk_appetite == "no_data"
+
+    def test_name_substring_does_not_classify_without_category(self, scaffold):
+        quotes = {
+            "us": [
+                Quote(Instrument("NVDA", "NVDA tech", "us"), price=100, pct_change=3.0),
+            ],
+        }
+
+        state = scaffold.build(quotes)
+
+        assert state.tech_state == "no_data"
+        assert state.risk_appetite == "no_data"

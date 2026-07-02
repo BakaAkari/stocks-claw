@@ -44,9 +44,9 @@ def sample_constraints() -> dict:
 def sample_instruments() -> list[Instrument]:
     """标准 watchlist 标的"""
     return [
-        Instrument(code="000300", name="沪深300", market="a", exchange="sz_index"),
-        Instrument(code="518880", name="华安黄金ETF", market="a", exchange="sh"),
-        Instrument(code="QQQ", name="纳斯达克100", market="us"),
+        Instrument(code="000300", name="沪深300", market="a", exchange="sz_index", category="equity_cn"),
+        Instrument(code="518880", name="华安黄金ETF", market="a", exchange="sh", category="gold"),
+        Instrument(code="QQQ", name="纳斯达克100", market="us", category="tech"),
     ]
 
 
@@ -56,13 +56,13 @@ def sample_quotes() -> dict[str, list[Quote]]:
     return {
         "a": [
             Quote(
-                instrument=Instrument(code="000300", name="沪深300", market="a"),
+                instrument=Instrument(code="000300", name="沪深300", market="a", category="equity_cn"),
                 price=3542.33,
                 change=12.45,
                 pct_change=0.35,
             ),
             Quote(
-                instrument=Instrument(code="518880", name="华安黄金ETF", market="a"),
+                instrument=Instrument(code="518880", name="华安黄金ETF", market="a", category="gold"),
                 price=4.55,
                 change=-0.02,
                 pct_change=-0.44,
@@ -70,7 +70,7 @@ def sample_quotes() -> dict[str, list[Quote]]:
         ],
         "us": [
             Quote(
-                instrument=Instrument(code="QQQ", name="纳斯达克100", market="us"),
+                instrument=Instrument(code="QQQ", name="纳斯达克100", market="us", category="tech"),
                 price=385.20,
                 change=5.30,
                 pct_change=1.40,

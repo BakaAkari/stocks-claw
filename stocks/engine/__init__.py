@@ -368,6 +368,7 @@ class StocksEngine:
                 elif market == "us":
                     market = "us"
                 exchange = item.get("exchange")
+                category = item.get("category")
                 if not exchange and market == "a":
                     exchange = item.get("market")  # 保留原始交易所信息
 
@@ -377,6 +378,7 @@ class StocksEngine:
                         name=name,
                         market=market,
                         exchange=exchange,
+                        category=category,
                     )
                 )
             except (ValueError, TypeError):

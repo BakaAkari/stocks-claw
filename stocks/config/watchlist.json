@@ -3,61 +3,72 @@
     "code": "000300",
     "name": "沪深300",
     "market": "a",
-    "exchange": "sz_index"
+    "exchange": "sh_index",
+    "category": "equity_cn"
   },
   {
     "code": "518880",
     "name": "华安黄金ETF",
     "market": "a",
-    "exchange": "sh"
+    "exchange": "sh",
+    "category": "gold"
   },
   {
     "code": "159110",
     "name": "科创债ETF万家",
     "market": "a",
-    "exchange": "sz"
+    "exchange": "sz",
+    "category": "bond"
   },
   {
     "code": "513390",
     "name": "纳指100ETF博时",
     "market": "a",
-    "exchange": "sh"
+    "exchange": "sh",
+    "category": "tech"
   },
   {
     "code": "588000",
     "name": "科创50ETF华夏",
     "market": "a",
-    "exchange": "sh"
+    "exchange": "sh",
+    "category": "tech"
   },
   {
     "code": "512810",
     "name": "军工ETF华宝",
     "market": "a",
-    "exchange": "sh"
+    "exchange": "sh",
+    "category": "equity_cn"
   },
   {
     "code": "QQQ",
     "name": "纳斯达克100ETF",
-    "market": "us"
+    "market": "us",
+    "category": "tech"
   },
   {
     "code": "AAPL",
     "name": "AAPL",
-    "market": "us"
+    "market": "us",
+    "category": "tech"
   },
   {
     "code": "QCOM",
     "name": "高通",
-    "market": "us"
+    "market": "us",
+    "category": "tech"
   },
   {
     "code": "BTCUSDT",
     "name": "比特币",
-    "market": "crypto"
+    "market": "crypto",
+    "category": "crypto"
   },
   {
     "code": "ETHUSDT",
     "name": "以太坊",
-    "market": "crypto"
+    "market": "crypto",
+    "category": "crypto"
   }
 ]

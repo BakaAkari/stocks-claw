@@ -669,6 +669,7 @@ class ContextBuilder:
         lines.append(f" 避险资产: {market_state.safe_haven_state}")
         lines.append(f" 中国市场: {market_state.china_state}")
         lines.append(f" 利率/债券: {market_state.rates_state}")
+        lines.append(f" 加密资产: {market_state.crypto_state}")
         if market_state.cross_asset_summary:
             lines.append(" 跨资产摘要:")
             for s in market_state.cross_asset_summary:

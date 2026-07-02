@@ -12,6 +12,7 @@ class Instrument:
     name: str
     market: str                    # "a" / "us"
     exchange: Optional[str] = None  # "sh" / "sz" / "us"
+    category: Optional[str] = None  # equity_cn / equity_us / tech / gold / bond / crypto
 
     def to_dict(self) -> dict:
         return {
@@ -19,6 +20,7 @@ class Instrument:
             "name": self.name,
             "market": self.market,
             "exchange": self.exchange,
+            "category": self.category,
         }
 
 
@@ -45,6 +47,7 @@ class Quote:
                 "name": self.instrument.name,
                 "market": self.instrument.market,
                 "exchange": self.instrument.exchange,
+                "category": self.instrument.category,
             },
             "price": self.price,
             "change": self.change,
@@ -214,11 +217,12 @@ class PortfolioMapping:
 @dataclass(frozen=True)
 class MarketState:
     """市场状态脚手架 — 轻量规则输出，供 LLM 参考"""
-    risk_appetite: str = "unknown"         # risk_on / cooling / broad_risk_off / mixed / unknown
-    tech_state: str = "unknown"           # expanding / under_pressure / soft / mixed / unknown
-    safe_haven_state: str = "unknown"     # strengthening / supported / weakening / unknown
-    china_state: str = "unknown"          # stable_positive / stable / mixed_pressure / under_pressure / unknown
-    rates_state: str = "unknown"          # bonds_bid / rates_pressure / neutral / unknown
+    risk_appetite: str = "no_data"         # risk_on / cooling / broad_risk_off / mixed / no_data
+    tech_state: str = "no_data"           # expanding / under_pressure / soft / mixed / no_data
+    safe_haven_state: str = "no_data"      # strengthening / supported / weakening / no_data
+    china_state: str = "no_data"           # stable_positive / stable / mixed_pressure / under_pressure / no_data
+    rates_state: str = "no_data"           # bonds_bid / rates_pressure / neutral / no_data
+    crypto_state: str = "no_data"          # strong / positive / mixed / soft / under_pressure / no_data
     cross_asset_summary: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -228,6 +232,7 @@ class MarketState:
             "safe_haven_state": self.safe_haven_state,
             "china_state": self.china_state,
             "rates_state": self.rates_state,
+            "crypto_state": self.crypto_state,
             "cross_asset_summary": self.cross_asset_summary,
         }
 

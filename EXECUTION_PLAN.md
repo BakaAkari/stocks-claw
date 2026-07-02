@@ -52,9 +52,11 @@
 **文件**:`stocks/engine/scaffolds.py`
 **问题**:只遍历 `mapping.ratios` 中存在的 bucket;某类资产占比为 0(如现金归零)时 bucket 缺失,`min` 约束违规永远不报——恰恰是最需要报警的场景。
 
-- [ ] 【验证前提】读 `check_drift`,确认遍历基准是 mapping 现有 bucket 而非约束文件的全部 bucket。
-- [ ] 改为以 `portfolio_constraints.json` 中声明的所有 bucket 为遍历基准,缺失 bucket 按 ratio=0 参与 `min` 检查。
-- [ ] 新增测试:现金 bucket 为空 + `cash min 5%` 约束 → 必须产出 below_min 违规。
+- [x] 【验证前提】读 `check_drift`,确认遍历基准是 mapping 现有 bucket 而非约束文件的全部 bucket。
+- [x] 改为以 `portfolio_constraints.json` 中声明的所有 bucket 为遍历基准,缺失 bucket 按 ratio=0 参与 `min` 检查。
+- [x] 新增测试:现金 bucket 为空 + `cash min 5%` 约束 → 必须产出 below_min 违规。
+
+> 完成:f237c51 约束声明成为 drift 遍历基准，缺失资产桶按 0% 报告最低占比违规。
 
 **验收**:新测试通过;既有 drift 测试不回归。
 

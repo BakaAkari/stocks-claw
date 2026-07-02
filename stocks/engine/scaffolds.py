@@ -172,38 +172,39 @@ class MarketScaffold:
         for market_quotes in quotes.values():
             all_quotes.extend(market_quotes)
 
-        # 分类统计
+        # 分类统计。资产类别只由 watchlist 的 category 决定，名称不参与推断。
         equity_changes = []      # 权益类
         tech_changes = []        # 科技相关
         safe_haven_changes = []  # 黄金/债券等避险
         china_changes = []       # A股
         rates_changes = []       # 债券/利率相关
+        crypto_changes = []      # 加密资产
 
         for q in all_quotes:
             if q.pct_change is None:
                 continue
             pc = q.pct_change
 
-            # 按市场分类
-            if q.instrument.market == "a":
+            category = (q.instrument.category or "").strip().lower()
+            if category in ("equity_cn", "equity_us", "equity", "tech"):
+                equity_changes.append(pc)
+            if category == "equity_cn":
                 china_changes.append(pc)
-                equity_changes.append(pc)
-            elif q.instrument.market == "us":
-                equity_changes.append(pc)
-                # 简单判断科技：名称含 tech / 科技 / 半导体 / 芯片 / NVDA / TSLA / AAPL / MSFT / GOOGL
-                name = q.instrument.name.lower()
-                if any(k in name for k in ("tech", "科技", "半导体", "芯片", "nvda", "tsla", "aapl", "msft", "googl")):
-                    tech_changes.append(pc)
-            elif q.instrument.market in ("gold", "commodity"):
+            if category == "tech":
+                tech_changes.append(pc)
+            if category == "gold":
                 safe_haven_changes.append(pc)
-            elif q.instrument.market in ("bond", "rates"):
+            if category == "bond":
+                safe_haven_changes.append(pc)
                 rates_changes.append(pc)
+            if category == "crypto":
+                crypto_changes.append(pc)
 
         # 判断 risk_appetite（风险情绪）
         risk_appetite = self._judge_risk_appetite(equity_changes)
 
         # 判断 tech_state（科技股状态）
-        tech_state = self._judge_tech_state(tech_changes, equity_changes)
+        tech_state = self._judge_tech_state(tech_changes)
 
         # 判断 safe_haven_state（避险资产状态）
         safe_haven_state = self._judge_safe_haven(safe_haven_changes)
@@ -214,10 +215,13 @@ class MarketScaffold:
         # 判断 rates_state（利率/债券状态）
         rates_state = self._judge_rates_state(rates_changes)
 
+        # 判断 crypto_state（加密资产状态）
+        crypto_state = self._judge_crypto_state(crypto_changes)
+
         # 生成 cross_asset_summary（跨资产摘要）
         cross_asset_summary = self._build_summary(
             risk_appetite, tech_state, safe_haven_state, china_state, rates_state,
-            equity_changes, china_changes, safe_haven_changes
+            equity_changes, china_changes, safe_haven_changes, crypto_changes
         )
 
         return MarketState(
@@ -226,6 +230,7 @@ class MarketScaffold:
             safe_haven_state=safe_haven_state,
             china_state=china_state,
             rates_state=rates_state,
+            crypto_state=crypto_state,
             cross_asset_summary=cross_asset_summary,
         )
 
@@ -238,7 +243,7 @@ class MarketScaffold:
     def _judge_risk_appetite(self, equity_changes: list[float]) -> str:
         avg = self._avg(equity_changes)
         if avg is None:
-            return "unknown"
+            return "no_data"
         if avg > 1.5:
             return "risk_on"
         elif avg > 0.3:
@@ -247,7 +252,7 @@ class MarketScaffold:
             return "broad_risk_off"
         return "mixed"
 
-    def _judge_tech_state(self, tech_changes: list[float], equity_changes: list[float]) -> str:
+    def _judge_tech_state(self, tech_changes: list[float]) -> str:
         if tech_changes:
             avg = self._avg(tech_changes)
             if avg is not None:
@@ -258,13 +263,12 @@ class MarketScaffold:
                 elif avg < -0.5:
                     return "soft"
                 return "mixed"
-        # 无科技标的时，用整体权益代替
-        return self._judge_risk_appetite(equity_changes).replace("risk_on", "expanding").replace("broad_risk_off", "under_pressure")
+        return "no_data"
 
     def _judge_safe_haven(self, safe_haven_changes: list[float]) -> str:
         avg = self._avg(safe_haven_changes)
         if avg is None:
-            return "unknown"
+            return "no_data"
         if avg > 0.5:
             return "strengthening"
         elif avg < -0.5:
@@ -274,7 +278,7 @@ class MarketScaffold:
     def _judge_china_state(self, china_changes: list[float]) -> str:
         avg = self._avg(china_changes)
         if avg is None:
-            return "unknown"
+            return "no_data"
         if avg > 1.0:
             return "stable_positive"
         elif avg > 0.0:
@@ -286,13 +290,27 @@ class MarketScaffold:
     def _judge_rates_state(self, rates_changes: list[float]) -> str:
         avg = self._avg(rates_changes)
         if avg is None:
-            return "unknown"
+            return "no_data"
         # 债券价格上涨 = 收益率下降 = 利率压力缓解，但这里简单处理
         if avg > 0.3:
             return "bonds_bid"
         elif avg < -0.3:
             return "rates_pressure"
         return "neutral"
+
+    def _judge_crypto_state(self, crypto_changes: list[float]) -> str:
+        avg = self._avg(crypto_changes)
+        if avg is None:
+            return "no_data"
+        if avg > 1.5:
+            return "strong"
+        if avg > 0.3:
+            return "positive"
+        if avg < -1.5:
+            return "under_pressure"
+        if avg < -0.3:
+            return "soft"
+        return "mixed"
 
     def _build_summary(
         self,
@@ -304,6 +322,7 @@ class MarketScaffold:
         equity_changes: list[float],
         china_changes: list[float],
         safe_haven_changes: list[float],
+        crypto_changes: list[float],
     ) -> list[str]:
         """生成跨资产摘要文本"""
         summary = []
@@ -319,6 +338,10 @@ class MarketScaffold:
         sh_avg = self._avg(safe_haven_changes)
         if sh_avg is not None:
             summary.append(f"避险资产涨跌: {sh_avg:+.2f}%")
+
+        crypto_avg = self._avg(crypto_changes)
+        if crypto_avg is not None:
+            summary.append(f"加密资产涨跌: {crypto_avg:+.2f}%")
 
         # 状态描述
         if risk_appetite == "risk_on":
