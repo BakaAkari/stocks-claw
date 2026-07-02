@@ -85,6 +85,29 @@ class TestBasic:
         assert "News A" in titles
         assert "News B" in titles
 
+    async def test_filter_by_source_name_or_type(self):
+        """sources 可按 source_name 或 source_type 过滤。"""
+        rss_item = make_news("RSS", "https://example.com/rss", 10, "rss-source")
+        rss_item = NewsItem(
+            **{
+                **rss_item.to_dict(),
+                "source_type": "rss",
+                "published_at": rss_item.published_at,
+                "source_name": rss_item.source_name,
+            }
+        )
+        api_item = make_news("API", "https://example.com/api", 5, "api-source")
+
+        aggregator = NewsAggregator([
+            MockNewsProvider([rss_item, api_item]),
+        ])
+
+        by_name = await aggregator.fetch(max_items=10, sources=["api-source"])
+        by_type = await aggregator.fetch(max_items=10, sources=["rss"])
+
+        assert [item.title for item in by_name] == ["API"]
+        assert [item.title for item in by_type] == ["RSS"]
+
     def test_generic_rss_parser_preserves_source_metadata(self):
         item = ET.fromstring(
             "<item><title>财经新闻</title><link>https://example.com/finance</link>"

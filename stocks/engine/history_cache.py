@@ -93,9 +93,19 @@ class HistoryCache:
         """记录一条行情快照到内存缓存
 
         自动去重同一天数据（保留最新），并截断至内存上限。
+        优先使用 quote.as_of 作为行情时间戳，避免深夜抓数据时
+        按到达时刻跨天归属错误交易日。
         """
         key = self._key(instrument)
-        ts = datetime.now(timezone.utc)
+        if quote.as_of:
+            try:
+                ts = datetime.fromisoformat(quote.as_of.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                ts = datetime.now(timezone.utc)
+        else:
+            ts = datetime.now(timezone.utc)
 
         row = {
             "timestamp": ts,

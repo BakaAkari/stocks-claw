@@ -497,7 +497,7 @@ class StocksEngine:
     ) -> list[NewsItem]:
         """获取新闻数据 — 使用 NewsAggregator 多源聚合。"""
         try:
-            return await self.news_aggregator.fetch(max_items=limit)
+            return await self.news_aggregator.fetch(max_items=limit, sources=sources)
         except Exception as e:
             logger.warning(f"News fetch failed: {e}")
             return []

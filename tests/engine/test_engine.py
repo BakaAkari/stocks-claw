@@ -472,7 +472,7 @@ class TestFetchNewsIntegration:
         result = await minimal_engine.fetch_news(limit=5)
         assert len(result) == 1
         assert result[0].title == "Test"
-        minimal_engine.news_aggregator.fetch.assert_called_once_with(max_items=5)
+        minimal_engine.news_aggregator.fetch.assert_called_once_with(max_items=5, sources=None)
 
     async def test_fetch_news_empty(self, minimal_engine):
         """NewsAggregator 返回空列表"""

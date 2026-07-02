@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Protocol
+from typing import Optional, Protocol
 
 from stocks.domain.models import NewsItem
 from stocks.logging_utils import get_logger
@@ -44,7 +44,11 @@ class NewsAggregator:
         self._providers = providers
         self._max_source_items = max_source_items
 
-    async def fetch(self, max_items: int = 20) -> list[NewsItem]:
+    async def fetch(
+        self,
+        max_items: int = 20,
+        sources: Optional[list[str]] = None,
+    ) -> list[NewsItem]:
         """获取聚合后的新闻列表
 
         流程：
@@ -52,6 +56,9 @@ class NewsAggregator:
         2. URL 去重（保留第一个来源的）
         3. 按 published_at 降序排序
         4. 截断至 max_items
+
+        Args:
+            sources: 指定保留的新闻源名称/类型列表，None 则不筛选。
         """
         if not self._providers:
             return []
@@ -76,6 +83,14 @@ class NewsAggregator:
             if item.url not in seen_urls:
                 seen_urls.add(item.url)
                 unique_news.append(item)
+
+        # 按 sources 过滤（匹配 source_name 或 source_type）
+        if sources:
+            source_set = set(sources)
+            unique_news = [
+                item for item in unique_news
+                if item.source_name in source_set or item.source_type in source_set
+            ]
 
         # 排序：按 published_at 降序（最新在前），无时间放最后
         def _sort_key(item: NewsItem) -> float:

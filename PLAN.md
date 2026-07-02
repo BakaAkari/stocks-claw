@@ -137,11 +137,11 @@ tests/engine/test_history_cache.py
 
 最小能力：
 
-- [ ] 保存某个标的的日线历史序列到本地 JSON。
-- [ ] 读取某个标的的历史序列。
-- [ ] 支持 TTL / stale 标记。
-- [ ] 网络失败或无 Provider 历史接口时，能返回 cached/stale 状态，而不是抛穿主流程。
-- [ ] 缓存路径必须 gitignore，默认位于运行态目录，不写入源码目录的 tracked 文件。
+- [x] 保存某个标的的日线历史序列到本地 JSON。
+- [x] 读取某个标的的历史序列。
+- [x] 支持 TTL / stale 标记。
+- [x] 网络失败或无 Provider 历史接口时，能返回 cached/stale 状态，而不是抛穿主流程。
+- [x] 缓存路径必须 gitignore，默认位于运行态目录，不写入源码目录的 tracked 文件。
 
 建议数据结构：
 
@@ -159,8 +159,8 @@ tests/engine/test_history_cache.py
 
 验收：
 
-- [ ] `test_history_cache.py` 覆盖 save/load/missing/stale/corrupt JSON。
-- [ ] 无网络或无历史 Provider 时，主流程仍可运行。
+- [x] `test_history_cache.py` 覆盖 save/load/missing/stale/corrupt JSON。
+- [x] 无网络或无历史 Provider 时，主流程仍可运行。
 
 ### Phase 2B：技术指标引擎
 
@@ -175,13 +175,13 @@ tests/engine/test_indicators.py
 
 最小指标集：
 
-- [ ] `ma_5`, `ma_10`, `ma_20`, `ma_30`
-- [ ] `ema_12`, `ema_26`
-- [ ] `rsi_14`
-- [ ] `macd`, `macd_signal`, `macd_histogram`
-- [ ] `atr_14`
-- [ ] `boll_upper`, `boll_middle`, `boll_lower`
-- [ ] `volatility_20`（20 日收益率标准差 × √252 的年化历史波动率）
+- [x] `ma_5`, `ma_10`, `ma_20`, `ma_30`
+- [x] `ema_12`, `ema_26`
+- [x] `rsi_14`
+- [x] `macd`, `macd_signal`, `macd_histogram`
+- [x] `atr_14`
+- [x] `boll_upper`, `boll_middle`, `boll_lower`
+- [x] `volatility_20`（20 日收益率标准差 × √252 的年化历史波动率）
 
 设计要求：
 
@@ -192,9 +192,9 @@ tests/engine/test_indicators.py
 
 验收：
 
-- [ ] 固定样本计算结果稳定。
-- [ ] 空数据、短序列、缺字段、非数字值都有测试。
-- [ ] ruff / pytest / compileall 全过。
+- [x] 固定样本计算结果稳定。
+- [x] 空数据、短序列、缺字段、非数字值都有测试。
+- [x] ruff / pytest / compileall 全过。
 
 ### Phase 2C：AnalysisContext 集成
 
@@ -212,7 +212,7 @@ tests/engine/test_context_builder.py
 建议 schema：
 
 ```text
-AnalysisContext.schema_version = 3
+AnalysisContext.schema_version = 5
 technical_indicators: dict[str, dict]
 ```
 
@@ -238,10 +238,10 @@ key 建议：
 
 验收：
 
-- [ ] `build_context()` 返回 `technical_indicators` 字段。
-- [ ] 无历史数据时字段存在，但标记 `missing` / `insufficient_data`。
-- [ ] CLI smoke 输出可解析。
-- [ ] schema version 升级有测试覆盖。
+- [x] `build_context()` 返回 `technical_indicators` 字段。
+- [x] 无历史数据时字段存在，但标记 `missing` / `insufficient_data`。
+- [x] CLI smoke 输出可解析。
+- [x] schema version 升级有测试覆盖。
 
 ---
 
@@ -249,12 +249,12 @@ key 建议：
 
 以下内容不要在 Phase 2A/2B/2C 之前展开：
 
-- 多源新闻聚合：GNews/Juhe 等实际接入。
+- ~~多源新闻聚合：GNews/Juhe 等实际接入。~~（Phase 2 已一并实现）
 - 新闻-标的关联。
-- 宏观数据抓取：VIX、Yahoo 等。
+- ~~宏观数据抓取：VIX、Yahoo 等。~~（Phase 2 已一并实现）
 - Provider 全面 httpx 改造。
 - 组合风险分析、相关性矩阵、回测框架。
-- HTTP 认证、限速、CORS。
+- HTTP 限速、CORS。
 - 标准 MCP SDK 重写。
 
 理由：这些都需要更清晰的数据契约。先把历史数据与技术指标闭环跑稳。

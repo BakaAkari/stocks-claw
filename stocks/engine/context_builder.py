@@ -205,7 +205,7 @@ class ContextBuilder:
             if instrument.market != "us" or instrument.code in existing:
                 continue
             history = await self.history_cache.get_history(instrument, lookback_bars=1)
-            if history.empty or history.iloc[-1].get("price") is None:
+            if history.empty or _optional_float(history.iloc[-1].get("price")) is None:
                 continue
             row = history.iloc[-1]
             timestamp = row.get("timestamp")

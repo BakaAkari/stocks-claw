@@ -238,10 +238,15 @@ class TestDiskPersistence:
         cache,
         sample_instrument,
     ):
-        """同一交易日的 provider 日 K 优先于实时 record。"""
-        now = datetime.now(timezone.utc)
+        """同一交易日的 provider 日 K 优先于实时 record。
+
+        使用跨 UTC 日期但同一上海交易日的固定时间，避免 UTC 16:00–24:00
+        运行时上海日期跨天导致 flaky。
+        """
+        # 上海 2026-07-02 04:00 与 09:00 属于同一交易日，但跨 UTC 日期
+        provider_ts = datetime(2026, 7, 1, 20, 0, tzinfo=timezone.utc)
         provider_row = {
-            "timestamp": now.replace(hour=0, minute=0, second=0, microsecond=0),
+            "timestamp": provider_ts,
             "code": sample_instrument.code,
             "name": sample_instrument.name,
             "market": sample_instrument.market,
@@ -263,6 +268,7 @@ class TestDiskPersistence:
                 low=10.4,
                 prev_close=10.0,
                 volume_lot=50,
+                as_of="2026-07-02T01:00:00+00:00",  # 上海 09:00，同一交易日
             ),
         )
 

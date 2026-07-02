@@ -57,8 +57,8 @@ class LLMAnalysis:
         if not self.enabled:
             return "LLM analysis disabled."
 
-        system_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
         try:
+            system_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
             return await asyncio.to_thread(
                 self._call_llm,
                 system_prompt,
