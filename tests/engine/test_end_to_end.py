@@ -178,6 +178,15 @@ class TestBuildContextEndToEnd:
         assert len(context.market_events) == 1
         assert context.news_digest["event_count"] == 1
 
+    async def test_second_build_contains_previous_snapshot(self, e2e_engine):
+        first = await e2e_engine.build_context(include_news=False, include_quotes=False)
+        second = await e2e_engine.build_context(include_news=False, include_quotes=False)
+
+        assert first.recent_snapshots == []
+        assert len(second.recent_snapshots) == 1
+        assert second.recent_snapshots[0]["asset_count"] == 2
+        assert "【上次快照】" in second.raw_prompt_input
+
     async def test_build_context_contains_macro(self, e2e_engine):
         """macro_snapshot 包含宏观数据"""
         context = await e2e_engine.build_context()

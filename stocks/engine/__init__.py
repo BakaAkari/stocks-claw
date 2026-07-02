@@ -172,7 +172,11 @@ class StocksEngine:
             history_cache=self.history_cache,
             macro_provider=self.macro_provider,
         )
-        self.persistence = DataPersistence()
+        self.persistence = DataPersistence(
+            base_dir=str(self._local_data_dir / "snapshots"),
+            enabled=cache_cfg.get("save_to_file", True),
+            max_snapshots=cache_cfg.get("max_snapshots", 30),
+        )
 
         # 2.4 初始化历史 K 线提供者（用于启动时回填历史数据）
         self._history_provider = CompositeKLineProvider()
@@ -577,6 +581,9 @@ class StocksEngine:
             enhanced_news=enhanced_news,
             news_requested=include_news,
         )
+
+        # 保存最小快照，供下一次上下文进行前后对照。
+        self.persistence.save_context(context)
 
         # 6. Flush history cache if present (ensure today's data persisted)
         if self.history_cache:

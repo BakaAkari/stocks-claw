@@ -44,6 +44,7 @@ DEFAULT_ENGINE_CONFIG = {
         "history_ttl": 86400,  # 24 小时
         "history_dir": None,  # 默认写入 .local/history，避免污染源码目录
         "max_snapshots": 30,
+        "save_to_file": True,
     },
     "llm": {
         "enhancer_enabled": True,

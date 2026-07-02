@@ -115,6 +115,7 @@ class ContextBuilder:
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
             market_events=market_events,
             news_digest=news_digest,
+            recent_snapshots=recent_snapshots,
         )
 
         data_quality = self._build_data_quality(
@@ -561,6 +562,7 @@ class ContextBuilder:
         macro_snapshot: Optional[dict] = None,
         market_events: Optional[list] = None,
         news_digest: Optional[dict] = None,
+        recent_snapshots: Optional[list[dict]] = None,
     ) -> str:
         """生成人类可读的原始输入文本，供 LLM 阅读"""
         lines: list[str] = []
@@ -598,6 +600,17 @@ class ContextBuilder:
             if asset.notes:
                 lines.append(f" 备注: {asset.notes}")
         lines.append("")
+
+        if recent_snapshots:
+            lines.append("【上次快照】")
+            for snapshot in recent_snapshots[:5]:
+                lines.append(
+                    f" {snapshot.get('generated_at', 'unknown')} | "
+                    f"资产数: {snapshot.get('asset_count', 0)} | "
+                    f"组合: {snapshot.get('portfolio_summary', {})} | "
+                    f"偏离: {snapshot.get('drift_checks', [])}"
+                )
+            lines.append("")
 
         # 组合结构
         lines.append("【组合结构】")

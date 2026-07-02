@@ -151,11 +151,13 @@
 **文件**:`stocks/engine/__init__.py`、新增 `stocks/data/investor_profile.example.json`
 **问题**:代码读取 `investor_profile.json` 但该文件在仓库中不存在,连示例都没有,用户画像恒为空。
 
-- [ ] 定义最小 schema(建议字段:`risk_tolerance`、`investment_horizon`、`preferences`(自由文本数组)、`constraints`(禁投/上限类)、`updated_at`)。
-- [ ] 提交 example 文件;真实文件路径为 `.local/investor_profile.json`(gitignore),加载优先级与资产文件一致。
-- [ ] MCP/CLI 暴露 `profile_get` / `profile_update`(同样要求显式确认参数)。
-- [ ] `ContextBuilder` 确认 profile 注入 `raw_prompt_input` 的【用户画像】段。
-- [ ] 新增测试:有/无 profile 文件两种情况下 build_context 均正常,有文件时画像段非空。
+- [x] 定义最小 schema(建议字段:`risk_tolerance`、`investment_horizon`、`preferences`(自由文本数组)、`constraints`(禁投/上限类)、`updated_at`)。
+- [x] 提交 example 文件;真实文件路径为 `.local/investor_profile.json`(gitignore),加载优先级与资产文件一致。
+- [x] MCP/CLI 暴露 `profile_get` / `profile_update`(同样要求显式确认参数)。
+- [x] `ContextBuilder` 确认 profile 注入 `raw_prompt_input` 的【用户画像】段。
+- [x] 新增测试:有/无 profile 文件两种情况下 build_context 均正常,有文件时画像段非空。
+
+> 完成:6cc4024 新增本地画像 schema 与 example，CLI/MCP 确认式更新，并验证 prompt 注入。
 
 **验收**:CLI smoke 输出的 raw_prompt 含画像内容。
 

@@ -36,6 +36,7 @@ MINIMAL_CONFIG = {
         "history_ttl": 86400,
         "history_dir": None,
         "max_snapshots": 30,
+        "save_to_file": True,
     },
     "news_sources": {
         "rss": ["https://www.36kr.com/feed"],
