@@ -378,8 +378,10 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes --save 
 **文件**:`stocks/engine/__init__.py`、`stocks/engine/context_builder.py`
 **依赖**:P2-3(快照回路)、M-1。
 
-- [ ] 注入最近 N 条(默认 3)建议摘要到 `AnalysisContext.recent_advice` 与 `raw_prompt_input` 的【上次建议】段。
-- [ ] 无建议记录时字段存在但为空,不伪造、不报错。
+- [x] 注入最近 N 条(默认 3)建议摘要到 `AnalysisContext.recent_advice` 与 `raw_prompt_input` 的【上次建议】段。
+- [x] 无建议记录时字段存在但为空,不伪造、不报错。
+
+> 完成:64ac9fe build_context 注入最近 3 条建议摘要到结构化字段与 raw_prompt。| 证据:`stocks/engine/__init__.py:573-585` 加载并传入 recent_advice,`stocks/engine/context_builder.py:57`/`:125`/`:682` 写入 `AnalysisContext` 与【上次建议】段,`tests/engine/test_end_to_end.py:189` 覆盖无建议为空、保存后第二次上下文含上次建议。
 
 **验收**:保存建议后第二次 build_context 的上下文含上次建议;无记录时 CLI smoke 正常。
 
