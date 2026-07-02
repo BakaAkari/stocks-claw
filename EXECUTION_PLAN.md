@@ -21,7 +21,7 @@
 
 ## 使用说明(执行 Agent 必读)
 
-1. **当前执行队列(2026-07-02 更新)**:P2 返工与 M 组建议闭环均已完成。后续任务需回到 `PLAN.md` 第 3 节按启动条件另行决策;P0/P1/P2/P3/P4/P5/M 已核验完成,勿重做。
+1. **当前执行队列(2026-07-02 第二次更新)**:P0/P1/P2/P3/P4/P5/M 已核验完成,勿重做。当前唯一进行中阶段为 **Phase D — 数据可信底盘与冗余**(见本文档 D 组),按 D0 → D1 → D2 顺序执行;启动依据与证据见 `PLAN.md` 决策日志 2026-07-02 数据可靠性审计条目及 `docs/archive/DATA_RELIABILITY_AUDIT_20260702.md`(证据留存,无准则效力,任务以 D 组任务卡为准)。
 2. 每完成一个任务,运行全局验收(见文末),全部通过后才能进入下一任务。
 3. 勾选格式:完成后把 `- [ ]` 改为 `- [x]`,并在任务末尾追加一行 `> 完成:<commit hash> <一句话说明>`。
 4. 遵守 `PLAN.md` 第 4 节禁止事项:不引入重型依赖、不伪造指标、不提交 `.local/`、`.secret/`、缓存。
@@ -411,6 +411,160 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes --save 
 **Phase M 出口标准**:M-1~M-5 全部带可复现证据完成;对照 VISION 成功标准,第 3 条(结合资产给出个人建议)与第 5 条(对决策真有帮助)从"一次性输出"升级为"可追踪、可回看"。
 
 > 完成:a64c83e Phase M 出口标准通过。| 证据:M-1 `a8fe792`、M-2 `cee3492`、M-3 `64ac9fe`、M-4 `d555aab`、M-5 `a64c83e` 均带测试证据;本轮最终全局验收 `ruff`/`compileall`/`pytest 312 passed`/CLI smoke 全通过。
+
+---
+
+## D — 数据可信底盘与冗余(Phase D,2026-07-02 数据可靠性审计导出,当前执行队列)
+
+**目标**:让系统先"诚实"再"博学"——任何数据源失败必须在 `data_quality` 显性可见,任何时间戳必须来自数据源本身,缺数据的指标绝不报 `ok`;在此之上为关键数据源建立真实冗余。对照 VISION 成功标准第 4 条(区分市场信息/用户记忆/LLM 推断边界)与第 5 条(对决策真有帮助)。
+
+**审计证据**(全文见 `docs/archive/DATA_RELIABILITY_AUDIT_20260702.md`,下列任务卡内只引用与该任务直接相关的证据):外部 GPT 审计 5 条结论经行号级独立核验全部成立;2026-07-02 现场网络诊断(`.local/verify_data_sources.py`)实测:eastmoney 日 K 0/6(RemoteDisconnected)、腾讯日 K 6/6(60-61 bars)、新浪日 K 窗口异常(每支 2 bars)、Yahoo 日 K 与宏观全线 HTTP 429(0/5、0/6)、三个新闻源均有产出(30/100/42 条)、Finnhub quote 与财报日历可用、Binance/SEC EDGAR/巨潮/上交所/FRED 全部可达。
+
+**硬前置**:无(Phase R 与 Phase M 均已收口)。组内顺序是硬约束:D0 全部完成并通过 D0 出口验收后才能开工 D1;D1-1/D1-2/D1-3 完成后才能开工 D2。理由:D1 的降级链上报依赖 D0-3 的 `history_backfill` 节点;D2 的事件质量依赖 D0-2 的真实时间戳。
+
+**开工基线**(D0-1 动工前跑一次并留存输出):
+
+```bash
+uv run ruff check .
+uv run python -m pytest -q
+uv run python -m compileall -q stocks tests
+uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
+python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
+```
+
+### D0-1 技术指标质量按 data_points 判级(消灭"瞎了报健康")
+
+**文件**:`stocks/engine/context_builder.py`、`tests/engine/test_context_builder.py`
+**问题**:`TechnicalIndicators.calculate()` 数据不足时所有指标为 None,但返回字典仍含 `data_points` 故恒为真值;`_collect_technical_indicators`(context_builder.py:614 附近 `if q.indicators:`)只判字典真值即标 `ok`;`_indicator_quality` 按 `status=="ok"` 聚合,把假 ok 放大为整体 `ok/fresh`。已复现:单 bar 输入 → 全 None 指标 + `status:"ok"` + `freshness:"fresh"`。
+**证据**:`.local/history/a_*.json` 六文件各仅 1 条 realtime 记录的当日,test_run 快照的指标质量仍报健康。
+
+- [ ] 【验证前提】`grep -n "if q.indicators" stocks/engine/context_builder.py` 命中 614 行附近;`grep -n "data_points" stocks/engine/indicators.py` 确认 `calculate()` 已输出该字段(59 行附近)。
+- [ ] `_collect_technical_indicators` 判级:`ok` = `data_points >= 35` 且 `ma_20`/`rsi_14`/`macd.hist`/`bollinger.upper` 全非 None;`partial` = 不满足 ok 但至少一个核心指标非 None;`missing` = 核心指标全 None 或 `data_points < 15`。输出随附 `data_points` 与 `unavailable`(不可用指标名列表)。
+- [ ] `_indicator_quality` 聚合规则同步:全 ok → `ok`;混合 → `partial`;全非 ok → `missing`;`missing_symbols` 语义保持(status 非 ok 即列入)。
+- [ ] `_build_raw_prompt` 市场行情段:status 为 partial/missing 的标的,指标行显式标注 `(历史仅 N bars,指标不可用/部分可用)`,禁止静默省略。
+- [ ] 新增测试:单 bar → missing;20 bars → partial(MACD 不可用被列入 unavailable);60 bars → ok。
+
+**验收**:单 bar 复现(向 `_collect_technical_indicators` 喂 `data_points:1` 的全 None 指标字典)输出 missing 而非 ok;存量测试(312 项)不回归。
+
+### D0-2 三个实时 Provider 补源时间戳,`as_of`/`freshness` 真实化
+
+**文件**:`stocks/providers/tencent_a.py`、`stocks/providers/eastmoney_a.py`、`stocks/providers/finnhub_quote.py`、`stocks/engine/context_builder.py`、`tests/`
+**问题**:三个 Quote 构造点(tencent_a.py:74 / eastmoney_a.py:71 / finnhub_quote.py:167)均不写 `source`/`as_of`,而 `Quote` 定义了这两个字段;`history_cache.record()` 的 `if quote.as_of:` 分支(跨天交易日归属保护)因此是死代码;`_quote_quality`(context_builder.py:387 附近)把 `generated_at` 当 `as_of`,只要有行情 freshness 恒为 `fresh`——收盘后深夜抓的收盘价也标 fresh。
+**证据**:Finnhub 实测响应含 `t=1782936000`(= 2026-07-01 20:00 UTC,美股收盘时刻),当前被丢弃。
+
+- [ ] 【验证前提】grep 三个 `Quote(` 构造点行号;确认 finnhub `_data_to_quote` 未读 `data["t"]`;确认 eastmoney 实时请求 fields 参数(eastmoney_a.py:46)不含 `f86`;确认 tencent 使用 `s_` 简版格式(`_build_symbol` 返回 `s_` 前缀,简版响应**无**时间字段)。
+- [ ] finnhub:`as_of` = `data["t"]`(unix 秒)→ UTC ISO;`source="finnhub"`。
+- [ ] eastmoney 实时:fields 追加 `f86`(行情 unix 时间戳),`as_of` = f86 → UTC ISO;`source="eastmoney_a"`。
+- [ ] tencent:二选一并在完成记录注明——(a) 改用完整格式(去 `s_` 前缀,行情时间在 index 30,格式 YYYYMMDDHHMMSS 北京时间;**全部字段索引随之变化,解析与测试整体重写**);(b) 维持简版,`as_of` 如实留 None,`source="tencent_a"`。倾向 (b) 先行、(a) 若做则另立任务;**禁止用抓取时刻伪造 as_of**。
+- [ ] `_quote_quality`:`as_of` 改为所有 Quote 真实 `as_of` 中的最旧值(最保守口径);`freshness` 由该值经 `_freshness_from_datetime` 判定;全部 Quote 无 as_of 时 `as_of=None`、`freshness="unknown"`——**禁止回退 generated_at 冒充**。
+- [ ] 新增测试:带昨日 `as_of` 的 quote 经 `record()` 归属昨日交易日(激活 history_cache 死代码路径);finnhub mock 含 `t` → as_of 正确;混合 as_of → quote_quality 取最旧且 freshness 正确;全无 as_of → unknown。
+
+**验收**:`data_quality.quotes.as_of` 不再等于 `generated_at`;用收盘后时间戳构造的行情,freshness 不为 fresh。
+
+### D0-3 历史回填结果显性上报 + 失败可重试
+
+**文件**:`stocks/engine/__init__.py`(552-564 附近)、`stocks/engine/history_provider.py`、`stocks/engine/context_builder.py`、`stocks/DATA_MODEL.md`
+**问题**:`warm_history_cache` 的返回值(每标的回填行数)在调用点被丢弃;**warm 全部失败也执行 `self._history_warmed = True`,进程内永不重试**;`data_quality` 无任何回填状态节点——审计方只能靠翻磁盘缓存文件才发现 A 股 6/6 回填失败,系统自己不上报。
+**证据**:`.local/history/` 中 a_* 六文件各 1 条 realtime 记录 vs us/crypto 文件 60-61 条 provider 日 K,同一次运行落差如此之大,当次 test_run 的 data_quality 却无迹可寻。
+
+- [ ] 【验证前提】确认 `stocks/engine/__init__.py:555` 的 `await warm_history_cache(...)` 结果未接收;确认 `_history_warmed = True` 在 try 内无条件执行。
+- [ ] warm 结果(每标的:回填行数/所用源/失败原因)保存在 engine 实例,经 `build_context` 注入 `data_quality` 新节点 `history_backfill`(整体 status:`ok/partial/failed` + per-instrument 明细)。
+- [ ] 回填全部为 0 行时不置 `_history_warmed=True`,下次 build 重试;为避免每次 build 都打满上游,加最小退避(如距上次失败 < 10 分钟内不重试),策略在完成记录注明。
+- [ ] `data_quality` 新增节点属于 AnalysisContext 内容变化:核对 `stocks/DATA_MODEL.md` 对 data_quality 的描述粒度,若列节点清单则同步;`schema_version` 是否升级由"DATA_MODEL 是否把节点清单列为 schema 约束"决定,判断依据写入完成记录(红线:变更 schema 必须三处同步)。
+- [ ] 新增测试:warm 全失败 → `history_backfill.status="failed"` 且技术指标节点非 ok(与 D0-1 联动);warm 部分成功 → partial。
+
+**验收**:模拟 A 股回填失败,`data_quality` 一眼可见 history_backfill 失败明细,prompt 中对应标的带"指标不可用"标注。
+
+### D0-4 fallback 配置语义修正(降级链真实化)
+
+**文件**:`stocks/config/engine.yaml`(25-30 行)、`stocks/engine/context_builder.py`、`tests/engine/test_fetchers.py` 或 `test_context_builder.py`
+**问题**:`fallback.us: [finnhub]` 的备用源就是主源自己(markets.json 中 us 主源即 finnhub),`_pick_fallback_provider` 按名排除已失败主源后实际候选为空,`fallback_success` 分支对 us 永远无法触发;`crypto` 在 fallback 映射中连键都没有。配置制造了"有降级链"的错觉。
+
+- [ ] 【验证前提】读 engine.yaml 25-30 行与 `stocks/config/markets.json`,确认 us/crypto 主源均为 finnhub、fallback 现状如上。
+- [ ] engine.yaml:删除 `us: [finnhub]` 自我回退;显式写 `us: []`、`crypto: []`,注释"当前无独立第二源,接入见 D1-2"。
+- [ ] `_quote_quality.by_market` 每市场增加 `single_source: true/false`(该市场 fallback 候选去除主源后为空即 true);既有 `us_quotes: "single_source_failed"` 逻辑保持兼容。
+- [ ] 新增测试:us/crypto 的 by_market 含 `single_source: true`,a 为 false;配置空列表不导致降级链代码报错。
+
+**验收**:`data_quality` 自己承认单源事实;`engine.yaml` 中不存在指向主源自身的假降级配置。
+
+**D0 出口验收**:D0-1~D0-4 全部完成后,真实网络跑一次全流程 `build_context`(含行情+新闻),把 `data_quality` 输出与 `.local/history/` 磁盘实况人工比对一致(回填失败可见、as_of 真实、缺数据指标非 ok),留存输出。**通过后才能开工 D1。**
+
+### D1-1 A 股历史 K 线接入腾讯第二源 + 回填降级链
+
+**文件**:`stocks/engine/history_provider.py`、`tests/engine/test_history_provider.py`
+**证据(2026-07-02 实测)**:eastmoney push2his 从用户网络 6/6 RemoteDisconnected(40-60ms 即断,疑反爬/限流,当日更早时段曾成功——间歇性失败);腾讯 `web.ifzq.gtimg.cn` 日 K 6/6 成功(60-61 bars);新浪接口通但数据窗口异常(每支仅 2 bars),**不选新浪**。
+
+- [ ] 【验证前提】重跑 `python3 .local/verify_data_sources.py` 第 1、2 节确认两源当下状态(eastmoney 恢复与否都不改变本任务必要性——间歇性失败正是要冗余的理由)。
+- [ ] 新增 `TencentKLineProvider`:`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sh|sz}{code},day,,,{lookback},qfq`;解析 `data.{symbol}.qfqday`(缺省回落 `day`)数组 `[日期,开,收,高,低,成交量]`;列对齐 `_HISTORY_COLUMNS`,`prev_close` 按前一根收盘推导(与 EastmoneyKLineProvider 同法),`data_source="provider"`;sh/sz 前缀判断复用 `tencent_a.py` 的 `_prefix` 规则(勿重新发明)。
+- [ ] `CompositeKLineProvider` 的 a 市场路由改为降级链:eastmoney → tencent;产出与 fetchers 降级记录同构的回填记录,供 D0-3 的 `history_backfill` 消费(记录用了哪个源、是否 fallback)。
+- [ ] 新增测试:腾讯响应 fixture 解析正确(含 qfqday/day 两种);主源空 → 备源成功 → 记录 fallback;两源全失败 → 空 DataFrame + 失败记录。
+
+**验收**:模拟 eastmoney 失败,A 股回填仍 6/6 成功且 `history_backfill` 记录降级来源;真实网络冒烟一次。
+
+### D1-2 美股/加密第二行情与历史源(暂缓项已解禁,见 PLAN 决策日志)
+
+**文件**:`stocks/engine/history_provider.py`、`stocks/providers/`(新增)、`stocks/config/engine.yaml`、`stocks/config/markets.json`
+**证据(2026-07-02 实测)**:Yahoo chart 从用户网络全线 HTTP 429(日 K 0/5、宏观 0/6)——**美股/crypto 历史回填主链路当前已断**,磁盘上 60 根缓存是早前成功的遗产;Binance `/api/v3` 可达(354ms);Finnhub `/quote` 正常。
+
+- [ ] 【验证前提·硬门槛】用现有 key 实测 `GET https://finnhub.io/api/v1/stock/candle?symbol=AAPL&resolution=D&from=<60天前unix>&to=<今unix>&token=<key>`:免费 tier 若返回 403/premium 提示,美股历史源选 **Stooq**(`https://stooq.com/q/d/l/?s=aapl.us&i=d`,免 key 日 K CSV,日期升序);若可用则选 **Finnhub candle**。**此前提未实测前禁止动工,两个分支实现不同。**结果写入完成记录。
+- [ ] crypto 历史:新增 `BinanceKLineProvider`(`/api/v3/klines?symbol=BTCUSDT&interval=1d&limit={lookback}`,免 key;kline 数组含开收高低量与收盘时间戳)为主源,Yahoo 降为备源;`CompositeKLineProvider` crypto 路由改降级链。
+- [ ] 美股历史:按验证前提结果接 Finnhub candle 或 Stooq 为主源,Yahoo 降为备源;同样走降级链 + 回填记录。
+- [ ] crypto 实时:新增 Binance 实时 provider(`/api/v3/ticker/24hr`,响应 `closeTime` → `as_of`)注册为 crypto 的 fallback(engine.yaml `crypto: [binance]`、markets.json providers 同步追加)。
+- [ ] 美股实时:维持 finnhub 主源 + 既有 stale 历史兜底;若历史源选了 Stooq,允许追加 Stooq 延迟报价为显式 fallback(必须 `stale=true`、`as_of` 取其 date/time 列——延迟数据禁止伪装实时)。
+- [ ] 新增测试:每个新 provider fixture 单测;crypto 降级链测试;engine.yaml/markets.json 配置一致性测试。
+
+**验收**:重跑诊断脚本,在 Yahoo 429 前提下 us/crypto 历史仍能回填 ≥ 40 bars;crypto 实时在 finnhub mock 失败时由 binance 兜住且 `fallback_success` 记录正确。
+
+### D1-3 宏观数据换权威源(FRED 主链 + 报价代理降级)
+
+**文件**:`stocks/engine/macro_data.py`、`stocks/engine/context_builder.py`、`stocks/DATA_MODEL.md`、`tests/engine/test_macro_data.py`
+**证据(2026-07-02 实测)**:Yahoo 宏观 6 指标 0/6(HTTP 429);FRED `fredgraph.csv` 可达免 key(276ms)。现另有设计缺陷:`CompositeMacroProvider` "第一个提供者有任意字段即整体返回",Yahoo 只回 1 个字段也会短路后续兜底。
+
+- [ ] 现有 6 指标改为按字段降级链,FRED 为主源(序列映射:`VIXCLS`→vix、`DGS10`→us_10y_yield、`DTWEXBGS`→dxy、`DEXCHUS`→usd_cny(注意该序列是 CNY per USD,核对方向)、`DCOILWTICO`→crude_oil;gold 无现行 FRED 序列 → Stooq `xauusd` 或维持 Yahoo,失败如实记 errors),Yahoo 降为备源,static_config 兜底不变。
+- [ ] `CompositeMacroProvider` 改为**按字段合并**:主源缺的字段由备源补,而非首个非空快照短路。
+- [ ] 每字段携带 `source` 与 `as_of`(FRED 为日度序列的观测日期,**它不是实时值,必须如实标注日期,禁止冒充实时**);`MacroSnapshot` 扩展 `field_sources`;`_macro_quality` 的 as_of/freshness 按字段级最旧值计算。
+- [ ] 新增官方统计组(月度,磁盘缓存 24h):`CPIAUCSL`→cpi(换算同比,换算逻辑加单测)、`UNRATE`→us_unemployment、`FEDFUNDS`→fed_funds_rate,归入 `official_stats` 子结构;raw_prompt 宏观段分组展示"市场定价代理"与"官方统计(滞后月度)"。
+- [ ] `macro_snapshot` 结构扩展属于 AnalysisContext schema 变更:`schema_version` 升 **v7**,红线三处同步(`stocks/DATA_MODEL.md` + context_builder/models + schema 断言测试)。
+- [ ] 新增测试:FRED CSV fixture 解析;字段级降级合并;official_stats 缓存命中;schema v7 三处同步断言。
+
+**验收**:mock Yahoo 全 429 时宏观仍 ≥ 5 字段有值且逐字段来源可溯;LLM 上下文能区分市场代理与官方统计;全局验收通过。
+
+**D1 出口验收**:重跑 `.local/verify_data_sources.py` + 真实全流程 build_context,对照 D0 出口留存输出:A 股/美股/crypto 历史、宏观在任一主源失败下仍有数据且降级全程可见。**通过后才能开工 D2。**
+
+### D2-1 财报日历注入(Finnhub 免费 tier,已实测可用)
+
+**文件**:`stocks/engine/market_events.py` 或新增独立模块、`stocks/engine/context_builder.py`、`tests/`
+
+- [ ] watchlist 中 us 标的:`/calendar/earnings?from=<今-7d>&to=<今+14d>&symbol=`,逐标的查询(复用 finnhub provider 的节流);结果缓存 12h(磁盘,gitignore 目录)。
+- [ ] 注入两处:`market_events`(event_type=`earnings`,urgency 按临近程度)与 raw_prompt 独立【财报日历】段;失败在 `data_quality` 标注,不阻塞主流程。
+- [ ] 新增测试:fixture 解析、临近财报进入事件、接口失败降级。
+
+**验收**:真实跑通一次,持仓相关财报日出现在上下文;失败场景 data_quality 可见。
+
+### D2-2 公司公告一手源(仅 watchlist 范围,不做全市场)
+
+**文件**:`stocks/providers/`(新增两个)、`stocks/engine/news_sources.py` 装配、`tests/`
+
+- [ ] 美股:SEC EDGAR submissions API(`data.sec.gov/submissions/CIK{10位}.json`;**UA 必须带联系方式标识,遵守 10 req/s 限速**;watchlist 内 us 个股映射 CIK,取最近 30 天 8-K/10-Q/10-K)。
+- [ ] A 股:巨潮资讯公告查询(POST `www.cninfo.com.cn/new/hisAnnouncement/query`,form 表单,按 watchlist 代码查询;实测域名可达,接口字段以实抓为准先写 fixture)。
+- [ ] 两者实现为 NewsProvider(`source_type="filing"`),汇入现有 NewsAggregator 去重排序;单源失败不阻塞。
+- [ ] 新增测试:fixture 解析;聚合后 filing 与 rss 共存去重正常。
+
+**验收**:真实网络冒烟各拉到 ≥1 条持仓相关公告;失败时 data_quality.news 的 sources 计数如实反映。
+
+### D2-3 持仓定向新闻(scope 标注)
+
+**文件**:`stocks/config/news_sources.json`、`stocks/engine/news_sources.py`、`stocks/engine/market_events.py`、`tests/`
+
+- [ ] 为 watchlist 每标的生成 Google News RSS 定向 feed(复用 RSSNewsProvider,query=`{名称} OR {代码}`,hl/gl 按市场);源配置支持模板化生成而非手写 N 条。
+- [ ] `NewsItem` 增加 `scope` 字段(`holding`/`general`);`MarketEventExtractor` 持仓匹配优先消费 holding 源,关键词匹配保留为增强。
+- [ ] 总量控制:定向源纳入现有 `max_source_items`/`max_items` 机制,防止淹没 general 源。
+- [ ] `NewsItem` 字段变更同步 `stocks/DATA_MODEL.md` 与测试(若 DATA_MODEL 列出 NewsItem schema)。
+- [ ] 新增测试:模板生成源正确;scope 标注与优先匹配;去重与总量上限。
+
+**验收**:上下文中持仓相关新闻占比显著提升且带 scope 标注;总条数不超上限。
+
+**Phase D 出口标准**:D0/D1/D2 全部带可复现证据完成;重跑 `.local/verify_data_sources.py` 与真实全流程 build_context,`data_quality` 满足:任一数据源失败均显性可见、所有 as_of 为真实源时间或如实 unknown、缺数据指标绝不报 ok、单源风险自我声明;对照 VISION 成功标准第 4、5 条各留一条证据。
 
 ---
 
