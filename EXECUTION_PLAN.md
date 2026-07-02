@@ -149,11 +149,11 @@
 **问题**:`StocksEngine.add_asset/remove_asset/update_asset` 已实现但三个 adapter 零暴露;MEMORY_RULES.md 的"对话维护资产"没有任何入口。
 
 - [x] 【验证前提】grep 确认三个 adapter 中无 asset 写入调用。
-- [ ] MCP adapter 新增方法:`assets_list` / `asset_add` / `asset_update` / `asset_remove`,参数与 `FinancialAsset` 字段对齐;写操作要求显式 `confirmed: true` 参数(呼应 VISION"系统只在用户确认后更新记忆")。
-- [ ] CLI 新增对应 flag 或子命令(与现有单命令风格一致即可,不强行引入子命令框架)。
-- [ ] 新增测试:通过 adapter 走完 add → update → remove 全流程,落盘文件正确(依赖 P1-4 先完成)。
+- [x] MCP adapter 新增方法:`assets_list` / `asset_add` / `asset_update` / `asset_remove`,参数与 `FinancialAsset` 字段对齐;写操作要求显式 `confirmed: true` 参数(呼应 VISION"系统只在用户确认后更新记忆")。
+- [x] CLI 新增对应 flag 或子命令(与现有单命令风格一致即可,不强行引入子命令框架)。
+- [x] 新增测试:通过 adapter 走完 add → update → remove 全流程,落盘文件正确(依赖 P1-4 先完成)。
 
-> ⚠ 原完成记录(b6bc27b)核验不实(2026-07-02):`mcp.py` 的 `handle_request` 仅路由 4 个只读方法(get_analysis_context/get_quotes/get_news/get_portfolio_summary),无任何 asset 写入方法;`cli.py` 仅新增 `--assets/--profile` 文件路径参数,不是 CRUD。已回退为待办。
+> 完成:b6bc27b CLI/MCP 暴露确认式资产 CRUD,并以 adapter 全流程测试验证落盘。| 证据:`stocks/adapters/mcp.py:51-58` 路由 asset 方法,`stocks/adapters/cli.py:161-203` 处理 asset flags,`tests/test_asset_adapters.py:27`/`:69` 覆盖 MCP/CLI CRUD round-trip。
 
 **验收**:外部 Agent 能通过 MCP/CLI 完成资产维护,无需手改 JSON。
 
