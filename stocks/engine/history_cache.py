@@ -24,6 +24,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -44,10 +45,17 @@ _COLUMNS = [
     "low",
     "prev_close",
     "volume_lot",
+    "data_source",
 ]
 
 # 内存单标的上限（防止高频记录导致内存膨胀）
 _MEMORY_MAX_ROWS = 500
+_MARKET_TIMEZONES = {
+    "a": ZoneInfo("Asia/Shanghai"),
+    "us": ZoneInfo("America/New_York"),
+    "crypto": timezone.utc,
+}
+_SOURCE_PRIORITY = {"realtime": 0, "unknown": 1, "provider": 2}
 
 
 class HistoryCache:
@@ -100,6 +108,7 @@ class HistoryCache:
             "low": quote.low,
             "prev_close": quote.prev_close,
             "volume_lot": quote.volume_lot,
+            "data_source": "realtime",
         }
 
         async with self._lock:
@@ -158,17 +167,23 @@ class HistoryCache:
         """
         key = self._key(instrument)
 
-        missing = set(_COLUMNS) - set(df.columns)
+        required_columns = set(_COLUMNS) - {"data_source"}
+        missing = required_columns - set(df.columns)
         if missing:
             raise ValueError(f"预热数据缺少列: {missing}")
 
         # 确保 timestamp 为 datetime 类型
         df = df.copy()
+        if "data_source" not in df.columns:
+            df["data_source"] = "provider"
         if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
             df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
 
         async with self._lock:
-            self._memory[key] = df
+            self._memory[key] = self._merge_and_deduplicate(
+                pd.DataFrame(columns=_COLUMNS),
+                df,
+            )
             self._dirty.add(key)
 
         logger.info(f"Warmed {instrument.code} with {len(df)} rows")
@@ -249,39 +264,54 @@ class HistoryCache:
             self._memory[key] = pd.DataFrame(columns=_COLUMNS)
 
         df = self._memory[key]
-        ts = row["timestamp"]
-        today = ts.date()
-
-        # 同一天去重：删除今天已有记录，保留最新
-        if not df.empty and pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
-            df_dates = df["timestamp"].dt.date
-            df = df[df_dates != today]
-
-        # 追加新记录
+        # 同一交易日只保留一根 bar；provider 日 K 优先于实时快照。
         new_df = pd.DataFrame([row], columns=_COLUMNS)
-        df = pd.concat([df, new_df], ignore_index=True)
+        df = self._merge_and_deduplicate(df, new_df)
 
         # 内存截断
         if len(df) > _MEMORY_MAX_ROWS:
             df = df.iloc[-_MEMORY_MAX_ROWS:].reset_index(drop=True)
 
-        df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", utc=True)
         self._memory[key] = df
         self._dirty.add(key)
 
     def _merge_and_deduplicate(
         self, disk_df: pd.DataFrame, mem_df: pd.DataFrame
     ) -> pd.DataFrame:
-        """合并磁盘和内存数据，按 timestamp 去重（内存优先）"""
-        if disk_df.empty:
-            return mem_df.copy()
-        if mem_df.empty:
-            return disk_df.copy()
-
-        combined = pd.concat([disk_df, mem_df], ignore_index=True)
-        combined = combined.drop_duplicates(subset=["timestamp"], keep="last")
-        combined = combined.sort_values("timestamp").reset_index(drop=True)
-        return combined
+        """按市场交易日合并；同日 provider 日 K 优先，其次取最新记录。"""
+        frames = [frame.copy() for frame in (disk_df, mem_df) if not frame.empty]
+        if not frames:
+            return pd.DataFrame(columns=_COLUMNS)
+        for frame in frames:
+            if "data_source" not in frame.columns:
+                frame["data_source"] = "unknown"
+            frame["timestamp"] = pd.to_datetime(
+                frame["timestamp"],
+                format="ISO8601",
+                utc=True,
+            )
+        combined = pd.concat(frames, ignore_index=True)
+        combined["_trade_date"] = [
+            timestamp.tz_convert(_MARKET_TIMEZONES.get(market, timezone.utc)).date()
+            for timestamp, market in zip(combined["timestamp"], combined["market"])
+        ]
+        combined["_source_priority"] = (
+            combined["data_source"].map(_SOURCE_PRIORITY).fillna(1)
+        )
+        combined = combined.sort_values(
+            ["_trade_date", "_source_priority", "timestamp"]
+        )
+        combined = combined.drop_duplicates(
+            subset=["market", "code", "_trade_date"],
+            keep="last",
+        )
+        return (
+            combined.drop(columns=["_trade_date", "_source_priority"])
+            .sort_values("timestamp")
+            .reindex(columns=_COLUMNS)
+            .reset_index(drop=True)
+        )
 
     async def _save_to_disk_impl(self, instrument: Instrument, df: pd.DataFrame) -> None:
         """无锁版本：原子写入 JSON 到磁盘"""
@@ -312,7 +342,12 @@ class HistoryCache:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             df = pd.DataFrame(data["records"], columns=data["columns"])
-            df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
+            if "data_source" not in df.columns:
+                df["data_source"] = "unknown"
+            df = df.reindex(columns=_COLUMNS)
+            df["timestamp"] = pd.to_datetime(
+                df["timestamp"], format="ISO8601", utc=True
+            )
             return df
 
         try:
@@ -330,7 +365,12 @@ class HistoryCache:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             df = pd.DataFrame(data["records"], columns=data["columns"])
-            df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601")
+            if "data_source" not in df.columns:
+                df["data_source"] = "unknown"
+            df = df.reindex(columns=_COLUMNS)
+            df["timestamp"] = pd.to_datetime(
+                df["timestamp"], format="ISO8601", utc=True
+            )
             df = df[df["timestamp"] >= cutoff]
             return df
 

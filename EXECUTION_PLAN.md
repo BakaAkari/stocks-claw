@@ -108,9 +108,11 @@
 **文件**:`stocks/engine/exchange_rate.py`
 **问题**:USD/CNY 失败时硬编码 7.2 且不标注;HKD 等币种按 1:1 换算仅打 warning——估值层面的实质错误。
 
-- [ ] 兜底策略改为:优先用本地缓存的上次成功汇率(带时间戳),并在结果中携带 `source: "stale_cache"|"hardcoded_fallback"` 标记,透传进 `data_quality`。
-- [ ] HKD 等未支持币种:禁止静默 1:1。要么接入该币种汇率,要么该资产标记 `conversion: "failed"`、不计入 CNY 合计,并在 `data_quality` 报告。
-- [ ] 新增测试:网络失败时返回 stale 标记;HKD 资产不再按 1:1 汇入合计。
+- [x] 兜底策略改为:优先用本地缓存的上次成功汇率(带时间戳),并在结果中携带 `source: "stale_cache"|"hardcoded_fallback"` 标记,透传进 `data_quality`。
+- [x] HKD 等未支持币种:禁止静默 1:1。要么接入该币种汇率,要么该资产标记 `conversion: "failed"`、不计入 CNY 合计,并在 `data_quality` 报告。
+- [x] 新增测试:网络失败时返回 stale 标记;HKD 资产不再按 1:1 汇入合计。
+
+> 完成:992978e 汇率结果携带来源与状态，失败换算不计入合计，所有降级在 data_quality 可见。
 
 **验收**:任何非精确换算在 `data_quality` 中可见,LLM 上下文不再收到无标注的错误估值。
 

@@ -209,7 +209,7 @@ class TestDiskPersistence:
         assert len(df) == 1
 
     async def test_disk_merge_deduplicate(self, temp_dir, sample_instrument):
-        """内存与磁盘合并时按 timestamp 去重（内存优先）"""
+        """内存与磁盘的同交易日实时记录只保留最新一条。"""
         cache1 = HistoryCache(base_dir=temp_dir, ttl=86400)
         q1 = Quote(
             instrument=sample_instrument, price=10.0,
@@ -229,12 +229,84 @@ class TestDiskPersistence:
         df = await cache2.get_history(sample_instrument, lookback_bars=5, include_disk=True)
         await cache2.close()
 
-        # 磁盘数据和内存数据时间戳不同，合并后保留两条（精确去重）
-        # 但 _record_impl 已去重内存中的同一天数据，所以只有 1 条内存 + 1 条磁盘 = 2 条
-        assert len(df) == 2
-        # 内存数据优先（保留 q2 的价格）
+        assert len(df) == 1
         latest = df.iloc[-1]
         assert latest["price"] == 11.0
+
+    async def test_provider_daily_bar_beats_same_day_realtime(
+        self,
+        cache,
+        sample_instrument,
+    ):
+        """同一交易日的 provider 日 K 优先于实时 record。"""
+        now = datetime.now(timezone.utc)
+        provider_row = {
+            "timestamp": now.replace(hour=0, minute=0, second=0, microsecond=0),
+            "code": sample_instrument.code,
+            "name": sample_instrument.name,
+            "market": sample_instrument.market,
+            "price": 10.0,
+            "open_price": 9.8,
+            "high": 10.2,
+            "low": 9.7,
+            "prev_close": 9.9,
+            "volume_lot": 100,
+        }
+        await cache.warm(sample_instrument, pd.DataFrame([provider_row]))
+        await cache.record(
+            sample_instrument,
+            Quote(
+                instrument=sample_instrument,
+                price=11.0,
+                open_price=10.5,
+                high=11.2,
+                low=10.4,
+                prev_close=10.0,
+                volume_lot=50,
+            ),
+        )
+
+        result = await cache.get_history(sample_instrument, lookback_bars=5)
+
+        assert len(result) == 1
+        assert result.iloc[0]["price"] == 10.0
+        assert result.iloc[0]["data_source"] == "provider"
+
+    def test_us_market_dedup_uses_new_york_trade_date(self, temp_dir):
+        """跨 UTC 日期但同一纽约交易日的记录必须合并。"""
+        cache = HistoryCache(base_dir=temp_dir, ttl=86400)
+        base = {
+            "code": "AAPL",
+            "name": "Apple",
+            "market": "us",
+            "open_price": 100.0,
+            "high": 102.0,
+            "low": 99.0,
+            "prev_close": 100.0,
+            "volume_lot": 10,
+        }
+        provider = pd.DataFrame([
+            {
+                **base,
+                "timestamp": datetime(2026, 7, 1, 14, 30, tzinfo=timezone.utc),
+                "price": 101.0,
+                "data_source": "provider",
+            }
+        ])
+        realtime = pd.DataFrame([
+            {
+                **base,
+                "timestamp": datetime(2026, 7, 2, 0, 30, tzinfo=timezone.utc),
+                "price": 103.0,
+                "data_source": "realtime",
+            }
+        ])
+
+        result = cache._merge_and_deduplicate(provider, realtime)
+
+        assert len(result) == 1
+        assert result.iloc[0]["price"] == 101.0
+        assert result.iloc[0]["data_source"] == "provider"
 
 
 # ------------------------------------------------------------------
