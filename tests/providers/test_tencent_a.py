@@ -1,8 +1,4 @@
-"""腾讯 Provider 测试 — 覆盖正常、异常、降级场景
-
-Mock 策略：patch urllib.request.urlopen，控制返回值，
-不依赖真实网络。
-"""
+"""腾讯 A 股完整行情格式解析测试。"""
 
 from __future__ import annotations
 
@@ -13,216 +9,158 @@ import pytest
 from stocks.domain.models import Instrument
 from stocks.providers.tencent_a import TencentAQuoteProvider
 
-# ------------------------------------------------------------------
-# Mock 辅助
-# ------------------------------------------------------------------
+# 2026-07-02 真实完整格式响应；量额已与同一时点东方财富响应逐字段核对：
+# index 6 == f5（成交量），index 37 == f6 / 10000（成交额万元）。
+FULL_SH_000300 = (
+    'v_sh000300="1~沪深300~000300~4812.30~4958.98~4865.17~343243758~0~0~0.00~0~0.00~'
+    '0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~~20260702161406~'
+    '-146.68~-2.96~4896.99~4800.48~4812.30/343243758/1027796834233~343243758~102779683~'
+    '1.03~14.24~~4896.99~4800.48~1.95~523762.89~553320.25~0.00~-1~-1~1.03~0~4856.49~'
+    '~~~~~102779683.4233~0.0000~0~ ~ZS~3.94~-4.14~~~~5064.27~3945.14~-2.42~-2.56~7.44~'
+    '3341313124466~~-4.82~5.76~3341313124466~~~22.03~0.07~~CNY~0~~0.00~0~";'
+)
+FULL_SH_518880 = (
+    'v_sh518880="1~黄金ETF华安~518880~8.475~8.271~8.425~5149790~2668691~2481099~8.474~'
+    '40221~8.473~624~8.472~3840~8.471~892~8.470~453~8.475~478~8.476~1044~8.477~856~'
+    '8.478~343~8.479~689~~20260702161439~0.204~2.47~8.484~8.397~'
+    '8.475/5149790/4346984456~5149790~434698~5.01~~~8.484~8.397~1.05~870.58~870.58~'
+    '0.00~9.098~7.444~1.31~42620~8.441~~~~~~434698.4456~0.0000~0~ ~ETF~-8.88~2.27~~~~'
+    '11.977~7.304~-5.38~-8.68~-12.97~10272340800~10272340800~86.21~3.86~10272340800~'
+    '0.21~8.4573~14.62~0.08~8.2753~CNY~0~___D__F__Y~8.469~8871~";'
+)
+
 
 class FakeResponse:
-    """模拟 urllib 响应对象 — 支持 with 上下文管理器"""
     def __init__(self, data: bytes):
         self._data = data
+
     def read(self):
         return self._data
+
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         pass
 
 
-def _make_mock_response(raw_bytes: bytes):
-    """构造 mock urllib 响应对象"""
-    return FakeResponse(raw_bytes)
+def _response(*lines: str) -> FakeResponse:
+    return FakeResponse("\n".join(lines).encode("gbk"))
 
 
-# ------------------------------------------------------------------
-# 正常场景
-# ------------------------------------------------------------------
+@pytest.fixture
+def provider():
+    return TencentAQuoteProvider()
 
 
-class TestTencentAQuoteProviderNormal:
-    """腾讯 Provider 正常数据返回场景"""
+async def test_fetch_single_full_quote_with_ohlc_and_real_as_of(provider):
+    instrument = Instrument("000300", "沪深300", "a", "sh_index")
 
-    @pytest.fixture
-    def provider(self):
-        return TencentAQuoteProvider()
+    with patch("urllib.request.urlopen", return_value=_response(FULL_SH_000300)):
+        quote = await provider.fetch(instrument)
 
-    @pytest.mark.asyncio
-    async def test_fetch_single_quote(self, provider):
-        """获取单只标的行情 — 沪深300"""
-        instrument = Instrument(code="000300", name="沪深300", market="a", exchange="sz_index")
-
-        # 腾讯返回格式：v_s_sz000300="1~HS300~000300~3542.33~12.45~0.35~..."
-        # 使用 ASCII 名称避免 GBK 解码测试中的编码问题
-        raw = b'v_s_sz000300="1~HS300~000300~3542.33~12.45~0.35~1000~2000~3540~3550~3530~"'
-
-        with patch("urllib.request.urlopen", return_value=_make_mock_response(raw)):
-            quote = await provider.fetch(instrument)
-
-        assert quote is not None
-        assert quote.instrument.code == "000300"
-        assert quote.price == 3542.33
-        assert quote.change == 12.45
-        assert quote.pct_change == 0.35
-
-    @pytest.mark.asyncio
-    async def test_fetch_batch_quotes(self, provider):
-        """批量获取行情 — 多只标的"""
-        instruments = [
-            Instrument(code="000300", name="沪深300", market="a", exchange="sz_index"),
-            Instrument(code="518880", name="黄金ETF", market="a", exchange="sh"),
-        ]
-
-        raw = (
-            b'v_s_sz000300="1~HS300~000300~3542.33~12.45~0.35~1000~2000~3540~3550~3530~";\n'
-            b'v_s_sh518880="1~GoldETF~518880~4.55~-0.02~-0.44~500~1000~4.56~4.57~4.53~"'
-        )
-
-        with patch("urllib.request.urlopen", return_value=_make_mock_response(raw)):
-            quotes = await provider.fetch_batch(instruments)
-
-        assert len(quotes) == 2
-        assert quotes[0].instrument.code == "000300"
-        assert quotes[0].price == 3542.33
-        assert quotes[1].instrument.code == "518880"
-        assert quotes[1].price == 4.55
-
-    @pytest.mark.asyncio
-    async def test_sh_exchange_prefix(self, provider):
-        """上海交易所前缀正确性"""
-        inst = Instrument(code="600519", name="贵州茅台", market="a", exchange="sh")
-        symbol = provider._build_symbol(inst)
-        assert symbol == "s_sh600519"
-
-    @pytest.mark.asyncio
-    async def test_sz_exchange_prefix(self, provider):
-        """深圳交易所前缀正确性"""
-        inst = Instrument(code="000001", name="平安银行", market="a", exchange="sz")
-        symbol = provider._build_symbol(inst)
-        assert symbol == "s_sz000001"
-
-    @pytest.mark.asyncio
-    async def test_fallback_code_prefix(self, provider):
-        """无 exchange 时，按代码前缀判断 — 5/6/9 开头为上海"""
-        inst = Instrument(code="600000", name="浦发银行", market="a")
-        assert provider._prefix(inst) == "sh"
-
-        inst = Instrument(code="000002", name="万科", market="a")
-        assert provider._prefix(inst) == "sz"
+    assert quote is not None
+    assert quote.instrument is instrument
+    assert quote.price == 4812.30
+    assert quote.prev_close == 4958.98
+    assert quote.open_price == 4865.17
+    assert quote.change == -146.68
+    assert quote.pct_change == -2.96
+    assert quote.high == 4896.99
+    assert quote.low == 4800.48
+    assert quote.volume_lot == 343243758
+    assert quote.amount_10k == 102779683
+    assert quote.source == "tencent_a"
+    assert quote.as_of == "2026-07-02T08:14:06+00:00"
 
 
-# ------------------------------------------------------------------
-# 异常场景
-# ------------------------------------------------------------------
+async def test_fetch_batch_full_quotes(provider):
+    instruments = [
+        Instrument("000300", "沪深300", "a", "sh_index"),
+        Instrument("518880", "黄金ETF", "a", "sh"),
+    ]
+
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_response(FULL_SH_000300, FULL_SH_518880),
+    ):
+        quotes = await provider.fetch_batch(instruments)
+
+    assert [quote.instrument for quote in quotes] == instruments
+    assert quotes[1].price == 8.475
+    assert quotes[1].prev_close == 8.271
+    assert quotes[1].open_price == 8.425
+    assert quotes[1].high == 8.484
+    assert quotes[1].low == 8.397
+    assert quotes[1].volume_lot == 5149790
+    assert quotes[1].amount_10k == 434698
+    assert quotes[1].as_of == "2026-07-02T08:14:39+00:00"
 
 
-class TestTencentAQuoteProviderErrors:
-    """腾讯 Provider 异常处理场景"""
-
-    @pytest.fixture
-    def provider(self):
-        return TencentAQuoteProvider()
-
-    @pytest.mark.asyncio
-    async def test_network_timeout(self, provider):
-        """网络超时 — 返回 None"""
-        inst = Instrument(code="000300", name="沪深300", market="a")
-
-        with patch("urllib.request.urlopen", side_effect=TimeoutError("连接超时")):
-            quote = await provider.fetch(inst)
-
-        assert quote is None
-
-    @pytest.mark.asyncio
-    async def test_empty_response(self, provider):
-        """空响应 — 返回 None"""
-        inst = Instrument(code="000300", name="沪深300", market="a")
-
-        with patch("urllib.request.urlopen", return_value=_make_mock_response(b"")):
-            quote = await provider.fetch(inst)
-
-        assert quote is None
-
-    @pytest.mark.asyncio
-    async def test_malformed_response(self, provider):
-        """畸形响应（无 =" 分隔符）— 解析为 None"""
-        inst = Instrument(code="000300", name="沪深300", market="a")
-
-        with patch("urllib.request.urlopen", return_value=_make_mock_response(b'random text without delimiter')):
-            quote = await provider.fetch(inst)
-
-        assert quote is None
-
-    @pytest.mark.asyncio
-    async def test_incomplete_fields(self, provider):
-        """字段不足（parts < 10）— 解析为 None"""
-        inst = Instrument(code="000300", name="沪深300", market="a")
-
-        with patch("urllib.request.urlopen", return_value=_make_mock_response(b'v_s_sz000300="1~HS300~000300~3542.33"')):
-            quote = await provider.fetch(inst)
-
-        assert quote is None
-
-    @pytest.mark.asyncio
-    async def test_gbk_decoding_error(self, provider):
-        """GBK 解码错误 — 使用 errors='replace' 继续解析"""
-        inst = Instrument(code="000300", name="沪深300", market="a")
-        # 包含非法 GBK 字节序列，但结构正确
-        raw = b'v_s_sz000300="1~HS300~000300~3542.33~12.45~0.35~1000~2000~3540~3550~3530~"'
-
-        with patch("urllib.request.urlopen", return_value=_make_mock_response(raw)):
-            quote = await provider.fetch(inst)
-
-        # 即使名称解码乱码，价格等字段仍应能解析
-        assert quote is not None
-        assert quote.price == 3542.33
-
-    @pytest.mark.asyncio
-    async def test_batch_partial_failure(self, provider):
-        """批量获取时部分失败 — 返回成功部分，不阻断"""
-        instruments = [
-            Instrument(code="000300", name="沪深300", market="a"),
-            Instrument(code="INVALID", name="无效代码", market="a"),
-        ]
-        # 只有第一条有效
-        raw = b'v_s_sz000300="1~HS300~000300~3542.33~12.45~0.35~1000~2000~3540~3550~3530~"'
-
-        with patch("urllib.request.urlopen", return_value=_make_mock_response(raw)):
-            quotes = await provider.fetch_batch(instruments)
-
-        # 只返回解析成功的部分
-        assert len(quotes) >= 1
-        assert quotes[0].instrument.code == "000300"
+def test_build_symbol_uses_full_format_without_s_prefix(provider):
+    assert provider._build_symbol(Instrument("600519", "贵州茅台", "a", "sh")) == "sh600519"
+    assert provider._build_symbol(Instrument("000001", "平安银行", "a", "sz")) == "sz000001"
+    assert provider._prefix(Instrument("600000", "浦发银行", "a")) == "sh"
+    assert provider._prefix(Instrument("000002", "万科", "a")) == "sz"
 
 
-# ------------------------------------------------------------------
-# 边界场景
-# ------------------------------------------------------------------
+async def test_network_timeout_returns_none(provider):
+    instrument = Instrument("000300", "沪深300", "a", "sh_index")
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("连接超时")):
+        assert await provider.fetch(instrument) is None
 
 
-class TestTencentAQuoteProviderEdgeCases:
-    """边界条件测试"""
+async def test_empty_response_returns_none(provider):
+    instrument = Instrument("000300", "沪深300", "a", "sh_index")
+    with patch("urllib.request.urlopen", return_value=FakeResponse(b"")):
+        assert await provider.fetch(instrument) is None
 
-    @pytest.fixture
-    def provider(self):
-        return TencentAQuoteProvider()
 
-    def test_empty_instrument_list(self, provider):
-        """空列表批量获取 — 返回腾讯空查询响应（非 None）"""
-        result = provider._fetch_raw_sync([])
-        # 腾讯对空查询返回 v_pv_none_match="1"; 不是 None
-        assert result is not None
+@pytest.mark.parametrize(
+    "line",
+    [
+        "random text without delimiter",
+        'v_sh000300="1~沪深300~000300~4812.30";',
+        'v_sh000300="' + "~".join(["1"] * 37) + '";',
+    ],
+)
+def test_malformed_or_incomplete_line_returns_none(provider, line):
+    assert provider._parse_line(line) is None
 
-    @pytest.mark.asyncio
-    async def test_fetch_batch_empty(self, provider):
-        """空列表 fetch_batch — 返回空列表"""
-        quotes = await provider.fetch_batch([])
-        assert quotes == []
 
-    def test_parse_line_no_instrument_map(self, provider):
-        """无 instrument_map 时解析 — 用代码构造默认 Instrument"""
-        line = 'v_s_sz000300="1~\\u6caa\\u6df1300~000300~3542.33~12.45~0.35~1000~2000~3540~3550~3530~"'
-        quote = provider._parse_line(line)
+def test_invalid_time_keeps_quote_but_as_of_is_none(provider):
+    line = FULL_SH_000300.replace("20260702161406", "20260702")
+    quote = provider._parse_line(line)
 
-        assert quote is not None
-        assert quote.instrument.code == "000300"
-        assert quote.instrument.name == "\\u6caa\\u6df1300"  # 未正确解码，但这是边界
+    assert quote is not None
+    assert quote.price == 4812.30
+    assert quote.as_of is None
+
+
+def test_parse_line_without_instrument_map_builds_instrument(provider):
+    quote = provider._parse_line(FULL_SH_000300)
+
+    assert quote is not None
+    assert quote.instrument.code == "000300"
+    assert quote.instrument.name == "沪深300"
+
+
+async def test_batch_skips_invalid_lines(provider):
+    instruments = [
+        Instrument("000300", "沪深300", "a", "sh_index"),
+        Instrument("INVALID", "无效代码", "a"),
+    ]
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_response(FULL_SH_000300, "invalid"),
+    ):
+        quotes = await provider.fetch_batch(instruments)
+
+    assert len(quotes) == 1
+    assert quotes[0].instrument is instruments[0]
+
+
+async def test_fetch_batch_empty_does_not_request_network(provider):
+    with patch("urllib.request.urlopen") as urlopen:
+        assert await provider.fetch_batch([]) == []
+    urlopen.assert_not_called()

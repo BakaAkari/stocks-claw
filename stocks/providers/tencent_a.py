@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from stocks.domain.models import Instrument, Quote
@@ -37,7 +38,7 @@ class TencentAQuoteProvider(QuoteProvider):
         return "sz"
 
     def _build_symbol(self, instrument: Instrument) -> str:
-        return f"s_{self._prefix(instrument)}{instrument.code}"
+        return f"{self._prefix(instrument)}{instrument.code}"
 
     def _fetch_raw_sync(self, symbols: list[str]) -> Optional[str]:
         """同步请求腾讯接口，返回原始文本。"""
@@ -63,8 +64,28 @@ class TencentAQuoteProvider(QuoteProvider):
         _, raw = line.split('="', 1)
         raw = raw.rstrip('";')
         parts = raw.split("~")
-        if len(parts) < 10:
+        # 完整格式中成交额位于 index 37，因此至少需要 38 个字段。
+        if len(parts) < 38:
             return None
+
+        def _float(value: str) -> Optional[float]:
+            if value in ("", "-"):
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        as_of = None
+        raw_time = parts[30]
+        if len(raw_time) == 14 and raw_time.isdigit():
+            try:
+                beijing_time = datetime.strptime(raw_time, "%Y%m%d%H%M%S").replace(
+                    tzinfo=timezone(timedelta(hours=8))
+                )
+                as_of = beijing_time.astimezone(timezone.utc).isoformat()
+            except ValueError:
+                pass
 
         code = parts[2] or (instrument.code if instrument else "-")
         resolved = instrument or (instrument_map or {}).get(code)
@@ -73,11 +94,17 @@ class TencentAQuoteProvider(QuoteProvider):
 
         return Quote(
             instrument=resolved,
-            price=float(parts[3]) if parts[3] else None,
-            change=float(parts[4]) if parts[4] else None,
-            pct_change=float(parts[5]) if parts[5] else None,
-            volume_lot=float(parts[6]) if parts[6] else None,
-            amount_10k=float(parts[9]) if len(parts) > 9 and parts[9] else None,
+            price=_float(parts[3]),
+            change=_float(parts[31]),
+            pct_change=_float(parts[32]),
+            volume_lot=_float(parts[6]),
+            amount_10k=_float(parts[37]),
+            open_price=_float(parts[5]),
+            high=_float(parts[33]),
+            low=_float(parts[34]),
+            prev_close=_float(parts[4]),
+            source=self.name,
+            as_of=as_of,
         )
 
     async def fetch(self, instrument: Instrument) -> Optional[Quote]:

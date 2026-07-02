@@ -4,6 +4,7 @@ import asyncio
 import json
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from typing import Optional
 
 from stocks.domain.models import Instrument, Quote
@@ -43,7 +44,7 @@ class EastmoneyAQuoteProvider(QuoteProvider):
         params = {
             "fltt": "2",
             "invt": "2",
-            "fields": "f12,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18",
+            "fields": "f12,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18,f124",
             "secids": ",".join(secids),
         }
         url = "https://push2.eastmoney.com/api/qt/ulist.np/get?" + urllib.parse.urlencode(params)
@@ -68,6 +69,17 @@ class EastmoneyAQuoteProvider(QuoteProvider):
             except (ValueError, TypeError):
                 return None
 
+        def _as_of(val) -> Optional[str]:
+            if val in (None, "", "-", 0, "0"):
+                return None
+            try:
+                timestamp = float(val)
+                if timestamp <= 0:
+                    return None
+                return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+            except (ValueError, TypeError, OverflowError, OSError):
+                return None
+
         return Quote(
             instrument=instrument,
             price=_float(row.get("f2")),
@@ -79,6 +91,8 @@ class EastmoneyAQuoteProvider(QuoteProvider):
             low=_float(row.get("f16")),
             open_price=_float(row.get("f17")),
             prev_close=_float(row.get("f18")),
+            source=self.name,
+            as_of=_as_of(row.get("f124")),
         )
 
     async def fetch(self, instrument: Instrument) -> Optional[Quote]:

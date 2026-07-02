@@ -72,6 +72,24 @@ class TestRecordAndGet:
         assert df.iloc[0]["market"] == "a"
         assert df.iloc[0]["volume_lot"] == 1_000_000
 
+    async def test_record_uses_quote_as_of_for_previous_trading_day(
+        self,
+        cache,
+        sample_instrument,
+    ):
+        quote = Quote(
+            instrument=sample_instrument,
+            price=10.5,
+            as_of="2026-07-01T07:00:00+00:00",
+        )
+
+        await cache.record(sample_instrument, quote)
+        df = await cache.get_history(sample_instrument, lookback_bars=5)
+
+        assert len(df) == 1
+        assert df.iloc[0]["timestamp"] == pd.Timestamp("2026-07-01T07:00:00+00:00")
+        assert df.iloc[0]["timestamp"].date().isoformat() == "2026-07-01"
+
     async def test_record_multiple(self, cache, sample_instrument):
         """多条记录后返回最近 N 条（跨天记录避免去重）"""
         for i in range(10):

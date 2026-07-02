@@ -255,7 +255,7 @@ class ContextBuilder:
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "generated_at": generated_at,
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
@@ -317,6 +317,14 @@ class ContextBuilder:
 
         quote_count = sum(len(items) for items in quotes.values())
         requested_count = len(instruments)
+        quote_as_of = [
+            parsed
+            for items in quotes.values()
+            for quote in items
+            if (parsed := self._parse_iso_datetime(quote.as_of)) is not None
+        ]
+        oldest_as_of = min(quote_as_of) if quote_as_of else None
+        missing_as_of = quote_count - len(quote_as_of)
         has_stale = any(quote.stale for items in quotes.values() for quote in items)
         us_single_source_failed = any(
             record.get("market") == "us"
@@ -332,26 +340,35 @@ class ContextBuilder:
         elif quote_count == 0:
             status = "missing"
             freshness = "missing"
-        elif has_stale:
-            status = "degraded"
-            freshness = "stale"
-        elif quote_count < requested_count:
-            status = "partial"
-            freshness = "fresh"
-        elif any(record.get("result") == "fallback_success" for record in degradation_log):
-            status = "degraded"
-            freshness = "fresh"
         else:
-            status = "ok"
-            freshness = "fresh"
+            freshness = (
+                self._freshness_from_datetime(oldest_as_of, generated_at)["freshness"]
+                if oldest_as_of
+                else "unknown"
+            )
+            if has_stale:
+                status = "degraded"
+            elif quote_count < requested_count:
+                status = "partial"
+            elif any(record.get("result") == "fallback_success" for record in degradation_log):
+                status = "degraded"
+            else:
+                status = "ok"
 
         by_market = {}
         records_by_market = {record.get("market"): record for record in degradation_log}
         for market in sorted(set(requested_by_market) | set(quotes)):
-            market_quote_count = len(quotes.get(market, []))
+            market_quotes = quotes.get(market, [])
+            market_quote_count = len(market_quotes)
             market_requested = requested_by_market.get(market, 0)
             record = records_by_market.get(market, {})
-            market_has_stale = any(quote.stale for quote in quotes.get(market, []))
+            market_has_stale = any(quote.stale for quote in market_quotes)
+            market_as_of_values = [
+                parsed
+                for quote in market_quotes
+                if (parsed := self._parse_iso_datetime(quote.as_of)) is not None
+            ]
+            market_oldest_as_of = min(market_as_of_values) if market_as_of_values else None
             if market_requested == 0:
                 market_status = "not_requested"
             elif market_quote_count == 0:
@@ -366,6 +383,7 @@ class ContextBuilder:
                 market_status = "ok"
             by_market[market] = {
                 "status": market_status,
+                "as_of": market_oldest_as_of.isoformat() if market_oldest_as_of else None,
                 "requested_count": market_requested,
                 "item_count": market_quote_count,
                 "primary_provider": record.get("primary_provider"),
@@ -384,10 +402,11 @@ class ContextBuilder:
         return {
             "status": status,
             "source": "DataFetcher",
-            "as_of": generated_at if quote_count else None,
+            "as_of": oldest_as_of.isoformat() if oldest_as_of else None,
             "freshness": freshness,
             "requested_count": requested_count,
             "item_count": quote_count,
+            "missing_as_of": missing_as_of,
             "providers": providers,
             "us_quotes": "single_source_failed" if us_single_source_failed else "ok",
             "by_market": by_market,
@@ -560,13 +579,22 @@ class ContextBuilder:
         }
 
     def _freshness_from_iso(self, value: Optional[str], generated_at: str) -> dict:
-        if not value:
-            return {"freshness": "unknown", "age_seconds": None}
-        try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
+        dt = self._parse_iso_datetime(value)
+        if dt is None:
             return {"freshness": "unknown", "age_seconds": None}
         return self._freshness_from_datetime(dt, generated_at)
+
+    @staticmethod
+    def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _freshness_from_datetime(self, value: Optional[datetime], generated_at: str) -> dict:
         if value is None:

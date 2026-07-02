@@ -133,7 +133,7 @@ class TestBasicBuild:
         assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
-        assert context.data_quality["schema_version"] == 1
+        assert context.data_quality["schema_version"] == 2
         assert context.data_quality["quotes"]["status"] == "ok"
         assert context.data_quality["quotes"]["item_count"] == 1
         assert context.data_quality["news"]["status"] == "not_requested"
@@ -615,6 +615,79 @@ class TestDataQuality:
         assert quotes_quality["providers"] == ["eastmoney_a"]
         assert quotes_quality["by_market"]["a"]["primary_provider"] == "eastmoney_a"
         assert quotes_quality["degradation"][0]["result"] == "success"
+
+    def test_quote_quality_uses_oldest_as_of_per_market_and_counts_missing(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        a_old = Instrument("000001", "平安银行", "a")
+        a_missing = Instrument("000002", "万科", "a")
+        us_newer = Instrument("AAPL", "Apple", "us")
+        quotes = {
+            "a": [
+                Quote(a_old, price=10.0, as_of="2026-07-01T07:00:00+00:00"),
+                Quote(a_missing, price=11.0, as_of=None),
+            ],
+            "us": [Quote(us_newer, price=210.0, as_of="2026-07-02T20:00:00+00:00")],
+        }
+
+        quality = builder._quote_quality(
+            "2026-07-03T08:00:00+00:00",
+            [a_old, a_missing, us_newer],
+            quotes,
+            [],
+        )
+
+        assert quality["as_of"] == "2026-07-01T07:00:00+00:00"
+        assert quality["freshness"] == "old"
+        assert quality["missing_as_of"] == 1
+        assert quality["by_market"]["a"]["as_of"] == "2026-07-01T07:00:00+00:00"
+        assert quality["by_market"]["us"]["as_of"] == "2026-07-02T20:00:00+00:00"
+
+    def test_quote_quality_after_close_is_not_fresh(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        instrument = Instrument("000001", "平安银行", "a")
+        quotes = {
+            "a": [Quote(instrument, price=10.0, as_of="2026-07-02T07:00:00+00:00")]
+        }
+
+        quality = builder._quote_quality(
+            "2026-07-02T23:00:00+00:00",
+            [instrument],
+            quotes,
+            [],
+        )
+
+        assert quality["freshness"] == "stale"
+
+    def test_quote_quality_all_missing_as_of_is_unknown(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        instrument = Instrument("000001", "平安银行", "a")
+
+        quality = builder._quote_quality(
+            "2026-07-02T23:00:00+00:00",
+            [instrument],
+            {"a": [Quote(instrument, price=10.0)]},
+            [],
+        )
+
+        assert quality["as_of"] is None
+        assert quality["freshness"] == "unknown"
+        assert quality["missing_as_of"] == 1
+        assert quality["by_market"]["a"]["as_of"] is None
 
 
 class TestAnalysisContextSerialization:

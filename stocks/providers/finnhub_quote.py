@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -164,6 +165,16 @@ class FinnhubQuoteProvider(QuoteProvider):
         price = data.get("c")
         if price is None:
             return None
+
+        as_of = None
+        raw_timestamp = data.get("t")
+        if raw_timestamp not in (None, "", "-", 0, "0"):
+            try:
+                timestamp = float(raw_timestamp)
+                if timestamp > 0:
+                    as_of = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+            except (ValueError, TypeError, OverflowError, OSError):
+                pass
         return Quote(
             instrument=instrument,
             price=float(price) if price is not None else None,
@@ -175,6 +186,8 @@ class FinnhubQuoteProvider(QuoteProvider):
             high=float(data["h"]) if data.get("h") is not None else None,
             low=float(data["l"]) if data.get("l") is not None else None,
             prev_close=float(data["pc"]) if data.get("pc") is not None else None,
+            source=self.name,
+            as_of=as_of,
         )
 
     async def fetch(self, instrument: Instrument) -> Optional[Quote]:

@@ -47,6 +47,36 @@ def test_fetch_sync_classifies_failures(side_effect, error_type):
             provider._fetch_sync("AAPL")
 
 
+def test_data_to_quote_uses_finnhub_timestamp_and_source():
+    instrument = Instrument("AAPL", "Apple", "us")
+    quote = _provider()._data_to_quote(
+        {
+            "c": 212.0,
+            "d": 1.0,
+            "dp": 0.47,
+            "o": 210.0,
+            "h": 213.0,
+            "l": 209.0,
+            "pc": 211.0,
+            "t": 1782936000,
+        },
+        instrument,
+    )
+
+    assert quote is not None
+    assert quote.source == "finnhub"
+    assert quote.as_of == "2026-07-01T20:00:00+00:00"
+
+
+@pytest.mark.parametrize("timestamp", [None, "", "-", 0, "0", "invalid"])
+def test_data_to_quote_does_not_fabricate_missing_timestamp(timestamp):
+    instrument = Instrument("AAPL", "Apple", "us")
+    quote = _provider()._data_to_quote({"c": 212.0, "t": timestamp}, instrument)
+
+    assert quote is not None
+    assert quote.as_of is None
+
+
 async def test_degradation_record_preserves_rate_limit_type():
     provider = _provider()
     registry = ProviderRegistry()

@@ -119,12 +119,13 @@ Agent 的统一入口：
 `stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
 精确值仍存在于结构化 `assets`，供受控调用方按需使用。
 
-## data_quality v1
+## data_quality v2
 
 `data_quality` 包含：
 
 - `currency_conversion`：每项外币换算状态、来源与失败统计
-- `quotes`：请求/返回数量、按市场状态、Provider 与降级记录
+- `quotes`：真实行情 `as_of` 的最旧值、缺失时间数量、请求/返回数量、按市场
+  `as_of` 与状态、Provider 与降级记录
 - `news`：请求状态、来源分布和时效
 - `macro`：来源、已填充/缺失字段和错误
 - `technical_indicators`：覆盖与缺失标的
