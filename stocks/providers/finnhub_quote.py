@@ -3,12 +3,24 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
+import threading
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Optional
 
 from stocks.domain.models import Instrument, Quote
+from stocks.errors import (
+    ProviderAuthError,
+    ProviderConfigError,
+    ProviderDataError,
+    ProviderNetworkError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 from stocks.providers.base import QuoteProvider
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,7 +33,7 @@ class FinnhubQuoteProvider(QuoteProvider):
     使用 Finnhub API https://finnhub.io/api/v1/quote
     需要 API key（从环境变量 FINNHUB_API_KEY 或 .secret/finnhub-key.md 读取）。
     支持美股和加密货币，返回 Quote 对象。
-    网络异常、API 限制或解析失败时返回 None / 空列表。
+    免费档按每分钟约 60 次请求做客户端节流，错误按统一 Provider 异常分类抛出。
 
     加密货币 symbol 格式：
     - 完整格式：EXCHANGE:SYMBOL（如 BINANCE:BTCUSDT）
@@ -36,7 +48,12 @@ class FinnhubQuoteProvider(QuoteProvider):
     def supported_markets(self) -> list[str]:
         return ["us", "crypto"]
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        *,
+        min_request_interval: float = 1.05,
+    ):
         if api_key:
             self.api_key = api_key
         else:
@@ -47,6 +64,17 @@ class FinnhubQuoteProvider(QuoteProvider):
                 self.api_key = FINNHUB_KEY_PATH.read_text(encoding="utf-8").strip()
             else:
                 self.api_key = ""
+        self._min_request_interval = max(0.0, min_request_interval)
+        self._rate_lock = threading.Lock()
+        self._last_request_at = 0.0
+
+    def _throttle(self) -> None:
+        with self._rate_lock:
+            elapsed = time.monotonic() - self._last_request_at
+            wait_for = self._min_request_interval - elapsed
+            if wait_for > 0:
+                time.sleep(wait_for)
+            self._last_request_at = time.monotonic()
 
     def _build_symbol(self, instrument: Instrument) -> str:
         """根据市场类型构建 Finnhub symbol。"""
@@ -66,22 +94,70 @@ class FinnhubQuoteProvider(QuoteProvider):
     def _fetch_sync(self, symbol: str) -> Optional[dict]:
         """同步请求 Finnhub quote 接口，返回 JSON 字典。"""
         if not self.api_key:
-            return None
+            raise ProviderConfigError("Finnhub API key 未配置", source=self.name)
+        self._throttle()
         params = urllib.parse.urlencode({"symbol": symbol, "token": self.api_key})
         url = f"https://finnhub.io/api/v1/quote?{params}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=30) as resp:
                 text = resp.read().decode("utf-8", errors="replace")
             if not text.strip():
-                return None
-            data = json.loads(text)
-            # Finnhub 错误响应可能包含 error 字段
+                raise ProviderDataError("Finnhub 返回空响应", source=self.name)
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ProviderDataError(
+                    "Finnhub 返回无效 JSON",
+                    source=self.name,
+                    detail=str(exc),
+                ) from exc
             if "error" in data:
-                return None
+                message = str(data["error"])
+                lowered = message.lower()
+                if "api key" in lowered or "forbidden" in lowered:
+                    raise ProviderAuthError(message, source=self.name)
+                if "limit" in lowered:
+                    raise ProviderRateLimitError(message, source=self.name)
+                raise ProviderDataError(message, source=self.name)
             return data
-        except Exception:
-            return None
+        except urllib.error.HTTPError as exc:
+            if exc.code in {401, 403}:
+                raise ProviderAuthError(
+                    f"Finnhub 鉴权失败: HTTP {exc.code}",
+                    source=self.name,
+                ) from exc
+            if exc.code == 429:
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                raise ProviderRateLimitError(
+                    "Finnhub 请求限流: HTTP 429",
+                    source=self.name,
+                    retry_after=int(retry_after) if retry_after and retry_after.isdigit() else None,
+                ) from exc
+            if exc.code in {408, 504}:
+                raise ProviderTimeoutError(
+                    f"Finnhub 请求超时: HTTP {exc.code}",
+                    source=self.name,
+                ) from exc
+            raise ProviderNetworkError(
+                f"Finnhub HTTP 错误: {exc.code}",
+                source=self.name,
+            ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise ProviderTimeoutError(
+                f"Finnhub 请求超时: {exc}",
+                source=self.name,
+            ) from exc
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+                raise ProviderTimeoutError(
+                    f"Finnhub 请求超时: {exc.reason}",
+                    source=self.name,
+                ) from exc
+            raise ProviderNetworkError(
+                f"Finnhub 网络错误: {exc.reason}",
+                source=self.name,
+            ) from exc
 
     def _data_to_quote(self, data: dict, instrument: Instrument) -> Optional[Quote]:
         """将 Finnhub 返回数据转换为 Quote。"""

@@ -263,10 +263,12 @@
 **文件**:`stocks/config/engine.yaml`、`stocks/config/news_sources.json`、`stocks/engine/news_sources.py`
 **问题**:默认唯一 RSS 源是 36kr(科技创业媒体,非财经媒体),market_events 输入质量从源头不成立。
 
-- [ ] 【验证前提】确认 `news_sources.json` 当前内容与 engine.yaml 实际加载哪一个。
-- [ ] 调研并接入至少 2 个可用的中文财经 RSS(候选:东方财富、新浪财经 RSS、华尔街见闻;逐一验证 RSS 可用性后再写入配置)+ 1 个英文源(如 Yahoo Finance RSS / Reuters 可用 feed)。
-- [ ] 36kr 降为可选源而非默认。
-- [ ] 新增测试:多源聚合去重正常。
+- [x] 【验证前提】确认 `news_sources.json` 当前内容与 engine.yaml 实际加载哪一个。
+- [x] 调研并接入至少 2 个可用的中文财经 RSS(候选:东方财富、新浪财经 RSS、华尔街见闻;逐一验证 RSS 可用性后再写入配置)+ 1 个英文源(如 Yahoo Finance RSS / Reuters 可用 feed)。
+- [x] 36kr 降为可选源而非默认。
+- [x] 新增测试:多源聚合去重正常。
+
+> 完成:26a4418 配置中新网财经、Google News 中文财经和 Yahoo Finance，36kr 改为禁用可选源并实抓验收。
 
 **验收**:默认配置抓到的新闻以财经内容为主。
 
