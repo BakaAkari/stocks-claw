@@ -607,6 +607,67 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 
 ---
 
+## F — 前瞻决策层(Phase F,2026-07-02 用户裁决启动,与 Phase D 并行不冲突)
+
+> 背景:用户对实际分析输出的直接反馈——回顾式总结"有数据只分析"无实质意义,
+> 要求系统在当下时间节点给出"提前布置哪些板块/调整哪些仓位"的条件化预案。
+> 决策日志见 PLAN.md 2026-07-02 Phase F 条目。
+
+### F-1 事件日历(upcoming_events)
+
+- [x] 新增 `stocks/engine/event_calendar.py`:StaticEventCalendarProvider(读 `stocks/config/event_calendar.json` 官方日程) + FinnhubEarningsCalendarProvider(watchlist 美股财报日) + EventCalendar 组合器(lookahead 窗口过滤、days_until、按类别匹配 watchlist 标的)。
+- [x] 新增 `stocks/config/event_calendar.json`:2026 下半年 FOMC/CPI/非农官方日程(来源 federalreserve.gov / bls.gov,2026-07-02 核对)。
+- [x] `engine.yaml` 增 `calendar` 节(enabled/lookahead_days/earnings.enabled);StocksEngine 装配并注入 ContextBuilder。
+- [x] `AnalysisContext` 增 `upcoming_events`(v6→v7);`data_quality` 增 `upcoming_events` 节点(v3→v4);raw_prompt_input 增【未来催化剂日历】小节。
+- [x] 失败语义:无 Provider → not_configured;部分 Provider 失败 → partial + errors 明细;全失败 → missing。Finnhub key 缺失显式报错不静默。
+
+> 完成:代码与测试已落盘(commit 待本机提交) | 证据:`tests/engine/test_event_calendar.py` 9 个用例(窗口过滤/days_until/标的匹配/partial/missing/not_configured/财报映射/key 缺失);CLI 冒烟输出 upcoming_events 2 条+dq.upcoming_events.status=partial(见 F 组验收段)。
+
+### F-2 板块轮动脚手架(rotation)
+
+- [x] 新增 `stocks/engine/rotation.py`:compute_rotation 纯函数,基于 HistoryCache 日 K 收盘算 5/20 根 K 线累计涨跌幅、MA20 上下方、按 r20 排名、类别动量聚合、leaders/laggards;历史不足显式进 missing。
+- [x] 新增 `stocks/config/sector_scan.json`:8 只 A 股行业 ETF + 8 只美股板块 ETF 扫描池;与 watchlist 去重;只参与历史回填与轮动,不请求实时行情、不进 MarketState。
+- [x] ContextBuilder 增 `_build_rotation`;`AnalysisContext.rotation` + `data_quality.rotation`;raw_prompt_input 增【板块轮动排名】小节。
+
+> 完成:代码与测试已落盘(commit 待本机提交) | 证据:`tests/engine/test_rotation.py` 5 个用例(收益计算/排名/partial+missing/no_data/可序列化)。
+
+### F-3 建议触发闭环(triggers)
+
+- [x] `AdviceRecord` 增可选 `triggers` 字段:{instrument:"market:code", type∈{price_above,price_below,pct_change_above,pct_change_below}, level:number, action:非空, invalidation?};严格校验,旧记录兼容按 [] 加载。
+- [x] `advice_review.py` 增 `_review_trigger`:按建议日之后收盘价序列核对 fired/not_fired/no_data,附 observed 价格事实;并入 recent_advice 的 `trigger_review` 派生字段。
+- [x] `engine.save_advice` 允许 triggers 透传;MCP advice_save 描述更新;raw_prompt_input【上次建议】增触发器核对行。
+
+> 完成:代码与测试已落盘(commit 待本机提交) | 证据:`tests/engine/test_advice_triggers.py` 13 个用例(校验 5 组非法输入拒绝/往返序列化/旧记录兼容/fired/not_fired/pct 触发/非 watchlist/无历史/无触发器)。
+
+### F-4 决策导向分析契约(prompt)
+
+- [x] 重写 `stocks/prompts/personal_advice_prompt.txt`:六节强制结构(核心结论/上期预案复盘/催化剂情景预案/调仓触发清单/下一个机会/风险与数据边界);触发条件必须可验证;禁止无条件"观察/等待";"下一个机会"不允许空章节;保留金额脱敏与不编造红线。
+- [x] raw_prompt_input 收尾指令同步指向新契约。
+- [x] `stocks/DATA_MODEL.md`(v7/data_quality v4/UpcomingEvent/rotation/triggers)、`ARCHITECTURE.md`、`AGENT_GUIDE.md`、PLAN 决策日志同步。
+
+> 完成:文档已同步(commit 待本机提交) | 证据:DATA_MODEL "AnalysisContext v7"/"data_quality v4"/"UpcomingEvent"/"rotation" 小节;AGENT_GUIDE triggers 示例。
+
+### F-5 候选池扩充与 pool 分层(用户裁决)
+
+- [x] `Instrument` 增可选 `pool` 字段;`sector_scan.json` 扩至 26 标的:A 股 8 行业 ETF + 美股大盘(SPY/IWM)/板块(XLK/SMH/IGV/XLF/XLE/XLV/XBI/XLI)/防守(XLU/XLP)/利率(TLT)/AI 链个股(NVDA/AMD/AVGO/TSM/MU),分层 broad/sector/defensive/rates/ai_chain。
+- [x] rotation items 增 `pool` 字段;watchlist 标的按 core 处理。
+
+### F-6 引擎动作信号层(用户裁决修订 §4 红线后启用)
+
+- [x] 新增 `stocks/engine/action_signals.py`:7 类信号(accumulate_candidate/wait_for_pullback/reduce_risk/avoid_catching_falling_knife/rotation_candidate/neutral_hold/no_data) + event_watch 叠加(T+3 内催化剂);规则阈值集中定义;每信号必附 reasons 指标事实;历史 <15 bars 一律 no_data。
+- [x] ContextBuilder 复用轮动 frames 统一为 watchlist+扫描池算指标;`AnalysisContext.action_signals`(并入 v7)+`data_quality.action_signals`(并入 v4)+raw_prompt【引擎动作信号】小节。
+- [x] prompt 契约更新:动作信号为初始底稿,Agent 必须逐条采纳或给理由推翻。
+- [x] PLAN §4 红线修订与决策日志登记;DATA_MODEL/ARCHITECTURE/AGENT_GUIDE 同步。
+
+> 完成:代码与测试已落盘(commit 待本机提交) | 证据:`tests/engine/test_action_signals.py` 用例覆盖 7 类信号规则/事件叠加/缺数据/可序列化。
+
+**F 组验收(2026-07-02 云端执行记录,pytest 需在本机补跑)**:
+
+- [x] `ruff check .` 全通过
+- [x] `python -m compileall -q stocks tests` 全通过
+- [x] CLI 冒烟 `--output json --no-news --no-quotes`:schema_version=7、data_quality.schema_version=4、upcoming_events 2 条(非农 T+0/CPI T+12)、dq.upcoming_events=partial(finnhub key 未配置显式报错)、rotation=no_data(无历史,诚实缺失)
+- [ ] `uv run python -m pytest -q` 全量通过(云端无 pytest 网络权限,待本机执行;新增用例已用等价 runner 全部通过)
+
 ## 全局验收(每个任务完成后必跑)
 
 ```bash

@@ -13,6 +13,7 @@ class Instrument:
     market: str                    # "a" / "us"
     exchange: Optional[str] = None  # "sh" / "sz" / "us"
     category: Optional[str] = None  # equity_cn / equity_us / tech / gold / bond / crypto
+    pool: Optional[str] = None      # 候选池分层: core/sector/defensive/rates/ai_chain/broad 等
 
     def to_dict(self) -> dict:
         return {
@@ -21,6 +22,7 @@ class Instrument:
             "market": self.market,
             "exchange": self.exchange,
             "category": self.category,
+            "pool": self.pool,
         }
 
 
@@ -147,6 +149,42 @@ class MarketEvent:
 
 
 @dataclass(frozen=True)
+class UpcomingEvent:
+    """未来市场催化剂 — 只收录已官方公布的日程事实，不做预测。
+
+    来源：
+    - static_config: `stocks/config/event_calendar.json` 中人工维护的官方日程
+      （FOMC、CPI、非农等，日期以官方发布为准）
+    - finnhub_earnings: Finnhub 财报日历返回的 watchlist 标的财报日
+    """
+
+    date: str                                # ISO 日期，如 "2026-07-14"
+    name: str                                # 事件名，如 "美国 6 月 CPI"
+    event_type: str                          # macro_release / central_bank / earnings / other
+    market: str                              # us / a / global / crypto
+    time_utc: Optional[str] = None           # 已知的官方发布时间（UTC "HH:MM"），未知为 None
+    source: str = "static_config"            # static_config / finnhub_earnings
+    affected_categories: list[str] = field(default_factory=list)  # 敏感的 watchlist 类别
+    affected_symbols: list[str] = field(default_factory=list)     # 命中的 "market:code"
+    days_until: Optional[int] = None         # 距 generated_at 的自然日数，构建时计算
+    note: str = ""                           # 事实性备注（影响路径描述，非预测）
+
+    def to_dict(self) -> dict:
+        return {
+            "date": self.date,
+            "name": self.name,
+            "event_type": self.event_type,
+            "market": self.market,
+            "time_utc": self.time_utc,
+            "source": self.source,
+            "affected_categories": self.affected_categories,
+            "affected_symbols": self.affected_symbols,
+            "days_until": self.days_until,
+            "note": self.note,
+        }
+
+
+@dataclass(frozen=True)
 class FinancialAsset:
     """金融资产"""
     name: str
@@ -268,6 +306,12 @@ class DriftCheck:
 _ADVICE_DIRECTIONS = {"buy", "sell", "watch", "hold"}
 _ADVICE_BASED_ON = {"quotes", "news", "indicators", "macro", "portfolio", "profile"}
 _ADVICE_BOUNDARY_TYPES = {"fact", "inference"}
+_ADVICE_TRIGGER_TYPES = {
+    "price_above",       # 收盘价上穿 level
+    "price_below",       # 收盘价下穿 level
+    "pct_change_above",  # 建议日以来累计涨跌幅 >= level（百分数）
+    "pct_change_below",  # 建议日以来累计涨跌幅 <= level（百分数）
+}
 
 
 @dataclass(frozen=True)
@@ -280,6 +324,7 @@ class AdviceRecord:
     rationale_summary: str
     based_on: list[str]
     boundary: list[dict]
+    triggers: list[dict] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -290,6 +335,7 @@ class AdviceRecord:
         rationale_summary: str,
         based_on: list[str],
         boundary: list[dict],
+        triggers: Optional[list[dict]] = None,
     ) -> "AdviceRecord":
         return cls(
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -298,6 +344,7 @@ class AdviceRecord:
             rationale_summary=rationale_summary,
             based_on=based_on,
             boundary=boundary,
+            triggers=list(triggers or []),
         )
 
     @classmethod
@@ -309,6 +356,7 @@ class AdviceRecord:
             rationale_summary=str(data.get("rationale_summary", "")),
             based_on=list(data.get("based_on", [])),
             boundary=list(data.get("boundary", [])),
+            triggers=list(data.get("triggers", [])),
         )
 
     def __post_init__(self) -> None:
@@ -338,6 +386,30 @@ class AdviceRecord:
             for item in self.boundary
         ):
             raise ValueError("boundary must contain {type: fact|inference, text}")
+        if not isinstance(self.triggers, list):
+            raise ValueError("triggers must be a list")
+        for item in self.triggers:
+            if not isinstance(item, dict):
+                raise ValueError("each trigger must be an object")
+            instrument = item.get("instrument")
+            if not isinstance(instrument, str) or ":" not in instrument:
+                raise ValueError("trigger.instrument must be 'market:code'")
+            if item.get("type") not in _ADVICE_TRIGGER_TYPES:
+                raise ValueError(
+                    f"trigger.type must be one of {sorted(_ADVICE_TRIGGER_TYPES)}"
+                )
+            level = item.get("level")
+            if not isinstance(level, (int, float)) or isinstance(level, bool):
+                raise ValueError("trigger.level must be a number")
+            action = item.get("action")
+            if not isinstance(action, str) or not action.strip():
+                raise ValueError("trigger.action must be a non-empty string")
+            invalidation = item.get("invalidation")
+            if invalidation is not None and not isinstance(invalidation, str):
+                raise ValueError("trigger.invalidation must be a string when present")
+            unknown = set(item) - {"instrument", "type", "level", "action", "invalidation"}
+            if unknown:
+                raise ValueError(f"Unsupported trigger fields: {sorted(unknown)}")
 
     def to_dict(self) -> dict:
         return {
@@ -347,6 +419,7 @@ class AdviceRecord:
             "rationale_summary": self.rationale_summary,
             "based_on": self.based_on,
             "boundary": self.boundary,
+            "triggers": self.triggers,
         }
 
 
@@ -401,8 +474,17 @@ class AnalysisContext:
     # 最近确认保存的建议摘要
     recent_advice: list[dict] = field(default_factory=list)
 
+    # 未来催化剂日历（官方已公布日程 + 财报日历）
+    upcoming_events: list[UpcomingEvent] = field(default_factory=list)
+
+    # 板块轮动脚手架（历史收盘相对强弱，纯事实排名）
+    rotation: dict = field(default_factory=dict)
+
+    # 引擎动作信号（规则化方向性候选动作，2026-07-02 用户裁决启用）
+    action_signals: dict = field(default_factory=dict)
+
     # 元信息（带默认值）
-    schema_version: int = 6
+    schema_version: int = 7
 
     def to_dict(self) -> dict:
         return {
@@ -426,4 +508,7 @@ class AnalysisContext:
             "technical_indicators": self.technical_indicators,
             "data_quality": self.data_quality,
             "recent_advice": self.recent_advice,
+            "upcoming_events": [e.to_dict() for e in self.upcoming_events],
+            "rotation": self.rotation,
+            "action_signals": self.action_signals,
         }

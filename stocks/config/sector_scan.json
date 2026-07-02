@@ -1,0 +1,192 @@
+[
+  {
+    "code": "512880",
+    "name": "证券ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "券商",
+    "pool": "sector"
+  },
+  {
+    "code": "512480",
+    "name": "半导体ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "半导体",
+    "pool": "sector"
+  },
+  {
+    "code": "512800",
+    "name": "银行ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "银行",
+    "pool": "defensive"
+  },
+  {
+    "code": "512010",
+    "name": "医药ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "医药",
+    "pool": "sector"
+  },
+  {
+    "code": "159928",
+    "name": "消费ETF",
+    "market": "a",
+    "exchange": "sz",
+    "category": "消费",
+    "pool": "sector"
+  },
+  {
+    "code": "510880",
+    "name": "红利ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "红利",
+    "pool": "defensive"
+  },
+  {
+    "code": "516160",
+    "name": "新能源ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "新能源",
+    "pool": "sector"
+  },
+  {
+    "code": "159915",
+    "name": "创业板ETF",
+    "market": "a",
+    "exchange": "sz",
+    "category": "创业板",
+    "pool": "broad"
+  },
+  {
+    "code": "SPY",
+    "name": "标普500ETF",
+    "market": "us",
+    "category": "us_broad",
+    "pool": "broad"
+  },
+  {
+    "code": "IWM",
+    "name": "美股小盘股",
+    "market": "us",
+    "category": "us_smallcap",
+    "pool": "broad"
+  },
+  {
+    "code": "XLK",
+    "name": "美股科技板块",
+    "market": "us",
+    "category": "us_tech",
+    "pool": "sector"
+  },
+  {
+    "code": "SMH",
+    "name": "美股半导体",
+    "market": "us",
+    "category": "us_semis",
+    "pool": "sector"
+  },
+  {
+    "code": "IGV",
+    "name": "美股软件",
+    "market": "us",
+    "category": "us_software",
+    "pool": "sector"
+  },
+  {
+    "code": "XLF",
+    "name": "美股金融板块",
+    "market": "us",
+    "category": "us_financials",
+    "pool": "rates"
+  },
+  {
+    "code": "XLE",
+    "name": "美股能源板块",
+    "market": "us",
+    "category": "us_energy",
+    "pool": "sector"
+  },
+  {
+    "code": "XLV",
+    "name": "美股医疗板块",
+    "market": "us",
+    "category": "us_healthcare",
+    "pool": "defensive"
+  },
+  {
+    "code": "XBI",
+    "name": "美股生物科技",
+    "market": "us",
+    "category": "us_biotech",
+    "pool": "sector"
+  },
+  {
+    "code": "XLI",
+    "name": "美股工业板块",
+    "market": "us",
+    "category": "us_industrials",
+    "pool": "sector"
+  },
+  {
+    "code": "XLU",
+    "name": "美股公用事业",
+    "market": "us",
+    "category": "us_utilities",
+    "pool": "defensive"
+  },
+  {
+    "code": "XLP",
+    "name": "美股必需消费",
+    "market": "us",
+    "category": "us_staples",
+    "pool": "defensive"
+  },
+  {
+    "code": "TLT",
+    "name": "美国长债ETF",
+    "market": "us",
+    "category": "us_rates",
+    "pool": "rates"
+  },
+  {
+    "code": "NVDA",
+    "name": "英伟达",
+    "market": "us",
+    "category": "us_ai_chain",
+    "pool": "ai_chain"
+  },
+  {
+    "code": "AMD",
+    "name": "AMD",
+    "market": "us",
+    "category": "us_ai_chain",
+    "pool": "ai_chain"
+  },
+  {
+    "code": "AVGO",
+    "name": "博通",
+    "market": "us",
+    "category": "us_ai_chain",
+    "pool": "ai_chain"
+  },
+  {
+    "code": "TSM",
+    "name": "台积电",
+    "market": "us",
+    "category": "us_ai_chain",
+    "pool": "ai_chain"
+  },
+  {
+    "code": "MU",
+    "name": "美光",
+    "market": "us",
+    "category": "us_ai_chain",
+    "pool": "ai_chain"
+  }
+]

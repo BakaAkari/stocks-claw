@@ -1,0 +1,149 @@
+{
+  "_comment": "官方已公布的未来市场事件日程。只录入官方来源公布的确定日期，不做预测。日期用完的条目会被 lookahead 窗口自动过滤，无需手动删除。来源：federalreserve.gov (FOMC 2026)、bls.gov (CPI/非农 2026)。",
+  "events": [
+    {
+      "date": "2026-07-02",
+      "time_utc": "12:30",
+      "name": "美国 6 月非农就业报告",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "就业强弱直接影响利率预期：偏弱利好成长久期与黄金，偏强推升收益率压制成长估值"
+    },
+    {
+      "date": "2026-07-14",
+      "time_utc": "12:30",
+      "name": "美国 6 月 CPI",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "通胀路径决定降息节奏：低于预期利好成长与债券，高于预期压制风险资产"
+    },
+    {
+      "date": "2026-07-29",
+      "time_utc": "18:00",
+      "name": "FOMC 利率决议（7/28-29 会议）",
+      "event_type": "central_bank",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us", "equity_cn"],
+      "note": "利率决议与声明措辞影响全球风险资产定价与美元流动性"
+    },
+    {
+      "date": "2026-08-07",
+      "time_utc": "12:30",
+      "name": "美国 7 月非农就业报告",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "就业强弱直接影响利率预期"
+    },
+    {
+      "date": "2026-08-12",
+      "time_utc": "12:30",
+      "name": "美国 7 月 CPI",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "通胀路径决定降息节奏"
+    },
+    {
+      "date": "2026-09-04",
+      "time_utc": "12:30",
+      "name": "美国 8 月非农就业报告",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "就业强弱直接影响利率预期"
+    },
+    {
+      "date": "2026-09-11",
+      "time_utc": "12:30",
+      "name": "美国 8 月 CPI",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "通胀路径决定降息节奏"
+    },
+    {
+      "date": "2026-09-16",
+      "time_utc": "18:00",
+      "name": "FOMC 利率决议（9/15-16 会议，含点阵图）",
+      "event_type": "central_bank",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us", "equity_cn"],
+      "note": "含经济预测摘要与点阵图，对利率路径预期影响大于普通会议"
+    },
+    {
+      "date": "2026-10-02",
+      "time_utc": "12:30",
+      "name": "美国 9 月非农就业报告",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "就业强弱直接影响利率预期"
+    },
+    {
+      "date": "2026-10-14",
+      "time_utc": "12:30",
+      "name": "美国 9 月 CPI",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "通胀路径决定降息节奏"
+    },
+    {
+      "date": "2026-10-28",
+      "time_utc": "18:00",
+      "name": "FOMC 利率决议（10/27-28 会议）",
+      "event_type": "central_bank",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us", "equity_cn"],
+      "note": "利率决议与声明措辞影响全球风险资产定价"
+    },
+    {
+      "date": "2026-11-06",
+      "time_utc": "13:30",
+      "name": "美国 10 月非农就业报告",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "就业强弱直接影响利率预期（美国已进入冬令时）"
+    },
+    {
+      "date": "2026-11-10",
+      "time_utc": "13:30",
+      "name": "美国 10 月 CPI",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "通胀路径决定降息节奏"
+    },
+    {
+      "date": "2026-12-04",
+      "time_utc": "13:30",
+      "name": "美国 11 月非农就业报告",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "就业强弱直接影响利率预期"
+    },
+    {
+      "date": "2026-12-09",
+      "time_utc": "19:00",
+      "name": "FOMC 利率决议（12/8-9 会议，含点阵图）",
+      "event_type": "central_bank",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us", "equity_cn"],
+      "note": "年内最后一次会议，含经济预测摘要与点阵图"
+    },
+    {
+      "date": "2026-12-10",
+      "time_utc": "13:30",
+      "name": "美国 11 月 CPI",
+      "event_type": "macro_release",
+      "market": "us",
+      "affected_categories": ["tech", "bond", "gold", "crypto", "equity_us"],
+      "note": "通胀路径决定降息节奏"
+    }
+  ]
+}

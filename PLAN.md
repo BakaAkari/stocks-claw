@@ -54,7 +54,7 @@ HTTP 完整认证限速、MCP SDK 重写、health check 暴露降级状态、并
 - 禁止实现暂缓区内容;禁止跳过任务顺序自行挑活;禁止重构与当前任务无关的代码。
 - 禁止新增 .md 文件(未在决策日志登记理由前);分析/调研产物一律进 `docs/archive/`。
 - 禁止变更 `AnalysisContext` schema 而不同步 `stocks/DATA_MODEL.md` + 本文档 + 测试。
-- 禁止在缺数据时伪造指标;禁止把技术指标包装成投资建议。
+- 禁止在缺数据时伪造指标。引擎允许输出规则化方向性动作信号(action_signals,2026-07-02 用户裁决),但每个信号必须附引用指标事实的 reasons、缺数据必须显式 no_data、不得输出收益承诺;最终判断权归用户与 Agent。
 - 禁止引入重型依赖;禁止提交 `.local/`、`.secret/`、运行态缓存、快照、虚拟环境;禁止任何文档/代码/日志出现真实 API Key。
 - 禁止让默认 `pytest` 失败;禁止删除或跳过测试来让其通过。
 
@@ -90,4 +90,6 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-02:采纳数据可靠性审计结论,启动 Phase D(数据可信底盘与冗余),任务卡追加为 EXECUTION_PLAN D 组;审计证据归档 `docs/archive/DATA_RELIABILITY_AUDIT_20260702.md`。依据:外部 GPT 审计 5 条结论经行号级独立核验全部成立(含"单 bar 指标仍报 ok"代码级复现),现场网络诊断实测 eastmoney 日 K 0/6、腾讯日 K 6/6、Yahoo 日 K/宏观全线 429。
 - 2026-07-02:解禁暂缓项"美股第二行情源",并扩展为"美股/加密第二行情与历史源"(D1-2)。依据:Yahoo 从用户网络全线 HTTP 429,美股/crypto 历史回填与宏观主链路当前已断,冗余从改进项升级为必需项。
 - 2026-07-02:新闻源澄清:GPT 审计所称"仅两源贡献"经实测为当次偶发(三个启用源现均有产出 30/100/42 条),不单独立项;结构性缺口(无一手公告/财报/监管源)由 D2 承接。依据:`.local/verify_data_sources.py` 第 5 节实测输出。
+- 2026-07-02:用户裁决启动 Phase F(前瞻决策层):分析输出从"回顾式总结"转向"事件驱动的条件化预案"。四项改造:①事件日历(官方已公布 FOMC/CPI/非农日程静态配置 + Finnhub 财报日历,新增 `upcoming_events`);②板块轮动脚手架(`sector_scan.json` 扫描池 + 历史收盘 5/20 日相对强弱,新增 `rotation`);③建议触发闭环(AdviceRecord 增可选 `triggers`,回看时按收盘价核对 fired/not_fired);④`personal_advice_prompt.txt` 重写为决策导向契约(情景树/触发清单/强制"下一个机会"/禁止无条件观察)。AnalysisContext v6→v7,data_quality v3→v4,DATA_MODEL 已同步。D2 的财报日历需求由 ①部分承接,D2 立项时应与 event_calendar 合并而非另建。任务卡见 EXECUTION_PLAN F 组。依据:用户对 2026-07-02 实际分析输出的直接反馈——"有数据只分析,起不到实质意义",要求系统在当下时间点给出提前布置方向。
+- 2026-07-02:用户裁决修订 §4 红线"禁止把技术指标包装成投资建议"→ 允许引擎输出规则化方向性 action signal(accumulate_candidate/wait_for_pullback/reduce_risk/avoid_catching_falling_knife/rotation_candidate/neutral_hold/no_data + event_watch 叠加),约束:reasons 必附指标事实、缺数据显式 no_data、无收益承诺、最终判断归用户与 Agent。同批:扫描池扩至 26 标的并增 pool 分层(core/broad/sector/defensive/rates/ai_chain),Instrument 增 pool 字段,AnalysisContext v7 增 action_signals,data_quality v4 增 action_signals 节点。依据:用户明确反馈"我就是要把技术指标包装成投资建议…你一定要给我建议",无方向语义的输出对其无实用价值。
 - (追加格式:`日期:决定;依据`)

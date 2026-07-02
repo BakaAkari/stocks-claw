@@ -63,18 +63,26 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - `history_cache.py` / `history_provider.py`：历史 K 线预热、按交易日去重与缓存。
 - `indicators.py`：基于历史序列计算技术指标和年化波动率。
 - `news_sources.py` / `market_events.py`：新闻聚合、去重和规则事件提取。
+- `event_calendar.py`：未来催化剂日历（官方已公布日程静态配置 + Finnhub
+  财报日历），产出 `upcoming_events` 与其质量节点。
+- `rotation.py`：板块轮动脚手架，基于历史收盘计算 watchlist + 扫描池的
+  5/20 日相对强弱排名。
+- `action_signals.py`：规则化方向性候选动作（附 reasons 指标事实，
+  2026-07-02 用户裁决启用，约束见 PLAN §4）。
 - `macro_data.py`：静态配置与 Yahoo Finance 宏观数据组合。
 - `exchange_rate.py`：外币估值与显式换算质量。
 - `persistence.py`：滚动最小上下文快照与确认建议摘要。
+- `advice_review.py`：建议表现回看与触发器核对（按收盘价，只列事实）。
 - `llm_analysis.py`：默认关闭的兼容报告模块。
 
 ### domain
 
 `stocks/domain/models.py` 定义不可变 dataclass：
 
-- `Instrument`、`Quote`、`NewsItem`、`MarketEvent`
+- `Instrument`、`Quote`、`NewsItem`、`MarketEvent`、`UpcomingEvent`
 - `FinancialAsset`
 - `PortfolioMapping`、`MarketState`、`DriftCheck`
+- `AdviceRecord`（含可选 `triggers`）
 - `AnalysisContext`
 
 这些对象是 Engine、Adapter 和测试之间的接口契约。
@@ -94,16 +102,18 @@ Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实�
 
 `StocksEngine.build_context()` 的当前顺序：
 
-1. 读取本地资产、约束、画像和 watchlist。
+1. 读取本地资产、约束、画像、watchlist 和 `sector_scan.json` 扫描池。
 2. 将资产原币种金额转换为运行时 `amount_cny`；原始金额与币种不被改写。
-3. 在需要时预热历史行情缓存。
+3. 在需要时预热历史行情缓存（watchlist + 扫描池）。
 4. 从 `news_sources.json` 中启用的 RSS/Atom 源聚合新闻。
 5. 先加载近期最小快照。
 6. `ContextBuilder` 获取行情并执行降级；美股可回填 stale 历史收盘价。
+   扫描池不请求实时行情，只经历史缓存参与轮动。
 7. 记录行情、计算技术指标与宏观快照。
-8. 提取市场事件、构建组合映射、偏离检查和市场状态。
+8. 提取市场事件、拉取未来催化剂日历、计算轮动排名与动作信号、
+   构建组合映射、偏离检查和市场状态；对最近建议做表现回看与触发器核对。
 9. 生成 `raw_prompt_input` 与 `data_quality`。
-10. 返回 `AnalysisContext v6`，随后保存本次最小快照。
+10. 返回 `AnalysisContext v7`，随后保存本次最小快照。
 
 由于“先读后写”，同一次运行不会把自身当作历史；第二次运行可以引用第一次快照。
 
@@ -185,6 +195,8 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 - `stocks/config/portfolio_constraints.json`
 - `stocks/config/news_sources.json`
 - `stocks/config/markets.json`
+- `stocks/config/event_calendar.json`：官方已公布的未来事件日程
+- `stocks/config/sector_scan.json`：候选池扫描，带 pool 分层（不进入 watchlist）
 
 Engine 配置优先级：环境变量 > YAML > 代码默认值。嵌套键使用双下划线，例如
 `STOCKS_FETCHER__MAX_RETRIES=3`。

@@ -34,6 +34,11 @@ from stocks.domain.models import (
 )
 from stocks.engine.config_loader import load_engine_config
 from stocks.engine.context_builder import ContextBuilder
+from stocks.engine.event_calendar import (
+    EventCalendar,
+    FinnhubEarningsCalendarProvider,
+    StaticEventCalendarProvider,
+)
 from stocks.engine.exchange_rate import convert_to_cny
 from stocks.engine.fetchers import DataFetcher
 from stocks.engine.history_cache import HistoryCache
@@ -180,12 +185,32 @@ class StocksEngine:
             providers.append(YahooFinanceMacroProvider())
             self.macro_provider = CompositeMacroProvider(providers)
 
+        # 2.35 初始化未来事件日历（官方日程 + 财报日历）
+        calendar_cfg = self._config.get("calendar", {})
+        self.event_calendar = None
+        if calendar_cfg.get("enabled", True):
+            calendar_providers = []
+            static_events = self._load_json("event_calendar.json")
+            if static_events:
+                calendar_providers.append(StaticEventCalendarProvider(static_events))
+            earnings_cfg = calendar_cfg.get("earnings", {})
+            if earnings_cfg.get("enabled", True) and prov_cfg.get(
+                "finnhub", {}
+            ).get("enabled", True):
+                calendar_providers.append(FinnhubEarningsCalendarProvider())
+            if calendar_providers:
+                self.event_calendar = EventCalendar(
+                    calendar_providers,
+                    lookahead_days=calendar_cfg.get("lookahead_days", 14),
+                )
+
         self.context_builder = ContextBuilder(
             fetcher=self.fetcher,
             portfolio_scaffold=self.portfolio_scaffold,
             market_scaffold=self.market_scaffold,
             history_cache=self.history_cache,
             macro_provider=self.macro_provider,
+            event_calendar=self.event_calendar,
         )
         self.persistence = DataPersistence(
             base_dir=str(self._local_data_dir / "snapshots"),
@@ -217,6 +242,7 @@ class StocksEngine:
         self._constraints: dict = {}
         self._profile: dict = {}
         self._watchlist: list[Instrument] = []
+        self._sector_scan: list[Instrument] = []
         self._load_configs()
 
     # ------------------------------------------------------------------
@@ -229,6 +255,7 @@ class StocksEngine:
         self._constraints = self._load_json("portfolio_constraints.json") or {}
         self._profile = self._load_profile()
         self._watchlist = self._load_watchlist()
+        self._sector_scan = self._load_sector_scan()
 
     def _load_openai_config(
         self,
@@ -412,6 +439,38 @@ class StocksEngine:
                 continue
         return instruments
 
+    def _load_sector_scan(self) -> list[Instrument]:
+        """从 ``sector_scan.json`` 加载板块扫描池（轮动脚手架专用）。
+
+        扫描池不进入用户 watchlist，不参与行情请求与 MarketState 判断，
+        只通过历史 K 线缓存参与轮动排名；与 watchlist 重复的 key 被去重。
+        """
+        data = self._load_json("sector_scan.json")
+        if not isinstance(data, list):
+            return []
+        watchlist_keys = {f"{i.market}:{i.code}" for i in self._watchlist}
+        instruments: list[Instrument] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            code = item.get("code", "")
+            market = item.get("market", "a")
+            if market in ("sh", "sz", "sh_index", "sz_index"):
+                market = "a"
+            if not code or f"{market}:{code}" in watchlist_keys:
+                continue
+            instruments.append(
+                Instrument(
+                    code=code,
+                    name=item.get("name", code),
+                    market=market,
+                    exchange=item.get("exchange"),
+                    category=item.get("category"),
+                    pool=item.get("pool", "sector"),
+                )
+            )
+        return instruments
+
     # ------------------------------------------------------------------
     # 对外接口 — Adapters 调用
     # ------------------------------------------------------------------
@@ -473,6 +532,7 @@ class StocksEngine:
             "rationale_summary",
             "based_on",
             "boundary",
+            "triggers",
         }
         unknown = set(payload) - allowed
         if unknown:
@@ -483,6 +543,7 @@ class StocksEngine:
             rationale_summary=payload.get("rationale_summary", ""),
             based_on=payload.get("based_on", []),
             boundary=payload.get("boundary", []),
+            triggers=payload.get("triggers", []),
         )
         self.persistence.save_advice(record)
         return record.to_dict()
@@ -550,8 +611,10 @@ class StocksEngine:
 
         这是 stocks-claw 向 Agent 提供的"完整分析原料包"。
         """
-        # 0. 确定要获取行情的标的
+        # 0. 确定要获取行情的标的；扫描池只参与历史回填与轮动，不请求实时行情。
+        # 轮动与动作信号基于历史缓存，--no-quotes 时仍可用（不触发新的历史回填）
         instruments = self._watchlist if include_quotes else []
+        scan_instruments = self._sector_scan
 
         # 1. Warm history cache if not yet warmed (D0-3:结构化上报 + 冷却重试)
         cooldown_active = False
@@ -566,11 +629,12 @@ class StocksEngine:
             and instruments
         ):
             try:
-                logger.info(f"Warming history cache for {len(instruments)} instruments...")
+                warm_targets = list(instruments) + list(scan_instruments)
+                logger.info(f"Warming history cache for {len(warm_targets)} instruments...")
                 report = await warm_history_cache(
                     self.history_cache,
                     self._history_provider,
-                    instruments,
+                    warm_targets,
                     lookback_days=60,
                 )
                 self._history_backfill_report = report
@@ -618,6 +682,7 @@ class StocksEngine:
             news=news,
             news_requested=include_news,
             history_backfill_report=self._history_backfill_report,
+            scan_instruments=scan_instruments,
         )
 
         # 保存最小快照，供下一次上下文进行前后对照。
@@ -643,6 +708,8 @@ class StocksEngine:
             "history_cache_enabled": self.history_cache is not None,
             "news_providers": len(self.news_aggregator._providers) if self.news_aggregator else 0,
             "macro_provider_enabled": self.macro_provider is not None,
+            "event_calendar_enabled": self.event_calendar is not None,
+            "sector_scan_loaded": len(self._sector_scan),
             "llm_analysis_enabled": self.llm_analysis.enabled,
         }
 

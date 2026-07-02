@@ -11,6 +11,14 @@ AnalysisContext；最终分析由调用它的 Agent 完成。系统不下单，�
 - 用户提到“买了”“卖了”或偏好变化时，先确认是否更新；未确认不得调用写接口。
 - 同一资产冲突时，以用户最后一次明确确认的内容为准。
 - 分析前读取 `stocks/prompts/personal_advice_prompt.txt`，它是统一分析约束。
+  该契约是决策导向的：输出必须围绕 `upcoming_events`（未来催化剂日历）组织
+  情景预案，引用 `rotation`（板块轮动排名）提名机会，并以"触发条件 → 动作 →
+  幅度"三元组给出调仓清单；禁止不带触发条件的"观察/等待"。
+- 每次报告先复盘上期建议：`recent_advice` 里的 `trigger_review` 是系统按
+  收盘价核对的触发事实（fired / not_fired / no_data），必须逐条回应。
+- `action_signals` 是引擎给出的规则化方向性候选动作（附 reasons），
+  是分析的初始底稿：每条方向性信号必须采纳或给理由推翻，不许无视；
+  它不是指令，最终动作仍需结合组合结构与用户偏好落定。
 - 默认使用 `AnalysisContext.raw_prompt_input` 做建议输入；其中只有金额区间，不含逐笔
   精确金额。结构化 `assets` 仍含精确值，只在确有必要时使用。
 - 所有结论必须结合 `data_quality`；stale、降级、换算失败和单源风险不可省略。
@@ -66,7 +74,7 @@ uv run python -m stocks.adapters.cli \
   --confirmed
 
 uv run python -m stocks.adapters.cli \
-  --advice-save '{"instruments":[{"market":"a","code":"000001","name":"平安银行"}],"direction":{"a:000001":"watch"},"rationale_summary":"现金占比较高，银行股继续观察。","based_on":["quotes","portfolio"],"boundary":[{"type":"fact","text":"现金占比较高"},{"type":"inference","text":"银行股继续观察"}]}' \
+  --advice-save '{"instruments":[{"market":"a","code":"000001","name":"平安银行"}],"direction":{"a:000001":"watch"},"rationale_summary":"现金占比较高，等待放量站回20日线。","based_on":["quotes","portfolio"],"boundary":[{"type":"fact","text":"现金占比较高"},{"type":"inference","text":"等待放量站回20日线"}],"triggers":[{"instrument":"a:000001","type":"price_above","level":12.5,"action":"收盘站上12.5则用现金层一成建仓","invalidation":"跌破11.8本条作废"}]}' \
   --confirmed
 
 uv run python -m stocks.adapters.cli --advice-list
@@ -83,7 +91,8 @@ MCP 对应工具：
 - `asset_add`、`asset_update`、`asset_remove`，参数必须含
   `"confirmed": true`
 - `profile_get`、`profile_update`，写操作同样必须确认
-- `advice_list`、`advice_save`，保存建议必须确认
+- `advice_list`、`advice_save`，保存建议必须确认；`advice.triggers` 可选，
+  保存"触发条件 → 动作"三元组供下次运行程序化核对
 - `get_analysis_context`、`get_quotes`、`get_news`、
   `get_portfolio_summary`
 
@@ -97,11 +106,16 @@ uv run python -m stocks.adapters.mcp
 
 受版本控制的配置位于 `stocks/config/`：
 
-- `engine.yaml`：Provider、缓存、LLM 与日志开关
+- `engine.yaml`：Provider、缓存、日历、LLM 与日志开关
 - `watchlist.json`：标的、市场、交易所和类别
 - `portfolio_constraints.json`：资产桶目标与约束
 - `news_sources.json`：RSS/Atom 新闻源
 - `markets.json`：市场元数据
+- `event_calendar.json`：官方已公布的未来事件日程（FOMC/CPI/非农等，
+  日期用完的条目被窗口自动过滤；新一批官方日程公布后人工增补）
+- `sector_scan.json`：候选池扫描（26 标的，带 pool 分层:
+  broad/sector/defensive/rates/ai_chain），只参与历史回填、轮动排名与
+  动作信号，不请求实时行情
 
 配置优先级为环境变量 > YAML > 代码默认值。嵌套环境变量使用双下划线，例如：
 

@@ -13,12 +13,15 @@ from stocks.domain.models import (
     PortfolioMapping,
     Quote,
 )
+from stocks.engine.action_signals import compute_action_signals
 from stocks.engine.advice_review import attach_advice_performance
+from stocks.engine.event_calendar import EventCalendar
 from stocks.engine.fetchers import DataFetcher
 from stocks.engine.history_cache import HistoryCache
 from stocks.engine.indicators import TechnicalIndicators
 from stocks.engine.macro_data import MacroProvider
 from stocks.engine.market_events import MarketEventExtractor
+from stocks.engine.rotation import compute_rotation
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.logging_utils import get_logger
 
@@ -40,6 +43,7 @@ class ContextBuilder:
         history_cache: Optional[HistoryCache] = None,
         macro_provider: Optional[MacroProvider] = None,
         market_event_extractor: Optional[MarketEventExtractor] = None,
+        event_calendar: Optional[EventCalendar] = None,
     ):
         self.fetcher = fetcher
         self.portfolio_scaffold = portfolio_scaffold
@@ -47,6 +51,7 @@ class ContextBuilder:
         self.history_cache = history_cache
         self.macro_provider = macro_provider
         self.market_event_extractor = market_event_extractor or MarketEventExtractor()
+        self.event_calendar = event_calendar
 
     async def build(
         self,
@@ -60,6 +65,7 @@ class ContextBuilder:
         news: Optional[list[NewsItem]] = None,
         news_requested: Optional[bool] = None,
         history_backfill_report: Optional[list[dict]] = None,
+        scan_instruments: Optional[list] = None,
     ) -> AnalysisContext:
         """构建完整分析上下文"""
         generated_at = datetime.now(timezone.utc).isoformat()
@@ -111,7 +117,44 @@ class ContextBuilder:
         # 7. 构建 MarketState
         market_state = self.market_scaffold.build(quotes)
 
-        # 8. 对最近建议做历史表现事实回看
+        # 7.5 未来催化剂日历（官方日程 + 财报日历）
+        upcoming_events: list = []
+        calendar_quality: Optional[dict] = None
+        if self.event_calendar is not None:
+            try:
+                upcoming_events, calendar_quality = await self.event_calendar.fetch(
+                    now=datetime.fromisoformat(generated_at),
+                    watchlist=list(instruments) or list(watchlist or []),
+                )
+            except Exception as e:
+                logger = get_logger("context_builder")
+                logger.warning(f"Event calendar fetch failed: {e}")
+                calendar_quality = {
+                    "status": "missing",
+                    "source": "EventCalendar",
+                    "event_count": 0,
+                    "errors": {"calendar": f"{type(e).__name__}: {e}"},
+                }
+
+        # 7.6 板块轮动脚手架（watchlist + 扫描池，基于历史收盘）
+        # 只依赖历史缓存，不依赖实时行情，因此 --no-quotes 时仍以 watchlist 计算
+        rotation, rotation_frames, rotation_universe, scan_keys = (
+            await self._build_rotation(
+                list(watchlist or instruments),
+                list(scan_instruments or []),
+            )
+        )
+
+        # 7.7 引擎动作信号（方向性候选动作，2026-07-02 用户裁决启用）
+        action_signals = compute_action_signals(
+            rotation_frames,
+            rotation_universe,
+            rotation,
+            upcoming_events=upcoming_events,
+            scan_keys=scan_keys,
+        )
+
+        # 8. 对最近建议做历史表现事实回看与触发器核对
         reviewed_advice = await attach_advice_performance(
             recent_advice or [],
             watchlist=watchlist or instruments,
@@ -133,6 +176,9 @@ class ContextBuilder:
             news_digest=news_digest,
             recent_snapshots=recent_snapshots,
             recent_advice=reviewed_advice,
+            upcoming_events=upcoming_events,
+            rotation=rotation,
+            action_signals=action_signals,
         )
 
         data_quality = self._build_data_quality(
@@ -149,6 +195,9 @@ class ContextBuilder:
             market_events=market_events,
             news_digest=news_digest,
             history_backfill_report=history_backfill_report or [],
+            calendar_quality=calendar_quality,
+            rotation=rotation,
+            action_signals=action_signals,
         )
 
         # 10. 组装 AnalysisContext
@@ -172,8 +221,56 @@ class ContextBuilder:
             technical_indicators=technical_indicators,
             data_quality=data_quality,
             recent_advice=reviewed_advice,
-            schema_version=6,
+            upcoming_events=upcoming_events,
+            rotation=rotation,
+            action_signals=action_signals,
+            schema_version=7,
         )
+
+    async def _build_rotation(
+        self,
+        instruments: list,
+        scan_instruments: list,
+    ) -> tuple[dict, dict, dict, set[str]]:
+        """基于历史缓存计算 watchlist + 扫描池的轮动排名。
+
+        返回 (rotation, frames, universe, scan_keys)，frames/universe 供
+        动作信号层复用，避免重复读历史。
+        """
+        universe: dict[str, object] = {}
+        scan_keys: set[str] = set()
+        for instrument in instruments:
+            universe[f"{instrument.market}:{instrument.code}"] = instrument
+        for instrument in scan_instruments:
+            key = f"{instrument.market}:{instrument.code}"
+            if key not in universe:
+                universe[key] = instrument
+                scan_keys.add(key)
+
+        if self.history_cache is None or not universe:
+            empty_rotation = {
+                "schema_version": 1,
+                "status": "no_data",
+                "as_of": None,
+                "window": {"short_bars": 5, "long_bars": 20},
+                "items": [],
+                "category_momentum": {},
+                "leaders": [],
+                "laggards": [],
+                "missing": sorted(universe),
+            }
+            return empty_rotation, {}, universe, scan_keys
+
+        frames = {}
+        for key, instrument in universe.items():
+            try:
+                frames[key] = await self.history_cache.get_history(
+                    instrument, lookback_bars=30
+                )
+            except Exception as e:
+                logger = get_logger("context_builder")
+                logger.warning(f"Rotation history load failed for {key}: {e}")
+        return compute_rotation(frames, universe, scan_keys), frames, universe, scan_keys
 
     def _get_fetcher_degradation_log(self) -> list[dict]:
         """读取 DataFetcher 降级日志，兼容测试中的轻量 mock。"""
@@ -255,10 +352,13 @@ class ContextBuilder:
         market_events: list,
         news_digest: dict,
         history_backfill_report: list[dict],
+        calendar_quality: Optional[dict] = None,
+        rotation: Optional[dict] = None,
+        action_signals: Optional[dict] = None,
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "generated_at": generated_at,
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
@@ -277,6 +377,53 @@ class ContextBuilder:
                 news_digest,
             ),
             "history_backfill": self._history_backfill_quality(history_backfill_report),
+            "upcoming_events": calendar_quality
+            or {
+                "status": "not_configured",
+                "source": "none",
+                "event_count": 0,
+                "sources": {},
+                "errors": {},
+            },
+            "rotation": self._rotation_quality(rotation),
+            "action_signals": self._action_signal_quality(action_signals),
+        }
+
+    @staticmethod
+    def _action_signal_quality(action_signals: Optional[dict]) -> dict:
+        """汇总动作信号覆盖为 data_quality 节点。"""
+        if not action_signals:
+            return {
+                "status": "not_configured",
+                "source": "none",
+                "item_count": 0,
+                "counts": {},
+            }
+        return {
+            "status": action_signals.get("status", "no_data"),
+            "source": "action_signals",
+            "item_count": len(action_signals.get("items", [])),
+            "counts": action_signals.get("counts", {}),
+        }
+
+    @staticmethod
+    def _rotation_quality(rotation: Optional[dict]) -> dict:
+        """汇总轮动脚手架的覆盖与时效为 data_quality 节点。"""
+        if not rotation:
+            return {
+                "status": "not_configured",
+                "source": "none",
+                "as_of": None,
+                "item_count": 0,
+                "missing_count": 0,
+            }
+        return {
+            "status": rotation.get("status", "no_data"),
+            "source": "history_cache",
+            "as_of": rotation.get("as_of"),
+            "item_count": len(rotation.get("items", [])),
+            "missing_count": len(rotation.get("missing", [])),
+            "missing": rotation.get("missing", []),
         }
 
     @staticmethod
@@ -751,6 +898,9 @@ class ContextBuilder:
         news_digest: Optional[dict] = None,
         recent_snapshots: Optional[list[dict]] = None,
         recent_advice: Optional[list[dict]] = None,
+        upcoming_events: Optional[list] = None,
+        rotation: Optional[dict] = None,
+        action_signals: Optional[dict] = None,
     ) -> str:
         """生成人类可读的原始输入文本，供 LLM 阅读"""
         lines: list[str] = []
@@ -840,6 +990,29 @@ class ContextBuilder:
                                 f" 表现: {label} | 当时方向 {item.get('direction')} | "
                                 f"status: no_data ({item.get('reason', 'unknown')})"
                             )
+                trigger_review = advice.get("trigger_review", [])
+                if trigger_review:
+                    lines.append(" 触发器核对(按收盘价):")
+                    for item in trigger_review:
+                        status = item.get("status", "no_data")
+                        head = (
+                            f" - {item.get('instrument')} {item.get('type')} "
+                            f"{item.get('level')} → {status}"
+                        )
+                        observed = item.get("observed") or {}
+                        if status in ("fired", "not_fired") and observed:
+                            head += (
+                                f" | 期间最高 {observed.get('max_price')} / "
+                                f"最低 {observed.get('min_price')} / "
+                                f"最新 {observed.get('latest_price')}"
+                            )
+                            if observed.get("pct_change") is not None:
+                                head += f" | 累计 {observed['pct_change']:+.2f}%"
+                        elif status == "no_data":
+                            head += f" ({item.get('reason', 'unknown')})"
+                        lines.append(head)
+                        if item.get("action"):
+                            lines.append(f"   预设动作: {item['action']}")
             lines.append("")
 
         # 组合结构
@@ -972,6 +1145,128 @@ class ContextBuilder:
                 lines.append(f" - {s}")
         lines.append("")
 
+        # 未来催化剂日历
+        lines.append("【未来催化剂日历】")
+        if upcoming_events:
+            lines.append(
+                " 以下为已官方公布的未来日程事实(非预测),按日期排列:"
+            )
+            for event in upcoming_events:
+                day_text = (
+                    f"T+{event.days_until}天"
+                    if event.days_until is not None and event.days_until > 0
+                    else "今天"
+                    if event.days_until == 0
+                    else "?"
+                )
+                time_text = f" {event.time_utc} UTC" if event.time_utc else ""
+                lines.append(
+                    f" {event.date}{time_text} ({day_text}) {event.name} "
+                    f"[{event.event_type}/{event.market}]"
+                )
+                if event.affected_categories:
+                    lines.append(
+                        f"  敏感类别: {', '.join(event.affected_categories)}"
+                    )
+                if event.affected_symbols:
+                    lines.append(
+                        f"  关联标的: {', '.join(event.affected_symbols[:8])}"
+                    )
+                if event.note:
+                    lines.append(f"  路径: {event.note}")
+        else:
+            lines.append(" 未配置事件日历或窗口内无已知事件(缺失即缺失,不要虚构日程)")
+        lines.append("")
+
+        # 板块轮动排名
+        lines.append("【板块轮动排名】")
+        rotation = rotation or {}
+        rotation_items = rotation.get("items", [])
+        if rotation_items:
+            window = rotation.get("window", {})
+            lines.append(
+                f" 基于历史收盘的相对强弱(近{window.get('short_bars', 5)}/"
+                f"{window.get('long_bars', 20)}根K线累计涨跌幅, as_of "
+                f"{rotation.get('as_of', 'unknown')}, 非实时):"
+            )
+            for item in rotation_items:
+                r5 = f"{item['r5']:+.2f}%" if item.get("r5") is not None else "n/a"
+                r20 = f"{item['r20']:+.2f}%" if item.get("r20") is not None else "n/a"
+                ma_flag = (
+                    "MA20上方"
+                    if item.get("above_ma20")
+                    else "MA20下方"
+                    if item.get("above_ma20") is False
+                    else ""
+                )
+                universe = "关注" if item.get("universe") == "watchlist" else "扫描"
+                lines.append(
+                    f" #{item.get('rank')} {item.get('name')} ({item.get('symbol')}) "
+                    f"[{item.get('category')}/{universe}] 5日 {r5} | 20日 {r20}"
+                    + (f" | {ma_flag}" if ma_flag else "")
+                )
+            momentum = rotation.get("category_momentum", {})
+            if momentum:
+                sorted_momentum = sorted(
+                    momentum.items(),
+                    key=lambda kv: kv[1].get("r20") if kv[1].get("r20") is not None else -1e9,
+                    reverse=True,
+                )
+                parts = []
+                for category, stats in sorted_momentum:
+                    r20 = stats.get("r20")
+                    parts.append(
+                        f"{category} {r20:+.2f}%" if r20 is not None else f"{category} n/a"
+                    )
+                lines.append(f" 类别20日动量排序: {'; '.join(parts)}")
+            missing = rotation.get("missing", [])
+            if missing:
+                lines.append(
+                    f" 历史不足未参与排名: {', '.join(missing)} (缺失即缺失,不要推断)"
+                )
+        else:
+            lines.append(" 无可用历史数据,轮动排名缺失(不要虚构强弱)")
+        lines.append("")
+
+        # 引擎动作信号
+        lines.append("【引擎动作信号】")
+        signals = (action_signals or {}).get("items", [])
+        if signals:
+            lines.append(
+                " 规则化候选动作(附触发事实,非指令;逐条确认或推翻后再输出最终建议):"
+            )
+            for item in signals:
+                if item.get("signal") in ("neutral_hold", "no_data"):
+                    continue
+                header = (
+                    f" [{item.get('signal')}] {item.get('name')} "
+                    f"({item.get('symbol')}) [{item.get('pool')}]"
+                )
+                lines.append(header)
+                for reason in item.get("reasons", []):
+                    lines.append(f"  - {reason}")
+                if item.get("event_watch"):
+                    lines.append(
+                        f"  - 事件叠加: {'; '.join(item['event_watch'])}"
+                    )
+                lines.append(f"  建议动作: {item.get('action_hint')}")
+            neutral = [i for i in signals if i.get("signal") == "neutral_hold"]
+            if neutral:
+                lines.append(
+                    " 无方向信号(neutral_hold): "
+                    + ", ".join(i.get("symbol", "?") for i in neutral)
+                )
+            missing_signals = [i for i in signals if i.get("signal") == "no_data"]
+            if missing_signals:
+                lines.append(
+                    f" 历史/指标不足不给方向(no_data) {len(missing_signals)} 个: "
+                    + ", ".join(i.get("symbol", "?") for i in missing_signals[:12])
+                    + ("..." if len(missing_signals) > 12 else "")
+                )
+        else:
+            lines.append(" 无可用动作信号(历史或指标不足,不给方向)")
+        lines.append("")
+
         # 结构化新闻事件
         lines.append("【新闻事件摘要】")
         event_items = market_events or []
@@ -1011,7 +1306,11 @@ class ContextBuilder:
         lines.append("")
 
         lines.append("=" * 50)
-        lines.append("请基于以上上下文给出投资组合分析和建议。")
+        lines.append(
+            "请基于以上上下文,按 personal_advice_prompt 的决策导向契约输出:"
+            "先复盘上期触发器,再围绕未来催化剂给出情景预案、"
+            "带触发条件的调仓清单与下一个机会提名。"
+        )
         lines.append("=" * 50)
 
         return "\n".join(lines)
