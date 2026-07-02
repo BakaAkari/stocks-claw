@@ -22,6 +22,12 @@ from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.logging_utils import get_logger
 
 
+def _optional_float(value) -> Optional[float]:
+    if value is None or value != value:
+        return None
+    return float(value)
+
+
 class ContextBuilder:
     """构建统一分析上下文 — 将行情、新闻、组合、市场状态、技术指标、宏观数据组装为 AnalysisContext"""
 
@@ -60,6 +66,11 @@ class ContextBuilder:
         if instruments:
             quotes = await self.fetcher.fetch_quotes(instruments)
         degradation_log = self._get_fetcher_degradation_log()
+        quotes = await self._backfill_stale_us_quotes(
+            instruments,
+            quotes,
+            degradation_log,
+        )
 
         # 2. 记录行情到历史缓存，并计算技术指标
         if self.history_cache and quotes:
@@ -168,6 +179,52 @@ class ContextBuilder:
                 result.append(record)
         return result
 
+    async def _backfill_stale_us_quotes(
+        self,
+        instruments: list,
+        quotes: dict[str, list[Quote]],
+        degradation_log: list[dict],
+    ) -> dict[str, list[Quote]]:
+        """Finnhub 单源失败时，用最近历史收盘价补充显式 stale 行情。"""
+        if self.history_cache is None:
+            return quotes
+        us_failed = any(
+            record.get("market") == "us"
+            and record.get("primary_provider") == "finnhub"
+            and record.get("fallback_provider") is None
+            and record.get("result") == "empty"
+            for record in degradation_log
+        )
+        if not us_failed:
+            return quotes
+
+        result = {market: list(items) for market, items in quotes.items()}
+        existing = {quote.instrument.code for quote in result.get("us", [])}
+        stale_quotes = result.setdefault("us", [])
+        for instrument in instruments:
+            if instrument.market != "us" or instrument.code in existing:
+                continue
+            history = await self.history_cache.get_history(instrument, lookback_bars=1)
+            if history.empty or history.iloc[-1].get("price") is None:
+                continue
+            row = history.iloc[-1]
+            timestamp = row.get("timestamp")
+            stale_quotes.append(
+                Quote(
+                    instrument=instrument,
+                    price=float(row["price"]),
+                    open_price=_optional_float(row.get("open_price")),
+                    high=_optional_float(row.get("high")),
+                    low=_optional_float(row.get("low")),
+                    prev_close=_optional_float(row.get("prev_close")),
+                    volume_lot=_optional_float(row.get("volume_lot")),
+                    source="history_cache",
+                    stale=True,
+                    as_of=timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp),
+                )
+            )
+        return result
+
     def _build_data_quality(
         self,
         *,
@@ -248,6 +305,14 @@ class ContextBuilder:
 
         quote_count = sum(len(items) for items in quotes.values())
         requested_count = len(instruments)
+        has_stale = any(quote.stale for items in quotes.values() for quote in items)
+        us_single_source_failed = any(
+            record.get("market") == "us"
+            and record.get("primary_provider") == "finnhub"
+            and record.get("fallback_provider") is None
+            and record.get("result") == "empty"
+            for record in degradation_log
+        )
 
         if requested_count == 0:
             status = "not_requested"
@@ -255,6 +320,9 @@ class ContextBuilder:
         elif quote_count == 0:
             status = "missing"
             freshness = "missing"
+        elif has_stale:
+            status = "degraded"
+            freshness = "stale"
         elif quote_count < requested_count:
             status = "partial"
             freshness = "fresh"
@@ -271,10 +339,13 @@ class ContextBuilder:
             market_quote_count = len(quotes.get(market, []))
             market_requested = requested_by_market.get(market, 0)
             record = records_by_market.get(market, {})
+            market_has_stale = any(quote.stale for quote in quotes.get(market, []))
             if market_requested == 0:
                 market_status = "not_requested"
             elif market_quote_count == 0:
                 market_status = "missing"
+            elif market_has_stale:
+                market_status = "stale_fallback"
             elif market_quote_count < market_requested:
                 market_status = "partial"
             elif record.get("result") == "fallback_success":
@@ -306,6 +377,7 @@ class ContextBuilder:
             "requested_count": requested_count,
             "item_count": quote_count,
             "providers": providers,
+            "us_quotes": "single_source_failed" if us_single_source_failed else "ok",
             "by_market": by_market,
             "degradation": degradation_log,
         }
@@ -509,8 +581,9 @@ class ContextBuilder:
         for market, market_quotes in quotes.items():
             enriched_quotes: list[Quote] = []
             for q in market_quotes:
-                # 记录到历史缓存
-                await self.history_cache.record(q.instrument, q)
+                # stale 回退不能伪造成今天的新行情写回历史。
+                if not q.stale:
+                    await self.history_cache.record(q.instrument, q)
                 # 获取历史数据计算指标
                 df = await self.history_cache.get_history(q.instrument, lookback_bars=60)
                 indicators = TechnicalIndicators.calculate(df)
@@ -654,7 +727,11 @@ class ContextBuilder:
                     if q.pct_change is not None:
                         sign = "+" if q.pct_change >= 0 else ""
                         change_str = f" ({sign}{q.pct_change:.2f}%)"
-                    lines.append(f" {q.instrument.name} ({q.instrument.code}): {price_str}{change_str}")
+                    stale_str = " [stale历史收盘]" if q.stale else ""
+                    lines.append(
+                        f" {q.instrument.name} ({q.instrument.code}): "
+                        f"{price_str}{change_str}{stale_str}"
+                    )
                     # 附加技术指标
                     if q.indicators:
                         ind = q.indicators

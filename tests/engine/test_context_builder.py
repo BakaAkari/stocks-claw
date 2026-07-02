@@ -13,6 +13,7 @@ import tempfile
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock
 
+import pandas as pd
 import pytest
 
 from stocks.domain.models import (
@@ -405,6 +406,68 @@ class TestRawPromptStructure:
 
 
 class TestDataQuality:
+    async def test_us_single_source_failure_uses_stale_history(
+        self,
+        mock_scaffolds,
+        sample_assets,
+        temp_dir,
+    ):
+        instrument = Instrument(code="AAPL", name="Apple", market="us")
+        fetcher = Mock()
+        fetcher.fetch_quotes = AsyncMock(return_value={"us": []})
+        fetcher.get_degradation_log = Mock(return_value=[{
+            "market": "us",
+            "primary_provider": "finnhub",
+            "fallback_provider": None,
+            "result": "empty",
+            "error_type": "ProviderNetworkError",
+            "message": "network failed",
+        }])
+        cache = HistoryCache(base_dir=temp_dir, ttl=86400)
+        historical_at = datetime(2026, 7, 1, 20, 0, tzinfo=timezone.utc)
+        await cache.warm(
+            instrument,
+            pd.DataFrame([{
+                "timestamp": historical_at,
+                "code": "AAPL",
+                "name": "Apple",
+                "market": "us",
+                "price": 210.0,
+                "open_price": 208.0,
+                "high": 212.0,
+                "low": 207.0,
+                "prev_close": 209.0,
+                "volume_lot": 1000,
+            }]),
+        )
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(
+            fetcher,
+            portfolio_scaffold,
+            market_scaffold,
+            history_cache=cache,
+        )
+
+        context = await builder.build(
+            assets=sample_assets,
+            constraints={},
+            profile={},
+            instruments=[instrument],
+            recent_snapshots=[],
+        )
+        await cache.close()
+
+        quote = context.quotes["us"][0]
+        assert quote.price == 210.0
+        assert quote.stale is True
+        assert quote.source == "history_cache"
+        quality = context.data_quality["quotes"]
+        assert quality["status"] == "degraded"
+        assert quality["freshness"] == "stale"
+        assert quality["us_quotes"] == "single_source_failed"
+        assert quality["by_market"]["us"]["status"] == "stale_fallback"
+        assert "[stale历史收盘]" in context.raw_prompt_input
+
     async def test_quotes_quality_includes_degradation_log(
         self,
         mock_fetcher,

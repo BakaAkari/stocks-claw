@@ -277,9 +277,11 @@
 **文件**:`stocks/providers/finnhub_quote.py`
 **问题**:`_fetch_sync` 以 `except Exception: return None` 吞掉所有异常,降级链的 typed error 分类对该 provider 失效,错误退化为"0 条行情"。
 
-- [ ] 按 `stocks/errors.py` 的异常体系分类抛出(网络超时→可重试,401/403→不可重试,429→限流);由降级链统一处理。
-- [ ] `fetch_batch` 串行逐个请求 + 免费档 60 次/分钟限流:加简单节流或至少文档标注上限。
-- [ ] 新增测试:mock 各类失败,确认 DegradationRecord 分类正确。
+- [x] 按 `stocks/errors.py` 的异常体系分类抛出(网络超时→可重试,401/403→不可重试,429→限流);由降级链统一处理。
+- [x] `fetch_batch` 串行逐个请求 + 免费档 60 次/分钟限流:加简单节流或至少文档标注上限。
+- [x] 新增测试:mock 各类失败,确认 DegradationRecord 分类正确。
+
+> 完成:af221e7 Finnhub 抛出 typed provider errors，免费档请求节流，降级记录保留错误分类。
 
 **验收**:Finnhub 故障时 `data_quality` 能区分"限流/网络/鉴权",不再统一表现为空结果。
 

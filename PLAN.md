@@ -266,6 +266,7 @@ key 建议：
 
 候选任务：
 
+- [ ] 美股第二行情源（替代当前 Finnhub 单点；未接入前仅使用显式 stale 历史兜底）
 - [ ] 组合风险分析：`stocks/engine/risk_analysis.py`
 - [ ] 相关性矩阵：`stocks/engine/correlation.py`
 - [ ] 分散度指标：`stocks/engine/diversification.py`

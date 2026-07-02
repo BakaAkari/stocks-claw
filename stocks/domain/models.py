@@ -37,6 +37,9 @@ class Quote:
     high: Optional[float] = None
     low: Optional[float] = None
     prev_close: Optional[float] = None
+    source: Optional[str] = None
+    stale: bool = False
+    as_of: Optional[str] = None
 
     indicators: Optional[dict] = None  # 技术指标计算结果
 
@@ -58,6 +61,9 @@ class Quote:
             "high": self.high,
             "low": self.low,
             "prev_close": self.prev_close,
+            "source": self.source,
+            "stale": self.stale,
+            "as_of": self.as_of,
             "indicators": self.indicators,
         }
 
