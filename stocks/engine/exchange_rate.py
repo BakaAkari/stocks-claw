@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +27,25 @@ _RATE_CACHE_FILE = (
 
 # 缓存有效期（秒）
 _CACHE_TTL = 3600 * 6  # 6 小时
+
+
+@dataclass(frozen=True)
+class ExchangeRateResult:
+    """带来源标记的汇率结果。"""
+
+    rate: float
+    source: str
+    timestamp: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class ConversionResult:
+    """币种换算结果；失败时 amount_cny/rate 为 None。"""
+
+    amount_cny: Optional[float]
+    rate: Optional[float]
+    source: str
+    status: str  # ok / degraded / failed
 
 
 def _fetch_usd_cny_rate() -> Optional[float]:
@@ -50,19 +71,17 @@ def _fetch_usd_cny_rate() -> Optional[float]:
     return None
 
 
-def _load_cache() -> Optional[float]:
-    """加载缓存的汇率（如果未过期）。"""
+def _load_cache() -> Optional[tuple[float, float]]:
+    """加载缓存汇率及时间戳；是否过期由调用方判断。"""
     if not _RATE_CACHE_FILE.exists():
         return None
     try:
-        import time
         with open(_RATE_CACHE_FILE, "r", encoding="utf-8") as f:
             cache = json.load(f)
         cached_rate = cache.get("rate")
         cached_at = cache.get("timestamp", 0)
-        if cached_rate and (time.time() - cached_at) < _CACHE_TTL:
-            logger.info("使用缓存汇率 USD/CNY: %.4f", cached_rate)
-            return float(cached_rate)
+        if cached_rate and cached_at:
+            return float(cached_rate), float(cached_at)
     except Exception:
         pass
     return None
@@ -70,7 +89,6 @@ def _load_cache() -> Optional[float]:
 
 def _save_cache(rate: float) -> None:
     """保存汇率到缓存文件。"""
-    import time
     try:
         _RATE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(_RATE_CACHE_FILE, "w", encoding="utf-8") as f:
@@ -97,35 +115,52 @@ def _load_fixed_rate() -> Optional[float]:
     return None
 
 
-def get_usd_cny_rate() -> float:
+def get_usd_cny_rate() -> ExchangeRateResult:
     """获取 USD/CNY 汇率。
 
-    优先级：固定配置 > 缓存 > 实时 API > 默认值(7.2)
+    优先级：固定配置 > 新鲜缓存 > 实时 API > 过期缓存 > 默认值(7.2)
 
     Returns:
-        USD/CNY 汇率（1 USD = ? CNY）
+        带来源与缓存时间戳的 USD/CNY 汇率。
     """
     # 1. 固定配置（用户明确指定，最高优先级）
     fixed = _load_fixed_rate()
     if fixed:
-        return fixed
+        return ExchangeRateResult(rate=fixed, source="fixed_config")
 
     # 2. 缓存（已验证过的数据，优先使用以避免网络阻塞）
     cached = _load_cache()
     if cached:
-        return cached
+        cached_rate, cached_at = cached
+        if (time.time() - cached_at) < _CACHE_TTL:
+            logger.info("使用缓存汇率 USD/CNY: %.4f", cached_rate)
+            return ExchangeRateResult(
+                rate=cached_rate,
+                source="cache",
+                timestamp=cached_at,
+            )
 
     # 3. 实时 API（缓存过期或不存在时获取）
     live = _fetch_usd_cny_rate()
     if live:
-        return live
+        return ExchangeRateResult(rate=live, source="live_api")
 
-    # 4. 默认值
-    logger.warning("无法获取 USD/CNY 汇率，使用默认值 7.2")
-    return 7.2
+    # 4. 实时获取失败后，过期缓存仍优先于硬编码值
+    if cached:
+        cached_rate, cached_at = cached
+        logger.warning("实时汇率不可用，使用过期缓存 USD/CNY: %.4f", cached_rate)
+        return ExchangeRateResult(
+            rate=cached_rate,
+            source="stale_cache",
+            timestamp=cached_at,
+        )
+
+    # 5. 最终硬编码兜底，必须显式标记
+    logger.warning("无法获取 USD/CNY 汇率，使用带标记的默认值 7.2")
+    return ExchangeRateResult(rate=7.2, source="hardcoded_fallback")
 
 
-def convert_to_cny(amount: float, currency: str) -> tuple[float, float]:
+def convert_to_cny(amount: float, currency: str) -> ConversionResult:
     """将指定币种的金额换算为 CNY。
 
     Args:
@@ -133,16 +168,18 @@ def convert_to_cny(amount: float, currency: str) -> tuple[float, float]:
         currency: 币种代码（"CNY" / "USD" / "HKD" 等）
 
     Returns:
-        (cny_amount, rate_used)
-        - cny_amount: 换算后的 CNY 金额
-        - rate_used: 使用的汇率
+        带状态和来源的换算结果。
     """
     currency = (currency or "CNY").upper().strip()
     if currency == "CNY":
-        return amount, 1.0
+        return ConversionResult(amount, 1.0, "identity", "ok")
     if currency == "USD":
-        rate = get_usd_cny_rate()
-        return amount * rate, rate
-    # 其他币种暂不支持，原样返回并记录警告
-    logger.warning("不支持币种 '%s' 的自动换算，按 1:1 处理", currency)
-    return amount, 1.0
+        result = get_usd_cny_rate()
+        status = (
+            "degraded"
+            if result.source in {"stale_cache", "hardcoded_fallback"}
+            else "ok"
+        )
+        return ConversionResult(amount * result.rate, result.rate, result.source, status)
+    logger.error("不支持币种 '%s' 的自动换算；该资产不计入 CNY 合计", currency)
+    return ConversionResult(None, None, "unsupported_currency", "failed")

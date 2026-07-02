@@ -179,6 +179,9 @@ class FinancialAsset:
     confirmed: bool = True
     currency: str = "CNY"  # 币种: CNY / USD / HKD 等
     amount_cny: Optional[float] = None  # 派生估值，不写回资产文件
+    conversion_status: str = "ok"  # ok / degraded / failed
+    conversion_source: str = "identity"
+    conversion_rate: Optional[float] = 1.0
 
     @property
     def valuation_cny(self) -> Optional[float]:
@@ -199,6 +202,9 @@ class FinancialAsset:
             "confirmed": self.confirmed,
             "currency": self.currency,
             "amount_cny": self.amount_cny,
+            "conversion_status": self.conversion_status,
+            "conversion_source": self.conversion_source,
+            "conversion_rate": self.conversion_rate,
         }
 
     def to_storage_dict(self) -> dict:

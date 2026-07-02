@@ -95,9 +95,11 @@
 **文件**:`stocks/engine/__init__.py`(`_load_assets_from_file` / `_save_assets`)
 **问题**:加载时把外币按当日汇率换算并将 `currency` 写死为 `"CNY"`;任何一次保存都会用换算后金额覆盖原文件,原始币种金额丢失(只剩 notes 文本)。
 
-- [ ] 数据模型分离两个概念:`amount` + `currency` 保持**原始录入值不变**;换算结果放派生字段(如 `amount_cny`,仅存在于内存/上下文输出,不写回文件)。
-- [ ] `_save_assets` 只写原始值。
-- [ ] 新增测试:加载 USD 资产 → save → 重新加载,原始 USD 金额与 currency 不变。
+- [x] 数据模型分离两个概念:`amount` + `currency` 保持**原始录入值不变**;换算结果放派生字段(如 `amount_cny`,仅存在于内存/上下文输出,不写回文件)。
+- [x] `_save_assets` 只写原始值。
+- [x] 新增测试:加载 USD 资产 → save → 重新加载,原始 USD 金额与 currency 不变。
+
+> 完成:53c438d 原始币种金额与 CNY 派生估值分离，保存不再覆盖原值，并兼容恢复旧版腐蚀数据。
 
 **验收**:round-trip 测试通过;`AnalysisContext` 中仍能拿到 CNY 口径合计。
 

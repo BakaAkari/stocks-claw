@@ -119,6 +119,7 @@ class ContextBuilder:
 
         data_quality = self._build_data_quality(
             generated_at=generated_at,
+            assets=assets,
             instruments=instruments,
             quotes=quotes,
             degradation_log=degradation_log,
@@ -180,6 +181,7 @@ class ContextBuilder:
         self,
         *,
         generated_at: str,
+        assets: list[FinancialAsset],
         instruments: list,
         quotes: dict[str, list[Quote]],
         degradation_log: list[dict],
@@ -195,6 +197,7 @@ class ContextBuilder:
         return {
             "schema_version": 1,
             "generated_at": generated_at,
+            "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
             "news": self._news_quality(generated_at, news, news_requested),
             "macro": self._macro_quality(generated_at, macro_snapshot, macro_error),
@@ -210,6 +213,35 @@ class ContextBuilder:
                 market_events,
                 news_digest,
             ),
+        }
+
+    @staticmethod
+    def _currency_conversion_quality(assets: list[FinancialAsset]) -> dict:
+        items = [
+            {
+                "name": asset.name,
+                "currency": asset.currency,
+                "status": asset.conversion_status,
+                "source": asset.conversion_source,
+                "rate": asset.conversion_rate,
+            }
+            for asset in assets
+            if asset.currency.upper() != "CNY"
+            or asset.conversion_status != "ok"
+        ]
+        failed = sum(item["status"] == "failed" for item in items)
+        degraded = sum(item["status"] == "degraded" for item in items)
+        if failed:
+            status = "failed"
+        elif degraded:
+            status = "degraded"
+        else:
+            status = "ok"
+        return {
+            "status": status,
+            "failed_count": failed,
+            "degraded_count": degraded,
+            "items": items,
         }
 
     def _quote_quality(
@@ -550,12 +582,18 @@ class ContextBuilder:
         lines.append(f" 总资产: {total:,.2f}")
         lines.append(f" 资产数量: {len(assets)}")
         for asset in assets:
-            value_cny = asset.valuation_cny or 0.0
-            pct = (value_cny / total * 100) if total > 0 else 0
+            value_cny = asset.valuation_cny
+            numeric_value = value_cny or 0.0
+            pct = (numeric_value / total * 100) if total > 0 else 0
             status = "" if asset.confirmed else "?"
+            value_text = (
+                f"{value_cny:,.2f} ({pct:.1f}%)"
+                if value_cny is not None
+                else "换算失败（未计入合计）"
+            )
             lines.append(
                 f" {status} {asset.name} ({asset.platform}) | "
-                f"类型: {asset.asset_type} | CNY估值: {value_cny:,.2f} ({pct:.1f}%)"
+                f"类型: {asset.asset_type} | CNY估值: {value_text}"
             )
             if asset.notes:
                 lines.append(f" 备注: {asset.notes}")

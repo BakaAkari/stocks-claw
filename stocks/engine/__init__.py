@@ -612,9 +612,23 @@ class StocksEngine:
         """保留原始金额/币种，并补充只在内存中使用的 CNY 估值。"""
         currency = (asset.currency or "CNY").upper()
         if currency == "CNY":
-            return replace(asset, currency=currency, amount_cny=asset.amount)
-        cny_amount, _rate = convert_to_cny(asset.amount, currency)
-        return replace(asset, currency=currency, amount_cny=cny_amount)
+            return replace(
+                asset,
+                currency=currency,
+                amount_cny=asset.amount,
+                conversion_status="ok",
+                conversion_source="identity",
+                conversion_rate=1.0,
+            )
+        conversion = convert_to_cny(asset.amount, currency)
+        return replace(
+            asset,
+            currency=currency,
+            amount_cny=conversion.amount_cny,
+            conversion_status=conversion.status,
+            conversion_source=conversion.source,
+            conversion_rate=conversion.rate,
+        )
 
     # ------------------------------------------------------------------
     # 内部工具

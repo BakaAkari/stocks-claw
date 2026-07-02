@@ -155,6 +155,71 @@ class TestBasicBuild:
         assert context.data_quality["market_events"]["status"] == "not_requested"
         assert "暂无行情数据" in context.raw_prompt_input
 
+    async def test_failed_currency_conversion_is_visible(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        hkd_asset = FinancialAsset(
+            name="港币现金",
+            platform="银行",
+            amount=1000,
+            asset_type="cash",
+            currency="HKD",
+            amount_cny=None,
+            conversion_status="failed",
+            conversion_source="unsupported_currency",
+            conversion_rate=None,
+        )
+
+        context = await builder.build(
+            assets=[hkd_asset],
+            constraints={},
+            profile={},
+            instruments=[],
+            recent_snapshots=[],
+        )
+
+        quality = context.data_quality["currency_conversion"]
+        assert quality["status"] == "failed"
+        assert quality["failed_count"] == 1
+        assert quality["items"][0]["source"] == "unsupported_currency"
+        assert "换算失败（未计入合计）" in context.raw_prompt_input
+
+    async def test_stale_currency_conversion_is_visible(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        usd_asset = FinancialAsset(
+            name="美元现金",
+            platform="银行",
+            amount=100,
+            asset_type="cash",
+            currency="USD",
+            amount_cny=675,
+            conversion_status="degraded",
+            conversion_source="stale_cache",
+            conversion_rate=6.75,
+        )
+
+        context = await builder.build(
+            assets=[usd_asset],
+            constraints={},
+            profile={},
+            instruments=[],
+            recent_snapshots=[],
+        )
+
+        quality = context.data_quality["currency_conversion"]
+        assert quality["status"] == "degraded"
+        assert quality["degraded_count"] == 1
+        assert quality["items"][0]["source"] == "stale_cache"
+
 
 # ------------------------------------------------------------------
 # 技术指标注入

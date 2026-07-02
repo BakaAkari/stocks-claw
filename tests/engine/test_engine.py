@@ -13,6 +13,7 @@ import pytest
 
 from stocks.domain.models import FinancialAsset
 from stocks.engine import StocksEngine
+from stocks.engine.exchange_rate import ConversionResult
 
 # 最小配置，用于测试初始化
 MINIMAL_CONFIG = {
@@ -260,7 +261,8 @@ class TestAssetCRUD:
             encoding="utf-8",
         )
 
-        with patch("stocks.engine.convert_to_cny", return_value=(700.0, 7.0)):
+        conversion = ConversionResult(700.0, 7.0, "cache", "ok")
+        with patch("stocks.engine.convert_to_cny", return_value=conversion):
             minimal_engine._assets = minimal_engine._load_assets_from_file()
             loaded = minimal_engine._assets[0]
             assert loaded.amount == 100.0
@@ -320,7 +322,8 @@ class TestAssetCRUD:
             encoding="utf-8",
         )
 
-        with patch("stocks.engine.convert_to_cny", return_value=(680.0, 6.8)):
+        conversion = ConversionResult(680.0, 6.8, "cache", "ok")
+        with patch("stocks.engine.convert_to_cny", return_value=conversion):
             recovered = minimal_engine._load_assets_from_file()[0]
 
         assert recovered.amount == 100.0
