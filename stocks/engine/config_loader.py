@@ -42,6 +42,7 @@ DEFAULT_ENGINE_CONFIG = {
         "quote_ttl": 1800,  # 30 分钟
         "news_ttl": 7200,   # 2 小时
         "history_ttl": 86400,  # 24 小时
+        "history_dir": None,  # 默认写入 .local/history，避免污染源码目录
         "max_snapshots": 30,
     },
     "llm": {
@@ -49,6 +50,7 @@ DEFAULT_ENGINE_CONFIG = {
         "analysis_enabled": False,
         "enhancer_model": "deepseek-v4-flash",
         "analysis_model": "kimi-k2.6",
+        "validate_models": False,
         "api_key_env": "OPENAI_API_KEY",
         "base_url_env": "OPENAI_BASE_URL",
     },

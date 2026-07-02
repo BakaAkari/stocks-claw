@@ -36,6 +36,8 @@ class Quote:
     low: Optional[float] = None
     prev_close: Optional[float] = None
 
+    indicators: Optional[dict] = None  # 技术指标计算结果
+
     def to_dict(self) -> dict:
         return {
             "instrument": {
@@ -53,6 +55,7 @@ class Quote:
             "high": self.high,
             "low": self.low,
             "prev_close": self.prev_close,
+            "indicators": self.indicators,
         }
 
 
@@ -241,12 +244,18 @@ class AnalysisContext:
     # 原始输入（供 LLM 阅读）
     raw_prompt_input: str                # 人类可读格式的完整上下文文本
 
+    # 宏观数据快照
+    macro_snapshot: Optional[dict] = None
+
+    # 技术指标汇总，key 格式为 "{market}:{code}"
+    technical_indicators: dict[str, dict] = field(default_factory=dict)
+
     # LLM 增强输出（当 llm_enhancer.enabled = true 时填充）
     market_summary_nl: str = ""            # 行情自然语言摘要（LLM 生成）
     enhanced_news_count: int = 0           # 增强后的新闻数量
 
     # 元信息（带默认值）
-    schema_version: int = 2
+    schema_version: int = 3
     llm_enhancer_enabled: bool = False   # 本次上下文是否经过 LLM 增强
     llm_enhancer_model: str = ""         # 使用的增强模型
 
@@ -268,6 +277,8 @@ class AnalysisContext:
             "drift_checks": [d.to_dict() for d in self.drift_checks],
             "recent_snapshots": self.recent_snapshots,
             "raw_prompt_input": self.raw_prompt_input,
+            "macro_snapshot": self.macro_snapshot,
+            "technical_indicators": self.technical_indicators,
             "llm_enhancer_enabled": self.llm_enhancer_enabled,
             "llm_enhancer_model": self.llm_enhancer_model,
         }

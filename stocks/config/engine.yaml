@@ -48,8 +48,26 @@ cache:
   news_ttl: 7200
   # 历史数据缓存 TTL（秒）
   history_ttl: 86400
+  # 历史缓存目录；默认写入 .local/history，避免污染源码目录
+  history_dir: null
   # 保留最大快照数
   max_snapshots: 30
+
+news_sources:
+  # RSS 新闻源列表
+  rss:
+    - https://www.36kr.com/feed
+  # 每个源最大获取条数
+  max_source_items: 20
+
+macro:
+  # 启用宏观数据采集
+  enabled: true
+  # 静态配置兜底（离线时使用）
+  static_config:
+    # vix: 20.0
+    # usd_cny: 7.25
+    # us_10y_yield: 4.2
 
 llm:
   # LLM 增强模块（新闻摘要、分级）
@@ -58,6 +76,8 @@ llm:
   # LLM 深度分析模块（投资建议生成）— 建议由 Agent 主脑处理，此处可禁用
   analysis_enabled: false
   analysis_model: kimi-k2.6
+  # 默认不在初始化时请求 /models，避免定时任务因代理鉴权/网络产生噪音
+  validate_models: false
   # API Key 从环境变量读取，也可通过 .secret/openai-key.md
   api_key_env: OPENAI_API_KEY
   base_url_env: OPENAI_BASE_URL

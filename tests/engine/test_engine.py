@@ -5,7 +5,8 @@ Mock 策略：patch load_engine_config 返回最小配置，避免依赖真实�
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from copy import deepcopy
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -26,21 +27,36 @@ MINIMAL_CONFIG = {
         "finnhub": {"enabled": True, "timeout": 20},
     },
     "fetcher": {"max_retries": 1, "retry_delay": 1.0},
-    "cache": {"enabled": True, "quote_ttl": 1800, "news_ttl": 7200, "history_ttl": 86400, "max_snapshots": 30},
+    "cache": {
+        "enabled": True,
+        "quote_ttl": 1800,
+        "news_ttl": 7200,
+        "history_ttl": 86400,
+        "history_dir": None,
+        "max_snapshots": 30,
+    },
+    "news_sources": {
+        "rss": ["https://www.36kr.com/feed"],
+        "max_source_items": 20,
+    },
+    "macro": {"enabled": True, "static_config": {}},
     "llm": {
         "enhancer_enabled": False,
         "analysis_enabled": False,
         "enhancer_model": "",
         "analysis_model": "",
+        "validate_models": False,
     },
     "logging": {"level": "INFO", "desensitize": True},
 }
 
 
 @pytest.fixture
-def minimal_engine():
+def minimal_engine(tmp_path):
     """返回使用最小配置初始化的 StocksEngine，并清空已加载的真实数据"""
-    with patch("stocks.engine.load_engine_config", return_value=MINIMAL_CONFIG):
+    config = deepcopy(MINIMAL_CONFIG)
+    config["paths"]["local_data_dir"] = str(tmp_path / "local")
+    with patch("stocks.engine.load_engine_config", return_value=config):
         engine = StocksEngine()
     # 清除可能从真实文件加载的数据，保证测试隔离性
     engine._assets = []
@@ -111,7 +127,7 @@ class TestEngineInitProviderDisabled:
     """Provider 禁用场景"""
 
     def test_tencent_disabled(self):
-        config = {**MINIMAL_CONFIG}
+        config = deepcopy(MINIMAL_CONFIG)
         config["providers"] = {
             "tencent_a": {"enabled": False},
             "eastmoney_a": {"enabled": True},
@@ -125,7 +141,7 @@ class TestEngineInitProviderDisabled:
         assert "eastmoney_a" in names
 
     def test_all_providers_disabled(self):
-        config = {**MINIMAL_CONFIG}
+        config = deepcopy(MINIMAL_CONFIG)
         config["providers"] = {
             "tencent_a": {"enabled": False},
             "eastmoney_a": {"enabled": False},
@@ -141,7 +157,7 @@ class TestEngineInitFetcherParams:
     """Fetcher 参数配置"""
 
     def test_custom_retry_params(self):
-        config = {**MINIMAL_CONFIG}
+        config = deepcopy(MINIMAL_CONFIG)
         config["fetcher"] = {"max_retries": 5, "retry_delay": 3.0}
         with patch("stocks.engine.load_engine_config", return_value=config):
             engine = StocksEngine()
@@ -257,3 +273,159 @@ class TestPortfolioAnalysis:
         mapping = scaffold.build([], {})
         drift = minimal_engine.detect_drift(mapping)
         assert drift == []
+
+
+# ------------------------------------------------------------------
+# 新模块集成测试（Phase 2）
+# ------------------------------------------------------------------
+
+class TestNewModuleIntegration:
+    """新模块集成测试 — HistoryCache / NewsAggregator / MacroProvider"""
+
+    def test_history_cache_initialized(self, minimal_engine):
+        """默认启用 history cache"""
+        assert minimal_engine.history_cache is not None
+        assert minimal_engine.history_cache._base_dir == minimal_engine._local_data_dir / "history"
+
+    def test_history_cache_custom_dir(self, tmp_path):
+        """cache.history_dir 显式配置时优先使用指定目录"""
+        config = deepcopy(MINIMAL_CONFIG)
+        custom_history_dir = tmp_path / "runtime-history"
+        config["cache"]["history_dir"] = str(custom_history_dir)
+        with patch("stocks.engine.load_engine_config", return_value=config):
+            engine = StocksEngine()
+
+        assert engine.history_cache is not None
+        assert engine.history_cache._base_dir == custom_history_dir
+
+    def test_history_cache_disabled(self):
+        """cache 禁用时 history_cache 为 None"""
+        from copy import deepcopy
+        config = deepcopy(MINIMAL_CONFIG)
+        config["cache"]["enabled"] = False
+        with patch("stocks.engine.load_engine_config", return_value=config):
+            engine = StocksEngine()
+        assert engine.history_cache is None
+
+    def test_news_aggregator_initialized(self, minimal_engine):
+        """NewsAggregator 正确初始化"""
+        assert minimal_engine.news_aggregator is not None
+        assert len(minimal_engine.news_aggregator._providers) == 1
+
+    def test_macro_provider_initialized(self, minimal_engine):
+        """默认启用 macro provider"""
+        assert minimal_engine.macro_provider is not None
+
+    def test_macro_provider_disabled(self):
+        """macro 禁用时 macro_provider 为 None"""
+        from copy import deepcopy
+        config = deepcopy(MINIMAL_CONFIG)
+        config["macro"]["enabled"] = False
+        with patch("stocks.engine.load_engine_config", return_value=config):
+            engine = StocksEngine()
+        assert engine.macro_provider is None
+
+    def test_context_builder_has_new_modules(self, minimal_engine):
+        """ContextBuilder 接收了新模块"""
+        assert minimal_engine.context_builder.history_cache is minimal_engine.history_cache
+        assert minimal_engine.context_builder.macro_provider is minimal_engine.macro_provider
+
+
+class TestHealthCheckNewModules:
+    """健康检查新字段测试"""
+
+    def test_health_check_new_fields(self, minimal_engine):
+        """health_check 包含新组件状态"""
+        health = minimal_engine.health_check()
+        assert "history_cache_enabled" in health
+        assert health["history_cache_enabled"] is True
+        assert "news_providers" in health
+        assert health["news_providers"] == 1
+        assert "macro_provider_enabled" in health
+        assert health["macro_provider_enabled"] is True
+
+    def test_health_check_cache_disabled(self):
+        from copy import deepcopy
+        config = deepcopy(MINIMAL_CONFIG)
+        config["cache"]["enabled"] = False
+        config["macro"]["enabled"] = False
+        with patch("stocks.engine.load_engine_config", return_value=config):
+            engine = StocksEngine()
+        health = engine.health_check()
+        assert health["history_cache_enabled"] is False
+        assert health["macro_provider_enabled"] is False
+        assert health["news_providers"] == 1  # news 不受 cache 影响
+
+
+class TestFetchNewsIntegration:
+    """fetch_news 使用 NewsAggregator 测试"""
+
+    async def test_fetch_news_uses_aggregator(self, minimal_engine):
+        """fetch_news 调用 NewsAggregator 而非 fetcher"""
+        from datetime import datetime, timezone
+
+        from stocks.domain.models import NewsItem
+
+        # Mock NewsAggregator.fetch
+        mock_news = [
+            NewsItem(
+                title="Test",
+                url="https://example.com",
+                source_name="test",
+                source_type="test",
+                published_at=datetime.now(timezone.utc),
+                summary="Summary",
+                language="zh",
+            )
+        ]
+        minimal_engine.news_aggregator.fetch = AsyncMock(return_value=mock_news)
+
+        result = await minimal_engine.fetch_news(limit=5)
+        assert len(result) == 1
+        assert result[0].title == "Test"
+        minimal_engine.news_aggregator.fetch.assert_called_once_with(max_items=5)
+
+    async def test_fetch_news_empty(self, minimal_engine):
+        """NewsAggregator 返回空列表"""
+        minimal_engine.news_aggregator.fetch = AsyncMock(return_value=[])
+        result = await minimal_engine.fetch_news()
+        assert result == []
+
+
+class TestLLMModelValidation:
+    """LLM 模型校验开关测试"""
+
+    def test_model_validation_disabled_by_default_even_with_api_config(self):
+        """默认不请求 /models，避免 CLI 在未启用 LLM 时产生后台网络噪音"""
+        config = deepcopy(MINIMAL_CONFIG)
+        config["llm"]["enhancer_enabled"] = False
+        config["llm"]["analysis_enabled"] = False
+        config["llm"]["validate_models"] = False
+
+        with patch("stocks.engine.load_engine_config", return_value=config):
+            with patch("stocks.engine.validate_llm_models") as validate:
+                engine = StocksEngine(
+                    openai_api_key="test-key",
+                    openai_base_url="https://example.com/v1",
+                )
+
+        assert engine._model_validation_done is False
+        validate.assert_not_called()
+
+    def test_model_validation_skipped_when_llm_modules_disabled(self):
+        """即使显式要求校验，LLM 模块都禁用时也不请求 /models"""
+        config = deepcopy(MINIMAL_CONFIG)
+        config["llm"]["enhancer_enabled"] = False
+        config["llm"]["analysis_enabled"] = False
+        config["llm"]["validate_models"] = True
+
+        with patch("stocks.engine.load_engine_config", return_value=config):
+            with patch("stocks.engine.validate_llm_models") as validate:
+                engine = StocksEngine(
+                    openai_api_key="test-key",
+                    openai_base_url="https://example.com/v1",
+                )
+
+        assert engine.llm_enhancer.enabled is False
+        assert engine.llm_analysis.enabled is False
+        validate.assert_not_called()

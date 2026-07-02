@@ -120,8 +120,10 @@ class TestLoadEngineConfig:
         assert config["fetcher"]["retry_delay"] == 1.0
         assert config["providers"]["tencent_a"]["enabled"] is True
         assert config["cache"]["quote_ttl"] == 1800
+        assert config["cache"]["history_dir"] is None
         assert config["llm"]["enhancer_enabled"] is True
         assert config["llm"]["analysis_enabled"] is False
+        assert config["llm"]["validate_models"] is False
 
     def test_yaml_override(self):
         """YAML 文件覆盖默认值"""
@@ -215,6 +217,7 @@ class TestLoadEngineConfig:
         assert config["llm"]["analysis_enabled"] is True
         assert config["llm"]["enhancer_model"] == "custom-model"
         assert config["llm"]["analysis_model"] == "kimi-k2.6"  # 默认值
+        assert config["llm"]["validate_models"] is False
 
     def test_logging_config(self):
         """日志配置正确加载"""

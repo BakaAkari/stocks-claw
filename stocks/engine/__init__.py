@@ -33,14 +33,23 @@ from stocks.engine.config_loader import load_engine_config
 from stocks.engine.context_builder import ContextBuilder
 from stocks.engine.exchange_rate import convert_to_cny
 from stocks.engine.fetchers import DataFetcher
+from stocks.engine.history_cache import HistoryCache
+from stocks.engine.history_provider import CompositeKLineProvider, warm_history_cache
 from stocks.engine.llm_analysis import LLMAnalysis
 from stocks.engine.llm_enhancer import LLMEnhancer
 from stocks.engine.llm_utils import validate_llm_models
+from stocks.engine.macro_data import (
+    CompositeMacroProvider,
+    StaticMacroProvider,
+    YahooFinanceMacroProvider,
+)
+from stocks.engine.news_sources import NewsAggregator
 from stocks.engine.persistence import DataPersistence
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
 from stocks.providers.finnhub_quote import FinnhubQuoteProvider
 from stocks.providers.registry import ProviderRegistry
+from stocks.providers.rss_news import RSSNewsProvider
 from stocks.providers.tencent_a import TencentAQuoteProvider
 
 logger = logging.getLogger(__name__)
@@ -116,23 +125,64 @@ class StocksEngine:
         )
         self.portfolio_scaffold = PortfolioScaffold()
         self.market_scaffold = MarketScaffold()
+
+        # 2.1 初始化历史缓存（用于技术指标计算）
+        cache_cfg = self._config.get("cache", {})
+        self.history_cache = None
+        if cache_cfg.get("enabled", True):
+            history_dir_cfg = cache_cfg.get("history_dir")
+            history_dir = Path(history_dir_cfg) if history_dir_cfg else self._local_data_dir / "history"
+            history_dir.mkdir(parents=True, exist_ok=True)
+            self.history_cache = HistoryCache(
+                base_dir=str(history_dir),
+                ttl=cache_cfg.get("history_ttl", 86400),
+            )
+
+        # 2.2 初始化新闻聚合器
+        news_cfg = self._config.get("news_sources", {})
+        rss_urls = news_cfg.get("rss", ["https://www.36kr.com/feed"])
+        news_providers = [RSSNewsProvider(url) for url in rss_urls]
+        self.news_aggregator = NewsAggregator(
+            providers=news_providers,
+            max_source_items=news_cfg.get("max_source_items", 20),
+        )
+
+        # 2.3 初始化宏观数据提供者
+        macro_cfg = self._config.get("macro", {})
+        self.macro_provider = None
+        if macro_cfg.get("enabled", True):
+            static_config = macro_cfg.get("static_config", {})
+            providers = []
+            if static_config:
+                providers.append(StaticMacroProvider(static_config))
+            providers.append(YahooFinanceMacroProvider())
+            self.macro_provider = CompositeMacroProvider(providers)
+
         self.context_builder = ContextBuilder(
             fetcher=self.fetcher,
             portfolio_scaffold=self.portfolio_scaffold,
             market_scaffold=self.market_scaffold,
+            history_cache=self.history_cache,
+            macro_provider=self.macro_provider,
         )
         self.persistence = DataPersistence()
+
+        # 2.4 初始化历史 K 线提供者（用于启动时回填历史数据）
+        self._history_provider = CompositeKLineProvider()
+        self._history_warmed = False
 
         # 3. 初始化 LLM 模块（配置默认值，传参可覆盖）
         llm_cfg = self._config["llm"]
         enhancer_on = llm_enhancer_enabled if llm_enhancer_enabled is not None else llm_cfg.get("enhancer_enabled", True)
         analysis_on = llm_analysis_enabled if llm_analysis_enabled is not None else llm_cfg.get("analysis_enabled", False)
         self.llm_enhancer = LLMEnhancer(
+            model=llm_cfg.get("enhancer_model", "deepseek-v4-flash"),
             enabled=enhancer_on and bool(api_key),
             api_key=api_key,
             base_url=base_url,
         )
         self.llm_analysis = LLMAnalysis(
+            model=llm_cfg.get("analysis_model", "kimi-k2.6"),
             enabled=analysis_on and bool(api_key),
             api_key=api_key,
             base_url=base_url,
@@ -140,7 +190,13 @@ class StocksEngine:
 
         # 3.5 校验模型可用性（后台线程异步执行，不阻塞初始化）
         self._model_validation_done = False
-        if api_key and base_url:
+        should_validate_models = (
+            bool(api_key)
+            and bool(base_url)
+            and llm_cfg.get("validate_models", False)
+            and (self.llm_enhancer.enabled or self.llm_analysis.enabled)
+        )
+        if should_validate_models:
             import threading
             def _validate_in_background():
                 try:
@@ -373,12 +429,12 @@ class StocksEngine:
         sources: Optional[list[str]] = None,
         limit: int = 10,
     ) -> list[NewsItem]:
-        """获取新闻数据 — 使用 RSS News Provider。"""
-        return await self.fetcher.fetch_news(
-            keywords=[],
-            sources=sources or [],
-            max_items=limit,
-        )
+        """获取新闻数据 — 使用 NewsAggregator 多源聚合。"""
+        try:
+            return await self.news_aggregator.fetch(max_items=limit)
+        except Exception as e:
+            logger.warning(f"News fetch failed: {e}")
+            return []
 
     async def enhance_news(self, news: list[NewsItem]) -> list[NewsItem]:
         """使用 LLM 增强新闻数据。"""
@@ -398,8 +454,23 @@ class StocksEngine:
 
         这是 stocks-claw 向 Agent 提供的"完整分析原料包"。
         """
-        # 1. 确定要获取行情的标的
+        # 0. 确定要获取行情的标的
         instruments = self._watchlist if include_quotes else []
+
+        # 1. Warm history cache if not yet warmed (fetch historical klines for technical indicators)
+        if not self._history_warmed and self.history_cache and instruments:
+            try:
+                logger.info(f"Warming history cache for {len(instruments)} instruments...")
+                await warm_history_cache(
+                    self.history_cache,
+                    self._history_provider,
+                    instruments,
+                    lookback_days=60,
+                )
+                self._history_warmed = True
+                logger.info("History cache warm complete")
+            except Exception as e:
+                logger.warning(f"History cache warm failed: {e}")
 
         # 2. 获取新闻（或空列表）
         news: list[NewsItem] = []
@@ -425,10 +496,17 @@ class StocksEngine:
             recent_snapshots=recent_snapshots,
             llm_enhancer_enabled=self.llm_enhancer.enabled,
             llm_enhancer_model=self.llm_enhancer.model if self.llm_enhancer.enabled else "",
-            enhanced_news=enhanced_news if self.llm_enhancer.enabled else None,
+            enhanced_news=enhanced_news,
         )
 
-        # 6. 如启用 LLM 增强，生成行情摘要（使用 360s 超时，追求质量）
+        # 6. Flush history cache if present (ensure today's data persisted)
+        if self.history_cache:
+            try:
+                await self.history_cache.flush()
+            except Exception as e:
+                logger.warning(f"History cache flush failed: {e}")
+
+        # 7. 如启用 LLM 增强，生成行情摘要（使用 360s 超时，追求质量）
         if self.llm_enhancer.enabled and context.quotes:
             try:
                 market_summary = await asyncio.wait_for(
@@ -456,6 +534,9 @@ class StocksEngine:
             "providers": [p.name for p in self.registry.all()],
             "assets_loaded": len(self._assets),
             "watchlist_loaded": len(self._watchlist),
+            "history_cache_enabled": self.history_cache is not None,
+            "news_providers": len(self.news_aggregator._providers) if self.news_aggregator else 0,
+            "macro_provider_enabled": self.macro_provider is not None,
             "llm_enhancer_enabled": self.llm_enhancer.enabled,
             "llm_analysis_enabled": self.llm_analysis.enabled,
         }
