@@ -228,15 +228,17 @@
 **文件**:`stocks/engine/fetchers.py`、`stocks/engine/__init__.py`、`stocks/config/engine.yaml`、`stocks/engine/config_loader.py`
 **问题清单**(动手前逐条 grep 验证):
 
-- [ ] `DataFetcher.fetch_news()`:与 `NewsAggregator` 重复、忽略入参、new 无 URL 的 provider——删除。
-- [ ] `_replace_context_field`:换用 `dataclasses.replace`,删除手工实现。
+- [x] `DataFetcher.fetch_news()`:与 `NewsAggregator` 重复、忽略入参、new 无 URL 的 provider——删除。
+- [x] `_replace_context_field`:换用 `dataclasses.replace`,删除手工实现。
 - [ ] `engine.yaml` 僵尸项逐一处理(实现或删除,不留假配置):
-  - `providers.fallback`(降级顺序)→ 让 `_pick_fallback_provider` 真正读取它,顺带消除对 `registry._providers` 私有属性的访问;
-  - `providers.*.timeout` → 传给 provider 或删;
-  - `cache.quote_ttl` / `news_ttl` → 实现或删;
-  - `save_to_file` / `max_snapshots` → 已由 P2-3 接线;
-  - `logging.desensitize` → 见 P3-3。
-- [ ] `HistoryCache.prune()`:在 engine 启动或每次 build 后调用,磁盘缓存获得清理路径。
+  - [x] `providers.fallback`(降级顺序)→ 让 `_pick_fallback_provider` 真正读取它,顺带消除对 `registry._providers` 私有属性的访问;
+  - [x] `providers.*.timeout` → 传给 provider 或删;
+  - [x] `cache.quote_ttl` / `news_ttl` → 实现或删;
+  - [x] `save_to_file` / `max_snapshots` → 已由 P2-3 接线;
+  - [ ] `logging.desensitize` → 见 P3-3。
+- [x] `HistoryCache.prune()`:在 engine 启动或每次 build 后调用,磁盘缓存获得清理路径。
+
+> 完成:290be6e 删除重复入口与手工替换器，配置驱动 fallback，清除假配置并接通缓存清理。
 
 **验收**:`engine.yaml` 中每个键都有消费者;grep 无剩余死路径。
 

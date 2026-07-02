@@ -45,11 +45,20 @@ class DesensitizeFilter(logging.Filter):
         if not self.enabled:
             return True
         if isinstance(record.msg, str):
+            # 先尝试完整格式化，避免 %d/%f 等数字格式符因 args 被改 str 而失败
+            if record.args:
+                try:
+                    formatted = record.msg % record.args
+                    record.msg = desensitize_message(formatted)
+                    record.args = ()
+                    return True
+                except (TypeError, ValueError):
+                    pass  # 格式化失败，退回到分别处理
             record.msg = desensitize_message(record.msg)
-        # 对 args 中的字符串也进行脱敏
+        # 只对字符串 args 脱敏，保留 int/float 原始类型
         if record.args:
             record.args = tuple(
-                desensitize_message(str(arg)) if isinstance(arg, (str, int, float)) else arg
+                desensitize_message(arg) if isinstance(arg, str) else arg
                 for arg in record.args
             )
         return True

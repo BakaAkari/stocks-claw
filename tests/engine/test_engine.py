@@ -107,6 +107,16 @@ class TestEngineInit:
         assert minimal_engine.fetcher.max_retries == 1
         assert minimal_engine.fetcher.retry_delay == 1.0
 
+    def test_init_applies_logging_config(self):
+        config = deepcopy(MINIMAL_CONFIG)
+        config["logging"] = {"level": "DEBUG", "desensitize": False}
+
+        with patch("stocks.engine.load_engine_config", return_value=config):
+            with patch("stocks.engine.setup_logging") as setup:
+                StocksEngine()
+
+        setup.assert_called_once_with(level="DEBUG", desensitize=False)
+
     def test_init_custom_config_dir(self, tmp_path):
         """自定义配置目录"""
         with patch("stocks.engine.load_engine_config", return_value=MINIMAL_CONFIG):

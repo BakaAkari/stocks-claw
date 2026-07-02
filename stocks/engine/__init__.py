@@ -46,6 +46,7 @@ from stocks.engine.macro_data import (
 from stocks.engine.news_sources import NewsAggregator
 from stocks.engine.persistence import DataPersistence
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
+from stocks.logging_utils import setup_logging
 from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
 from stocks.providers.finnhub_quote import FinnhubQuoteProvider
 from stocks.providers.registry import ProviderRegistry
@@ -87,6 +88,11 @@ class StocksEngine:
         """
         # 加载 engine.yaml 配置（环境变量 > YAML > 代码默认值）
         self._config = load_engine_config()
+        logging_cfg = self._config.get("logging", {})
+        setup_logging(
+            level=logging_cfg.get("level", "INFO"),
+            desensitize=logging_cfg.get("desensitize", True),
+        )
 
         # 路径配置：传参 > YAML > 代码默认值
         self.config_dir = (

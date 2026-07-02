@@ -117,14 +117,16 @@ class TestDesensitizeFilter:
         assert record.args == ("50000",)
 
     def test_filter_non_string_args(self):
-        """非字符串 args 不处理"""
+        """非字符串 args 保持原样（int/float 不转 str，避免 %d 格式失败）"""
         f = DesensitizeFilter(enabled=True)
         record = MagicMock()
         record.msg = "资产 %s"
         record.args = (100000, None, [1, 2])
 
         f.filter(record)
-        assert record.args == ("***", None, [1, 2])
+        # 格式化失败（%s 数量与 args 不匹配），退回到分别处理
+        # msg 无数字，保持不变；int/float/list  args 不处理
+        assert record.args == (100000, None, [1, 2])
 
     def test_filter_returns_true(self):
         """过滤器始终返回 True（不阻断日志）"""
