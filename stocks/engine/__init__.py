@@ -497,6 +497,7 @@ class StocksEngine:
             llm_enhancer_enabled=self.llm_enhancer.enabled,
             llm_enhancer_model=self.llm_enhancer.model if self.llm_enhancer.enabled else "",
             enhanced_news=enhanced_news,
+            news_requested=include_news,
         )
 
         # 6. Flush history cache if present (ensure today's data persisted)

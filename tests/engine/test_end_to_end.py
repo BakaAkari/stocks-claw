@@ -279,13 +279,17 @@ class TestJSONSerialization:
         # 反序列化验证
         parsed = json.loads(json_str)
         assert parsed["asset_count"] == 2
-        assert parsed["schema_version"] == 3
+        assert parsed["schema_version"] == 4
         assert "quotes" in parsed
         assert "a" in parsed["quotes"]
         assert parsed["news_count"] == 1
         assert parsed["macro_snapshot"] is not None
         assert "technical_indicators" in parsed
         assert parsed["technical_indicators"]["a:000001"]["status"] == "ok"
+        assert "data_quality" in parsed
+        assert parsed["data_quality"]["quotes"]["status"] == "ok"
+        assert parsed["data_quality"]["news"]["status"] == "ok"
+        assert parsed["data_quality"]["macro"]["status"] == "ok"
 
     async def test_quotes_with_indicators_serializable(self, e2e_engine_with_history):
         """带 indicators 的 Quote 可 JSON 序列化"""
@@ -308,6 +312,20 @@ class TestJSONSerialization:
         json_str = json.dumps(d["technical_indicators"], ensure_ascii=False, default=str)
         assert "history_cache" in json_str
 
+    async def test_data_quality_serializable(self, e2e_engine_with_history):
+        """data_quality 可 JSON 序列化，包含行情/新闻/宏观/指标状态"""
+        context = await e2e_engine_with_history.build_context()
+        d = context.to_dict()
+
+        quality = d["data_quality"]
+        assert quality["schema_version"] == 1
+        assert quality["quotes"]["item_count"] == 1
+        assert quality["news"]["sources"] == {"rss:36kr": 1}
+        assert quality["macro"]["source"] == "yahoo_finance"
+        assert quality["technical_indicators"]["status"] == "ok"
+        json_str = json.dumps(quality, ensure_ascii=False, default=str)
+        assert "technical_indicators" in json_str
+
     async def test_macro_snapshot_serializable(self, e2e_engine):
         """macro_snapshot 可 JSON 序列化"""
         context = await e2e_engine.build_context()
@@ -329,6 +347,8 @@ class TestDegradation:
         context = await e2e_engine.build_context()
         assert context is not None
         assert context.macro_snapshot is None
+        assert context.data_quality["macro"]["status"] == "missing"
+        assert "API down" in context.data_quality["macro"]["errors"]["provider"]
         assert "【宏观环境】" not in context.raw_prompt_input
 
     async def test_news_fetch_failure_does_not_block(self, e2e_engine):

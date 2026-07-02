@@ -1,7 +1,7 @@
 """AnalysisContext 组装器 — 编排数据获取与脚手架计算，生成统一分析上下文"""
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from stocks.domain.models import (
@@ -49,12 +49,17 @@ class ContextBuilder:
         llm_enhancer_model: str = "",
         market_summary_nl: str = "",
         enhanced_news: list = None,
+        news_requested: Optional[bool] = None,
     ) -> AnalysisContext:
         """构建完整分析上下文"""
+        generated_at = datetime.now(timezone.utc).isoformat()
+        news_was_requested = news_requested if news_requested is not None else enhanced_news is not None
+
         # 1. 获取行情
         quotes: dict[str, list[Quote]] = {}
         if instruments:
             quotes = await self.fetcher.fetch_quotes(instruments)
+        degradation_log = self._get_fetcher_degradation_log()
 
         # 2. 记录行情到历史缓存，并计算技术指标
         if self.history_cache and quotes:
@@ -63,10 +68,12 @@ class ContextBuilder:
 
         # 3. 获取宏观数据
         macro_snapshot = None
+        macro_error = None
         if self.macro_provider:
             try:
                 macro_snapshot = await self.macro_provider.fetch()
             except Exception as e:
+                macro_error = f"{type(e).__name__}: {e}"
                 logger = get_logger("context_builder")
                 logger.warning(f"Macro data fetch failed: {e}")
 
@@ -98,10 +105,22 @@ class ContextBuilder:
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
         )
 
+        data_quality = self._build_data_quality(
+            generated_at=generated_at,
+            instruments=instruments,
+            quotes=quotes,
+            degradation_log=degradation_log,
+            news=news,
+            news_requested=news_was_requested,
+            macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
+            macro_error=macro_error,
+            technical_indicators=technical_indicators,
+        )
+
         # 9. 组装 AnalysisContext
         return AnalysisContext(
-            generated_at=datetime.now().isoformat(),
-            schema_version=3,
+            generated_at=generated_at,
+            schema_version=4,
             assets=assets,
             asset_count=len(assets),
             portfolio_constraints=constraints,
@@ -118,9 +137,289 @@ class ContextBuilder:
             raw_prompt_input=raw_prompt,
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
             technical_indicators=technical_indicators,
+            data_quality=data_quality,
             llm_enhancer_enabled=llm_enhancer_enabled,
             llm_enhancer_model=llm_enhancer_model,
         )
+
+    def _get_fetcher_degradation_log(self) -> list[dict]:
+        """读取 DataFetcher 降级日志，兼容测试中的轻量 mock。"""
+        if not hasattr(self.fetcher, "get_degradation_log"):
+            return []
+        try:
+            records = self.fetcher.get_degradation_log()
+        except Exception:
+            return []
+        if not isinstance(records, (list, tuple)):
+            return []
+        result = []
+        for record in records:
+            if hasattr(record, "to_dict"):
+                result.append(record.to_dict())
+            elif isinstance(record, dict):
+                result.append(record)
+        return result
+
+    def _build_data_quality(
+        self,
+        *,
+        generated_at: str,
+        instruments: list,
+        quotes: dict[str, list[Quote]],
+        degradation_log: list[dict],
+        news: list[NewsItem],
+        news_requested: bool,
+        macro_snapshot: Optional[dict],
+        macro_error: Optional[str],
+        technical_indicators: dict[str, dict],
+    ) -> dict[str, dict]:
+        """生成统一数据质量与溯源摘要。"""
+        return {
+            "schema_version": 1,
+            "generated_at": generated_at,
+            "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
+            "news": self._news_quality(generated_at, news, news_requested),
+            "macro": self._macro_quality(generated_at, macro_snapshot, macro_error),
+            "technical_indicators": self._indicator_quality(
+                generated_at,
+                instruments,
+                quotes,
+                technical_indicators,
+            ),
+        }
+
+    def _quote_quality(
+        self,
+        generated_at: str,
+        instruments: list,
+        quotes: dict[str, list[Quote]],
+        degradation_log: list[dict],
+    ) -> dict:
+        requested_by_market: dict[str, int] = {}
+        for inst in instruments:
+            requested_by_market[inst.market] = requested_by_market.get(inst.market, 0) + 1
+
+        quote_count = sum(len(items) for items in quotes.values())
+        requested_count = len(instruments)
+
+        if requested_count == 0:
+            status = "not_requested"
+            freshness = "not_requested"
+        elif quote_count == 0:
+            status = "missing"
+            freshness = "missing"
+        elif quote_count < requested_count:
+            status = "partial"
+            freshness = "fresh"
+        elif any(record.get("result") == "fallback_success" for record in degradation_log):
+            status = "degraded"
+            freshness = "fresh"
+        else:
+            status = "ok"
+            freshness = "fresh"
+
+        by_market = {}
+        records_by_market = {record.get("market"): record for record in degradation_log}
+        for market in sorted(set(requested_by_market) | set(quotes)):
+            market_quote_count = len(quotes.get(market, []))
+            market_requested = requested_by_market.get(market, 0)
+            record = records_by_market.get(market, {})
+            if market_requested == 0:
+                market_status = "not_requested"
+            elif market_quote_count == 0:
+                market_status = "missing"
+            elif market_quote_count < market_requested:
+                market_status = "partial"
+            elif record.get("result") == "fallback_success":
+                market_status = "degraded"
+            else:
+                market_status = "ok"
+            by_market[market] = {
+                "status": market_status,
+                "requested_count": market_requested,
+                "item_count": market_quote_count,
+                "primary_provider": record.get("primary_provider"),
+                "fallback_provider": record.get("fallback_provider"),
+                "degradation_result": record.get("result"),
+                "message": record.get("message"),
+            }
+
+        providers = sorted({
+            provider
+            for record in degradation_log
+            for provider in (record.get("primary_provider"), record.get("fallback_provider"))
+            if provider
+        })
+
+        return {
+            "status": status,
+            "source": "DataFetcher",
+            "as_of": generated_at if quote_count else None,
+            "freshness": freshness,
+            "requested_count": requested_count,
+            "item_count": quote_count,
+            "providers": providers,
+            "by_market": by_market,
+            "degradation": degradation_log,
+        }
+
+    def _news_quality(self, generated_at: str, news: list[NewsItem], requested: bool) -> dict:
+        if not requested:
+            return {
+                "status": "not_requested",
+                "source": "none",
+                "as_of": None,
+                "freshness": "not_requested",
+                "item_count": 0,
+                "sources": {},
+            }
+
+        sources: dict[str, int] = {}
+        missing_published_at = 0
+        newest = None
+        for item in news:
+            source_key = f"{item.source_type}:{item.source_name}"
+            sources[source_key] = sources.get(source_key, 0) + 1
+            if item.published_at is None:
+                missing_published_at += 1
+                continue
+            published_at = item.published_at
+            if published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            if newest is None or published_at > newest:
+                newest = published_at
+
+        if not news:
+            status = "missing"
+            freshness = "missing"
+        elif missing_published_at:
+            status = "partial"
+            freshness = self._freshness_from_datetime(newest, generated_at)["freshness"] if newest else "unknown"
+        else:
+            status = "ok"
+            freshness = self._freshness_from_datetime(newest, generated_at)["freshness"] if newest else "unknown"
+
+        age_info = self._freshness_from_datetime(newest, generated_at) if newest else {"age_seconds": None}
+        return {
+            "status": status,
+            "source": "NewsAggregator",
+            "as_of": newest.isoformat() if newest else None,
+            "freshness": freshness,
+            "age_seconds": age_info["age_seconds"],
+            "item_count": len(news),
+            "sources": sources,
+            "missing_published_at": missing_published_at,
+        }
+
+    def _macro_quality(
+        self,
+        generated_at: str,
+        macro_snapshot: Optional[dict],
+        macro_error: Optional[str],
+    ) -> dict:
+        if macro_snapshot is None:
+            return {
+                "status": "missing" if self.macro_provider else "not_configured",
+                "source": "none",
+                "as_of": None,
+                "freshness": "missing" if self.macro_provider else "not_configured",
+                "filled_fields": 0,
+                "missing_fields": [],
+                "errors": {"provider": macro_error} if macro_error else {},
+            }
+
+        metric_fields = ["usd_cny", "vix", "us_10y_yield", "dxy", "gold", "crude_oil"]
+        filled = [field for field in metric_fields if macro_snapshot.get(field) is not None]
+        missing = [field for field in metric_fields if macro_snapshot.get(field) is None]
+        errors = macro_snapshot.get("errors") or {}
+        if not filled:
+            status = "missing"
+        elif errors or missing:
+            status = "partial"
+        else:
+            status = "ok"
+
+        timestamp = macro_snapshot.get("timestamp")
+        freshness_info = self._freshness_from_iso(timestamp, generated_at)
+        return {
+            "status": status,
+            "source": macro_snapshot.get("source", "unknown"),
+            "as_of": timestamp,
+            "freshness": freshness_info["freshness"],
+            "age_seconds": freshness_info["age_seconds"],
+            "filled_fields": len(filled),
+            "missing_fields": missing,
+            "errors": errors,
+        }
+
+    def _indicator_quality(
+        self,
+        generated_at: str,
+        instruments: list,
+        quotes: dict[str, list[Quote]],
+        technical_indicators: dict[str, dict],
+    ) -> dict:
+        requested_count = sum(len(items) for items in quotes.values()) if quotes else len(instruments)
+        if requested_count == 0:
+            status = "not_requested"
+            freshness = "not_requested"
+        elif not technical_indicators:
+            status = "missing"
+            freshness = "missing"
+        else:
+            ok_count = sum(1 for item in technical_indicators.values() if item.get("status") == "ok")
+            missing_count = len(technical_indicators) - ok_count
+            if ok_count == 0:
+                status = "missing"
+            elif missing_count:
+                status = "partial"
+            else:
+                status = "ok"
+            freshness = "fresh" if ok_count else "missing"
+
+        missing_symbols = [
+            symbol
+            for symbol, item in technical_indicators.items()
+            if item.get("status") != "ok"
+        ]
+        return {
+            "status": status,
+            "source": "history_cache" if self.history_cache else "none",
+            "as_of": generated_at if technical_indicators else None,
+            "freshness": freshness,
+            "requested_count": requested_count,
+            "item_count": len(technical_indicators),
+            "missing_symbols": missing_symbols,
+        }
+
+    def _freshness_from_iso(self, value: Optional[str], generated_at: str) -> dict:
+        if not value:
+            return {"freshness": "unknown", "age_seconds": None}
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return {"freshness": "unknown", "age_seconds": None}
+        return self._freshness_from_datetime(dt, generated_at)
+
+    def _freshness_from_datetime(self, value: Optional[datetime], generated_at: str) -> dict:
+        if value is None:
+            return {"freshness": "unknown", "age_seconds": None}
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        try:
+            now = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        except ValueError:
+            now = datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        age_seconds = max(0, int((now - value).total_seconds()))
+        if age_seconds <= 2 * 60 * 60:
+            freshness = "fresh"
+        elif age_seconds <= 24 * 60 * 60:
+            freshness = "stale"
+        else:
+            freshness = "old"
+        return {"freshness": freshness, "age_seconds": age_seconds}
 
     async def _enrich_with_indicators(
         self, quotes: dict[str, list[Quote]]

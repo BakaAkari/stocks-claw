@@ -250,12 +250,15 @@ class AnalysisContext:
     # 技术指标汇总，key 格式为 "{market}:{code}"
     technical_indicators: dict[str, dict] = field(default_factory=dict)
 
+    # 数据质量与溯源摘要
+    data_quality: dict[str, dict] = field(default_factory=dict)
+
     # LLM 增强输出（当 llm_enhancer.enabled = true 时填充）
     market_summary_nl: str = ""            # 行情自然语言摘要（LLM 生成）
     enhanced_news_count: int = 0           # 增强后的新闻数量
 
     # 元信息（带默认值）
-    schema_version: int = 3
+    schema_version: int = 4
     llm_enhancer_enabled: bool = False   # 本次上下文是否经过 LLM 增强
     llm_enhancer_model: str = ""         # 使用的增强模型
 
@@ -279,6 +282,7 @@ class AnalysisContext:
             "raw_prompt_input": self.raw_prompt_input,
             "macro_snapshot": self.macro_snapshot,
             "technical_indicators": self.technical_indicators,
+            "data_quality": self.data_quality,
             "llm_enhancer_enabled": self.llm_enhancer_enabled,
             "llm_enhancer_model": self.llm_enhancer_model,
         }

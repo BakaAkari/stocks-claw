@@ -178,7 +178,38 @@
 
 ---
 
-## 8. AdvisorContext
+## 8. AnalysisContext v4
+
+Agent 主入口上下文对象。
+
+新增稳定结构：
+
+- `schema_version`: 当前为 `4`
+- `macro_snapshot`: 宏观数据快照
+- `technical_indicators`: 按 `{market}:{code}` 汇总的技术指标
+- `data_quality`: 数据质量与溯源摘要
+
+`data_quality` 子结构：
+
+- `schema_version`: 当前为 `1`
+- `generated_at`: 本次质量摘要生成时间
+- `quotes`: 行情数据状态、Provider、降级链、请求数和返回数
+- `news`: 新闻请求状态、来源分布、最新发布时间和 freshness
+- `macro`: 宏观数据来源、填充字段、缺失字段、错误信息和 freshness
+- `technical_indicators`: 指标来源、覆盖标的数、缺失标的和 freshness
+
+状态枚举：
+
+- `ok`: 数据可用且未发现明显缺失
+- `partial`: 有数据，但字段、标的或来源存在缺失
+- `degraded`: 通过备用来源成功获取
+- `missing`: 已请求但没有可用数据
+- `not_requested`: 本次未请求该类数据
+- `not_configured`: 对应 provider 未启用
+
+---
+
+## 9. AdvisorContext
 
 送给 LLM 的核心上下文对象。
 

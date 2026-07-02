@@ -121,12 +121,18 @@ class TestBasicBuild:
         )
 
         assert isinstance(context, AnalysisContext)
-        assert context.schema_version == 3
+        assert context.schema_version == 4
         assert context.asset_count == 2
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
+        assert context.data_quality["schema_version"] == 1
+        assert context.data_quality["quotes"]["status"] == "ok"
+        assert context.data_quality["quotes"]["item_count"] == 1
+        assert context.data_quality["news"]["status"] == "not_requested"
+        assert context.data_quality["macro"]["status"] == "not_configured"
+        assert context.data_quality["technical_indicators"]["status"] == "missing"
 
     async def test_build_no_instruments(self, mock_fetcher, mock_scaffolds, sample_assets):
         """无 instruments 时 quotes 为空"""
@@ -143,6 +149,8 @@ class TestBasicBuild:
 
         assert context.quotes == {}
         assert context.technical_indicators == {}
+        assert context.data_quality["quotes"]["status"] == "not_requested"
+        assert context.data_quality["technical_indicators"]["status"] == "not_requested"
         assert "暂无行情数据" in context.raw_prompt_input
 
 
@@ -178,6 +186,8 @@ class TestIndicatorEnrichment:
         assert context.technical_indicators["a:000001"]["status"] == "ok"
         assert context.technical_indicators["a:000001"]["source"] == "history_cache"
         assert context.technical_indicators["a:000001"]["data_points"] == 1
+        assert context.data_quality["technical_indicators"]["status"] == "ok"
+        assert context.data_quality["technical_indicators"]["source"] == "history_cache"
 
     async def test_raw_prompt_with_indicators(self, mock_fetcher, mock_scaffolds, sample_assets, sample_instruments, sample_quotes, temp_dir):
         """raw_prompt 应包含技术指标段落（即使数据不足也有 data_points）"""
@@ -228,6 +238,8 @@ class TestMacroData:
 
         assert context.macro_snapshot is not None
         assert context.macro_snapshot["vix"] == 25.5
+        assert context.data_quality["macro"]["status"] == "partial"
+        assert context.data_quality["macro"]["filled_fields"] == 3
         assert "【宏观环境】" in context.raw_prompt_input
         assert "VIX 恐慌指数" in context.raw_prompt_input
 
@@ -248,6 +260,8 @@ class TestMacroData:
 
         # 宏观数据应为 None，但不应抛异常
         assert context.macro_snapshot is None
+        assert context.data_quality["macro"]["status"] == "missing"
+        assert "Network error" in context.data_quality["macro"]["errors"]["provider"]
         assert "【宏观环境】" not in context.raw_prompt_input
         assert context.raw_prompt_input != ""
 
@@ -308,11 +322,47 @@ class TestRawPromptStructure:
         )
 
         assert context.news_count == 1
+        assert context.data_quality["news"]["status"] == "ok"
+        assert context.data_quality["news"]["sources"] == {"test:test": 1}
         assert "Test News" in context.raw_prompt_input
 
 
+class TestDataQuality:
+    async def test_quotes_quality_includes_degradation_log(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+        sample_assets,
+        sample_instruments,
+    ):
+        """行情质量层带 provider 降级记录"""
+        mock_fetcher.get_degradation_log = Mock(return_value=[{
+            "market": "a",
+            "primary_provider": "eastmoney_a",
+            "fallback_provider": None,
+            "result": "success",
+            "message": "ok",
+        }])
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+
+        context = await builder.build(
+            assets=sample_assets,
+            constraints={},
+            profile={},
+            instruments=sample_instruments,
+            recent_snapshots=[],
+        )
+
+        quotes_quality = context.data_quality["quotes"]
+        assert quotes_quality["status"] == "ok"
+        assert quotes_quality["providers"] == ["eastmoney_a"]
+        assert quotes_quality["by_market"]["a"]["primary_provider"] == "eastmoney_a"
+        assert quotes_quality["degradation"][0]["result"] == "success"
+
+
 class TestAnalysisContextSerialization:
-    async def test_to_dict_includes_schema_v3_and_top_level_indicators(
+    async def test_to_dict_includes_schema_v4_indicators_and_data_quality(
         self,
         mock_fetcher,
         mock_scaffolds,
@@ -320,7 +370,7 @@ class TestAnalysisContextSerialization:
         sample_instruments,
         temp_dir,
     ):
-        """to_dict 输出 schema v3 与顶层 technical_indicators"""
+        """to_dict 输出 schema v4、顶层 technical_indicators 与 data_quality"""
         portfolio_scaffold, market_scaffold = mock_scaffolds
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
         builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold, history_cache=cache)
@@ -336,7 +386,9 @@ class TestAnalysisContextSerialization:
         await cache.close()
 
         data = context.to_dict()
-        assert data["schema_version"] == 3
+        assert data["schema_version"] == 4
         assert "technical_indicators" in data
+        assert "data_quality" in data
         assert data["technical_indicators"]["a:000001"]["status"] == "ok"
         assert data["technical_indicators"]["a:000001"]["data_points"] == 1
+        assert data["data_quality"]["technical_indicators"]["status"] == "ok"
