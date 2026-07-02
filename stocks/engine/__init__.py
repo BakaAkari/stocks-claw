@@ -570,8 +570,10 @@ class StocksEngine:
 
         # 3. 加载历史快照
         recent_snapshots: list[dict] = []
+        recent_advice: list[dict] = []
         if include_history:
             recent_snapshots = self.persistence.load_recent(count=5)
+            recent_advice = self.persistence.load_recent_advice(count=3)
 
         # 5. 构建 AnalysisContext
         context = await self.context_builder.build(
@@ -580,6 +582,7 @@ class StocksEngine:
             profile=self._profile,
             instruments=instruments,
             recent_snapshots=recent_snapshots,
+            recent_advice=recent_advice,
             news=news,
             news_requested=include_news,
         )

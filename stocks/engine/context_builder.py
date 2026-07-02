@@ -54,6 +54,7 @@ class ContextBuilder:
         profile: dict,
         instruments: list,  # 要获取行情的标的列表
         recent_snapshots: list[dict],
+        recent_advice: Optional[list[dict]] = None,
         news: Optional[list[NewsItem]] = None,
         news_requested: Optional[bool] = None,
     ) -> AnalysisContext:
@@ -121,6 +122,7 @@ class ContextBuilder:
             market_events=market_events,
             news_digest=news_digest,
             recent_snapshots=recent_snapshots,
+            recent_advice=recent_advice or [],
         )
 
         data_quality = self._build_data_quality(
@@ -158,6 +160,7 @@ class ContextBuilder:
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
             technical_indicators=technical_indicators,
             data_quality=data_quality,
+            recent_advice=recent_advice or [],
             schema_version=6,
         )
 
@@ -626,6 +629,7 @@ class ContextBuilder:
         market_events: Optional[list] = None,
         news_digest: Optional[dict] = None,
         recent_snapshots: Optional[list[dict]] = None,
+        recent_advice: Optional[list[dict]] = None,
     ) -> str:
         """生成人类可读的原始输入文本，供 LLM 阅读"""
         lines: list[str] = []
@@ -673,6 +677,30 @@ class ContextBuilder:
                     f"组合: {snapshot.get('portfolio_summary', {})} | "
                     f"偏离: {snapshot.get('drift_checks', [])}"
                 )
+            lines.append("")
+
+        if recent_advice:
+            lines.append("【上次建议】")
+            for advice in recent_advice[:3]:
+                instruments_text = ", ".join(
+                    f"{item.get('name', '')}({item.get('market', '')}:{item.get('code', '')})"
+                    for item in advice.get("instruments", [])
+                )
+                direction = advice.get("direction", {})
+                based_on = ", ".join(advice.get("based_on", []))
+                lines.append(
+                    f" {advice.get('created_at', 'unknown')} | "
+                    f"标的: {instruments_text or '无'} | "
+                    f"方向: {direction} | 来源: {based_on or '未标注'}"
+                )
+                lines.append(f" 摘要: {advice.get('rationale_summary', '')}")
+                boundary = advice.get("boundary", [])
+                if boundary:
+                    boundary_text = "; ".join(
+                        f"{item.get('type')}: {item.get('text')}"
+                        for item in boundary
+                    )
+                    lines.append(f" 边界: {boundary_text}")
             lines.append("")
 
         # 组合结构

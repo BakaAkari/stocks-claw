@@ -186,6 +186,28 @@ class TestBuildContextEndToEnd:
         assert second.recent_snapshots[0]["asset_count"] == 2
         assert "【上次快照】" in second.raw_prompt_input
 
+    async def test_build_context_contains_recent_advice(self, e2e_engine):
+        first = await e2e_engine.build_context(include_news=False, include_quotes=False)
+        assert first.recent_advice == []
+
+        e2e_engine.save_advice({
+            "instruments": [{"market": "a", "code": "000001", "name": "平安银行"}],
+            "direction": {"a:000001": "watch"},
+            "rationale_summary": "现金占比较高，平安银行继续观察。",
+            "based_on": ["quotes", "portfolio", "profile"],
+            "boundary": [
+                {"type": "fact", "text": "现金占比较高"},
+                {"type": "inference", "text": "平安银行继续观察"},
+            ],
+        })
+
+        second = await e2e_engine.build_context(include_news=False, include_quotes=False)
+
+        assert len(second.recent_advice) == 1
+        assert second.recent_advice[0]["direction"]["a:000001"] == "watch"
+        assert "【上次建议】" in second.raw_prompt_input
+        assert "平安银行继续观察" in second.raw_prompt_input
+
     async def test_build_context_contains_macro(self, e2e_engine):
         """macro_snapshot 包含宏观数据"""
         context = await e2e_engine.build_context()
