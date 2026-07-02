@@ -1,5 +1,7 @@
 # 数据源配置文档
 
+> **安全告警（2026-07）**：本文件曾提交真实 API Key，且仓库配置了远端。历史中出现过的 GNews、Juhe 与 Finnhub 凭据必须立即在对应服务商控制台作废并轮换；本文档只记录凭据文件位置。
+
 本文档记录 stocks 系统的所有外部数据源配置。
 
 ---
@@ -64,19 +66,19 @@
 - **查询词**: `stock market gold nasdaq`
 - **语言**: 英文
 - **配额**: 免费额度（具体查看 GNews 官网）
-- **Key**: `76fc86a55bacb7dbcabed5ef99d80b55`
+- **Key**: `<从 .secret/ 读取>`
 
 #### 3. Juhe 新闻头条 (ID 235)
 - **URL**: `http://v.juhe.cn/toutiao/index`
 - **类别**: `caijing`（财经）
 - **配额**: 100次/天
-- **Key**: `09e3f75e8b0909c3982e4350a209ad05`
+- **Key**: `<从 .secret/ 读取>`
 
 #### 4. Juhe 财经新闻 (ID 743)
 - **URL**: `http://apis.juhe.cn/fapigx/caijing/query`
 - **来源**: 澎湃新闻等深度财经媒体
 - **配额**: 查看 Juhe 官网
-- **Key**: `2f1f87b064b584e7e47af6d33560fd3c`
+- **Key**: `<从 .secret/ 读取>`
 
 ### 刷新机制
 - 手动刷新：`python3 stocks/services/news_fetch_service.py`

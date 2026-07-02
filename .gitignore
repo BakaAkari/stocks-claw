@@ -4,6 +4,7 @@
 # 密钥文件（已跟踪的除外）
 .secret/*
 !.secret/README.md
+secret/
 
 # Python
 __pycache__/
