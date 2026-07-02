@@ -5,6 +5,7 @@ Mock 策略：patch load_engine_config 返回最小配置，避免依赖真实�
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 
@@ -241,6 +242,91 @@ class TestAssetCRUD:
         """更新不存在的资产"""
         result = minimal_engine.update_asset("不存在", amount=100)
         assert result is False
+
+    def test_usd_asset_round_trip_preserves_original_value(self, minimal_engine, tmp_path):
+        """加载、保存、重载后不得用 CNY 派生值覆盖 USD 原值。"""
+        minimal_engine._local_data_dir = tmp_path
+        asset_path = tmp_path / "financial_assets.json"
+        asset_path.write_text(
+            json.dumps([
+                {
+                    "name": "美元现金",
+                    "platform": "IBKR",
+                    "amount": 100.0,
+                    "asset_type": "现金",
+                    "currency": "USD",
+                }
+            ]),
+            encoding="utf-8",
+        )
+
+        with patch("stocks.engine.convert_to_cny", return_value=(700.0, 7.0)):
+            minimal_engine._assets = minimal_engine._load_assets_from_file()
+            loaded = minimal_engine._assets[0]
+            assert loaded.amount == 100.0
+            assert loaded.currency == "USD"
+            assert loaded.amount_cny == 700.0
+
+            minimal_engine._save_assets()
+            stored = json.loads(asset_path.read_text(encoding="utf-8"))[0]
+            assert stored["amount"] == 100.0
+            assert stored["currency"] == "USD"
+            assert "amount_cny" not in stored
+
+            reloaded = minimal_engine._load_assets_from_file()[0]
+            assert reloaded.amount == 100.0
+            assert reloaded.currency == "USD"
+            assert reloaded.amount_cny == 700.0
+
+    def test_portfolio_uses_cny_valuation(self, minimal_engine):
+        assets = [
+            FinancialAsset(
+                name="美元现金",
+                platform="IBKR",
+                amount=100.0,
+                asset_type="现金",
+                currency="USD",
+                amount_cny=700.0,
+            ),
+            FinancialAsset(
+                name="人民币股票",
+                platform="券商",
+                amount=300.0,
+                asset_type="股票",
+                currency="CNY",
+                amount_cny=300.0,
+            ),
+        ]
+
+        mapping = minimal_engine.analyze_portfolio(assets)
+
+        assert mapping.ratios["现金"] == 0.7
+        assert mapping.ratios["权益"] == 0.3
+
+    def test_legacy_converted_asset_is_recovered(self, minimal_engine, tmp_path):
+        """旧版写进 notes 的原始 USD 数据应在加载时恢复。"""
+        minimal_engine._local_data_dir = tmp_path
+        (tmp_path / "financial_assets.json").write_text(
+            json.dumps([
+                {
+                    "name": "美元现金",
+                    "platform": "IBKR",
+                    "amount": 700.0,
+                    "asset_type": "现金",
+                    "notes": "USD现金余额 | 原始: 100.0 USD (汇率 7.0000)",
+                    "currency": "CNY",
+                }
+            ]),
+            encoding="utf-8",
+        )
+
+        with patch("stocks.engine.convert_to_cny", return_value=(680.0, 6.8)):
+            recovered = minimal_engine._load_assets_from_file()[0]
+
+        assert recovered.amount == 100.0
+        assert recovered.currency == "USD"
+        assert recovered.amount_cny == 680.0
+        assert recovered.notes == "USD现金余额"
 
 
 # ------------------------------------------------------------------

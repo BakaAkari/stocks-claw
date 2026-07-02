@@ -18,6 +18,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -59,6 +61,10 @@ DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 LOCAL_DATA_DIR = Path(__file__).resolve().parents[2] / ".local"
 SECRET_DIR = Path(__file__).resolve().parents[2] / ".secret"
+_LEGACY_CONVERSION_NOTE = re.compile(
+    r"(?:^|\s*\|\s*)原始:\s*(?P<amount>\d+(?:\.\d+)?)\s+"
+    r"(?P<currency>[A-Za-z]{3})\s*\(汇率\s*\d+(?:\.\d+)?\)\s*$"
+)
 
 
 class StocksEngine:
@@ -317,30 +323,44 @@ class StocksEngine:
                 notes = item.get("notes")
                 confirmed = item.get("confirmed", True)
                 currency = item.get("currency", "CNY")
-
-                # 多币种换算：统一为 CNY
-                if currency and currency.upper() != "CNY":
-                    cny_amount, rate = convert_to_cny(amount, currency)
-                    if notes:
-                        notes = f"{notes} | 原始: {amount} {currency} (汇率 {rate:.4f})"
-                    else:
-                        notes = f"原始: {amount} {currency} (汇率 {rate:.4f})"
-                    amount = cny_amount
+                amount, currency, notes = self._recover_legacy_currency(
+                    amount,
+                    currency,
+                    notes,
+                )
 
                 assets.append(
-                    FinancialAsset(
+                    self._with_cny_valuation(FinancialAsset(
                         name=name,
                         platform=platform,
                         amount=amount,
                         asset_type=asset_type,
                         notes=notes,
                         confirmed=bool(confirmed),
-                        currency="CNY",  # 统一存储为 CNY
-                    )
+                        currency=(currency or "CNY").upper(),
+                    ))
                 )
             except (ValueError, TypeError):
                 continue
         return assets
+
+    @staticmethod
+    def _recover_legacy_currency(
+        amount: float,
+        currency: str,
+        notes: Optional[str],
+    ) -> tuple[float, str, Optional[str]]:
+        """恢复旧版曾写入 notes 的原始外币值，兼容已经腐蚀的数据文件。"""
+        normalized = (currency or "CNY").upper()
+        if normalized != "CNY" or not notes:
+            return amount, normalized, notes
+        match = _LEGACY_CONVERSION_NOTE.search(notes)
+        if not match:
+            return amount, normalized, notes
+        original_amount = float(match.group("amount"))
+        original_currency = match.group("currency").upper()
+        cleaned_notes = notes[:match.start()].rstrip(" |") or None
+        return original_amount, original_currency, cleaned_notes
 
     def _load_watchlist(self) -> list[Instrument]:
         """从 ``watchlist.json`` 加载关注列表。
@@ -550,7 +570,7 @@ class StocksEngine:
 
     def add_asset(self, asset: FinancialAsset) -> None:
         """添加资产并持久化到本地文件。"""
-        self._assets.append(asset)
+        self._assets.append(self._with_cny_valuation(asset))
         self._save_assets()
 
     def remove_asset(self, name: str) -> bool:
@@ -567,9 +587,10 @@ class StocksEngine:
         for i, asset in enumerate(self._assets):
             if asset.name == name:
                 # 由于 dataclass 是 frozen，需要重建
-                current = asset.to_dict()
+                current = asset.to_storage_dict()
                 current.update(kwargs)
-                self._assets[i] = FinancialAsset(**current)
+                current.pop("amount_cny", None)
+                self._assets[i] = self._with_cny_valuation(FinancialAsset(**current))
                 self._save_assets()
                 return True
         return False
@@ -579,7 +600,21 @@ class StocksEngine:
         local_path = self._local_data_dir / "financial_assets.json"
         self._local_data_dir.mkdir(parents=True, exist_ok=True)
         with open(local_path, "w", encoding="utf-8") as f:
-            json.dump([a.to_dict() for a in self._assets], f, ensure_ascii=False, indent=2)
+            json.dump(
+                [a.to_storage_dict() for a in self._assets],
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+    @staticmethod
+    def _with_cny_valuation(asset: FinancialAsset) -> FinancialAsset:
+        """保留原始金额/币种，并补充只在内存中使用的 CNY 估值。"""
+        currency = (asset.currency or "CNY").upper()
+        if currency == "CNY":
+            return replace(asset, currency=currency, amount_cny=asset.amount)
+        cny_amount, _rate = convert_to_cny(asset.amount, currency)
+        return replace(asset, currency=currency, amount_cny=cny_amount)
 
     # ------------------------------------------------------------------
     # 内部工具

@@ -141,10 +141,12 @@ class CLIAdapter:
         lines.append("")
         lines.append("【资产概况】")
         lines.append(f"  资产数量: {context.asset_count}")
-        total = sum(a.amount for a in context.assets)
+        total = sum(a.valuation_cny or 0.0 for a in context.assets)
         lines.append(f"  资产总值: {total:,.2f}")
         for asset in context.assets:
-            lines.append(f"  - {asset.name} ({asset.platform}): {asset.amount:,.2f}")
+            value_cny = asset.valuation_cny
+            display = f"{value_cny:,.2f} CNY" if value_cny is not None else "换算失败"
+            lines.append(f"  - {asset.name} ({asset.platform}): {display}")
 
         lines.append("")
         lines.append("【组合映射】")

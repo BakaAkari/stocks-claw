@@ -116,7 +116,7 @@ def _make_request_handler(engine):
                 mapping = self._engine.analyze_portfolio(assets)
                 constraints = body.get("constraints")
                 drift_checks = self._engine.detect_drift(mapping, constraints)
-                total = sum(a.amount for a in assets)
+                total = sum(a.valuation_cny or 0.0 for a in assets)
                 return 200, {
                     "success": True,
                     "data": {

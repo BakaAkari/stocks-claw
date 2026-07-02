@@ -120,7 +120,7 @@ class MCPAdapter:
             constraints = params.get("constraints")
             drift_checks = self.engine.detect_drift(mapping, constraints)
 
-            total = sum(a.amount for a in assets)
+            total = sum(a.valuation_cny or 0.0 for a in assets)
             return {
                 "success": True,
                 "data": {

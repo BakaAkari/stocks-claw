@@ -64,13 +64,16 @@ class PortfolioScaffold:
             buckets.setdefault(bucket, []).append(asset)
 
         # 计算总资产金额
-        total = sum(a.amount for a in assets)
+        total = sum(a.valuation_cny or 0.0 for a in assets)
         total = total if total > 0 else 1.0  # 避免除零
 
         # 计算各 bucket 占比
         ratios: dict[str, float] = {}
         for bucket, bucket_assets in buckets.items():
-            ratios[bucket] = round(sum(a.amount for a in bucket_assets) / total, 4)
+            ratios[bucket] = round(
+                sum(a.valuation_cny or 0.0 for a in bucket_assets) / total,
+                4,
+            )
 
         # 判断 dominant_layers（占比 > 30% 的层）
         dominant_layers = [b for b, r in ratios.items() if r > 0.30]

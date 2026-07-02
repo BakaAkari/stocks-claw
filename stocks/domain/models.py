@@ -178,8 +178,31 @@ class FinancialAsset:
     notes: Optional[str] = None
     confirmed: bool = True
     currency: str = "CNY"  # 币种: CNY / USD / HKD 等
+    amount_cny: Optional[float] = None  # 派生估值，不写回资产文件
+
+    @property
+    def valuation_cny(self) -> Optional[float]:
+        """返回可用于组合统计的 CNY 估值；未换算外币返回 None。"""
+        if self.amount_cny is not None:
+            return self.amount_cny
+        if (self.currency or "CNY").upper() == "CNY":
+            return self.amount
+        return None
 
     def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "platform": self.platform,
+            "amount": self.amount,
+            "asset_type": self.asset_type,
+            "notes": self.notes,
+            "confirmed": self.confirmed,
+            "currency": self.currency,
+            "amount_cny": self.amount_cny,
+        }
+
+    def to_storage_dict(self) -> dict:
+        """返回持久化字段，排除运行时派生估值。"""
         return {
             "name": self.name,
             "platform": self.platform,

@@ -546,15 +546,16 @@ class ContextBuilder:
 
         # 资产明细
         lines.append("【资产明细】")
-        total = sum(a.amount for a in assets) if assets else 0
+        total = sum(a.valuation_cny or 0.0 for a in assets) if assets else 0
         lines.append(f" 总资产: {total:,.2f}")
         lines.append(f" 资产数量: {len(assets)}")
         for asset in assets:
-            pct = (asset.amount / total * 100) if total > 0 else 0
+            value_cny = asset.valuation_cny or 0.0
+            pct = (value_cny / total * 100) if total > 0 else 0
             status = "" if asset.confirmed else "?"
             lines.append(
                 f" {status} {asset.name} ({asset.platform}) | "
-                f"类型: {asset.asset_type} | 金额: {asset.amount:,.2f} ({pct:.1f}%)"
+                f"类型: {asset.asset_type} | CNY估值: {value_cny:,.2f} ({pct:.1f}%)"
             )
             if asset.notes:
                 lines.append(f" 备注: {asset.notes}")
