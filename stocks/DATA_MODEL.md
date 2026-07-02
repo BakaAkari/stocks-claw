@@ -178,16 +178,18 @@
 
 ---
 
-## 8. AnalysisContext v4
+## 8. AnalysisContext v5
 
 Agent 主入口上下文对象。
 
 新增稳定结构：
 
-- `schema_version`: 当前为 `4`
+- `schema_version`: 当前为 `5`
 - `macro_snapshot`: 宏观数据快照
 - `technical_indicators`: 按 `{market}:{code}` 汇总的技术指标
 - `data_quality`: 数据质量与溯源摘要
+- `market_events`: 从新闻提取的结构化市场事件列表
+- `news_digest`: 市场事件摘要，包含主题、市场、情绪、紧急度和持仓匹配聚合
 
 `data_quality` 子结构：
 
@@ -197,6 +199,7 @@ Agent 主入口上下文对象。
 - `news`: 新闻请求状态、来源分布、最新发布时间和 freshness
 - `macro`: 宏观数据来源、填充字段、缺失字段、错误信息和 freshness
 - `technical_indicators`: 指标来源、覆盖标的数、缺失标的和 freshness
+- `market_events`: 新闻事件提取状态、事件数、最高紧急度、持仓匹配数
 
 状态枚举：
 
@@ -206,6 +209,18 @@ Agent 主入口上下文对象。
 - `missing`: 已请求但没有可用数据
 - `not_requested`: 本次未请求该类数据
 - `not_configured`: 对应 provider 未启用
+
+`market_events` 事件字段：
+
+- `event_type`: `monetary_policy` / `macro_policy` / `industry_theme` / `company_news` / `earnings` / `market_movement` / `geopolitical` / `other`
+- `themes`: 主题标签，如 AI、半导体、利率、金融
+- `affected_markets`: 影响市场，如 `a`、`us`、`hk`、`global`
+- `affected_symbols`: 命中的关注标的，格式为 `{market}:{code}`
+- `matched_holdings`: 命中的当前持仓名称
+- `sentiment`: `positive` / `negative` / `neutral` / `unknown`
+- `urgency`: `immediate` / `high` / `medium` / `low`
+- `impact_horizon`: 影响窗口，如 `intraday_to_short_term`、`short_to_medium_term`
+- `confidence`: 规则置信度，0 到 1
 
 ---
 

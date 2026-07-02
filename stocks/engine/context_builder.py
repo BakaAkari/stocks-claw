@@ -17,6 +17,7 @@ from stocks.engine.fetchers import DataFetcher
 from stocks.engine.history_cache import HistoryCache
 from stocks.engine.indicators import TechnicalIndicators
 from stocks.engine.macro_data import MacroProvider
+from stocks.engine.market_events import MarketEventExtractor
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.logging_utils import get_logger
 
@@ -31,12 +32,14 @@ class ContextBuilder:
         market_scaffold: MarketScaffold,
         history_cache: Optional[HistoryCache] = None,
         macro_provider: Optional[MacroProvider] = None,
+        market_event_extractor: Optional[MarketEventExtractor] = None,
     ):
         self.fetcher = fetcher
         self.portfolio_scaffold = portfolio_scaffold
         self.market_scaffold = market_scaffold
         self.history_cache = history_cache
         self.macro_provider = macro_provider
+        self.market_event_extractor = market_event_extractor or MarketEventExtractor()
 
     async def build(
         self,
@@ -83,6 +86,13 @@ class ContextBuilder:
             # 预留：后续可通过 fetcher 获取新闻
             news = []
 
+        market_events, news_digest = self.market_event_extractor.extract(
+            news,
+            assets=assets,
+            instruments=instruments,
+            generated_at=generated_at,
+        )
+
         # 5. 构建 PortfolioMapping
         mapping = self.portfolio_scaffold.build(assets, constraints)
 
@@ -103,6 +113,8 @@ class ContextBuilder:
             constraints=constraints,
             profile=profile,
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
+            market_events=market_events,
+            news_digest=news_digest,
         )
 
         data_quality = self._build_data_quality(
@@ -115,12 +127,13 @@ class ContextBuilder:
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
             macro_error=macro_error,
             technical_indicators=technical_indicators,
+            market_events=market_events,
+            news_digest=news_digest,
         )
 
         # 9. 组装 AnalysisContext
         return AnalysisContext(
             generated_at=generated_at,
-            schema_version=4,
             assets=assets,
             asset_count=len(assets),
             portfolio_constraints=constraints,
@@ -128,6 +141,8 @@ class ContextBuilder:
             quotes=quotes,
             news=news,
             news_count=len(news),
+            market_events=market_events,
+            news_digest=news_digest,
             market_summary_nl=market_summary_nl,
             enhanced_news_count=len(enhanced_news) if enhanced_news else 0,
             market_state=market_state,
@@ -140,6 +155,7 @@ class ContextBuilder:
             data_quality=data_quality,
             llm_enhancer_enabled=llm_enhancer_enabled,
             llm_enhancer_model=llm_enhancer_model,
+            schema_version=5,
         )
 
     def _get_fetcher_degradation_log(self) -> list[dict]:
@@ -172,6 +188,8 @@ class ContextBuilder:
         macro_snapshot: Optional[dict],
         macro_error: Optional[str],
         technical_indicators: dict[str, dict],
+        market_events: list,
+        news_digest: dict,
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
@@ -185,6 +203,12 @@ class ContextBuilder:
                 instruments,
                 quotes,
                 technical_indicators,
+            ),
+            "market_events": self._market_event_quality(
+                news_requested,
+                news,
+                market_events,
+                news_digest,
             ),
         }
 
@@ -392,6 +416,39 @@ class ContextBuilder:
             "missing_symbols": missing_symbols,
         }
 
+    def _market_event_quality(
+        self,
+        news_requested: bool,
+        news: list[NewsItem],
+        market_events: list,
+        news_digest: dict,
+    ) -> dict:
+        if not news_requested:
+            status = "not_requested"
+            freshness = "not_requested"
+        elif not news:
+            status = "missing"
+            freshness = "missing"
+        elif not market_events:
+            status = "missing"
+            freshness = "missing"
+        elif len(market_events) < len(news):
+            status = "partial"
+            freshness = "fresh"
+        else:
+            status = "ok"
+            freshness = "fresh"
+
+        return {
+            "status": status,
+            "source": "MarketEventExtractor",
+            "freshness": freshness,
+            "news_count": len(news),
+            "event_count": len(market_events),
+            "top_urgency": next(iter(news_digest.get("urgency", {})), None),
+            "matched_holdings_count": len(news_digest.get("matched_holdings", [])),
+        }
+
     def _freshness_from_iso(self, value: Optional[str], generated_at: str) -> dict:
         if not value:
             return {"freshness": "unknown", "age_seconds": None}
@@ -470,6 +527,8 @@ class ContextBuilder:
         constraints: dict,
         profile: dict,
         macro_snapshot: Optional[dict] = None,
+        market_events: Optional[list] = None,
+        news_digest: Optional[dict] = None,
     ) -> str:
         """生成人类可读的原始输入文本，供 LLM 阅读"""
         lines: list[str] = []
@@ -614,6 +673,33 @@ class ContextBuilder:
             lines.append(" 跨资产摘要:")
             for s in market_state.cross_asset_summary:
                 lines.append(f" - {s}")
+        lines.append("")
+
+        # 结构化新闻事件
+        lines.append("【新闻事件摘要】")
+        event_items = market_events or []
+        digest = news_digest or {}
+        if event_items:
+            if digest.get("themes"):
+                top_themes = ", ".join(list(digest["themes"].keys())[:5])
+                lines.append(f" 主要主题: {top_themes}")
+            if digest.get("affected_markets"):
+                top_markets = ", ".join(list(digest["affected_markets"].keys())[:5])
+                lines.append(f" 影响市场: {top_markets}")
+            if digest.get("matched_holdings"):
+                holdings = ", ".join(digest["matched_holdings"][:5])
+                lines.append(f" 关联持仓: {holdings}")
+            for event in event_items[:5]:
+                themes = ",".join(event.themes[:3]) if event.themes else "无"
+                markets = ",".join(event.affected_markets) if event.affected_markets else "unknown"
+                holdings = ",".join(event.matched_holdings[:3]) if event.matched_holdings else "无"
+                lines.append(
+                    f" [{event.urgency}/{event.sentiment}/{event.impact_horizon}] "
+                    f"{event.title} | 类型:{event.event_type} | 主题:{themes} | "
+                    f"市场:{markets} | 持仓:{holdings}"
+                )
+        else:
+            lines.append(" 暂无结构化新闻事件")
         lines.append("")
 
         # 新闻

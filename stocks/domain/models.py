@@ -122,6 +122,50 @@ class EnhancedNewsItem(NewsItem):
 
 
 @dataclass(frozen=True)
+class MarketEvent:
+    """由新闻提取出的结构化市场事件。"""
+
+    title: str
+    url: str
+    source_name: str
+    source_type: str
+    published_at: Optional[datetime]
+    summary: Optional[str]
+    event_type: str
+    themes: list[str] = field(default_factory=list)
+    affected_markets: list[str] = field(default_factory=list)
+    affected_symbols: list[str] = field(default_factory=list)
+    matched_holdings: list[str] = field(default_factory=list)
+    sentiment: str = "unknown"
+    urgency: str = "medium"
+    impact_horizon: str = "short_term"
+    confidence: float = 0.0
+    rationale: str = ""
+    raw_news_index: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "url": self.url,
+            "source_name": self.source_name,
+            "source_type": self.source_type,
+            "published_at": self.published_at.isoformat() if self.published_at else None,
+            "summary": self.summary,
+            "event_type": self.event_type,
+            "themes": self.themes,
+            "affected_markets": self.affected_markets,
+            "affected_symbols": self.affected_symbols,
+            "matched_holdings": self.matched_holdings,
+            "sentiment": self.sentiment,
+            "urgency": self.urgency,
+            "impact_horizon": self.impact_horizon,
+            "confidence": self.confidence,
+            "rationale": self.rationale,
+            "raw_news_index": self.raw_news_index,
+        }
+
+
+@dataclass(frozen=True)
 class FinancialAsset:
     """金融资产"""
     name: str
@@ -244,6 +288,10 @@ class AnalysisContext:
     # 原始输入（供 LLM 阅读）
     raw_prompt_input: str                # 人类可读格式的完整上下文文本
 
+    # 新闻事件层
+    market_events: list[MarketEvent] = field(default_factory=list)
+    news_digest: dict = field(default_factory=dict)
+
     # 宏观数据快照
     macro_snapshot: Optional[dict] = None
 
@@ -258,7 +306,7 @@ class AnalysisContext:
     enhanced_news_count: int = 0           # 增强后的新闻数量
 
     # 元信息（带默认值）
-    schema_version: int = 4
+    schema_version: int = 5
     llm_enhancer_enabled: bool = False   # 本次上下文是否经过 LLM 增强
     llm_enhancer_model: str = ""         # 使用的增强模型
 
@@ -273,6 +321,8 @@ class AnalysisContext:
             "quotes": {k: [q.to_dict() for q in v] for k, v in self.quotes.items()},
             "news": [n.to_dict() for n in self.news],
             "news_count": self.news_count,
+            "market_events": [e.to_dict() for e in self.market_events],
+            "news_digest": self.news_digest,
             "market_summary_nl": self.market_summary_nl,
             "enhanced_news_count": self.enhanced_news_count,
             "market_state": self.market_state.to_dict(),

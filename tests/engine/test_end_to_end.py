@@ -175,6 +175,8 @@ class TestBuildContextEndToEnd:
         assert context.news_count == 1
         assert len(context.news) == 1
         assert context.news[0].title == "测试新闻标题"
+        assert len(context.market_events) == 1
+        assert context.news_digest["event_count"] == 1
 
     async def test_build_context_contains_macro(self, e2e_engine):
         """macro_snapshot 包含宏观数据"""
@@ -279,10 +281,12 @@ class TestJSONSerialization:
         # 反序列化验证
         parsed = json.loads(json_str)
         assert parsed["asset_count"] == 2
-        assert parsed["schema_version"] == 4
+        assert parsed["schema_version"] == 5
         assert "quotes" in parsed
         assert "a" in parsed["quotes"]
         assert parsed["news_count"] == 1
+        assert "market_events" in parsed
+        assert parsed["news_digest"]["event_count"] == 1
         assert parsed["macro_snapshot"] is not None
         assert "technical_indicators" in parsed
         assert parsed["technical_indicators"]["a:000001"]["status"] == "ok"
@@ -290,6 +294,7 @@ class TestJSONSerialization:
         assert parsed["data_quality"]["quotes"]["status"] == "ok"
         assert parsed["data_quality"]["news"]["status"] == "ok"
         assert parsed["data_quality"]["macro"]["status"] == "ok"
+        assert parsed["data_quality"]["market_events"]["status"] == "ok"
 
     async def test_quotes_with_indicators_serializable(self, e2e_engine_with_history):
         """带 indicators 的 Quote 可 JSON 序列化"""
@@ -321,6 +326,7 @@ class TestJSONSerialization:
         assert quality["schema_version"] == 1
         assert quality["quotes"]["item_count"] == 1
         assert quality["news"]["sources"] == {"rss:36kr": 1}
+        assert quality["market_events"]["event_count"] == 1
         assert quality["macro"]["source"] == "yahoo_finance"
         assert quality["technical_indicators"]["status"] == "ok"
         json_str = json.dumps(quality, ensure_ascii=False, default=str)
