@@ -260,6 +260,21 @@ class TestPortfolioScaffoldDrift:
         assert statuses["固收"] == "above_max"
         assert statuses["现金"] == "within_range"  # 在范围内也返回
 
+    def test_missing_bucket_is_checked_as_zero(self, scaffold):
+        """组合中没有现金时，现金最低占比约束仍必须报警。"""
+        mapping = scaffold.build(
+            [FinancialAsset(name="股票", platform="x", amount=100000, asset_type="股票ETF")],
+            {},
+        )
+
+        drift = scaffold.check_drift(mapping, {"现金": {"min": 0.05, "max": 0.30}})
+
+        assert len(drift) == 1
+        assert drift[0].bucket == "现金"
+        assert drift[0].current_ratio == 0.0
+        assert drift[0].status == "below_min"
+        assert drift[0].gap == 0.05
+
 
 # ------------------------------------------------------------------
 # MarketScaffold 测试

@@ -128,8 +128,9 @@ class PortfolioScaffold:
         """检查约束偏离 — 对每个 bucket 检查是否超出约束范围"""
         drift_checks: list[DriftCheck] = []
 
-        for bucket, ratio in mapping.ratios.items():
-            bucket_constraints = constraints.get(bucket, {})
+        # 约束声明是检查基准：组合里缺失的 bucket 也必须按 0% 检查最小值。
+        for bucket, bucket_constraints in constraints.items():
+            ratio = mapping.ratios.get(bucket, 0.0)
             target_min = bucket_constraints.get("min")
             target_max = bucket_constraints.get("max")
 

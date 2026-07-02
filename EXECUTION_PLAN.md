@@ -36,8 +36,10 @@
 
 **问题**:`stocks/engine/exchange_rate.py` 把非敏感的汇率缓存写入 `.secret/exchange-rate-cache.json`,密钥目录被当通用存储,且路径硬编码相对源码树。
 
-- [ ] 缓存路径改为运行态数据目录(建议 `data/cache/exchange-rate-cache.json` 或与 `HistoryCache` 同级目录),确保 gitignore。
-- [ ] `.secret/` 目录只允许存放凭据类文件。
+- [x] 缓存路径改为运行态数据目录(建议 `data/cache/exchange-rate-cache.json` 或与 `HistoryCache` 同级目录),确保 gitignore。
+- [x] `.secret/` 目录只允许存放凭据类文件。
+
+> 完成:7f0e538 汇率缓存迁移至忽略的 `data/cache/`，并将现有运行态缓存移出 `.secret/`。
 
 **验收**:运行 CLI 后 `.secret/` 无新增非凭据文件;新缓存路径未被 git 追踪。
 
