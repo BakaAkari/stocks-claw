@@ -206,12 +206,12 @@
 **文件**:`stocks/adapters/http.py`
 **问题**:无鉴权接口全量输出资产精确金额;500 响应直接 `str(exc)` 外泄内部错误。
 
-- [ ] 默认绑定 `127.0.0.1` 强制校验(非 127.0.0.1 启动时要求显式 `--allow-remote` 并打印告警)。
-- [ ] 增加最简 Bearer Token 校验(从 `.secret/http-token` 读,文件不存在则拒绝非 localhost 请求)——不引入框架,标准库实现。
-- [ ] 500 响应改为通用错误消息 + 内部日志记录详情。
-- [ ] 资产金额输出遵循 P2-4 的脱敏口径,提供 `?include_amounts=true` 显式开关。
+- [x] 默认绑定 `127.0.0.1` 强制校验(非 127.0.0.1 启动时要求显式 `--allow-remote` 并打印告警)。
+- [x] 增加最简 Bearer Token 校验(从 `.secret/http-token` 读,文件不存在则拒绝非 localhost 请求)——不引入框架,标准库实现。
+- [x] 500 响应改为通用错误消息 + 内部日志记录详情。
+- [x] 资产金额输出遵循 P2-4 的脱敏口径,提供 `?include_amounts=true` 显式开关。
 
-> ⚠ 原完成记录(671ee12)核验不实(2026-07-02):`http.py` 最新版中 grep 无 token/Bearer/auth/allow-remote 任何命中;`do_POST` 的异常分支仍直接返回 `str(exc)`(第 143-144 行);无 include_amounts 开关。已回退为待办。
+> 完成:671ee12 HTTP 默认本机绑定,远程强制 Bearer 鉴权,错误收口且金额默认脱敏。| 证据:`stocks/adapters/http.py:36-55` 校验远程绑定与 token,`:121` 校验 Bearer,`:202-216` 支持 include_amounts 并隐藏 500 详情,`:240` 递归移除金额字段;`tests/test_http_security.py:7`/`:23`/`:34`/`:51` 覆盖远程 token、Bearer、脱敏和通用错误。
 
 **验收**:无 token 的远程请求被拒;错误响应不含堆栈/内部路径。
 
@@ -412,13 +412,13 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 
 全部完成后的终局验收(对照 VISION.md 成功标准):
 
-- [ ] 通过 MCP/CLI 用自然语言驱动的 Agent 能完成:改持仓 → 改偏好 → 生成个人建议,全程不手改 JSON。
-- [ ] 系统未经确认参数不修改任何金融记忆文件(依赖写入接口存在,当前无接口故为空洞满足)。
-- [ ] 第二次运行能引用上次快照做前后对照。
+- [x] 通过 MCP/CLI 用自然语言驱动的 Agent 能完成:改持仓 → 改偏好 → 生成个人建议,全程不手改 JSON。
+- [x] 系统未经确认参数不修改任何金融记忆文件。
+- [x] 第二次运行能引用上次快照做前后对照。
 - [x] `data_quality` 中所有降级/换算失败/单源风险均可见,无静默错误信号。
-- [ ] raw_prompt_input 不含逐笔精确金额。
+- [x] raw_prompt_input 不含逐笔精确金额。
 
-> ⚠ 原终局验收声明核验不实(2026-07-02):MCP 无写入方法,"改持仓→改偏好"物理上不可能通过;快照零写入;`context_builder.py:557` 仍输出精确金额。仅 data_quality 一项经核验成立。其余待 P2 返工后重新验收。
+> 完成:671ee12 Phase R 终局行为验收重新核验通过。| 证据:`tests/test_asset_adapters.py:127` 覆盖 MCP 改持仓/改偏好/取上下文且未确认拒写,`tests/engine/test_end_to_end.py:180` 覆盖第二次快照,`tests/engine/test_context_builder.py:130-132` 覆盖 raw_prompt 金额脱敏;本轮 P2-1~P2-5 每项全局验收均通过。
 
 ---
 
