@@ -13,24 +13,55 @@
 
 from __future__ import annotations
 
+import hmac
 import json
+import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
+
+logger = logging.getLogger(__name__)
 
 
 class HTTPAdapter:
     """HTTP 适配器 — 使用标准库 http.server 启动 JSON API 服务。"""
 
-    def __init__(self, engine, host: str = "localhost", port: int = 8687):
+    def __init__(
+        self,
+        engine,
+        host: str = "127.0.0.1",
+        port: int = 8687,
+        *,
+        allow_remote: bool = False,
+        token_path: Optional[Path] = None,
+    ):
         self.engine = engine
         self.host = host
         self.port = port
+        self.allow_remote = allow_remote
+        self._is_local = host in {"127.0.0.1", "localhost", "::1"}
+        if not self._is_local and not allow_remote:
+            raise ValueError("Remote bind requires --allow-remote")
+        token_path = token_path or Path(__file__).resolve().parents[2] / ".secret" / "http-token"
+        self._bearer_token = (
+            token_path.read_text(encoding="utf-8").strip()
+            if token_path.exists()
+            else ""
+        )
+        if not self._is_local and not self._bearer_token:
+            raise ValueError("Remote bind requires .secret/http-token")
         self._server: Optional[HTTPServer] = None
 
     def start(self):
         """启动 HTTP 服务器（阻塞）。"""
-        handler_factory = _make_request_handler(self.engine)
+        if not self._is_local:
+            logger.warning("HTTP remote access enabled on %s; Bearer auth is mandatory", self.host)
+        handler_factory = _make_request_handler(
+            self.engine,
+            bearer_token=self._bearer_token,
+            require_auth=not self._is_local or bool(self._bearer_token),
+        )
         self._server = HTTPServer((self.host, self.port), handler_factory)
         print(f"stocks-claw HTTP 服务已启动: http://{self.host}:{self.port}")
         try:
@@ -49,13 +80,15 @@ class HTTPAdapter:
             print("HTTP 服务已停止。")
 
 
-def _make_request_handler(engine):
+def _make_request_handler(engine, bearer_token: str = "", require_auth: bool = False):
     """工厂函数：创建绑定 engine 的 RequestHandler 子类。"""
 
     class _RequestHandler(BaseHTTPRequestHandler):
         """HTTP 请求处理器 — 路由到 engine 方法并返回 JSON。"""
 
         _engine = engine
+        _bearer_token = bearer_token
+        _require_auth = require_auth
 
         def log_message(self, format, *args):
             """覆盖默认日志，减少噪音。"""
@@ -81,7 +114,29 @@ def _make_request_handler(engine):
             except json.JSONDecodeError as exc:
                 raise ValueError(f"Invalid JSON body: {exc}")
 
-        def _route_post(self, path: str, body: dict) -> tuple[int, dict]:
+        def _is_authorized(self) -> bool:
+            if not self._require_auth:
+                return True
+            authorization = self.headers.get("Authorization", "")
+            expected = f"Bearer {self._bearer_token}"
+            return bool(self._bearer_token) and hmac.compare_digest(
+                authorization,
+                expected,
+            )
+
+        def _require_authorization(self) -> bool:
+            if self._is_authorized():
+                return True
+            self._send_json(401, {"success": False, "error": "Unauthorized"})
+            return False
+
+        def _route_post(
+            self,
+            path: str,
+            body: dict,
+            *,
+            include_amounts: bool = False,
+        ) -> tuple[int, dict]:
             """路由 POST 请求到 engine 方法。"""
             import asyncio
             if path == "/api/v1/analysis/context":
@@ -90,7 +145,10 @@ def _make_request_handler(engine):
                     include_quotes=body.get("include_quotes", True),
                     include_history=body.get("include_history", True),
                 ))
-                return 200, {"success": True, "data": context.to_dict()}
+                data = context.to_dict()
+                if not include_amounts:
+                    data = _without_precise_amounts(data)
+                return 200, {"success": True, "data": data}
 
             if path == "/api/v1/quotes":
                 market = body.get("market")
@@ -117,15 +175,18 @@ def _make_request_handler(engine):
                 constraints = body.get("constraints")
                 drift_checks = self._engine.detect_drift(mapping, constraints)
                 total = sum(a.valuation_cny or 0.0 for a in assets)
+                data = {
+                    "assets": [a.to_dict() for a in assets],
+                    "asset_count": len(assets),
+                    "total_value": total,
+                    "portfolio_mapping": mapping.to_dict(),
+                    "drift_checks": [d.to_dict() for d in drift_checks],
+                }
+                if not include_amounts:
+                    data = _without_precise_amounts(data)
                 return 200, {
                     "success": True,
-                    "data": {
-                        "assets": [a.to_dict() for a in assets],
-                        "asset_count": len(assets),
-                        "total_value": total,
-                        "portfolio_mapping": mapping.to_dict(),
-                        "drift_checks": [d.to_dict() for d in drift_checks],
-                    },
+                    "data": data,
                 }
 
             return 404, {"success": False, "error": f"Unknown endpoint: {path}"}
@@ -134,31 +195,59 @@ def _make_request_handler(engine):
             """处理 POST 请求。"""
             parsed = urlparse(self.path)
             path = parsed.path
+            if not self._require_authorization():
+                return
             try:
                 body = self._read_json_body()
-                status, response = self._route_post(path, body)
+                include_amounts = (
+                    parse_qs(parsed.query).get("include_amounts", ["false"])[0].lower()
+                    == "true"
+                )
+                status, response = self._route_post(
+                    path,
+                    body,
+                    include_amounts=include_amounts,
+                )
                 self._send_json(status, response)
             except ValueError as exc:
                 self._send_json(400, {"success": False, "error": str(exc)})
-            except Exception as exc:
-                self._send_json(500, {"success": False, "error": str(exc)})
+            except Exception:
+                logger.exception("HTTP POST %s failed", path)
+                self._send_json(500, {"success": False, "error": "Internal server error"})
 
         def do_GET(self):
             """处理 GET 请求。"""
             parsed = urlparse(self.path)
             path = parsed.path
+            if not self._require_authorization():
+                return
 
             if path == "/api/v1/health":
                 try:
                     health = self._engine.health_check()
                     self._send_json(200, {"success": True, "data": health})
-                except Exception as exc:
-                    self._send_json(500, {"success": False, "error": str(exc)})
+                except Exception:
+                    logger.exception("HTTP health check failed")
+                    self._send_json(500, {"success": False, "error": "Internal server error"})
                 return
 
             self._send_json(404, {"success": False, "error": f"Unknown endpoint: {path}"})
 
     return _RequestHandler
+
+
+def _without_precise_amounts(value):
+    """递归移除 HTTP 默认响应中的精确资产金额字段。"""
+    if isinstance(value, list):
+        return [_without_precise_amounts(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    hidden = {"amount", "amount_cny", "total_value"}
+    return {
+        key: _without_precise_amounts(item)
+        for key, item in value.items()
+        if key not in hidden
+    }
 
 
 def main():
@@ -167,6 +256,11 @@ def main():
 
     parser = argparse.ArgumentParser(description="stocks-claw HTTP 服务")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="显式允许非本机监听（必须配置 .secret/http-token）",
+    )
     parser.add_argument("--port", type=int, default=8687, help="监听端口")
     parser.add_argument("--llm-enhancer", action="store_true", help="启用 LLM 数据增强")
     parser.add_argument("--llm-analysis", action="store_true", help="启用 LLM 深度分析")
@@ -182,7 +276,12 @@ def main():
         openai_api_key=args.openai_key,
         openai_base_url=args.openai_base_url,
     )
-    adapter = HTTPAdapter(engine, host=args.host, port=args.port)
+    adapter = HTTPAdapter(
+        engine,
+        host=args.host,
+        port=args.port,
+        allow_remote=args.allow_remote,
+    )
     adapter.start()
 
 

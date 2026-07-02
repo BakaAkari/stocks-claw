@@ -181,10 +181,12 @@
 **文件**:`stocks/engine/llm_analysis.py`、`stocks/prompts/`、`AGENT_GUIDE.md`
 **问题**:全库质量最高的 prompt(反幻觉、金额脱敏、格式规范)没有任何代码加载;`llm_analysis` 用的是内联弱 prompt,且两者对"是否暴露金额"要求直接矛盾。
 
-- [ ] `LLMAnalysis.generate_report()` 改为从 `stocks/prompts/personal_advice_prompt.txt` 加载系统 prompt,内联 prompt 删除。
-- [ ] 在 `AGENT_GUIDE.md` 增加一节:外部 Agent 作为主脑时,应读取该 prompt 文件作为分析指引(明确它是给内部 LLM 和外部 Agent 共用的"分析宪法")。
-- [ ] 解决金额矛盾:`raw_prompt_input` 中资产金额改为**占比 + 量级区间**表达(遵循 prompt 的脱敏要求);精确金额仅保留在结构化 `to_dict()` 中,由调用方决定是否使用。
-- [ ] 删除死代码 `extract_constraints()`(其职能由 P2-2 的 profile_update 承接)或接线到 profile 更新流程——二选一,倾向删除。
+- [x] `LLMAnalysis.generate_report()` 改为从 `stocks/prompts/personal_advice_prompt.txt` 加载系统 prompt,内联 prompt 删除。
+- [x] 在 `AGENT_GUIDE.md` 增加一节:外部 Agent 作为主脑时,应读取该 prompt 文件作为分析指引(明确它是给内部 LLM 和外部 Agent 共用的"分析宪法")。
+- [x] 解决金额矛盾:`raw_prompt_input` 中资产金额改为**占比 + 量级区间**表达(遵循 prompt 的脱敏要求);精确金额仅保留在结构化 `to_dict()` 中,由调用方决定是否使用。
+- [x] 删除死代码 `extract_constraints()`(其职能由 P2-2 的 profile_update 承接)或接线到 profile 更新流程——二选一,倾向删除。
+
+> 完成:6cf7688 内外部分析统一加载 advice prompt，删除死提取器，并将 raw prompt 金额改为占比与量级。
 
 **验收**:`--llm-analysis` 输出遵循 advice prompt 的格式约束;raw_prompt 不再出现逐笔精确金额。
 
