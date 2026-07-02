@@ -494,7 +494,7 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 **验收**:模拟 A 股回填失败,`data_quality` 一眼可见 history_backfill 失败明细,prompt 中对应标的带"指标不可用"标注。
 
 **完成记录**(2026-07-02):
-- 提交:待补(commit hash 见 D0-3 完成 commit)
+- 提交:`005b59f` D0-3: 历史回填结果显性上报 + 失败可重试
 - 验证前提证据:
   - `stocks/engine/__init__.py:555` 原代码 `await warm_history_cache(...)` 返回值未接收(改前 grep 已核实,当前已重写为接收结构化 report)。
   - 原 `try` 分支内 `self._history_warmed = True` 无条件执行,重写后仅当 `effective = ok+skipped_cached > 0` 才置真。
