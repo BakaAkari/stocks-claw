@@ -18,7 +18,7 @@
 
 > 本节转录自旧 EXECUTION_PLAN 的带证据完成记录(归档件 `docs/archive/EXECUTION_PLAN_20260703.md`,证据细节一律查归档件)。任何执行 Agent 开工前必须先完成 EXECUTION_PLAN 的 S0 基线核验;发现不符,以代码为准并回头修正本节。
 
-- **已完成(证据见归档件对应任务卡)**:P0 安全、P1 静默错误六项、P2 记忆回路(含返工与证据收口)、P3 删减、P4 数据底盘一期、P5 文档收口、M 建议闭环(AdviceRecord/确认保存/注入/回看)、F0 基线修复(事件时点/时区语义、真实 trigger_review、autouse 网络守门)、**Phase D 全部**(D0 可信度硬化;D1 冗余:A 股腾讯、美股 Nasdaq、加密 Binance 第二源,宏观 FRED→Yahoo→static 逐字段合并+月度官方统计;D2 一手事件源:Finnhub 财报日历缓存、SEC EDGAR/巨潮公告、持仓定向新闻 scope。出口 2026-07-03 10:34 通过,全量 431 passed,历史 37/37 可用)、**Phase F 重新验收通过**(rotation 37/37 标的 ≥40 bars、accumulate 增 r20≥2% 门槛排除微小正收益、顶层 as_of 取最保守口径)、**G0**(DecisionEnvelope 冻结契约:dataclass + JSON Schema 2020-12 + 本地校验器与两模式同形测试;MCP 尚未暴露决策工具)。当前契约:**AnalysisContext v10、data_quality v9**。
+- **已完成(证据见归档件对应任务卡)**:P0 安全、P1 静默错误六项、P2 记忆回路(含返工与证据收口)、P3 删减、P4 数据底盘一期、P5 文档收口、M 建议闭环(AdviceRecord/确认保存/注入/回看)、F0 基线修复(事件时点/时区语义、真实 trigger_review、autouse 网络守门)、**Phase D 全部**(D0 可信度硬化;D1 冗余:A 股腾讯、美股 Nasdaq、加密 Binance 第二源,宏观 FRED→Yahoo→static 逐字段合并+月度官方统计;D2 一手事件源:Finnhub 财报日历缓存、SEC EDGAR/巨潮公告、持仓定向新闻 scope。出口 2026-07-03 10:34 通过,当时全量 431 passed,历史 37/37 可用;S0 2026-07-03 12:15 复核为全量 436 passed,历史 37/37 可用,真实网络 build_context 行情 ok、rotation ok、upcoming_events ok、新闻 partial(SEC_USER_AGENT 未配置邮箱))、**Phase F 重新验收通过**(rotation 37/37 标的 ≥40 bars、accumulate 增 r20≥2% 门槛排除微小正收益、顶层 as_of 取最保守口径)、**G0**(DecisionEnvelope 冻结契约:dataclass + JSON Schema 2020-12 + 本地校验器与两模式同形测试;MCP 尚未暴露决策工具)。当前契约:**AnalysisContext v10、data_quality v9**。
 - **未开工**:旧 G1~G7。依本次重构裁决不再按旧蓝图串行排期,转入切片候选队列(§5);G0 已落盘的契约与校验器保留为休眠资产,在 DecisionPlan 相关切片立项时接线,期间不得删除。
 - **两起必须记住的事故**:①执行 Agent 伪造带 commit hash 的完成记录并勾掉物理上不可能通过的验收;②文档维护方曾未比对内容整体覆盖完成态清单。§6、§7 的规则由此导出,永久有效。
 

@@ -21,11 +21,13 @@
 
 **目的**:PLAN §2 的状态是 2026-07-03 文档重构时从归档件转录的,未重新逐项核验。本任务为后续一切工作建立可信基线。
 
-- [ ] 跑全局验收四道闸,记录 pytest 收集数与通过数;与 PLAN §2 转录值("最近一次全量 431 passed")对照,不一致则逐项列出差异。
-- [ ] 【验证前提】grep 确认:`stocks/engine/advice_review.py` 存在 `_review_trigger`;`stocks/providers/` 存在 Tencent/Nasdaq/Binance K 线 Provider 与 SEC/巨潮 filing Provider;G0 的 DecisionEnvelope 契约与本地校验器存在(休眠资产,不得删除);`AnalysisContext.schema_version == 10`、`data_quality.schema_version == 9`(以 `stocks/DATA_MODEL.md` 与 models/测试断言互证)。
-- [ ] 真实网络冒烟一次完整 `build_context`(含行情与新闻),把 `data_quality` 概要(quotes/history_backfill/rotation/upcoming_events 各节状态)留存到本任务完成记录。
+- [x] 跑全局验收四道闸,记录 pytest 收集数与通过数;与 PLAN §2 转录值("最近一次全量 431 passed")对照,不一致则逐项列出差异。
+- [x] 【验证前提】grep 确认:`stocks/engine/advice_review.py` 存在 `_review_trigger`;`stocks/engine/history_provider.py` 存在 Tencent/Nasdaq/Binance K 线 Provider,`stocks/providers/filings.py` 存在 SEC/巨潮 filing Provider;G0 的 DecisionEnvelope 契约与本地校验器存在(休眠资产,不得删除);`AnalysisContext.schema_version == 10`、`data_quality.schema_version == 9`(以 `stocks/DATA_MODEL.md` 与 models/测试断言互证)。
+- [x] 真实网络冒烟一次完整 `build_context`(含行情与新闻),把 `data_quality` 概要(quotes/history_backfill/rotation/upcoming_events 各节状态)留存到本任务完成记录。
 
 **验收**:基线数字写入完成记录;若与 PLAN §2 冲突,先修正 PLAN §2(增量修改+立即 commit)再继续。
+
+> 完成:commit待回填 S0 基线核验通过,PLAN §2 当前基线由 431 更新为 436 passed,并修正 K 线 Provider 真实路径 | 证据:全局闸 `uv run ruff check .`=All checks passed,`uv run python -m pytest -q`=436 passed,`uv run python -m compileall -q stocks tests`=0,`uv run python -m stocks.adapters.cli --output json --no-news --no-quotes`=0;grep `stocks/engine/advice_review.py:66`,`stocks/engine/history_provider.py:145/288/382`,`stocks/providers/filings.py:18/146`,`stocks/engine/decision_contract.py:18/49`,`stocks/domain/models.py:499/530`,`stocks/engine/context_builder.py:256/391`,`stocks/DATA_MODEL.md:4/235`,`tests/engine/test_context_builder.py:146-153`;真实网络 build_context:quotes ok 11/11,history_backfill ok 37 skipped_cached,rotation ok missing 0,upcoming_events ok cache hits 3 misses 0,news partial(SEC_USER_AGENT 未配置邮箱)。
 
 ---
 
@@ -53,8 +55,8 @@
 
 - [ ] 【验证前提】grep AdviceRecord 现有字段、triggers 的校验方式与存储位置(`.local/advice/`)。
 - [ ] `AdviceRecord` 增可选 `actions[]`,每项:`{target(instrument_key 或约束 bucket 名), action ∈ {add,increase,reduce,exit,hold,watch}, size_hint(比例区间或自然语言,禁止精确金额), trigger?, invalidation?, horizon ∈ {short,medium,long}}`;旧记录按 `[]` 兼容加载。
-- [ ] 保存时确定性校验:`target` 必须存在于已映射持仓/watchlist/扫描池/约束 bucket 之一;action/horizon 枚举合法;`size_hint` 含纯精确金额(正则检测)则拒绝。校验失败返回结构化错误明细,不静默丢弃、不部分写入。
-- [ ] prompt 契约"调仓触发清单"节同步一句:建议确认保存时按 actions 结构落库。
+- [ ] 保存时确定性校验:`target` 必须存在于已映射持仓/watchlist/扫描池/约束 bucket 之一;action/horizon 枚举合法;`size_hint` 含具体货币金额(如 `¥12,000`、`$3,400`、`12000元`,正则检测货币符号/单位+数字)则拒绝,百分比与比例区间(如 "一成"、"5%~8%")允许。校验失败返回结构化错误明细,不静默丢弃、不部分写入。
+- [ ] prompt 契约"调仓触发清单"节同步一句:建议确认保存时按 actions 结构落库;`AGENT_GUIDE.md` 的 advice_save 示例同步 actions 用法。
 - [ ] 测试:合法保存、伪造 target 拒绝、精确金额拒绝、旧记录加载、CLI/MCP 透传。
 
 **验收**:保存一条带 ≥2 个 actions 的真实建议,下次 `build_context` 的 recent_advice 完整回显 actions;全局验收通过。
@@ -63,8 +65,9 @@
 
 **文件**:`stocks/domain/models.py`、`stocks/engine/persistence.py`、`stocks/adapters/cli.py`、`stocks/adapters/mcp.py`、`stocks/DATA_MODEL.md`、`tests/`
 
-- [ ] `ExecutionRecord`:`{id, advice_id?, target, action, note, executed_at, recorded_at}`;存 `.local/executions/`(gitignore 确认覆盖);确认式写入:CLI `--execution-save ... --confirmed`、MCP `execution_save`(`confirmed: true`);`--execution-list`/`execution_list` 读取。
-- [ ] `build_context` 复盘对照:上期建议每条 action 标 `executed / partial / not_executed / unknown`(按 advice_id+target 匹配;匹配不到一律 unknown,**不猜**)。
+- [ ] `ExecutionRecord`:`{id, advice_id?, target, action(建议 action 枚举 + none 表示"明确未执行"), extent ∈ {full,partial}(action=none 时省略), note, executed_at, recorded_at}`;存 `.local/executions/`(gitignore 确认覆盖);确认式写入:CLI `--execution-save ... --confirmed`、MCP `execution_save`(`confirmed: true`);`--execution-list`/`execution_list` 读取。
+- [ ] `build_context` 复盘对照:上期建议每条 action 按 advice_id+target 匹配——有记录且 extent=full → `executed`;extent=partial → `partial`;action=none → `not_executed`;无记录 → `unknown`。**匹配不到一律 unknown,不猜。**
+- [ ] 新 CLI/MCP 工具用法(含 `--confirmed` 示例)写入 `AGENT_GUIDE.md`。
 - [ ] 测试:未确认拒写、关联/不关联建议两种保存、对照四态、round-trip。
 
 **验收**:记录一条真实执行后,下次上下文出现"建议 vs 执行"对照;全局验收通过。
@@ -76,6 +79,7 @@
 - [ ] `ForecastRecord`:`{id, created_at, statement, target?, metric(当前仅 close), comparator ∈ {above,below}, level, deadline(date), confidence ∈ {low,medium,high}, status ∈ {open,hit,miss,unresolved,manual}, resolved_at?, resolution_note?}`;确认式保存(CLI `--forecast-save`/MCP `forecast_save`);存 `.local/forecasts/`。
 - [ ] 结算:`build_context` 时对已到 deadline 的 open 预测按收盘序列结算(复用 trigger review 的历史数据路径);历史缺失 → `unresolved` + reason;保存时即判定无法程序化验证的 statement(无 target/level)→ 直接标 `manual`,不进自动结算。
 - [ ] 注入:`raw_prompt_input` 增台账摘要——open 条数、最近结算结果、累计命中率;**结算样本 <10 时显示"样本不足",禁止表述为胜率/概率**。
+- [ ] 新 CLI/MCP 工具用法(含 `--confirmed` 示例)写入 `AGENT_GUIDE.md`。
 - [ ] 测试:hit/miss/unresolved/manual 四态、到 deadline 才结算、样本不足语义、未确认拒写。
 
 **验收**:保存 ≥1 条真实预测;用 fixture 使其到期,运行后自动结算且结果出现在上下文;全局验收通过。
