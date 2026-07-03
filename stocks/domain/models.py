@@ -524,3 +524,51 @@ class AnalysisContext:
             "rotation": self.rotation,
             "action_signals": self.action_signals,
         }
+
+
+@dataclass(frozen=True)
+class DecisionEnvelope:
+    """决策层统一传输协议；所有字段始终存在，缺失值显式为 None。"""
+
+    status: str
+    mode_requested: str
+    mode_used: str
+    decision_plan: Optional[dict] = None
+    agent_task: Optional[dict] = None
+    setup_required: Optional[dict] = None
+    quality: dict = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    final_analysis_instructions: str = ""
+
+    def __post_init__(self) -> None:
+        if self.status not in {
+            "ok",
+            "degraded",
+            "setup_required",
+            "validation_failed",
+            "failed",
+        }:
+            raise ValueError("DecisionEnvelope.status 非法")
+        if self.mode_used not in {
+            "internal_llm",
+            "agent_delegate",
+            "deterministic_only",
+        }:
+            raise ValueError("DecisionEnvelope.mode_used 非法")
+        if not self.mode_requested:
+            raise ValueError("DecisionEnvelope.mode_requested 不能为空")
+        if not self.final_analysis_instructions.strip():
+            raise ValueError("final_analysis_instructions 不能为空")
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "mode_requested": self.mode_requested,
+            "mode_used": self.mode_used,
+            "decision_plan": self.decision_plan,
+            "agent_task": self.agent_task,
+            "setup_required": self.setup_required,
+            "quality": self.quality,
+            "errors": list(self.errors),
+            "final_analysis_instructions": self.final_analysis_instructions,
+        }
