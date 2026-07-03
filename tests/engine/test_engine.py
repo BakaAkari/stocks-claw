@@ -290,6 +290,58 @@ class TestAssetCRUD:
             assert reloaded.currency == "USD"
             assert reloaded.amount_cny == 700.0
 
+    def test_asset_instrument_mapping_legacy_and_round_trip(
+        self,
+        minimal_engine,
+        tmp_path,
+    ):
+        """旧资产缺映射字段可加载；新映射字段保存/重载不丢失。"""
+        minimal_engine._local_data_dir = tmp_path
+        asset_path = tmp_path / "financial_assets.json"
+        asset_path.write_text(
+            json.dumps([
+                {
+                    "name": "旧现金",
+                    "platform": "银行",
+                    "amount": 1000.0,
+                    "asset_type": "现金",
+                    "currency": "CNY",
+                }
+            ]),
+            encoding="utf-8",
+        )
+
+        legacy = minimal_engine._load_assets_from_file()[0]
+        assert legacy.instrument_key is None
+        assert legacy.quantity is None
+        assert legacy.tradable is None
+
+        minimal_engine._assets = [
+            legacy,
+            FinancialAsset(
+                name="科创50ETF",
+                platform="券商",
+                amount=3000,
+                asset_type="股票ETF",
+                currency="cny",
+                instrument_key="A:588000",
+                quantity=1800,
+                tradable=True,
+            ),
+        ]
+        minimal_engine._save_assets()
+        stored = json.loads(asset_path.read_text(encoding="utf-8"))
+        assert "instrument_key" not in stored[0]
+        assert stored[1]["currency"] == "CNY"
+        assert stored[1]["instrument_key"] == "a:588000"
+        assert stored[1]["quantity"] == 1800.0
+        assert stored[1]["tradable"] is True
+
+        reloaded = minimal_engine._load_assets_from_file()[1]
+        assert reloaded.instrument_key == "a:588000"
+        assert reloaded.quantity == 1800.0
+        assert reloaded.tradable is True
+
     def test_portfolio_uses_cny_valuation(self, minimal_engine):
         assets = [
             FinancialAsset(

@@ -97,6 +97,65 @@ def test_cli_asset_crud_round_trip(adapter_engine, tmp_path, capsys):
     assert json.loads((tmp_path / "financial_assets.json").read_text()) == []
 
 
+def test_asset_instrument_mapping_cli_and_mcp_validation(adapter_engine, capsys):
+    mcp = MCPAdapter(adapter_engine)
+    cli = CLIAdapter(adapter_engine)
+
+    invalid_mcp = mcp.handle_request({
+        "method": "asset_add",
+        "params": {
+            "name": "未知标的",
+            "platform": "券商",
+            "amount": 1000,
+            "instrument_key": "bad-key",
+            "confirmed": True,
+        },
+    })
+    assert invalid_mcp["success"] is False
+    assert "instrument_key" in invalid_mcp["error"]
+    assert adapter_engine.load_assets() == []
+
+    added = mcp.handle_request({
+        "method": "asset_add",
+        "params": {
+            "name": "科创50ETF",
+            "platform": "券商",
+            "amount": 3000,
+            "asset_type": "股票ETF",
+            "currency": "CNY",
+            "instrument_key": "a:588000",
+            "quantity": 1800,
+            "tradable": True,
+            "confirmed": True,
+        },
+    })
+    assert added["success"] is True
+    asset = adapter_engine.load_assets()[0]
+    assert asset.instrument_key == "a:588000"
+    assert asset.quantity == 1800.0
+    assert asset.tradable is True
+
+    invalid_cli_payload = {
+        "name": "科创50ETF",
+        "changes": {"instrument_key": "hk:2800"},
+    }
+    cli.run(["--asset-update", json.dumps(invalid_cli_payload), "--confirmed"])
+    invalid_cli = json.loads(capsys.readouterr().out)
+    assert invalid_cli["success"] is False
+    assert "instrument_key market" in invalid_cli["error"]
+
+    valid_cli_payload = {
+        "name": "科创50ETF",
+        "changes": {"instrument_key": "us:QCOM", "quantity": 3, "tradable": True},
+    }
+    cli.run(["--asset-update", json.dumps(valid_cli_payload), "--confirmed"])
+    assert json.loads(capsys.readouterr().out)["success"] is True
+    updated = adapter_engine.load_assets()[0]
+    assert updated.instrument_key == "us:QCOM"
+    assert updated.quantity == 3.0
+    assert updated.tradable is True
+
+
 def test_profile_update_requires_confirmation_and_persists(adapter_engine, tmp_path):
     adapter = MCPAdapter(adapter_engine)
     denied = adapter.handle_request({

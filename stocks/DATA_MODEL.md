@@ -30,12 +30,15 @@
 - `name`、`platform`、`amount`
 - `asset_type`、`notes`、`confirmed`
 - `currency`：用户输入的原始币种
+- `instrument_key`：用户确认映射的证券标的，格式 `market:code`；未映射为 `null`
+- `quantity`：用户确认的持有数量；未提供为 `null`
+- `tradable`：用户确认的可交易状态；未知为 `null`
 - `amount_cny`：运行时派生的人民币估值，不写回资产文件
 - `conversion_status`：`ok` / `degraded` / `failed`
 - `conversion_source`、`conversion_rate`
 
-持久化只写原始资产字段。换算失败的外币资产仍保留原金额和币种，但
-`valuation_cny` 为 `null`，不能静默计入组合总值。
+持久化只写原始资产字段与用户确认的映射字段；`amount_cny` 等运行时派生字段不写回。
+换算失败的外币资产仍保留原金额和币种，但 `valuation_cny` 为 `null`，不能静默计入组合总值。
 
 ## Investor profile
 

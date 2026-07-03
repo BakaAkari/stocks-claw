@@ -246,6 +246,9 @@ class CLIAdapter:
             "notes",
             "confirmed",
             "currency",
+            "instrument_key",
+            "quantity",
+            "tradable",
         }
         unknown = set(data) - allowed
         if unknown:

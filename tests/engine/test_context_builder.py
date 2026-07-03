@@ -608,6 +608,38 @@ class TestRawPromptStructure:
         assert "按 personal_advice_prompt 的决策导向契约输出" in prompt
         assert "带触发条件的调仓清单与下一个机会提名" in prompt
 
+    async def test_prompt_marks_mapped_holding_by_instrument_key(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+        sample_instruments,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        assets = [
+            FinancialAsset(
+                name="平安银行持仓",
+                platform="券商",
+                amount=12000,
+                asset_type="股票",
+                instrument_key="a:000001",
+                quantity=1200,
+                tradable=True,
+            )
+        ]
+
+        context = await builder.build(
+            assets=assets,
+            constraints={},
+            profile={},
+            instruments=sample_instruments,
+            recent_snapshots=[],
+        )
+
+        prompt = context.raw_prompt_input
+        assert "标的: a:000001 | 当前持有 1200 | 可交易" in prompt
+        assert "平安银行 (000001): 10.50 (+2.94%) | 当前持有 1200" in prompt
+
     async def test_prompt_with_news(self, mock_fetcher, mock_scaffolds, sample_assets, sample_instruments):
         """有新闻时 prompt 应包含新闻"""
         portfolio_scaffold, market_scaffold = mock_scaffolds

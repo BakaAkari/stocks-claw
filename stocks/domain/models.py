@@ -4,6 +4,27 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+_SUPPORTED_INSTRUMENT_MARKETS = {"a", "us", "crypto"}
+
+
+def _normalize_instrument_key(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("instrument_key 必须是 market:code 字符串")
+    raw = value.strip()
+    if not raw:
+        return None
+    market, sep, code = raw.partition(":")
+    market = market.strip().lower()
+    code = code.strip()
+    if not sep or not market or not code:
+        raise ValueError("instrument_key 格式必须为 market:code")
+    if market not in _SUPPORTED_INSTRUMENT_MARKETS:
+        supported = ", ".join(sorted(_SUPPORTED_INSTRUMENT_MARKETS))
+        raise ValueError(f"instrument_key market 必须是 {supported}")
+    return f"{market}:{code}"
+
 
 @dataclass(frozen=True)
 class Instrument:
@@ -206,10 +227,33 @@ class FinancialAsset:
     notes: Optional[str] = None
     confirmed: bool = True
     currency: str = "CNY"  # 币种: CNY / USD / HKD 等
+    instrument_key: Optional[str] = None  # 已确认映射的证券标的，格式 market:code
+    quantity: Optional[float] = None      # 已确认持有数量，仅来自用户写入
+    tradable: Optional[bool] = None       # 是否可交易；未知为 None
     amount_cny: Optional[float] = None  # 派生估值，不写回资产文件
     conversion_status: str = "ok"  # ok / degraded / failed
     conversion_source: str = "identity"
     conversion_rate: Optional[float] = 1.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "currency", (self.currency or "CNY").upper())
+        object.__setattr__(
+            self,
+            "instrument_key",
+            _normalize_instrument_key(self.instrument_key),
+        )
+        if self.quantity is not None:
+            if isinstance(self.quantity, bool):
+                raise ValueError("quantity 必须是数字")
+            try:
+                quantity = float(self.quantity)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("quantity 必须是数字") from exc
+            if quantity < 0:
+                raise ValueError("quantity 不能为负数")
+            object.__setattr__(self, "quantity", quantity)
+        if self.tradable is not None and not isinstance(self.tradable, bool):
+            raise ValueError("tradable 必须是 bool 或 null")
 
     @property
     def valuation_cny(self) -> Optional[float]:
@@ -229,6 +273,9 @@ class FinancialAsset:
             "notes": self.notes,
             "confirmed": self.confirmed,
             "currency": self.currency,
+            "instrument_key": self.instrument_key,
+            "quantity": self.quantity,
+            "tradable": self.tradable,
             "amount_cny": self.amount_cny,
             "conversion_status": self.conversion_status,
             "conversion_source": self.conversion_source,
@@ -237,7 +284,7 @@ class FinancialAsset:
 
     def to_storage_dict(self) -> dict:
         """返回持久化字段，排除运行时派生估值。"""
-        return {
+        data = {
             "name": self.name,
             "platform": self.platform,
             "amount": self.amount,
@@ -246,6 +293,13 @@ class FinancialAsset:
             "confirmed": self.confirmed,
             "currency": self.currency,
         }
+        if self.instrument_key is not None:
+            data["instrument_key"] = self.instrument_key
+        if self.quantity is not None:
+            data["quantity"] = self.quantity
+        if self.tradable is not None:
+            data["tradable"] = self.tradable
+        return data
 
 
 @dataclass(frozen=True)

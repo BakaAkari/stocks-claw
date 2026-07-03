@@ -111,7 +111,15 @@ class MCPAdapter:
                 key: value
                 for key, value in params.items()
                 if key in {
-                    "name", "platform", "amount", "asset_type", "notes", "currency"
+                    "name",
+                    "platform",
+                    "amount",
+                    "asset_type",
+                    "notes",
+                    "currency",
+                    "instrument_key",
+                    "quantity",
+                    "tradable",
                 }
             }
             asset = FinancialAsset(**fields)
@@ -129,7 +137,16 @@ class MCPAdapter:
         if not name or not isinstance(changes, dict):
             return {"success": False, "error": "name and changes are required"}
         allowed = {
-            "name", "platform", "amount", "asset_type", "notes", "confirmed", "currency"
+            "name",
+            "platform",
+            "amount",
+            "asset_type",
+            "notes",
+            "confirmed",
+            "currency",
+            "instrument_key",
+            "quantity",
+            "tradable",
         }
         unknown = set(changes) - allowed
         if unknown:
@@ -393,6 +410,9 @@ class MCPAdapter:
             "asset_type": {"type": "string"},
             "notes": {"type": ["string", "null"]},
             "currency": {"type": "string"},
+            "instrument_key": {"type": ["string", "null"]},
+            "quantity": {"type": ["number", "null"]},
+            "tradable": {"type": ["boolean", "null"]},
             "confirmed": {"type": "boolean", "const": True},
         }
         if action == "update":

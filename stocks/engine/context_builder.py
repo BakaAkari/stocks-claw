@@ -33,6 +33,10 @@ def _optional_float(value) -> Optional[float]:
     return float(value)
 
 
+def _instrument_key(instrument) -> str:
+    return f"{instrument.market}:{instrument.code}"
+
+
 class ContextBuilder:
     """构建统一分析上下文 — 将行情、新闻、组合、市场状态、技术指标、宏观数据组装为 AnalysisContext"""
 
@@ -1028,6 +1032,11 @@ class ContextBuilder:
         # 资产明细
         lines.append("【资产明细】")
         total = sum(a.valuation_cny or 0.0 for a in assets) if assets else 0
+        holdings_by_key = {
+            asset.instrument_key: asset
+            for asset in assets
+            if asset.instrument_key
+        }
         lines.append(f" 总资产量级: {self._amount_band(total)}")
         lines.append(f" 资产数量: {len(assets)}")
         for asset in assets:
@@ -1043,6 +1052,7 @@ class ContextBuilder:
             lines.append(
                 f" {status} {asset.name} ({asset.platform}) | "
                 f"类型: {asset.asset_type} | CNY估值: {value_text}"
+                f"{self._asset_mapping_text(asset)}"
             )
             if asset.notes:
                 lines.append(f" 备注: {asset.notes}")
@@ -1177,9 +1187,13 @@ class ContextBuilder:
                         sign = "+" if q.pct_change >= 0 else ""
                         change_str = f" ({sign}{q.pct_change:.2f}%)"
                     stale_str = " [stale历史收盘]" if q.stale else ""
+                    holding = holdings_by_key.get(_instrument_key(q.instrument))
+                    holding_str = (
+                        f" | {self._holding_text(holding)}" if holding else ""
+                    )
                     lines.append(
                         f" {q.instrument.name} ({q.instrument.code}): "
-                        f"{price_str}{change_str}{stale_str}"
+                        f"{price_str}{change_str}{stale_str}{holding_str}"
                     )
                     # 附加技术指标(D0-1:按 data_points 判级,非 ok 显式标注不可用)
                     if q.indicators:
@@ -1444,3 +1458,23 @@ class ContextBuilder:
         if value < 1_000_000:
             return "10 万至 100 万元"
         return "100 万元以上"
+
+    @staticmethod
+    def _quantity_text(quantity: Optional[float]) -> str:
+        if quantity is None:
+            return ""
+        if float(quantity).is_integer():
+            return str(int(quantity))
+        return f"{quantity:g}"
+
+    def _holding_text(self, asset: FinancialAsset) -> str:
+        quantity = self._quantity_text(asset.quantity)
+        return f"当前持有 {quantity}" if quantity else "当前持有"
+
+    def _asset_mapping_text(self, asset: FinancialAsset) -> str:
+        if not asset.instrument_key:
+            return ""
+        parts = [f"标的: {asset.instrument_key}", self._holding_text(asset)]
+        if asset.tradable is not None:
+            parts.append("可交易" if asset.tradable else "不可交易")
+        return " | " + " | ".join(parts)

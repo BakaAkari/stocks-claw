@@ -395,6 +395,9 @@ class StocksEngine:
                 notes = item.get("notes")
                 confirmed = item.get("confirmed", True)
                 currency = item.get("currency", "CNY")
+                instrument_key = item.get("instrument_key")
+                quantity = item.get("quantity")
+                tradable = item.get("tradable")
                 amount, currency, notes = self._recover_legacy_currency(
                     amount,
                     currency,
@@ -410,6 +413,9 @@ class StocksEngine:
                         notes=notes,
                         confirmed=bool(confirmed),
                         currency=(currency or "CNY").upper(),
+                        instrument_key=instrument_key,
+                        quantity=quantity,
+                        tradable=tradable,
                     ))
                 )
             except (ValueError, TypeError):
