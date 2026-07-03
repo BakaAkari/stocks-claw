@@ -114,4 +114,5 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-03:F0 修复 UpcomingEvent 的完整时点、精度与生命周期字段,属于破坏性契约变化,故 AnalysisContext v7→v8、data_quality v4→v5;已发生事件不再进入 upcoming/event_watch,过滤数量由 expired_count 显式上报。依据:同日事件发生后仍被当作“未来”会直接污染调仓预案,且 schema 红线禁止字段变化不升版本。
 - 2026-07-03:D0-4 删除 us 指向 finnhub 自身的伪 fallback,us/crypto 显式空链,并由 quotes.by_market.single_source 暴露真实单源风险;data_quality v5→v6。真实出口验证 37 个历史标的 30 可用/7 缺失,质量节点与磁盘逐项一致,D0 完成后进入 D1。依据:降级能力必须由独立 Provider 证明,不能由配置键存在推断。
 - 2026-07-03:D1-1 接入腾讯 A 股前复权日 K 作为东方财富备用源,历史回填逐项暴露主源/备用源/降级结果/逐源错误,data_quality v6→v7。真实复测东方财富 0/6 时腾讯仍为正确 exchange 的 6/6 标的返回 60~61 bars。依据:同一网络下主源持续 RemoteDisconnected,备用源必须实际接管而非只写配置。
+- 2026-07-03:D1-2 硬门槛确认 Finnhub candle 免费权限 403,原备选 Stooq CSV 又返回 JS 反爬页,因此以实测可用性优先改接 Nasdaq 免 key美股日 K,Yahoo 为备;crypto 采用 Binance 日 K主源+实时 fallback。依据:计划的目标是独立可接管的数据源,不能为遵守候选名称而接入当前不可机器读取的端点。
 - (追加格式:`日期:决定;依据`)

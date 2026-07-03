@@ -27,6 +27,7 @@ MINIMAL_CONFIG = {
         "tencent_a": {"enabled": True},
         "eastmoney_a": {"enabled": True},
         "finnhub": {"enabled": True},
+        "binance": {"enabled": True},
     },
     "fetcher": {"max_retries": 1, "retry_delay": 1.0},
     "cache": {
@@ -85,6 +86,7 @@ class TestEngineInit:
         assert "tencent_a" in names
         assert "eastmoney_a" in names
         assert "finnhub" in names
+        assert "binance" in names
 
     def test_init_llm_disabled_by_config(self, minimal_engine):
         """配置中 LLM 禁用时，初始化后 LLM 模块禁用"""
@@ -141,6 +143,7 @@ class TestEngineInitProviderDisabled:
             "tencent_a": {"enabled": False},
             "eastmoney_a": {"enabled": True},
             "finnhub": {"enabled": True},
+            "binance": {"enabled": True},
         }
         with patch("stocks.engine.load_engine_config", return_value=config):
             engine = StocksEngine()
@@ -155,6 +158,7 @@ class TestEngineInitProviderDisabled:
             "tencent_a": {"enabled": False},
             "eastmoney_a": {"enabled": False},
             "finnhub": {"enabled": False},
+            "binance": {"enabled": False},
         }
         with patch("stocks.engine.load_engine_config", return_value=config):
             engine = StocksEngine()
@@ -185,7 +189,7 @@ class TestHealthCheck:
     def test_health_check_ok(self, minimal_engine):
         health = minimal_engine.health_check()
         assert health["status"] == "ok"
-        assert len(health["providers"]) == 3
+        assert len(health["providers"]) == 4
         assert health["assets_loaded"] == 0
         assert health["watchlist_loaded"] == 0
         assert health["llm_analysis_enabled"] is False

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -120,7 +121,7 @@ class TestLoadEngineConfig:
         assert config["fetcher"]["retry_delay"] == 1.0
         assert config["providers"]["tencent_a"]["enabled"] is True
         assert config["providers"]["fallback"]["us"] == []
-        assert config["providers"]["fallback"]["crypto"] == []
+        assert config["providers"]["fallback"]["crypto"] == ["binance"]
         assert config["cache"]["history_ttl"] == 7776000
         assert config["cache"]["history_dir"] is None
         assert config["calendar"] == {
@@ -276,3 +277,17 @@ class TestConfigIntegration:
         assert config["cache"]["max_snapshots"] == 12
         # 默认值未改变
         assert config["fetcher"]["retry_delay"] == 1.0
+
+    def test_fallback_names_match_market_registry(self):
+        root = Path(__file__).resolve().parents[2]
+        config = load_engine_config(root / "stocks" / "config" / "engine.yaml")
+        markets = json.loads(
+            (root / "stocks" / "config" / "markets.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        for market, fallback_names in config["providers"]["fallback"].items():
+            assert set(fallback_names) <= set(markets[market]["providers"])
+        assert config["providers"]["fallback"]["crypto"] == ["binance"]
+        assert markets["crypto"]["default_provider"] == "finnhub"

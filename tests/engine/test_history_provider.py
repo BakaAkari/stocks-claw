@@ -19,8 +19,10 @@ import pytest
 from stocks.domain.models import Instrument
 from stocks.engine.history_cache import HistoryCache
 from stocks.engine.history_provider import (
+    BinanceKLineProvider,
     CompositeKLineProvider,
     EastmoneyKLineProvider,
+    NasdaqKLineProvider,
     TencentKLineProvider,
     YahooKLineProvider,
     warm_history_cache,
@@ -77,6 +79,25 @@ TENCENT_QFQ_RESPONSE = {
         }
     },
 }
+
+NASDAQ_RESPONSE = {
+    "status": {"rCode": 200},
+    "data": {
+        "tradesTable": {
+            "rows": [
+                {"date": "01/04/2024", "close": "N/A", "volume": "N/A", "open": "N/A", "high": "N/A", "low": "N/A"},
+                {"date": "01/03/2024", "close": "$103.00", "volume": "3,000", "open": "$102.00", "high": "$104.00", "low": "$101.00"},
+                {"date": "01/02/2024", "close": "$102.00", "volume": "2,000", "open": "$101.00", "high": "$103.00", "low": "$100.00"},
+                {"date": "01/01/2024", "close": "$101.00", "volume": "1,000", "open": "$100.00", "high": "$102.00", "low": "$99.00"},
+            ]
+        }
+    },
+}
+
+BINANCE_KLINES = [
+    [1704067200000, "40000", "42000", "39000", "41000", "100", 1704153599999, "0", 1, "0", "0", "0"],
+    [1704153600000, "41000", "43000", "40500", "42500", "120", 1704239999999, "0", 1, "0", "0", "0"],
+]
 
 
 @pytest.fixture
@@ -271,6 +292,76 @@ class TestYahooKLineProvider:
 
 
 # ------------------------------------------------------------------
+# Nasdaq / Binance 独立历史源
+# ------------------------------------------------------------------
+
+class TestNasdaqKLineProvider:
+    async def test_fetch_parses_currency_and_sorts_ascending(
+        self, sample_instrument_us
+    ):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(NASDAQ_RESPONSE).encode("utf-8")
+        mock_resp.__enter__ = Mock(return_value=mock_resp)
+        mock_resp.__exit__ = Mock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            frame = await NasdaqKLineProvider().fetch(
+                sample_instrument_us, lookback_days=3
+            )
+
+        assert list(frame["price"]) == [101.0, 102.0, 103.0]
+        assert list(frame["prev_close"]) == [101.0, 101.0, 102.0]
+        assert list(frame["volume_lot"]) == [1000.0, 2000.0, 3000.0]
+        assert frame.iloc[0]["data_source"] == "provider"
+
+    async def test_etf_assetclass_fallback(self):
+        instrument = Instrument("QQQ", "Nasdaq 100", "us")
+        empty = {"status": {"rCode": 400}, "data": None}
+        responses = []
+        for payload in (empty, NASDAQ_RESPONSE):
+            response = MagicMock()
+            response.read.return_value = json.dumps(payload).encode("utf-8")
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            responses.append(response)
+
+        with patch("urllib.request.urlopen", side_effect=responses) as urlopen:
+            frame = await NasdaqKLineProvider().fetch(instrument, lookback_days=3)
+
+        assert len(frame) == 3
+        assert "assetclass=stocks" in urlopen.call_args_list[0].args[0].full_url
+        assert "assetclass=etf" in urlopen.call_args_list[1].args[0].full_url
+
+
+class TestBinanceKLineProvider:
+    async def test_fetch_parses_daily_klines(self, sample_instrument_crypto):
+        rows = BINANCE_KLINES + [
+            [4102358400000, "1", "2", "1", "2", "1", 4102444799999]
+        ]
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(rows).encode("utf-8")
+        mock_resp.__enter__ = Mock(return_value=mock_resp)
+        mock_resp.__exit__ = Mock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as urlopen:
+            frame = await BinanceKLineProvider().fetch(
+                sample_instrument_crypto, lookback_days=2
+            )
+
+        assert list(frame["price"]) == [41000.0, 42500.0]
+        assert list(frame["prev_close"]) == [41000.0, 41000.0]
+        assert frame.iloc[1]["high"] == 43000.0
+        assert frame.iloc[1]["volume_lot"] == 120.0
+        assert str(frame.iloc[0]["timestamp"]).startswith("2024-01-01 23:59:59.999")
+        assert "limit=3" in urlopen.call_args.args[0].full_url
+
+    def test_symbol_normalization(self):
+        provider = BinanceKLineProvider()
+        assert provider._symbol(Instrument("BINANCE:BTCUSDT", "", "crypto")) == "BTCUSDT"
+        assert provider._symbol(Instrument("BTC/USDT", "", "crypto")) == "BTCUSDT"
+
+
+# ------------------------------------------------------------------
 # CompositeKLineProvider
 # ------------------------------------------------------------------
 
@@ -324,30 +415,51 @@ class TestCompositeKLineProvider:
             "tencent_kline": "provider returned empty frame",
         }
 
-    async def test_routes_us_to_yahoo(self, sample_instrument_us):
-        """美股路由到 Yahoo"""
+    async def test_routes_us_to_nasdaq(self, sample_instrument_us):
+        """美股主路由到 Nasdaq"""
         provider = CompositeKLineProvider()
-        with patch.object(provider._yahoo, "fetch", return_value=pd.DataFrame({"col": [1]})) as mock_y:
-            with patch.object(provider._eastmoney, "fetch") as mock_e:
+        with patch.object(provider._nasdaq, "fetch", return_value=pd.DataFrame({"col": [1]})) as mock_n:
+            with patch.object(provider._yahoo, "fetch") as mock_y:
                 await provider.fetch(sample_instrument_us, lookback_days=5)
-                mock_y.assert_called_once()
-                mock_e.assert_not_called()
+                mock_n.assert_called_once()
+                mock_y.assert_not_called()
 
-    async def test_routes_crypto_to_yahoo(self, sample_instrument_crypto):
-        """加密货币路由到 Yahoo"""
+    async def test_us_falls_back_to_yahoo(self, sample_instrument_us):
         provider = CompositeKLineProvider()
-        with patch.object(provider._yahoo, "fetch", return_value=pd.DataFrame({"col": [1]})) as mock_y:
-            with patch.object(provider._eastmoney, "fetch") as mock_e:
+        with patch.object(provider._nasdaq, "fetch", return_value=pd.DataFrame()):
+            with patch.object(
+                provider._yahoo, "fetch", return_value=pd.DataFrame({"price": [1]})
+            ):
+                frame = await provider.fetch(sample_instrument_us, lookback_days=5)
+        assert frame.attrs["source"] == "yahoo_kline"
+        assert frame.attrs["degradation_result"] == "fallback_success"
+
+    async def test_routes_crypto_to_binance(self, sample_instrument_crypto):
+        """加密货币主路由到 Binance"""
+        provider = CompositeKLineProvider()
+        with patch.object(provider._binance, "fetch", return_value=pd.DataFrame({"col": [1]})) as mock_b:
+            with patch.object(provider._yahoo, "fetch") as mock_y:
                 await provider.fetch(sample_instrument_crypto, lookback_days=5)
-                mock_y.assert_called_once()
-                mock_e.assert_not_called()
+                mock_b.assert_called_once()
+                mock_y.assert_not_called()
+
+    async def test_crypto_falls_back_to_yahoo(self, sample_instrument_crypto):
+        provider = CompositeKLineProvider()
+        with patch.object(provider._binance, "fetch", return_value=pd.DataFrame()):
+            with patch.object(
+                provider._yahoo, "fetch", return_value=pd.DataFrame({"price": [1]})
+            ):
+                frame = await provider.fetch(sample_instrument_crypto, lookback_days=5)
+        assert frame.attrs["source"] == "yahoo_kline"
+        assert frame.attrs["primary_source"] == "binance_kline"
+        assert frame.attrs["degradation_result"] == "fallback_success"
 
     async def test_fetch_batch(self, sample_instrument_a, sample_instrument_us):
         """批量并行获取"""
         provider = CompositeKLineProvider()
         with patch.object(provider._eastmoney, "fetch", return_value=pd.DataFrame({"col": [1]})):
             with patch.object(provider._tencent, "fetch"):
-                with patch.object(provider._yahoo, "fetch", return_value=pd.DataFrame({"col": [2]})):
+                with patch.object(provider._nasdaq, "fetch", return_value=pd.DataFrame({"col": [2]})):
                     results = await provider.fetch_batch([sample_instrument_a, sample_instrument_us], 5)
 
         assert len(results) == 2
@@ -502,7 +614,7 @@ class TestWarmHistoryCache:
         assert a_item["source"] == "eastmoney_kline"
         assert us_item["status"] == "ok"
         assert us_item["rows"] == 3
-        assert us_item["source"] == "yahoo_kline"
+        assert us_item["source"] == "nasdaq_kline"
         assert us_item["error"] is None
 
     async def test_warm_empty_provider_response(self, tmp_path, sample_instrument_a):

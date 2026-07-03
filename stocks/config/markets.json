@@ -11,7 +11,7 @@
   },
   "crypto": {
     "label": "加密货币",
-    "providers": ["finnhub"],
+    "providers": ["finnhub", "binance"],
     "default_provider": "finnhub"
   }
 }

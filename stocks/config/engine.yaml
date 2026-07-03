@@ -21,6 +21,8 @@ providers:
   # 美股/加密货币 Provider
   finnhub:
     enabled: true
+  binance:
+    enabled: true
   # 备用 Provider 映射：市场 -> [备用1, 备用2]
   fallback:
     a:
@@ -28,7 +30,8 @@ providers:
       - tencent_a
     # 当前无独立第二源；接入任务见 EXECUTION_PLAN D1-2。
     us: []
-    crypto: []
+    crypto:
+      - binance
 
 fetcher:
   # 主 Provider 失败后的重试次数

@@ -93,6 +93,9 @@ Adapter 不实现组合算法或 Provider 逻辑。
 
 - 腾讯、东方财富：A 股行情，互为降级来源。
 - Finnhub：美股行情；认证、限流、超时、网络和数据错误使用不同异常类型。
+- Binance：加密货币实时备用源与历史日 K 主源。
+- 历史 K 线：A 股为东方财富→腾讯，美股为 Nasdaq→Yahoo，crypto 为
+  Binance→Yahoo；每次回填保留逐源降级记录。
 - RSS：读取 RSS 2.0 或 Atom 新闻。
 
 Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实时源；失败时质量信息标记

@@ -208,7 +208,8 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
   `failed_count` 与 `items`。每个 item 结构为
   `{symbol, market, source, rows, status, error}`，其中 `status ∈ {ok, skipped_cached, failed}`
   且 `source` 标注实际成功源（包括 `eastmoney_kline`、`tencent_kline`、
-  `yahoo_kline` 等）。每项同时给出 `primary_source`、`fallback_source`、
+  `nasdaq_kline`、`binance_kline`、`yahoo_kline` 等）。每项同时给出
+  `primary_source`、`fallback_source`、
   `degradation_result` 与逐源 `errors`，可区分主源成功、备用成功与全失败。
   失败标的记录 `error` 字符串；全部失败会触发 10 分钟冷却而非静默重试。
 

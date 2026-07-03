@@ -586,12 +586,14 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 **文件**:`stocks/engine/history_provider.py`、`stocks/providers/`(新增)、`stocks/config/engine.yaml`、`stocks/config/markets.json`
 **证据(2026-07-02 实测)**:Yahoo chart 从用户网络全线 HTTP 429(日 K 0/5、宏观 0/6)——**美股/crypto 历史回填主链路当前已断**,磁盘上 60 根缓存是早前成功的遗产;Binance `/api/v3` 可达(354ms);Finnhub `/quote` 正常。
 
-- [ ] 【验证前提·硬门槛】用现有 key 实测 `GET https://finnhub.io/api/v1/stock/candle?symbol=AAPL&resolution=D&from=<60天前unix>&to=<今unix>&token=<key>`:免费 tier 若返回 403/premium 提示,美股历史源选 **Stooq**(`https://stooq.com/q/d/l/?s=aapl.us&i=d`,免 key 日 K CSV,日期升序);若可用则选 **Finnhub candle**。**此前提未实测前禁止动工,两个分支实现不同。**结果写入完成记录。
-- [ ] crypto 历史:新增 `BinanceKLineProvider`(`/api/v3/klines?symbol=BTCUSDT&interval=1d&limit={lookback}`,免 key;kline 数组含开收高低量与收盘时间戳)为主源,Yahoo 降为备源;`CompositeKLineProvider` crypto 路由改降级链。
-- [ ] 美股历史:按验证前提结果接 Finnhub candle 或 Stooq 为主源,Yahoo 降为备源;同样走降级链 + 回填记录。
-- [ ] crypto 实时:新增 Binance 实时 provider(`/api/v3/ticker/24hr`,响应 `closeTime` → `as_of`)注册为 crypto 的 fallback(engine.yaml `crypto: [binance]`、markets.json providers 同步追加)。
-- [ ] 美股实时:维持 finnhub 主源 + 既有 stale 历史兜底;若历史源选了 Stooq,允许追加 Stooq 延迟报价为显式 fallback(必须 `stale=true`、`as_of` 取其 date/time 列——延迟数据禁止伪装实时)。
-- [ ] 新增测试:每个新 provider fixture 单测;crypto 降级链测试;engine.yaml/markets.json 配置一致性测试。
+- [x] 【验证前提·硬门槛】现有 key 实测 Finnhub candle 返回 HTTP 403 `You don't have access to this resource`。随后实测 Stooq 指定 CSV URL 返回 JS proof-of-work 反爬页而非 CSV,不可作为机器源;为保持“真实可用独立源”目标,改选免 key 的 Nasdaq 公开历史端点,实测 AAPL/QQQ 均返回 60 bars。偏离原二选一的原因和证据已写入完成记录。
+- [x] crypto 历史:新增 `BinanceKLineProvider` 为主源,Yahoo 降为备源;剔除 closeTime 尚在未来的未收盘日 K,多取一根保证 60 根已完成 bars;Composite crypto 路由走统一降级链。
+- [x] 美股历史:新增 `NasdaqKLineProvider` 为主源(自动 stocks→etf assetclass 回落,逐行跳过 N/A),Yahoo 降为备源;统一输出 source/降级记录。
+- [x] crypto 实时:新增 `BinanceQuoteProvider`(`/api/v3/ticker/24hr`,closeTime → as_of),注册为 crypto fallback;engine.yaml 与 markets.json 同步。
+- [x] 美股实时:维持 finnhub 主源 + 既有 stale 历史兜底;Nasdaq 这里只提供日 K,未把日线伪装实时 fallback。
+- [x] 新增测试:Nasdaq/Binance 历史 fixture、stocks→etf、未收盘 K 过滤、Binance 实时 typed error/OHLC/as_of、crypto fallback_success、engine.yaml/markets.json 一致性。
+
+> 完成(2026-07-03):Finnhub candle=403;Stooq CSV=200 text/html 反爬挑战,故按任务目标改用实测可达的 Nasdaq 免 key 日 K。真实冒烟:AAPL/QQQ Nasdaq 各 60 根已完成日 K,BTCUSDT/ETHUSDT Binance 各 60 根已完成日 K,Binance 实时 quote 带源 closeTime。Yahoo 仅备用;全量 `410 passed`。本任务只扩 Provider/配置与既有 source 值域,未增删 AnalysisContext/data_quality 字段,不升 schema。
 
 **验收**:重跑诊断脚本,在 Yahoo 429 前提下 us/crypto 历史仍能回填 ≥ 40 bars;crypto 实时在 finnhub mock 失败时由 binance 兜住且 `fallback_success` 记录正确。
 

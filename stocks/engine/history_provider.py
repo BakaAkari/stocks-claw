@@ -3,8 +3,9 @@
 为技术指标计算提供足够的历史数据底座，避免"从今天开始记日记"的 20 天空窗期。
 
 数据源：
-- A 股/ETF: 东方财富日 K 接口（免费，无需 key）
-- 美股/加密货币: Yahoo Finance v8 chart API（免费，无需 key）
+- A 股/ETF: 东方财富 → 腾讯
+- 美股: Nasdaq → Yahoo
+- 加密货币: Binance → Yahoo
 
 使用方式：
     provider = CompositeKLineProvider()
@@ -17,8 +18,9 @@ from __future__ import annotations
 import asyncio
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -280,6 +282,167 @@ class YahooKLineProvider:
 
 
 # ------------------------------------------------------------------
+# Nasdaq 美股日 K（免 key 主源）
+# ------------------------------------------------------------------
+
+class NasdaqKLineProvider:
+    """Nasdaq 公开历史行情端点；返回按日期升序的 OHLCV。"""
+
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+    }
+
+    @staticmethod
+    def _number(value) -> float:
+        cleaned = str(value).replace("$", "").replace(",", "").strip()
+        return float(cleaned)
+
+    async def fetch(
+        self, instrument: Instrument, lookback_days: int = 60
+    ) -> pd.DataFrame:
+        today = datetime.now(timezone.utc).date()
+        start = today - timedelta(days=max(90, lookback_days * 2))
+        def _request(assetclass: str):
+            query = urllib.parse.urlencode({
+                "assetclass": assetclass,
+                "fromdate": start.isoformat(),
+                "todate": today.isoformat(),
+                "limit": min(lookback_days + 10, 5000),
+            })
+            url = (
+                f"https://api.nasdaq.com/api/quote/{instrument.code}/historical"
+                f"?{query}"
+            )
+            req = urllib.request.Request(url, headers=self._HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        try:
+            rows = []
+            for assetclass in ("stocks", "etf"):
+                payload = await asyncio.to_thread(_request, assetclass)
+                data = payload.get("data") or {}
+                rows = data.get("tradesTable", {}).get("rows", []) or []
+                if rows:
+                    break
+            parsed: list[tuple[datetime, dict]] = []
+            for row in rows:
+                try:
+                    timestamp = datetime.strptime(row["date"], "%m/%d/%Y").replace(
+                        tzinfo=timezone.utc
+                    )
+                    parsed.append((timestamp, row))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            parsed.sort(key=lambda item: item[0])
+            records: list[dict] = []
+            previous_close: float | None = None
+            for timestamp, row in parsed:
+                try:
+                    close = self._number(row["close"])
+                    open_price = self._number(row["open"])
+                    high = self._number(row["high"])
+                    low = self._number(row["low"])
+                    volume = self._number(row["volume"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                records.append({
+                    "timestamp": timestamp,
+                    "code": instrument.code,
+                    "name": instrument.name,
+                    "market": instrument.market,
+                    "price": close,
+                    "open_price": open_price,
+                    "high": high,
+                    "low": low,
+                    "prev_close": previous_close if previous_close is not None else close,
+                    "volume_lot": volume,
+                    "data_source": "provider",
+                })
+                previous_close = close
+            records = records[-lookback_days:]
+            frame = pd.DataFrame(records, columns=_HISTORY_COLUMNS)
+            if not frame.empty:
+                frame["timestamp"] = pd.to_datetime(frame["timestamp"])
+            logger.info(f"Nasdaq fetched {len(frame)} rows for {instrument.code}")
+            return frame
+        except Exception as exc:
+            logger.warning(f"Nasdaq fetch failed for {instrument.code}: {exc}")
+            return pd.DataFrame(columns=_HISTORY_COLUMNS)
+
+
+# ------------------------------------------------------------------
+# Binance 加密货币日 K（免 key 主源）
+# ------------------------------------------------------------------
+
+class BinanceKLineProvider:
+    """Binance UTC 日 K；Yahoo 仅作为备用。"""
+
+    _HEADERS = {"User-Agent": "stocks-claw/1.0"}
+
+    @staticmethod
+    def _symbol(instrument: Instrument) -> str:
+        return instrument.code.split(":", 1)[-1].replace("/", "").upper()
+
+    async def fetch(
+        self, instrument: Instrument, lookback_days: int = 60
+    ) -> pd.DataFrame:
+        query = urllib.parse.urlencode({
+            "symbol": self._symbol(instrument),
+            "interval": "1d",
+            # 多取一根并剔除尚未收盘的当日 K，避免未来 closeTime 污染指标。
+            "limit": min(max(1, lookback_days + 1), 1000),
+        })
+        url = f"https://api.binance.com/api/v3/klines?{query}"
+
+        def _request():
+            req = urllib.request.Request(url, headers=self._HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        try:
+            rows = await asyncio.to_thread(_request)
+            records: list[dict] = []
+            previous_close: float | None = None
+            now_ms = datetime.now(timezone.utc).timestamp() * 1000
+            for row in rows:
+                if not isinstance(row, list) or len(row) < 7:
+                    continue
+                if float(row[6]) > now_ms:
+                    continue
+                close = float(row[4])
+                records.append({
+                    "timestamp": datetime.fromtimestamp(
+                        float(row[6]) / 1000, tz=timezone.utc
+                    ),
+                    "code": instrument.code,
+                    "name": instrument.name,
+                    "market": instrument.market,
+                    "price": close,
+                    "open_price": float(row[1]),
+                    "high": float(row[2]),
+                    "low": float(row[3]),
+                    "prev_close": previous_close if previous_close is not None else close,
+                    "volume_lot": float(row[5]),
+                    "data_source": "provider",
+                })
+                previous_close = close
+            records = records[-lookback_days:]
+            frame = pd.DataFrame(records, columns=_HISTORY_COLUMNS)
+            if not frame.empty:
+                frame["timestamp"] = pd.to_datetime(frame["timestamp"])
+            logger.info(f"Binance fetched {len(frame)} rows for {instrument.code}")
+            return frame
+        except Exception as exc:
+            logger.warning(f"Binance fetch failed for {instrument.code}: {exc}")
+            return pd.DataFrame(columns=_HISTORY_COLUMNS)
+
+
+# ------------------------------------------------------------------
 # 组合提供者（按 market 路由）
 # ------------------------------------------------------------------
 
@@ -289,6 +452,8 @@ class CompositeKLineProvider:
     def __init__(self):
         self._eastmoney = EastmoneyKLineProvider()
         self._tencent = TencentKLineProvider()
+        self._nasdaq = NasdaqKLineProvider()
+        self._binance = BinanceKLineProvider()
         self._yahoo = YahooKLineProvider()
 
     async def _fetch_chain(
@@ -338,8 +503,24 @@ class CompositeKLineProvider:
                     ("tencent_kline", self._tencent),
                 ],
             )
-        elif instrument.market in ("us", "crypto"):
-            return await self._yahoo.fetch(instrument, lookback_days)
+        elif instrument.market == "us":
+            return await self._fetch_chain(
+                instrument,
+                lookback_days,
+                [
+                    ("nasdaq_kline", self._nasdaq),
+                    ("yahoo_kline", self._yahoo),
+                ],
+            )
+        elif instrument.market == "crypto":
+            return await self._fetch_chain(
+                instrument,
+                lookback_days,
+                [
+                    ("binance_kline", self._binance),
+                    ("yahoo_kline", self._yahoo),
+                ],
+            )
         else:
             logger.warning(f"Unknown market {instrument.market} for {instrument.code}")
             return pd.DataFrame(columns=_HISTORY_COLUMNS)
@@ -376,8 +557,8 @@ class CompositeKLineProvider:
 # D0-3:市场 → 主历史 provider 名称映射,与 CompositeKLineProvider.fetch 路由保持一致。
 _MARKET_TO_HISTORY_SOURCE: dict[str, str] = {
     "a": "eastmoney_kline",
-    "us": "yahoo_kline",
-    "crypto": "yahoo_kline",
+    "us": "nasdaq_kline",
+    "crypto": "binance_kline",
 }
 
 

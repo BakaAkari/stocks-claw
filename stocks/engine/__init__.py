@@ -53,6 +53,7 @@ from stocks.engine.news_sources import NewsAggregator
 from stocks.engine.persistence import DataPersistence
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.logging_utils import setup_logging
+from stocks.providers.binance_quote import BinanceQuoteProvider
 from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
 from stocks.providers.finnhub_quote import FinnhubQuoteProvider
 from stocks.providers.registry import ProviderRegistry
@@ -129,6 +130,8 @@ class StocksEngine:
             self.registry.register(EastmoneyAQuoteProvider())
         if prov_cfg.get("finnhub", {}).get("enabled", True):
             self.registry.register(FinnhubQuoteProvider())
+        if prov_cfg.get("binance", {}).get("enabled", False):
+            self.registry.register(BinanceQuoteProvider())
 
         # 2. 初始化 Engine 组件（使用配置参数）
         fetcher_cfg = self._config["fetcher"]

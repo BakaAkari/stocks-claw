@@ -28,10 +28,11 @@ DEFAULT_ENGINE_CONFIG = {
         "tencent_a": {"enabled": True},
         "eastmoney_a": {"enabled": True},
         "finnhub": {"enabled": True},
+        "binance": {"enabled": True},
         "fallback": {
             "a": ["eastmoney_a", "tencent_a"],
             "us": [],
-            "crypto": [],
+            "crypto": ["binance"],
         },
     },
     "fetcher": {
