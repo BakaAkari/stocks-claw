@@ -156,15 +156,15 @@ class DataPersistence:
         return [record.to_dict() for record in self._load_forecast_records()]
 
     def _list_snapshot_files(self) -> list[Path]:
-        """获取目录下所有 JSON 快照文件的完整路径，按修改时间倒序"""
+        """获取目录下所有 JSON 快照文件的完整路径，按文件名时间戳倒序。"""
         if not self.base_dir.is_dir():
             return []
         files = list(self.base_dir.glob("*.json"))
-        files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        files.sort(key=lambda path: path.name, reverse=True)
         return files
 
     def _trim_snapshots(self) -> None:
-        for path in self._list_snapshot_files()[self.max_snapshots:]:
+        for path in self._list_snapshot_files()[self.max_snapshots :]:
             path.unlink(missing_ok=True)
 
     def _load_advice_records(self) -> list[AdviceRecord]:
@@ -182,12 +182,15 @@ class DataPersistence:
         if not self.advice_dir.is_dir():
             return []
         files = list(self.advice_dir.glob("*.json"))
-        files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        files.sort(key=lambda path: path.name, reverse=True)
         return files
 
     def _trim_advice(self) -> None:
-        for path in self._list_advice_files()[self.max_advice_records:]:
-            path.unlink(missing_ok=True)
+        self._trim_record_files(
+            self._list_advice_files(),
+            keep=self.max_advice_records,
+            sort_key=lambda data: data.get("created_at", ""),
+        )
 
     def _load_execution_records(self) -> list[ExecutionRecord]:
         records: list[ExecutionRecord] = []
@@ -197,19 +200,22 @@ class DataPersistence:
                     records.append(ExecutionRecord.from_dict(json.load(f)))
             except Exception:
                 continue
-        records.sort(key=lambda record: record.recorded_at, reverse=True)
+        records.sort(key=lambda record: (record.recorded_at, record.id), reverse=True)
         return records
 
     def _list_execution_files(self) -> list[Path]:
         if not self.execution_dir.is_dir():
             return []
         files = list(self.execution_dir.glob("*.json"))
-        files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        files.sort(key=lambda path: path.name, reverse=True)
         return files
 
     def _trim_executions(self) -> None:
-        for path in self._list_execution_files()[self.max_execution_records:]:
-            path.unlink(missing_ok=True)
+        self._trim_record_files(
+            self._list_execution_files(),
+            keep=self.max_execution_records,
+            sort_key=lambda data: data.get("recorded_at", ""),
+        )
 
     def _load_forecast_records(self) -> list[ForecastRecord]:
         records: list[ForecastRecord] = []
@@ -219,25 +225,38 @@ class DataPersistence:
                     records.append(ForecastRecord.from_dict(json.load(f)))
             except Exception:
                 continue
-        records.sort(key=lambda record: record.created_at, reverse=True)
+        records.sort(key=lambda record: (record.created_at, record.id), reverse=True)
         return records
 
     def _list_forecast_files(self) -> list[Path]:
         if not self.forecast_dir.is_dir():
             return []
         files = list(self.forecast_dir.glob("*.json"))
-        files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        files.sort(key=lambda path: path.name, reverse=True)
         return files
 
     def _trim_forecasts(self) -> None:
-        for path in self._list_forecast_files()[self.max_forecast_records:]:
+        self._trim_record_files(
+            self._list_forecast_files(),
+            keep=self.max_forecast_records,
+            sort_key=lambda data: data.get("created_at", ""),
+        )
+
+    @staticmethod
+    def _trim_record_files(paths: list[Path], *, keep: int, sort_key) -> None:
+        ranked: list[tuple[str, str, Path]] = []
+        for path in paths:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    sort_value = sort_key(json.load(f))
+            except Exception:
+                sort_value = ""
+            ranked.append((str(sort_value or ""), path.name, path))
+
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        for _, _, path in ranked[keep:]:
             path.unlink(missing_ok=True)
 
     @staticmethod
     def _safe_timestamp(value: str) -> str:
-        return (
-            value.replace(":", "")
-            .replace("+", "_")
-            .replace("/", "_")
-            .replace("\\", "_")
-        )
+        return value.replace(":", "").replace("+", "_").replace("/", "_").replace("\\", "_")

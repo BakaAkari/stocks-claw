@@ -1,5 +1,6 @@
 """最小化上下文快照持久化测试。"""
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -89,32 +90,38 @@ def test_execution_record_round_trip_and_rolls_over(tmp_path):
         max_execution_records=2,
     )
 
-    persistence.save_execution(ExecutionRecord.create(
-        id="one",
-        advice_id="advice-1",
-        target="a:588000",
-        action="increase",
-        extent="full",
-        note="已执行",
-        executed_at="2026-07-03T10:00:00+08:00",
-    ))
-    persistence.save_execution(ExecutionRecord.create(
-        id="two",
-        advice_id="advice-1",
-        target="现金",
-        action="none",
-        note="未执行",
-        executed_at="2026-07-03T11:00:00+08:00",
-    ))
-    persistence.save_execution(ExecutionRecord.create(
-        id="three",
-        advice_id=None,
-        target="a:588000",
-        action="increase",
-        extent="partial",
-        note="无 advice_id 不参与匹配",
-        executed_at="2026-07-03T12:00:00+08:00",
-    ))
+    persistence.save_execution(
+        ExecutionRecord.create(
+            id="one",
+            advice_id="advice-1",
+            target="a:588000",
+            action="increase",
+            extent="full",
+            note="已执行",
+            executed_at="2026-07-03T10:00:00+08:00",
+        )
+    )
+    persistence.save_execution(
+        ExecutionRecord.create(
+            id="two",
+            advice_id="advice-1",
+            target="现金",
+            action="none",
+            note="未执行",
+            executed_at="2026-07-03T11:00:00+08:00",
+        )
+    )
+    persistence.save_execution(
+        ExecutionRecord.create(
+            id="three",
+            advice_id=None,
+            target="a:588000",
+            action="increase",
+            extent="partial",
+            note="无 advice_id 不参与匹配",
+            executed_at="2026-07-03T12:00:00+08:00",
+        )
+    )
 
     records = persistence.list_executions()
     assert len(records) == 2
@@ -169,6 +176,58 @@ def test_forecast_record_round_trip_and_rolls_over(tmp_path):
     assert records[0]["id"] == "forecast-3"
     assert records[0]["status"] == "hit"
     assert records[1]["target"] == "a:588000"
+
+
+def test_rollover_uses_record_time_when_file_mtime_ties(tmp_path):
+    """NAS/FUSE/sync dirs may give rapid writes identical mtimes; keep newest records."""
+    persistence = DataPersistence(
+        str(tmp_path / "snapshots"),
+        advice_dir=str(tmp_path / "advice"),
+        execution_dir=str(tmp_path / "executions"),
+        forecast_dir=str(tmp_path / "forecasts"),
+        max_advice_records=10,
+        max_execution_records=10,
+        max_forecast_records=10,
+    )
+
+    for index in (1, 2, 3):
+        persistence.save_advice(_advice(index))
+        persistence.save_execution(
+            ExecutionRecord(
+                id=f"execution-{index}",
+                advice_id="advice-1",
+                target="a:588000",
+                action="increase",
+                extent="full",
+                note="执行记录",
+                executed_at=f"2026-07-03T0{index}:00:00+00:00",
+                recorded_at=f"2026-07-03T0{index}:00:00+00:00",
+            )
+        )
+        persistence.save_forecast(_forecast(index))
+
+    for directory in (persistence.advice_dir, persistence.execution_dir, persistence.forecast_dir):
+        for path in directory.glob("*.json"):
+            os.utime(path, (1, 1))
+
+    persistence.max_advice_records = 2
+    persistence.max_execution_records = 2
+    persistence.max_forecast_records = 2
+    persistence._trim_advice()
+    persistence._trim_executions()
+    persistence._trim_forecasts()
+
+    advice_records = persistence.list_advice()
+    assert advice_records[0]["created_at"].endswith("03+00:00")
+    assert advice_records[1]["created_at"].endswith("02+00:00")
+    assert [item["id"] for item in persistence.list_executions()] == [
+        "execution-3",
+        "execution-2",
+    ]
+    assert [item["id"] for item in persistence.list_forecasts()] == [
+        "forecast-3",
+        "forecast-2",
+    ]
 
 
 def test_forecast_record_manual_and_validation():
