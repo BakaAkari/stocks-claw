@@ -55,13 +55,15 @@
 
 **文件**:`stocks/domain/models.py`、`stocks/engine/persistence.py`、advice_save 路径(cli/mcp)、`stocks/prompts/personal_advice_prompt.txt`、`stocks/DATA_MODEL.md`、`tests/`
 
-- [ ] 【验证前提】grep AdviceRecord 现有字段、triggers 的校验方式与存储位置(`.local/advice/`)。
-- [ ] `AdviceRecord` 增可选 `actions[]`,每项:`{target(instrument_key 或约束 bucket 名), action ∈ {add,increase,reduce,exit,hold,watch}, size_hint(比例区间或自然语言,禁止精确金额), trigger?, invalidation?, horizon ∈ {short,medium,long}}`;旧记录按 `[]` 兼容加载。
-- [ ] 保存时确定性校验:`target` 必须存在于已映射持仓/watchlist/扫描池/约束 bucket 之一;action/horizon 枚举合法;`size_hint` 含具体货币金额(如 `¥12,000`、`$3,400`、`12000元`,正则检测货币符号/单位+数字)则拒绝,百分比与比例区间(如 "一成"、"5%~8%")允许。校验失败返回结构化错误明细,不静默丢弃、不部分写入。
-- [ ] prompt 契约"调仓触发清单"节同步一句:建议确认保存时按 actions 结构落库;`AGENT_GUIDE.md` 的 advice_save 示例同步 actions 用法。
-- [ ] 测试:合法保存、伪造 target 拒绝、精确金额拒绝、旧记录加载、CLI/MCP 透传。
+- [x] 【验证前提】grep AdviceRecord 现有字段、triggers 的校验方式与存储位置(`.local/advice/`)。
+- [x] `AdviceRecord` 增可选 `actions[]`,每项:`{target(instrument_key 或约束 bucket 名), action ∈ {add,increase,reduce,exit,hold,watch}, size_hint(比例区间或自然语言,禁止精确金额), trigger?, invalidation?, horizon ∈ {short,medium,long}}`;旧记录按 `[]` 兼容加载。
+- [x] 保存时确定性校验:`target` 必须存在于已映射持仓/watchlist/扫描池/约束 bucket 之一;action/horizon 枚举合法;`size_hint` 含具体货币金额(如 `¥12,000`、`$3,400`、`12000元`,正则检测货币符号/单位+数字)则拒绝,百分比与比例区间(如 "一成"、"5%~8%")允许。校验失败返回结构化错误明细,不静默丢弃、不部分写入。
+- [x] prompt 契约"调仓触发清单"节同步一句:建议确认保存时按 actions 结构落库;`AGENT_GUIDE.md` 的 advice_save 示例同步 actions 用法。
+- [x] 测试:合法保存、伪造 target 拒绝、精确金额拒绝、旧记录加载、CLI/MCP 透传。
 
 **验收**:保存一条带 ≥2 个 actions 的真实建议,下次 `build_context` 的 recent_advice 完整回显 actions;全局验收通过。
+
+> 完成:773b8a9 S1-2 结构化建议 actions 完成,并按用户确认保存真实建议两条 actions(`a:588000 increase 5%~8%`,`现金 reduce 一成以内`) | 证据:`stocks/domain/models.py:384`/`:402`/`:504` 定义 actions 与精确金额拒绝,`stocks/engine/__init__.py:78`/`:632` 返回结构化校验错误并校验 target,`stocks/engine/context_builder.py:1096` 将 actions 注入 raw_prompt,`stocks/prompts/personal_advice_prompt.txt:53` 与 `AGENT_GUIDE.md:95` 同步契约,`tests/engine/test_advice_actions.py:32` 覆盖旧记录 actions=[],`tests/test_asset_adapters.py:234`/`:316` 覆盖 MCP/CLI 透传、伪造 target 与精确金额拒绝;真实验收 `advice_save --confirmed` 成功,`build_context` 回显 recent_advice.actions 两条且 raw_prompt 命中 `结构化动作:`、`a:588000 | increase | 5%~8% | short`、`现金 | reduce | 一成以内 | short`;全局闸 `ruff`=All checks passed,`pytest`=446 passed,`compileall`=0,CLI smoke=0。
 
 ### S1-3 执行记录
 
