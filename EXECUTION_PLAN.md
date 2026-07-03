@@ -572,10 +572,12 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 **文件**:`stocks/engine/history_provider.py`、`tests/engine/test_history_provider.py`
 **证据(2026-07-02 实测)**:eastmoney push2his 从用户网络 6/6 RemoteDisconnected(40-60ms 即断,疑反爬/限流,当日更早时段曾成功——间歇性失败);腾讯 `web.ifzq.gtimg.cn` 日 K 6/6 成功(60-61 bars);新浪接口通但数据窗口异常(每支仅 2 bars),**不选新浪**。
 
-- [ ] 【验证前提】重跑 `python3 .local/verify_data_sources.py` 第 1、2 节确认两源当下状态(eastmoney 恢复与否都不改变本任务必要性——间歇性失败正是要冗余的理由)。
-- [ ] 新增 `TencentKLineProvider`:`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sh|sz}{code},day,,,{lookback},qfq`;解析 `data.{symbol}.qfqday`(缺省回落 `day`)数组 `[日期,开,收,高,低,成交量]`;列对齐 `_HISTORY_COLUMNS`,`prev_close` 按前一根收盘推导(与 EastmoneyKLineProvider 同法),`data_source="provider"`;sh/sz 前缀判断复用 `tencent_a.py` 的 `_prefix` 规则(勿重新发明)。
-- [ ] `CompositeKLineProvider` 的 a 市场路由改为降级链:eastmoney → tencent;产出与 fetchers 降级记录同构的回填记录,供 D0-3 的 `history_backfill` 消费(记录用了哪个源、是否 fallback)。
-- [ ] 新增测试:腾讯响应 fixture 解析正确(含 qfqday/day 两种);主源空 → 备源成功 → 记录 fallback;两源全失败 → 空 DataFrame + 失败记录。
+- [x] 【验证前提】重跑 `.local/verify_data_sources.py`:eastmoney 0/6 RemoteDisconnected、腾讯 6/6 各 60 bars、新浪仍仅 2 bars。
+- [x] 新增 `TencentKLineProvider`,解析 `qfqday` 并回落 `day`;列对齐 HistoryCache(含 `data_source=provider`),prev_close 按前一根收盘推导;sh/sz 规则抽为 `tencent_market_prefix` 供实时与历史 Provider 共用。
+- [x] `CompositeKLineProvider` 的 a 市场路由改为 eastmoney → tencent;DataFrame attrs 与 history_backfill item 同时记录 source/primary_source/fallback_source/degradation_result/逐源 errors。
+- [x] 新增测试:qfqday/day fixture、共享前缀、主源成功、备用成功、两源全空、warm report fallback 均覆盖。
+
+> 完成(2026-07-03):真实网络以正确 exchange 元数据复测 6 个 watchlist A 股标的,腾讯均返回 60~61 bars;eastmoney 当时仍全失败,结果均为 `fallback_success`。`history_backfill.items` 新增逐源降级字段属于契约变化,data_quality v6→v7 并同步 DATA_MODEL/context_builder/tests。
 
 **验收**:模拟 eastmoney 失败,A 股回填仍 6/6 成功且 `history_backfill` 记录降级来源;真实网络冒烟一次。
 

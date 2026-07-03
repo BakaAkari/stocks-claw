@@ -358,7 +358,7 @@ class ContextBuilder:
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 6,
+            "schema_version": 7,
             "generated_at": generated_at,
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),

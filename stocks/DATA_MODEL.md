@@ -192,7 +192,7 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
 精确值仍存在于结构化 `assets`，供受控调用方按需使用。
 
-## data_quality v6
+## data_quality v7
 
 `data_quality` 包含：
 
@@ -207,7 +207,9 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
   `status`、`requested_count`、`ok_count`、`skipped_cached_count`、
   `failed_count` 与 `items`。每个 item 结构为
   `{symbol, market, source, rows, status, error}`，其中 `status ∈ {ok, skipped_cached, failed}`
-  且 `source` 显式标注 `eastmoney_kline` / `yahoo_kline` / `unknown`。
+  且 `source` 标注实际成功源（包括 `eastmoney_kline`、`tencent_kline`、
+  `yahoo_kline` 等）。每项同时给出 `primary_source`、`fallback_source`、
+  `degradation_result` 与逐源 `errors`，可区分主源成功、备用成功与全失败。
   失败标的记录 `error` 字符串；全部失败会触发 10 分钟冷却而非静默重试。
 
 - `upcoming_events`：事件日历质量。`status ∈ {ok, partial, missing,
@@ -223,8 +225,9 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `not_requested` 和 `not_configured`。美股单源失败额外标记
 `single_source_failed`，历史价格回填标记为 stale。
 
-`schema_version` 语义：v6 相对 v5 为 `quotes.by_market` 增加
-`single_source`；v5 相对 v4 为 `upcoming_events` 增加 `expired_count`；
+`schema_version` 语义：v7 相对 v6 扩展 `history_backfill.items` 的逐源降级字段；
+v6 相对 v5 为 `quotes.by_market` 增加 `single_source`；
+v5 相对 v4 为 `upcoming_events` 增加 `expired_count`；
 v4 相对 v3 新增 `upcoming_events`、`rotation` 与
 `action_signals` 三个节点；v3 相对 v2 新增 `history_backfill` 节点；
 其余节点结构不变。

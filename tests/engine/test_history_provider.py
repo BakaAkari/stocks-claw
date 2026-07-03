@@ -21,6 +21,7 @@ from stocks.engine.history_cache import HistoryCache
 from stocks.engine.history_provider import (
     CompositeKLineProvider,
     EastmoneyKLineProvider,
+    TencentKLineProvider,
     YahooKLineProvider,
     warm_history_cache,
 )
@@ -65,6 +66,18 @@ YAHOO_RESPONSE = {
     }
 }
 
+TENCENT_QFQ_RESPONSE = {
+    "code": 0,
+    "data": {
+        "sh000300": {
+            "qfqday": [
+                ["2024-01-01", "100.0", "101.0", "102.0", "99.0", "1000000"],
+                ["2024-01-02", "101.0", "103.0", "104.0", "100.0", "2000000"],
+            ]
+        }
+    },
+}
+
 
 @pytest.fixture
 def sample_instrument_a():
@@ -100,7 +113,7 @@ class TestEastmoneyKLineProvider:
         assert len(df) == 5
         assert list(df.columns) == [
             "timestamp", "code", "name", "market", "price", "open_price",
-            "high", "low", "prev_close", "volume_lot",
+            "high", "low", "prev_close", "volume_lot", "data_source",
         ]
         assert df.iloc[0]["code"] == "000300"
         assert df.iloc[0]["price"] == 101.0  # 第一日收盘
@@ -152,6 +165,51 @@ class TestEastmoneyKLineProvider:
 
         inst2 = Instrument(code="159110", name="科创债", market="a")
         assert provider._secid(inst2) == "0.159110"
+
+
+# ------------------------------------------------------------------
+# TencentKLineProvider
+# ------------------------------------------------------------------
+
+class TestTencentKLineProvider:
+    @pytest.mark.parametrize("series_key", ["qfqday", "day"])
+    async def test_fetch_qfq_and_day_payloads(
+        self, sample_instrument_a, series_key
+    ):
+        payload = json.loads(json.dumps(TENCENT_QFQ_RESPONSE))
+        node = payload["data"]["sh000300"]
+        if series_key == "day":
+            node["day"] = node.pop("qfqday")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_resp.__enter__ = Mock(return_value=mock_resp)
+        mock_resp.__exit__ = Mock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            frame = await TencentKLineProvider().fetch(
+                sample_instrument_a, lookback_days=2
+            )
+
+        assert len(frame) == 2
+        assert frame.iloc[0]["price"] == 101.0
+        assert frame.iloc[0]["prev_close"] == 101.0
+        assert frame.iloc[1]["prev_close"] == 101.0
+        assert frame.iloc[1]["volume_lot"] == 2_000_000.0
+        assert frame.iloc[1]["data_source"] == "provider"
+
+    async def test_fetch_uses_shared_sh_sz_prefix(self):
+        instrument = Instrument("159110", "科创债", "a", exchange="sz")
+        payload = {"code": 0, "data": {"sz159110": {"qfqday": []}}}
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_resp.__enter__ = Mock(return_value=mock_resp)
+        mock_resp.__exit__ = Mock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as urlopen:
+            frame = await TencentKLineProvider().fetch(instrument, lookback_days=5)
+
+        assert frame.empty
+        assert "param=sz159110,day,,,5,qfq" in urlopen.call_args.args[0].full_url
 
 
 # ------------------------------------------------------------------
@@ -221,10 +279,50 @@ class TestCompositeKLineProvider:
         """A 股路由到 Eastmoney"""
         provider = CompositeKLineProvider()
         with patch.object(provider._eastmoney, "fetch", return_value=pd.DataFrame({"col": [1]})) as mock_e:
-            with patch.object(provider._yahoo, "fetch") as mock_y:
-                await provider.fetch(sample_instrument_a, lookback_days=5)
-                mock_e.assert_called_once()
-                mock_y.assert_not_called()
+            with patch.object(provider._tencent, "fetch") as mock_t:
+                with patch.object(provider._yahoo, "fetch") as mock_y:
+                    frame = await provider.fetch(sample_instrument_a, lookback_days=5)
+                    mock_e.assert_called_once()
+                    mock_t.assert_not_called()
+                    mock_y.assert_not_called()
+        assert frame.attrs["source"] == "eastmoney_kline"
+        assert frame.attrs["degradation_result"] == "success"
+
+    async def test_a_falls_back_to_tencent(self, sample_instrument_a):
+        provider = CompositeKLineProvider()
+        fallback_frame = pd.DataFrame({"price": [101.0]})
+        with patch.object(
+            provider._eastmoney, "fetch", return_value=pd.DataFrame()
+        ):
+            with patch.object(
+                provider._tencent, "fetch", return_value=fallback_frame
+            ):
+                frame = await provider.fetch(sample_instrument_a, lookback_days=5)
+
+        assert frame.attrs["source"] == "tencent_kline"
+        assert frame.attrs["primary_source"] == "eastmoney_kline"
+        assert frame.attrs["fallback_source"] == "tencent_kline"
+        assert frame.attrs["degradation_result"] == "fallback_success"
+        assert frame.attrs["errors"] == {
+            "eastmoney_kline": "provider returned empty frame"
+        }
+
+    async def test_a_all_sources_empty_reports_errors(self, sample_instrument_a):
+        provider = CompositeKLineProvider()
+        with patch.object(
+            provider._eastmoney, "fetch", return_value=pd.DataFrame()
+        ):
+            with patch.object(
+                provider._tencent, "fetch", return_value=pd.DataFrame()
+            ):
+                frame = await provider.fetch(sample_instrument_a, lookback_days=5)
+
+        assert frame.empty
+        assert frame.attrs["degradation_result"] == "empty"
+        assert frame.attrs["errors"] == {
+            "eastmoney_kline": "provider returned empty frame",
+            "tencent_kline": "provider returned empty frame",
+        }
 
     async def test_routes_us_to_yahoo(self, sample_instrument_us):
         """美股路由到 Yahoo"""
@@ -248,8 +346,9 @@ class TestCompositeKLineProvider:
         """批量并行获取"""
         provider = CompositeKLineProvider()
         with patch.object(provider._eastmoney, "fetch", return_value=pd.DataFrame({"col": [1]})):
-            with patch.object(provider._yahoo, "fetch", return_value=pd.DataFrame({"col": [2]})):
-                results = await provider.fetch_batch([sample_instrument_a, sample_instrument_us], 5)
+            with patch.object(provider._tencent, "fetch"):
+                with patch.object(provider._yahoo, "fetch", return_value=pd.DataFrame({"col": [2]})):
+                    results = await provider.fetch_batch([sample_instrument_a, sample_instrument_us], 5)
 
         assert len(results) == 2
         assert "a:000300" in results
@@ -303,6 +402,43 @@ class TestWarmHistoryCache:
         assert item["source"] == "eastmoney_kline"
         assert item["error"] is None
         provider.fetch.assert_called_once_with(sample_instrument_a, 5)
+
+    async def test_warm_report_exposes_tencent_fallback(
+        self, tmp_path, sample_instrument_a
+    ):
+        cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
+        provider = CompositeKLineProvider()
+        fallback = pd.DataFrame({
+            "timestamp": pd.date_range("2024-01-01", periods=5, freq="D"),
+            "code": ["000300"] * 5,
+            "name": ["沪深300"] * 5,
+            "market": ["a"] * 5,
+            "price": [100.0, 101.0, 102.0, 103.0, 104.0],
+            "open_price": [100.0] * 5,
+            "high": [102.0] * 5,
+            "low": [98.0] * 5,
+            "prev_close": [100.0, 100.0, 101.0, 102.0, 103.0],
+            "volume_lot": [1_000_000] * 5,
+            "data_source": ["provider"] * 5,
+        })
+        with patch.object(
+            provider._eastmoney, "fetch", return_value=pd.DataFrame()
+        ):
+            with patch.object(provider._tencent, "fetch", return_value=fallback):
+                report = await warm_history_cache(
+                    cache, provider, [sample_instrument_a], 5
+                )
+        await cache.close()
+
+        item = _find_report(report, "a:000300")
+        assert item["status"] == "ok"
+        assert item["source"] == "tencent_kline"
+        assert item["primary_source"] == "eastmoney_kline"
+        assert item["fallback_source"] == "tencent_kline"
+        assert item["degradation_result"] == "fallback_success"
+        assert item["errors"] == {
+            "eastmoney_kline": "provider returned empty frame"
+        }
 
     async def test_skip_sufficient_cache(self, tmp_path, sample_instrument_a):
         """数据充足时跳过 warm,状态为 skipped_cached(D0-3)"""

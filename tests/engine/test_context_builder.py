@@ -134,7 +134,7 @@ class TestBasicBuild:
         assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
-        assert context.data_quality["schema_version"] == 6
+        assert context.data_quality["schema_version"] == 7
         assert context.data_quality["quotes"]["status"] == "ok"
         assert context.data_quality["quotes"]["item_count"] == 1
         assert context.data_quality["news"]["status"] == "not_requested"
@@ -149,7 +149,7 @@ class TestBasicBuild:
             Path(__file__).resolve().parents[2] / "stocks" / "DATA_MODEL.md"
         ).read_text(encoding="utf-8")
         assert "`AnalysisContext.schema_version` 当前为 `8`" in data_model
-        assert "## data_quality v6" in data_model
+        assert "## data_quality v7" in data_model
 
     async def test_build_no_instruments(self, mock_fetcher, mock_scaffolds, sample_assets):
         """无 instruments 时 quotes 为空"""
@@ -845,7 +845,7 @@ class TestHistoryBackfillQuality:
             instruments=sample_instruments,
             recent_snapshots=[],
         )
-        assert context.data_quality["schema_version"] == 6
+        assert context.data_quality["schema_version"] == 7
         assert "history_backfill" in context.data_quality
         assert context.data_quality["history_backfill"]["status"] == "not_requested"
 

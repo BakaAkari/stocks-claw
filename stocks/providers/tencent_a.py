@@ -9,6 +9,18 @@ from stocks.domain.models import Instrument, Quote
 from stocks.providers.base import QuoteProvider
 
 
+def tencent_market_prefix(instrument: Instrument) -> str:
+    """返回腾讯接口使用的 sh/sz 前缀，供实时与历史 Provider 共用。"""
+    exchange = (instrument.exchange or "").lower()
+    if exchange in ("sh", "sh_stock", "sh_a", "sh_index"):
+        return "sh"
+    if exchange in ("sz", "sz_stock", "sz_a", "sz_index"):
+        return "sz"
+    if instrument.code.startswith(("5", "6", "9")):
+        return "sh"
+    return "sz"
+
+
 class TencentAQuoteProvider(QuoteProvider):
     """腾讯股票接口 A 股行情 Provider
 
@@ -27,15 +39,7 @@ class TencentAQuoteProvider(QuoteProvider):
 
     def _prefix(self, instrument: Instrument) -> str:
         """根据交易所或代码前缀判断市场前缀。"""
-        exchange = (instrument.exchange or "").lower()
-        code = instrument.code
-        if exchange in ("sh", "sh_stock", "sh_a", "sh_index"):
-            return "sh"
-        if exchange in ("sz", "sz_stock", "sz_a", "sz_index"):
-            return "sz"
-        if code.startswith(("5", "6", "9")):
-            return "sh"
-        return "sz"
+        return tencent_market_prefix(instrument)
 
     def _build_symbol(self, instrument: Instrument) -> str:
         return f"{self._prefix(instrument)}{instrument.code}"

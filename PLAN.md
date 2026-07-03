@@ -113,4 +113,5 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-03:用户裁决内部决策 LLM 默认开启,并采用双路径交付:凭据齐全走 internal_llm;URL/key 缺失时用户 Agent 必须提示安全配置或选择 agent_delegate,由用户 Agent按同一 DecisionPlan 契约生成中间决策;无论哪条路径,用户 Agent最后结合对话、证据和质量边界完成最终分析。新增 Phase G 规划持仓映射、仓位计算、机会评分、DecisionPlan、事件生命周期、触发监控和轻量效果校准。依据:用户要求工具在对话当下给出提前布局/调仓方案,不再只返回数据汇总。
 - 2026-07-03:F0 修复 UpcomingEvent 的完整时点、精度与生命周期字段,属于破坏性契约变化,故 AnalysisContext v7→v8、data_quality v4→v5;已发生事件不再进入 upcoming/event_watch,过滤数量由 expired_count 显式上报。依据:同日事件发生后仍被当作“未来”会直接污染调仓预案,且 schema 红线禁止字段变化不升版本。
 - 2026-07-03:D0-4 删除 us 指向 finnhub 自身的伪 fallback,us/crypto 显式空链,并由 quotes.by_market.single_source 暴露真实单源风险;data_quality v5→v6。真实出口验证 37 个历史标的 30 可用/7 缺失,质量节点与磁盘逐项一致,D0 完成后进入 D1。依据:降级能力必须由独立 Provider 证明,不能由配置键存在推断。
+- 2026-07-03:D1-1 接入腾讯 A 股前复权日 K 作为东方财富备用源,历史回填逐项暴露主源/备用源/降级结果/逐源错误,data_quality v6→v7。真实复测东方财富 0/6 时腾讯仍为正确 exchange 的 6/6 标的返回 60~61 bars。依据:同一网络下主源持续 RemoteDisconnected,备用源必须实际接管而非只写配置。
 - (追加格式:`日期:决定;依据`)

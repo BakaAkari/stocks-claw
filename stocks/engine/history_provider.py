@@ -25,6 +25,7 @@ import pandas as pd
 from stocks.domain.models import Instrument
 from stocks.engine.history_cache import HistoryCache
 from stocks.logging_utils import get_logger
+from stocks.providers.tencent_a import tencent_market_prefix
 
 logger = get_logger("history_provider")
 
@@ -43,6 +44,7 @@ _HISTORY_COLUMNS = [
     "low",
     "prev_close",
     "volume_lot",
+    "data_source",
 ]
 
 
@@ -121,6 +123,7 @@ class EastmoneyKLineProvider:
                     "low": float(low_p),
                     "prev_close": prev_close,
                     "volume_lot": float(volume),
+                    "data_source": "provider",
                 })
 
             df = pd.DataFrame(records, columns=_HISTORY_COLUMNS)
@@ -130,6 +133,66 @@ class EastmoneyKLineProvider:
 
         except Exception as e:
             logger.warning(f"Eastmoney fetch failed for {instrument.code}: {e}")
+            return pd.DataFrame(columns=_HISTORY_COLUMNS)
+
+
+# ------------------------------------------------------------------
+# 腾讯 A 股/ETF 日 K（东方财富备用源）
+# ------------------------------------------------------------------
+
+class TencentKLineProvider:
+    """腾讯前复权日 K；响应优先使用 qfqday，缺失时回落 day。"""
+
+    _HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+    async def fetch(
+        self, instrument: Instrument, lookback_days: int = 60
+    ) -> pd.DataFrame:
+        symbol = f"{tencent_market_prefix(instrument)}{instrument.code}"
+        url = (
+            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+            f"?param={symbol},day,,,{lookback_days},qfq"
+        )
+
+        def _request():
+            req = urllib.request.Request(url, headers=self._HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        try:
+            payload = await asyncio.to_thread(_request)
+            node = payload.get("data", {}).get(symbol, {})
+            klines = node.get("qfqday") or node.get("day") or []
+            records: list[dict] = []
+            previous_close: float | None = None
+            for row in klines:
+                if not isinstance(row, list) or len(row) < 6:
+                    continue
+                dt_str, open_p, close_p, high_p, low_p, volume = row[:6]
+                close = float(close_p)
+                records.append({
+                    "timestamp": datetime.strptime(dt_str, "%Y-%m-%d").replace(
+                        tzinfo=timezone.utc
+                    ),
+                    "code": instrument.code,
+                    "name": instrument.name,
+                    "market": instrument.market,
+                    "price": close,
+                    "open_price": float(open_p),
+                    "high": float(high_p),
+                    "low": float(low_p),
+                    "prev_close": previous_close if previous_close is not None else close,
+                    "volume_lot": float(volume),
+                    "data_source": "provider",
+                })
+                previous_close = close
+            frame = pd.DataFrame(records, columns=_HISTORY_COLUMNS)
+            if not frame.empty:
+                frame["timestamp"] = pd.to_datetime(frame["timestamp"])
+            logger.info(f"Tencent fetched {len(frame)} rows for {instrument.code}")
+            return frame
+        except Exception as exc:
+            logger.warning(f"Tencent fetch failed for {instrument.code}: {exc}")
             return pd.DataFrame(columns=_HISTORY_COLUMNS)
 
 
@@ -203,6 +266,7 @@ class YahooKLineProvider:
                     "low": float(lows[i]) if lows[i] is not None else float(closes[i]),
                     "prev_close": float(prev_close),
                     "volume_lot": float(volumes[i]) if volumes[i] is not None else 0.0,
+                    "data_source": "provider",
                 })
 
             df = pd.DataFrame(records, columns=_HISTORY_COLUMNS)
@@ -224,12 +288,56 @@ class CompositeKLineProvider:
 
     def __init__(self):
         self._eastmoney = EastmoneyKLineProvider()
+        self._tencent = TencentKLineProvider()
         self._yahoo = YahooKLineProvider()
+
+    async def _fetch_chain(
+        self,
+        instrument: Instrument,
+        lookback_days: int,
+        providers: list[tuple[str, object]],
+    ) -> pd.DataFrame:
+        errors: dict[str, str] = {}
+        primary_source = providers[0][0]
+        for index, (source, provider) in enumerate(providers):
+            try:
+                frame = await provider.fetch(instrument, lookback_days)
+            except Exception as exc:
+                frame = pd.DataFrame(columns=_HISTORY_COLUMNS)
+                errors[source] = f"{type(exc).__name__}: {exc}"
+            if frame.empty:
+                errors.setdefault(source, "provider returned empty frame")
+                continue
+            frame.attrs.update({
+                "source": source,
+                "primary_source": primary_source,
+                "fallback_source": source if index > 0 else None,
+                "degradation_result": "fallback_success" if index > 0 else "success",
+                "errors": errors,
+            })
+            return frame
+
+        frame = pd.DataFrame(columns=_HISTORY_COLUMNS)
+        frame.attrs.update({
+            "source": primary_source,
+            "primary_source": primary_source,
+            "fallback_source": providers[-1][0] if len(providers) > 1 else None,
+            "degradation_result": "empty",
+            "errors": errors,
+        })
+        return frame
 
     async def fetch(self, instrument: Instrument, lookback_days: int = 60) -> pd.DataFrame:
         """根据 market 选择数据源"""
         if instrument.market == "a":
-            return await self._eastmoney.fetch(instrument, lookback_days)
+            return await self._fetch_chain(
+                instrument,
+                lookback_days,
+                [
+                    ("eastmoney_kline", self._eastmoney),
+                    ("tencent_kline", self._tencent),
+                ],
+            )
         elif instrument.market in ("us", "crypto"):
             return await self._yahoo.fetch(instrument, lookback_days)
         else:
@@ -294,6 +402,10 @@ async def warm_history_cache(
     for inst in instruments:
         key = f"{inst.market}:{inst.code}"
         source = _resolve_history_source(inst.market)
+        primary_source = source
+        fallback_source = None
+        degradation_result = "not_requested"
+        provider_errors: dict[str, str] = {}
 
         # 检查当前缓存数据量;≥80% 视为已足
         try:
@@ -303,6 +415,8 @@ async def warm_history_cache(
         if len(df) >= lookback_days * 0.8:
             report.append({
                 "symbol": key, "market": inst.market, "source": source,
+                "primary_source": primary_source, "fallback_source": fallback_source,
+                "degradation_result": "skipped_cached", "errors": provider_errors,
                 "rows": len(df), "status": "skipped_cached", "error": None,
             })
             continue
@@ -313,6 +427,13 @@ async def warm_history_cache(
         for attempt in range(2):
             try:
                 hist_df = await provider.fetch(inst, lookback_days)
+                source = hist_df.attrs.get("source", source)
+                primary_source = hist_df.attrs.get("primary_source", primary_source)
+                fallback_source = hist_df.attrs.get("fallback_source")
+                degradation_result = hist_df.attrs.get(
+                    "degradation_result", "success" if not hist_df.empty else "empty"
+                )
+                provider_errors = dict(hist_df.attrs.get("errors", {}))
                 if not hist_df.empty:
                     last_error = None
                     break
@@ -329,6 +450,8 @@ async def warm_history_cache(
             logger.info(f"Warm empty for {inst.code}: {last_error}")
             report.append({
                 "symbol": key, "market": inst.market, "source": source,
+                "primary_source": primary_source, "fallback_source": fallback_source,
+                "degradation_result": degradation_result, "errors": provider_errors,
                 "rows": 0, "status": "failed", "error": last_error,
             })
             continue
@@ -339,12 +462,16 @@ async def warm_history_cache(
             logger.info(f"Warmed {inst.code} with {rows} rows")
             report.append({
                 "symbol": key, "market": inst.market, "source": source,
+                "primary_source": primary_source, "fallback_source": fallback_source,
+                "degradation_result": degradation_result, "errors": provider_errors,
                 "rows": rows, "status": "ok", "error": None,
             })
         except Exception as e:
             logger.info(f"Warm cache write failed for {inst.code}: {e}")
             report.append({
                 "symbol": key, "market": inst.market, "source": source,
+                "primary_source": primary_source, "fallback_source": fallback_source,
+                "degradation_result": degradation_result, "errors": provider_errors,
                 "rows": 0, "status": "failed",
                 "error": f"cache_write:{type(e).__name__}: {e}",
             })
