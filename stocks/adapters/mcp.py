@@ -191,7 +191,11 @@ class MCPAdapter:
             record = self.engine.save_advice(advice)
             return {"success": True, "data": record, "action": "advice_saved"}
         except (TypeError, ValueError) as exc:
-            return {"success": False, "error": str(exc)}
+            response = {"success": False, "error": str(exc)}
+            errors = getattr(exc, "errors", None)
+            if errors is not None:
+                response["errors"] = errors
+            return response
 
     def _get_quotes(self, params: dict) -> dict:
         """获取行情数据。

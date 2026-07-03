@@ -75,6 +75,14 @@ _LEGACY_CONVERSION_NOTE = re.compile(
 )
 
 
+class AdviceValidationError(ValueError):
+    """结构化建议校验错误；adapters 会把 errors 原样返回给调用方。"""
+
+    def __init__(self, errors: list[dict]):
+        super().__init__("Advice validation failed")
+        self.errors = errors
+
+
 class StocksEngine:
     """stocks-claw 核心引擎 — 数据获取与分析上下文构建入口。"""
 
@@ -589,24 +597,64 @@ class StocksEngine:
             "based_on",
             "boundary",
             "triggers",
+            "actions",
         }
         unknown = set(payload) - allowed
         if unknown:
             raise ValueError(f"Unsupported advice fields: {sorted(unknown)}")
-        record = AdviceRecord.create(
-            instruments=payload.get("instruments", []),
-            direction=payload.get("direction", {}),
-            rationale_summary=payload.get("rationale_summary", ""),
-            based_on=payload.get("based_on", []),
-            boundary=payload.get("boundary", []),
-            triggers=payload.get("triggers", []),
-        )
+        try:
+            record = AdviceRecord.create(
+                instruments=payload.get("instruments", []),
+                direction=payload.get("direction", {}),
+                rationale_summary=payload.get("rationale_summary", ""),
+                based_on=payload.get("based_on", []),
+                boundary=payload.get("boundary", []),
+                triggers=payload.get("triggers", []),
+                actions=payload.get("actions", []),
+            )
+        except ValueError as exc:
+            if "actions" in payload:
+                raise AdviceValidationError([{
+                    "field": "actions",
+                    "message": str(exc),
+                }]) from exc
+            raise
+        action_errors = self._validate_advice_action_targets(record.actions)
+        if action_errors:
+            raise AdviceValidationError(action_errors)
         self.persistence.save_advice(record)
         return record.to_dict()
 
     def list_advice(self) -> list[dict]:
         """列出已确认保存的建议摘要。"""
         return self.persistence.list_advice()
+
+    def _validate_advice_action_targets(self, actions: list[dict]) -> list[dict]:
+        if not actions:
+            return []
+        valid_targets = {
+            asset.instrument_key
+            for asset in self._assets
+            if asset.instrument_key
+        }
+        valid_targets.update(f"{item.market}:{item.code}" for item in self._watchlist)
+        valid_targets.update(f"{item.market}:{item.code}" for item in self._sector_scan)
+        valid_targets.update(str(bucket) for bucket in self._constraints)
+
+        errors: list[dict] = []
+        for index, action in enumerate(actions):
+            target = action.get("target")
+            if target not in valid_targets:
+                errors.append({
+                    "index": index,
+                    "field": "target",
+                    "target": target,
+                    "message": (
+                        "target must exist in mapped holdings, watchlist, "
+                        "scan pool, or constraint buckets"
+                    ),
+                })
+        return errors
 
     def analyze_portfolio(self, assets: list[FinancialAsset]) -> PortfolioMapping:
         """分析投资组合结构。"""

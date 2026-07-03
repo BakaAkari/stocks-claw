@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -378,6 +379,13 @@ _ADVICE_TRIGGER_TYPES = {
     "pct_change_above",  # 建议日以来累计涨跌幅 >= level（百分数）
     "pct_change_below",  # 建议日以来累计涨跌幅 <= level（百分数）
 }
+_ADVICE_ACTIONS = {"add", "increase", "reduce", "exit", "hold", "watch"}
+_ADVICE_HORIZONS = {"short", "medium", "long"}
+_EXACT_MONEY_RE = re.compile(
+    r"(?:[$¥￥]\s*\d[\d,]*(?:\.\d+)?)|"
+    r"(?:\d[\d,]*(?:\.\d+)?\s*(?:元|人民币|美元|美金|港元|USD|CNY|HKD))",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -391,6 +399,7 @@ class AdviceRecord:
     based_on: list[str]
     boundary: list[dict]
     triggers: list[dict] = field(default_factory=list)
+    actions: list[dict] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -402,6 +411,7 @@ class AdviceRecord:
         based_on: list[str],
         boundary: list[dict],
         triggers: Optional[list[dict]] = None,
+        actions: Optional[list[dict]] = None,
     ) -> "AdviceRecord":
         return cls(
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -411,6 +421,7 @@ class AdviceRecord:
             based_on=based_on,
             boundary=boundary,
             triggers=list(triggers or []),
+            actions=list(actions or []),
         )
 
     @classmethod
@@ -423,6 +434,7 @@ class AdviceRecord:
             based_on=list(data.get("based_on", [])),
             boundary=list(data.get("boundary", [])),
             triggers=list(data.get("triggers", [])),
+            actions=list(data.get("actions", [])),
         )
 
     def __post_init__(self) -> None:
@@ -476,6 +488,39 @@ class AdviceRecord:
             unknown = set(item) - {"instrument", "type", "level", "action", "invalidation"}
             if unknown:
                 raise ValueError(f"Unsupported trigger fields: {sorted(unknown)}")
+        if not isinstance(self.actions, list):
+            raise ValueError("actions must be a list")
+        for item in self.actions:
+            if not isinstance(item, dict):
+                raise ValueError("each action must be an object")
+            target = item.get("target")
+            if not isinstance(target, str) or not target.strip():
+                raise ValueError("action.target must be a non-empty string")
+            if item.get("action") not in _ADVICE_ACTIONS:
+                raise ValueError(f"action.action must be one of {sorted(_ADVICE_ACTIONS)}")
+            size_hint = item.get("size_hint")
+            if not isinstance(size_hint, str) or not size_hint.strip():
+                raise ValueError("action.size_hint must be a non-empty string")
+            if _EXACT_MONEY_RE.search(size_hint):
+                raise ValueError("action.size_hint must not contain exact currency amounts")
+            if item.get("horizon") not in _ADVICE_HORIZONS:
+                raise ValueError(f"action.horizon must be one of {sorted(_ADVICE_HORIZONS)}")
+            trigger = item.get("trigger")
+            if trigger is not None and not isinstance(trigger, str):
+                raise ValueError("action.trigger must be a string when present")
+            invalidation = item.get("invalidation")
+            if invalidation is not None and not isinstance(invalidation, str):
+                raise ValueError("action.invalidation must be a string when present")
+            unknown = set(item) - {
+                "target",
+                "action",
+                "size_hint",
+                "trigger",
+                "invalidation",
+                "horizon",
+            }
+            if unknown:
+                raise ValueError(f"Unsupported action fields: {sorted(unknown)}")
 
     def to_dict(self) -> dict:
         return {
@@ -486,6 +531,7 @@ class AdviceRecord:
             "based_on": self.based_on,
             "boundary": self.boundary,
             "triggers": self.triggers,
+            "actions": self.actions,
         }
 
 

@@ -227,7 +227,11 @@ class CLIAdapter:
                 "action": "removed",
             }
         except (TypeError, ValueError) as exc:
-            return {"success": False, "error": str(exc)}
+            response = {"success": False, "error": str(exc)}
+            errors = getattr(exc, "errors", None)
+            if errors is not None:
+                response["errors"] = errors
+            return response
 
     @staticmethod
     def _parse_json_object(value: str) -> dict:

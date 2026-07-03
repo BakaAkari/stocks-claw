@@ -10,6 +10,7 @@ import pytest
 
 from stocks.adapters.cli import CLIAdapter
 from stocks.adapters.mcp import MCPAdapter
+from stocks.domain.models import FinancialAsset
 from stocks.engine import StocksEngine
 from tests.engine.test_engine import MINIMAL_CONFIG
 
@@ -198,6 +199,17 @@ def _advice_payload() -> dict:
     }
 
 
+def _advice_action(target: str = "a:588000", size_hint: str = "一成") -> dict:
+    return {
+        "target": target,
+        "action": "increase",
+        "size_hint": size_hint,
+        "trigger": "回踩20日线后重新转强",
+        "invalidation": "跌破前低",
+        "horizon": "short",
+    }
+
+
 def test_mcp_advice_save_requires_confirmation_and_lists(adapter_engine, tmp_path):
     adapter = MCPAdapter(adapter_engine)
     denied = adapter.handle_request({
@@ -219,6 +231,69 @@ def test_mcp_advice_save_requires_confirmation_and_lists(adapter_engine, tmp_pat
     assert listed["data"][0]["rationale_summary"] == "现金占比较高，银行股继续观察。"
 
 
+def test_mcp_advice_actions_validate_target_and_context_echo(adapter_engine):
+    adapter_engine._assets = [
+        FinancialAsset(
+            name="科创50ETF华夏",
+            platform="券商",
+            amount=3000,
+            asset_type="股票ETF",
+            instrument_key="a:588000",
+            quantity=1800,
+            tradable=True,
+        )
+    ]
+    adapter = MCPAdapter(adapter_engine)
+    payload = _advice_payload() | {
+        "actions": [
+            _advice_action("a:588000", "5%~8%"),
+            _advice_action("权益", "一成"),
+        ]
+    }
+    adapter_engine._constraints = {"权益": {"min": 0.25, "max": 0.65}}
+
+    saved = adapter.handle_request({
+        "method": "advice_save",
+        "params": {"advice": payload, "confirmed": True},
+    })
+    assert saved["success"] is True
+    assert len(saved["data"]["actions"]) == 2
+
+    fake_target = adapter.handle_request({
+        "method": "advice_save",
+        "params": {
+            "advice": _advice_payload() | {"actions": [_advice_action("a:FAKE")]},
+            "confirmed": True,
+        },
+    })
+    assert fake_target["success"] is False
+    assert fake_target["errors"][0]["field"] == "target"
+
+    exact_amount = adapter.handle_request({
+        "method": "advice_save",
+        "params": {
+            "advice": _advice_payload() | {"actions": [_advice_action(size_hint="¥12,000")]},
+            "confirmed": True,
+        },
+    })
+    assert exact_amount["success"] is False
+    assert exact_amount["errors"][0]["field"] == "actions"
+
+    context_result = adapter.handle_request({
+        "method": "get_analysis_context",
+        "params": {
+            "include_news": False,
+            "include_quotes": False,
+            "include_history": True,
+        },
+    })
+    assert context_result["success"] is True
+    advice = context_result["data"]["recent_advice"][0]
+    assert advice["actions"] == payload["actions"]
+    assert "结构化动作:" in context_result["data"]["raw_prompt_input"]
+    assert "a:588000 | increase | 5%~8% | short" in context_result["data"]["raw_prompt_input"]
+
+
 def test_cli_advice_save_requires_confirmation_and_lists(adapter_engine, capsys):
     adapter = CLIAdapter(adapter_engine)
 
@@ -236,6 +311,19 @@ def test_cli_advice_save_requires_confirmation_and_lists(adapter_engine, capsys)
     adapter.run(["--advice-list"])
     listed = json.loads(capsys.readouterr().out)
     assert listed["data"][0]["direction"]["a:000001"] == "watch"
+
+
+def test_cli_advice_actions_passthrough(adapter_engine, capsys):
+    adapter_engine._constraints = {"权益": {"min": 0.25, "max": 0.65}}
+    adapter = CLIAdapter(adapter_engine)
+    payload = _advice_payload() | {"actions": [_advice_action("权益", "一成")]}
+
+    adapter.run(["--advice-save", json.dumps(payload, ensure_ascii=False), "--confirmed"])
+    assert json.loads(capsys.readouterr().out)["success"] is True
+
+    adapter.run(["--advice-list"])
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["data"][0]["actions"] == payload["actions"]
 
 
 def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engine):

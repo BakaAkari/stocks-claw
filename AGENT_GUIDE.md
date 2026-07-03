@@ -74,7 +74,7 @@ uv run python -m stocks.adapters.cli \
   --confirmed
 
 uv run python -m stocks.adapters.cli \
-  --advice-save '{"instruments":[{"market":"a","code":"000001","name":"平安银行"}],"direction":{"a:000001":"watch"},"rationale_summary":"现金占比较高，等待放量站回20日线。","based_on":["quotes","portfolio"],"boundary":[{"type":"fact","text":"现金占比较高"},{"type":"inference","text":"等待放量站回20日线"}],"triggers":[{"instrument":"a:000001","type":"price_above","level":12.5,"action":"收盘站上12.5则用现金层一成建仓","invalidation":"跌破11.8本条作废"}]}' \
+  --advice-save '{"instruments":[{"market":"a","code":"000001","name":"平安银行"}],"direction":{"a:000001":"watch"},"rationale_summary":"现金占比较高，等待放量站回20日线。","based_on":["quotes","portfolio"],"boundary":[{"type":"fact","text":"现金占比较高"},{"type":"inference","text":"等待放量站回20日线"}],"triggers":[{"instrument":"a:000001","type":"price_above","level":12.5,"action":"收盘站上12.5则用现金层一成建仓","invalidation":"跌破11.8本条作废"}],"actions":[{"target":"权益","action":"increase","size_hint":"现金层一成","trigger":"收盘站上20日线","invalidation":"跌破11.8本条作废","horizon":"short"}]}' \
   --confirmed
 
 uv run python -m stocks.adapters.cli --advice-list
@@ -92,7 +92,8 @@ MCP 对应工具：
   `"confirmed": true`
 - `profile_get`、`profile_update`，写操作同样必须确认
 - `advice_list`、`advice_save`，保存建议必须确认；`advice.triggers` 可选，
-  保存"触发条件 → 动作"三元组供下次运行程序化核对
+  保存"触发条件 → 动作"三元组供下次运行程序化核对；`advice.actions`
+  用于保存结构化调仓动作，`size_hint` 只能写比例或自然语言，不写具体金额
 - `get_analysis_context`、`get_quotes`、`get_news`、
   `get_portfolio_summary`
 

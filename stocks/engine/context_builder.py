@@ -1091,6 +1091,19 @@ class ContextBuilder:
                         for item in boundary
                     )
                     lines.append(f" 边界: {boundary_text}")
+                actions = advice.get("actions", [])
+                if actions:
+                    lines.append(" 结构化动作:")
+                    for item in actions:
+                        detail = (
+                            f" - {item.get('target')} | {item.get('action')} | "
+                            f"{item.get('size_hint')} | {item.get('horizon')}"
+                        )
+                        if item.get("trigger"):
+                            detail += f" | trigger: {item.get('trigger')}"
+                        if item.get("invalidation"):
+                            detail += f" | invalidation: {item.get('invalidation')}"
+                        lines.append(detail)
                 performance = advice.get("performance", [])
                 if performance:
                     for item in performance:

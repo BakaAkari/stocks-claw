@@ -50,6 +50,7 @@
 - **硬性禁令：不允许出现不带触发条件的"观察""等待""保持关注"**。要观察，就写明观察什么信号、信号出现后做什么
 - 每条附证伪条件（什么情况下这条预案作废）
 - 建议同时以 advice_save 的 triggers 格式给出机器可核对版本（instrument/type/level/action），方便用户确认保存
+- 若用户确认保存建议，调仓动作必须同步按 advice_save 的 actions 结构落库（target/action/size_hint/trigger/invalidation/horizon），size_hint 只写比例或自然语言，禁止具体金额
 
 **5. 下一个机会**（强制章节，不允许整节留空）
 

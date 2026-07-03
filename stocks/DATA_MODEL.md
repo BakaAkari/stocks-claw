@@ -66,6 +66,12 @@
   `type ∈ {price_above, price_below, pct_change_above, pct_change_below}`，
   `level` 为数字（价位或百分数），`action` 为非空动作描述。
   旧记录缺失该字段时按 `[]` 加载。
+- `actions`（可选，默认 `[]`）：结构化调仓动作，每条为
+  `{target, action, size_hint, trigger?, invalidation?, horizon}`。
+  `target` 必须命中已映射持仓、watchlist、扫描池或约束 bucket；
+  `action ∈ {add, increase, reduce, exit, hold, watch}`；
+  `horizon ∈ {short, medium, long}`；`size_hint` 允许比例、区间或自然语言，
+  禁止保存具体货币金额。旧记录缺失该字段时按 `[]` 加载。
 
 `AnalysisContext.recent_advice` 会在构建上下文时附加两个派生字段（均不写回
 `.local/advice/`）：
