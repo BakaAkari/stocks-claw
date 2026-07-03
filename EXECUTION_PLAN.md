@@ -27,7 +27,7 @@
 
 **验收**:基线数字写入完成记录;若与 PLAN §2 冲突,先修正 PLAN §2(增量修改+立即 commit)再继续。
 
-> 完成:commit待回填 S0 基线核验通过,PLAN §2 当前基线由 431 更新为 436 passed,并修正 K 线 Provider 真实路径 | 证据:全局闸 `uv run ruff check .`=All checks passed,`uv run python -m pytest -q`=436 passed,`uv run python -m compileall -q stocks tests`=0,`uv run python -m stocks.adapters.cli --output json --no-news --no-quotes`=0;grep `stocks/engine/advice_review.py:66`,`stocks/engine/history_provider.py:145/288/382`,`stocks/providers/filings.py:18/146`,`stocks/engine/decision_contract.py:18/49`,`stocks/domain/models.py:499/530`,`stocks/engine/context_builder.py:256/391`,`stocks/DATA_MODEL.md:4/235`,`tests/engine/test_context_builder.py:146-153`;真实网络 build_context:quotes ok 11/11,history_backfill ok 37 skipped_cached,rotation ok missing 0,upcoming_events ok cache hits 3 misses 0,news partial(SEC_USER_AGENT 未配置邮箱)。
+> 完成:7ac9ee4 S0 基线核验通过,PLAN §2 当前基线由 431 更新为 436 passed,并修正 K 线 Provider 真实路径 | 证据:全局闸 `uv run ruff check .`=All checks passed,`uv run python -m pytest -q`=436 passed,`uv run python -m compileall -q stocks tests`=0,`uv run python -m stocks.adapters.cli --output json --no-news --no-quotes`=0;grep `stocks/engine/advice_review.py:66`,`stocks/engine/history_provider.py:145/288/382`,`stocks/providers/filings.py:18/146`,`stocks/engine/decision_contract.py:18/49`,`stocks/domain/models.py:499/530`,`stocks/engine/context_builder.py:256/391`,`stocks/DATA_MODEL.md:4/235`,`tests/engine/test_context_builder.py:146-153`;真实网络 build_context:quotes ok 11/11,history_backfill ok 37 skipped_cached,rotation ok missing 0,upcoming_events ok cache hits 3 misses 0,news partial(SEC_USER_AGENT 未配置邮箱)。
 
 ---
 
