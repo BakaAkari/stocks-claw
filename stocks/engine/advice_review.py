@@ -63,6 +63,67 @@ async def attach_advice_performance(
     return enriched_records
 
 
+def attach_execution_review(
+    advice_records: list[dict],
+    execution_records: list[dict],
+) -> list[dict]:
+    """为建议 actions 附加执行对照；只按 advice_id + target 精确匹配。"""
+    if not advice_records:
+        return []
+    if not execution_records:
+        return [_with_unknown_execution_review(advice) for advice in advice_records]
+
+    by_key: dict[tuple[str, str], dict] = {}
+    for record in execution_records:
+        advice_id = record.get("advice_id")
+        target = record.get("target")
+        if isinstance(advice_id, str) and isinstance(target, str):
+            by_key.setdefault((advice_id, target), record)
+
+    reviewed: list[dict] = []
+    for advice in advice_records:
+        enriched = deepcopy(advice)
+        advice_id = str(advice.get("id") or advice.get("created_at") or "")
+        execution_review = []
+        for action in advice.get("actions", []):
+            target = action.get("target")
+            record = by_key.get((advice_id, target))
+            execution_review.append(
+                _execution_review_item(action, record)
+            )
+        enriched["execution_review"] = execution_review
+        reviewed.append(enriched)
+    return reviewed
+
+
+def _with_unknown_execution_review(advice: dict) -> dict:
+    enriched = deepcopy(advice)
+    enriched["execution_review"] = [
+        _execution_review_item(action, None)
+        for action in advice.get("actions", [])
+    ]
+    return enriched
+
+
+def _execution_review_item(action: dict, record: Optional[dict]) -> dict:
+    item = {
+        "target": action.get("target"),
+        "recommended_action": action.get("action"),
+        "status": "unknown",
+    }
+    if record is None:
+        return item
+    execution_action = record.get("action")
+    if execution_action == "none":
+        item["status"] = "not_executed"
+    elif record.get("extent") == "full":
+        item["status"] = "executed"
+    elif record.get("extent") == "partial":
+        item["status"] = "partial"
+    item["execution"] = record
+    return item
+
+
 async def _review_trigger(
     trigger: dict,
     *,

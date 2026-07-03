@@ -4,7 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from stocks.domain.models import AdviceRecord, DriftCheck, MarketState, PortfolioMapping
+from stocks.domain.models import (
+    AdviceRecord,
+    DriftCheck,
+    ExecutionRecord,
+    MarketState,
+    PortfolioMapping,
+)
 from stocks.engine.persistence import DataPersistence
 
 
@@ -73,6 +79,62 @@ def test_advice_record_round_trip_and_rolls_over(tmp_path):
     assert records[0]["created_at"].endswith("03+00:00")
     assert records[0]["direction"]["a:000001"] == "watch"
     assert "rationale_summary" in records[0]
+
+
+def test_execution_record_round_trip_and_rolls_over(tmp_path):
+    persistence = DataPersistence(
+        str(tmp_path / "snapshots"),
+        execution_dir=str(tmp_path / "executions"),
+        max_execution_records=2,
+    )
+
+    persistence.save_execution(ExecutionRecord.create(
+        id="one",
+        advice_id="advice-1",
+        target="a:588000",
+        action="increase",
+        extent="full",
+        note="已执行",
+        executed_at="2026-07-03T10:00:00+08:00",
+    ))
+    persistence.save_execution(ExecutionRecord.create(
+        id="two",
+        advice_id="advice-1",
+        target="现金",
+        action="none",
+        note="未执行",
+        executed_at="2026-07-03T11:00:00+08:00",
+    ))
+    persistence.save_execution(ExecutionRecord.create(
+        id="three",
+        advice_id=None,
+        target="a:588000",
+        action="increase",
+        extent="partial",
+        note="无 advice_id 不参与匹配",
+        executed_at="2026-07-03T12:00:00+08:00",
+    ))
+
+    records = persistence.list_executions()
+    assert len(records) == 2
+    assert records[0]["id"] == "three"
+    assert records[0]["extent"] == "partial"
+    assert records[1]["action"] == "none"
+    assert "extent" not in records[1]
+
+
+def test_execution_record_validates_action_and_extent():
+    with pytest.raises(ValueError, match="extent must be omitted"):
+        ExecutionRecord.create(
+            target="a:588000",
+            action="none",
+            extent="full",
+        )
+    with pytest.raises(ValueError, match="extent must be full or partial"):
+        ExecutionRecord.create(
+            target="a:588000",
+            action="increase",
+        )
 
 
 def test_advice_record_rejects_long_summary():

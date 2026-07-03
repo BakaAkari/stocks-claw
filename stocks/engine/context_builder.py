@@ -15,7 +15,7 @@ from stocks.domain.models import (
     Quote,
 )
 from stocks.engine.action_signals import compute_action_signals
-from stocks.engine.advice_review import attach_advice_performance
+from stocks.engine.advice_review import attach_advice_performance, attach_execution_review
 from stocks.engine.event_calendar import EventCalendar
 from stocks.engine.fetchers import DataFetcher
 from stocks.engine.history_cache import HistoryCache
@@ -72,6 +72,7 @@ class ContextBuilder:
         news_provider_errors: Optional[dict[str, str]] = None,
         history_backfill_report: Optional[list[dict]] = None,
         scan_instruments: Optional[list] = None,
+        execution_records: Optional[list[dict]] = None,
     ) -> AnalysisContext:
         """构建完整分析上下文"""
         generated_at = datetime.now(timezone.utc).isoformat()
@@ -191,6 +192,10 @@ class ContextBuilder:
             recent_advice or [],
             watchlist=watchlist or instruments,
             history_cache=self.history_cache,
+        )
+        reviewed_advice = attach_execution_review(
+            reviewed_advice,
+            execution_records or [],
         )
 
         # 9. 生成 raw_prompt_input（人类可读文本）
@@ -1104,6 +1109,22 @@ class ContextBuilder:
                         if item.get("invalidation"):
                             detail += f" | invalidation: {item.get('invalidation')}"
                         lines.append(detail)
+                execution_review = advice.get("execution_review", [])
+                if execution_review:
+                    lines.append(" 建议 vs 执行:")
+                    for item in execution_review:
+                        line = (
+                            f" - {item.get('target')} | 建议 {item.get('recommended_action')} "
+                            f"→ {item.get('status')}"
+                        )
+                        execution = item.get("execution") or {}
+                        if execution.get("action"):
+                            line += f" | 记录 {execution.get('action')}"
+                            if execution.get("extent"):
+                                line += f"/{execution.get('extent')}"
+                        if execution.get("note"):
+                            line += f" | note: {execution.get('note')}"
+                        lines.append(line)
                 performance = advice.get("performance", [])
                 if performance:
                     for item in performance:

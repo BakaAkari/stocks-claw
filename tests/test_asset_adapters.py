@@ -326,6 +326,146 @@ def test_cli_advice_actions_passthrough(adapter_engine, capsys):
     assert listed["data"][0]["actions"] == payload["actions"]
 
 
+def _execution_payload(
+    *,
+    advice_id: str | None,
+    target: str,
+    action: str = "increase",
+    extent: str | None = "full",
+    note: str = "执行记录",
+) -> dict:
+    payload = {
+        "advice_id": advice_id,
+        "target": target,
+        "action": action,
+        "note": note,
+        "executed_at": "2026-07-03T12:00:00+08:00",
+    }
+    if extent is not None:
+        payload["extent"] = extent
+    return payload
+
+
+def test_mcp_execution_save_requires_confirmation_and_review_four_states(adapter_engine):
+    adapter_engine._assets = [
+        FinancialAsset(
+            name="科创50ETF华夏",
+            platform="券商",
+            amount=3000,
+            asset_type="股票ETF",
+            instrument_key="a:588000",
+        )
+    ]
+    adapter_engine._constraints = {
+        "权益": {"min": 0.25, "max": 0.65},
+        "现金": {"min": 0.05, "max": 0.30},
+        "固收": {"min": 0.15, "max": 0.50},
+        "黄金": {"min": 0.0, "max": 0.15},
+    }
+    adapter = MCPAdapter(adapter_engine)
+    advice_payload = _advice_payload() | {
+        "actions": [
+            _advice_action("a:588000", "5%~8%"),
+            _advice_action("现金", "一成"),
+            _advice_action("固收", "保持"),
+            _advice_action("黄金", "观察"),
+        ]
+    }
+    saved_advice = adapter.handle_request({
+        "method": "advice_save",
+        "params": {"advice": advice_payload, "confirmed": True},
+    })
+    advice_id = saved_advice["data"]["created_at"]
+
+    denied = adapter.handle_request({
+        "method": "execution_save",
+        "params": {"execution": _execution_payload(advice_id=advice_id, target="a:588000")},
+    })
+    assert denied["success"] is False
+
+    for execution in [
+        _execution_payload(advice_id=advice_id, target="a:588000", extent="full"),
+        _execution_payload(advice_id=advice_id, target="现金", action="reduce", extent="partial"),
+        _execution_payload(
+            advice_id=advice_id,
+            target="固收",
+            action="none",
+            extent=None,
+            note="明确未执行",
+        ),
+        _execution_payload(advice_id=None, target="a:588000", extent="partial"),
+    ]:
+        saved = adapter.handle_request({
+            "method": "execution_save",
+            "params": {"execution": execution, "confirmed": True},
+        })
+        assert saved["success"] is True
+
+    listed = adapter.handle_request({"method": "execution_list"})
+    assert len(listed["data"]) == 4
+
+    context_result = adapter.handle_request({
+        "method": "get_analysis_context",
+        "params": {
+            "include_news": False,
+            "include_quotes": False,
+            "include_history": True,
+        },
+    })
+    assert context_result["success"] is True
+    review = context_result["data"]["recent_advice"][0]["execution_review"]
+    statuses = {item["target"]: item["status"] for item in review}
+    assert statuses == {
+        "a:588000": "executed",
+        "现金": "partial",
+        "固收": "not_executed",
+        "黄金": "unknown",
+    }
+    prompt = context_result["data"]["raw_prompt_input"]
+    assert "建议 vs 执行:" in prompt
+    assert "a:588000 | 建议 increase → executed" in prompt
+    assert "固收 | 建议 increase → not_executed | 记录 none" in prompt
+
+
+def test_cli_execution_save_and_list(adapter_engine, capsys):
+    adapter = CLIAdapter(adapter_engine)
+
+    adapter.run([
+        "--execution-save",
+        json.dumps(
+            _execution_payload(
+                advice_id="advice-1",
+                target="a:588000",
+                action="increase",
+                extent="partial",
+            ),
+            ensure_ascii=False,
+        ),
+    ])
+    denied = json.loads(capsys.readouterr().out)
+    assert denied["success"] is False
+
+    adapter.run([
+        "--execution-save",
+        json.dumps(
+            _execution_payload(
+                advice_id="advice-1",
+                target="a:588000",
+                action="increase",
+                extent="partial",
+            ),
+            ensure_ascii=False,
+        ),
+        "--confirmed",
+    ])
+    assert json.loads(capsys.readouterr().out)["success"] is True
+
+    adapter.run(["--execution-list"])
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["data"][0]["target"] == "a:588000"
+    assert listed["data"][0]["extent"] == "partial"
+
+
 def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engine):
     """Agent 可经 MCP 改持仓、改偏好，并立即取得个人建议上下文。"""
     adapter_engine._watchlist = []

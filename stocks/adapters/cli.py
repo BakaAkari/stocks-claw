@@ -101,6 +101,16 @@ class CLIAdapter:
             metavar="JSON",
             help="保存一条建议摘要；值为 AdviceRecord 字段的 JSON 对象",
         )
+        asset_actions.add_argument(
+            "--execution-list",
+            action="store_true",
+            help="列出已确认记录的执行记录",
+        )
+        asset_actions.add_argument(
+            "--execution-save",
+            metavar="JSON",
+            help="保存一条执行记录；值为 ExecutionRecord 字段的 JSON 对象",
+        )
         parser.add_argument(
             "--confirmed",
             action="store_true",
@@ -170,6 +180,8 @@ class CLIAdapter:
             return {"success": True, "data": self.engine.get_profile()}
         if args.advice_list:
             return {"success": True, "data": self.engine.list_advice()}
+        if args.execution_list:
+            return {"success": True, "data": self.engine.list_executions()}
         if args.assets_list:
             return {
                 "success": True,
@@ -183,6 +195,7 @@ class CLIAdapter:
                 args.asset_remove,
                 args.profile_update,
                 args.advice_save,
+                args.execution_save,
             )
         )
         if not write_requested:
@@ -199,6 +212,15 @@ class CLIAdapter:
                     self._parse_json_object(args.advice_save)
                 )
                 return {"success": True, "data": advice, "action": "advice_saved"}
+            if args.execution_save:
+                execution = self.engine.save_execution(
+                    self._parse_json_object(args.execution_save)
+                )
+                return {
+                    "success": True,
+                    "data": execution,
+                    "action": "execution_saved",
+                }
             if args.profile_update:
                 profile = self.engine.update_profile(
                     self._parse_json_object(args.profile_update)

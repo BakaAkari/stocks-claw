@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import uuid4
 
 _SUPPORTED_INSTRUMENT_MARKETS = {"a", "us", "crypto"}
 
@@ -381,6 +382,8 @@ _ADVICE_TRIGGER_TYPES = {
 }
 _ADVICE_ACTIONS = {"add", "increase", "reduce", "exit", "hold", "watch"}
 _ADVICE_HORIZONS = {"short", "medium", "long"}
+_EXECUTION_ACTIONS = _ADVICE_ACTIONS | {"none"}
+_EXECUTION_EXTENTS = {"full", "partial"}
 _EXACT_MONEY_RE = re.compile(
     r"(?:[$¥￥]\s*\d[\d,]*(?:\.\d+)?)|"
     r"(?:\d[\d,]*(?:\.\d+)?\s*(?:元|人民币|美元|美金|港元|USD|CNY|HKD))",
@@ -533,6 +536,92 @@ class AdviceRecord:
             "triggers": self.triggers,
             "actions": self.actions,
         }
+
+
+@dataclass(frozen=True)
+class ExecutionRecord:
+    """用户确认记录的一次建议执行或明确未执行。"""
+
+    id: str
+    target: str
+    action: str
+    note: str
+    executed_at: str
+    recorded_at: str
+    advice_id: Optional[str] = None
+    extent: Optional[str] = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        target: str,
+        action: str,
+        note: str = "",
+        executed_at: Optional[str] = None,
+        advice_id: Optional[str] = None,
+        extent: Optional[str] = None,
+        id: Optional[str] = None,
+    ) -> "ExecutionRecord":
+        now = datetime.now(timezone.utc).isoformat()
+        return cls(
+            id=id or uuid4().hex,
+            advice_id=advice_id,
+            target=target,
+            action=action,
+            extent=extent,
+            note=note,
+            executed_at=executed_at or now,
+            recorded_at=now,
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExecutionRecord":
+        return cls(
+            id=str(data.get("id", "")),
+            advice_id=data.get("advice_id"),
+            target=str(data.get("target", "")),
+            action=str(data.get("action", "")),
+            extent=data.get("extent"),
+            note=str(data.get("note", "")),
+            executed_at=str(data.get("executed_at", "")),
+            recorded_at=str(data.get("recorded_at", "")),
+        )
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError("execution.id is required")
+        if self.advice_id is not None and not isinstance(self.advice_id, str):
+            raise ValueError("execution.advice_id must be a string when present")
+        if not isinstance(self.target, str) or not self.target.strip():
+            raise ValueError("execution.target must be a non-empty string")
+        if self.action not in _EXECUTION_ACTIONS:
+            raise ValueError(f"execution.action must be one of {sorted(_EXECUTION_ACTIONS)}")
+        if self.action == "none":
+            if self.extent is not None:
+                raise ValueError("execution.extent must be omitted when action is none")
+        elif self.extent not in _EXECUTION_EXTENTS:
+            raise ValueError("execution.extent must be full or partial")
+        if not isinstance(self.note, str):
+            raise ValueError("execution.note must be a string")
+        if not self.executed_at:
+            raise ValueError("execution.executed_at is required")
+        if not self.recorded_at:
+            raise ValueError("execution.recorded_at is required")
+
+    def to_dict(self) -> dict:
+        data = {
+            "id": self.id,
+            "advice_id": self.advice_id,
+            "target": self.target,
+            "action": self.action,
+            "note": self.note,
+            "executed_at": self.executed_at,
+            "recorded_at": self.recorded_at,
+        }
+        if self.extent is not None:
+            data["extent"] = self.extent
+        return data
 
 
 @dataclass(frozen=True)

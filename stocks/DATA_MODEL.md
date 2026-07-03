@@ -82,6 +82,22 @@
   `observed = {basis: "close", start_at, latest_at, start_price, latest_price,
   max_price, min_price, pct_change}`，no_data 时附 `reason`。
   核对只陈述价格事实，不判断建议对错。
+- `execution_review`：对每条 action 按 `advice_id + target` 精确匹配
+  `ExecutionRecord`，`status ∈ {executed, partial, not_executed, unknown}`。
+  匹配不到一律 `unknown`，不按名称、方向或金额猜测。
+
+## ExecutionRecord
+
+用户确认记录的建议执行或明确未执行，位于 `.local/executions/`：
+
+- `id`：系统生成的记录 id
+- `advice_id`：可选；建议记录的 `created_at`，用于与 action 精确匹配
+- `target`：对应 action 的 target
+- `action ∈ {add, increase, reduce, exit, hold, watch, none}`；`none` 表示明确未执行
+- `extent ∈ {full, partial}`；当 `action = none` 时省略
+- `note`
+- `executed_at`：实际执行或确认未执行的时间
+- `recorded_at`：系统记录时间
 
 ## Instrument 与 Quote
 

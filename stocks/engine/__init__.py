@@ -26,6 +26,7 @@ from typing import Optional
 from stocks.domain.models import (
     AdviceRecord,
     AnalysisContext,
+    ExecutionRecord,
     FinancialAsset,
     Instrument,
     NewsItem,
@@ -629,6 +630,38 @@ class StocksEngine:
         """列出已确认保存的建议摘要。"""
         return self.persistence.list_advice()
 
+    def save_execution(self, payload: dict) -> dict:
+        """保存用户确认过的执行记录。"""
+        if not isinstance(payload, dict):
+            raise ValueError("Execution payload must be an object")
+        allowed = {
+            "id",
+            "advice_id",
+            "target",
+            "action",
+            "extent",
+            "note",
+            "executed_at",
+        }
+        unknown = set(payload) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported execution fields: {sorted(unknown)}")
+        record = ExecutionRecord.create(
+            id=payload.get("id"),
+            advice_id=payload.get("advice_id"),
+            target=payload.get("target", ""),
+            action=payload.get("action", ""),
+            extent=payload.get("extent"),
+            note=payload.get("note", ""),
+            executed_at=payload.get("executed_at"),
+        )
+        self.persistence.save_execution(record)
+        return record.to_dict()
+
+    def list_executions(self) -> list[dict]:
+        """列出已确认的执行记录。"""
+        return self.persistence.list_executions()
+
     def _validate_advice_action_targets(self, actions: list[dict]) -> list[dict]:
         if not actions:
             return []
@@ -770,9 +803,11 @@ class StocksEngine:
         # 3. 加载历史快照
         recent_snapshots: list[dict] = []
         recent_advice: list[dict] = []
+        execution_records: list[dict] = []
         if include_history:
             recent_snapshots = self.persistence.load_recent(count=5)
             recent_advice = self.persistence.load_recent_advice(count=3)
+            execution_records = self.persistence.list_executions()
 
         # 5. 构建 AnalysisContext
         context = await self.context_builder.build(
@@ -782,6 +817,7 @@ class StocksEngine:
             instruments=instruments,
             recent_snapshots=recent_snapshots,
             recent_advice=recent_advice,
+            execution_records=execution_records,
             watchlist=self._watchlist,
             news=news,
             news_requested=include_news,

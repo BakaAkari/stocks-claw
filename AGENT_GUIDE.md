@@ -78,6 +78,12 @@ uv run python -m stocks.adapters.cli \
   --confirmed
 
 uv run python -m stocks.adapters.cli --advice-list
+
+uv run python -m stocks.adapters.cli \
+  --execution-save '{"advice_id":"2026-07-03T04:40:29.112458+00:00","target":"a:588000","action":"increase","extent":"partial","note":"按触发条件执行一部分","executed_at":"2026-07-03T12:00:00+08:00"}' \
+  --confirmed
+
+uv run python -m stocks.adapters.cli --execution-list
 ```
 
 资产保存在 `.local/financial_assets.json`，画像保存在
@@ -94,6 +100,8 @@ MCP 对应工具：
 - `advice_list`、`advice_save`，保存建议必须确认；`advice.triggers` 可选，
   保存"触发条件 → 动作"三元组供下次运行程序化核对；`advice.actions`
   用于保存结构化调仓动作，`size_hint` 只能写比例或自然语言，不写具体金额
+- `execution_list`、`execution_save`，保存建议执行记录必须确认；执行对照只按
+  `advice_id + target` 精确匹配，匹配不到显示 `unknown`
 - `get_analysis_context`、`get_quotes`、`get_news`、
   `get_portfolio_summary`
 

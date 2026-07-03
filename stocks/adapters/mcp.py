@@ -64,6 +64,10 @@ class MCPAdapter:
             return {"success": True, "data": self.engine.list_advice()}
         elif method == "advice_save":
             return self._advice_save(params)
+        elif method == "execution_list":
+            return {"success": True, "data": self.engine.list_executions()}
+        elif method == "execution_save":
+            return self._execution_save(params)
         else:
             return {"error": f"Unknown method: {method}"}
 
@@ -196,6 +200,19 @@ class MCPAdapter:
             if errors is not None:
                 response["errors"] = errors
             return response
+
+    def _execution_save(self, params: dict) -> dict:
+        confirmation_error = self._confirmed(params)
+        if confirmation_error:
+            return confirmation_error
+        execution = params.get("execution")
+        if not isinstance(execution, dict):
+            return {"success": False, "error": "execution object is required"}
+        try:
+            record = self.engine.save_execution(execution)
+            return {"success": True, "data": record, "action": "execution_saved"}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
 
     def _get_quotes(self, params: dict) -> dict:
         """获取行情数据。
@@ -399,6 +416,23 @@ class MCPAdapter:
                     "required": ["advice", "confirmed"],
                     "properties": {
                         "advice": {"type": "object"},
+                        "confirmed": {"type": "boolean", "const": True},
+                    },
+                },
+            },
+            {
+                "name": "execution_list",
+                "description": "列出已确认记录的执行记录。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "execution_save",
+                "description": "在用户明确确认后保存建议执行记录。",
+                "parameters": {
+                    "type": "object",
+                    "required": ["execution", "confirmed"],
+                    "properties": {
+                        "execution": {"type": "object"},
                         "confirmed": {"type": "boolean", "const": True},
                     },
                 },
