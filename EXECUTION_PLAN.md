@@ -82,13 +82,15 @@
 
 **文件**:`stocks/domain/models.py`、`stocks/engine/forecasts.py`(新增)、`stocks/engine/persistence.py`、cli/mcp、`stocks/engine/context_builder.py`、`stocks/DATA_MODEL.md`、`tests/`
 
-- [ ] `ForecastRecord`:`{id, created_at, statement, target?, metric(当前仅 close), comparator ∈ {above,below}, level, deadline(date), confidence ∈ {low,medium,high}, status ∈ {open,hit,miss,unresolved,manual}, resolved_at?, resolution_note?}`;确认式保存(CLI `--forecast-save`/MCP `forecast_save`);存 `.local/forecasts/`。
-- [ ] 结算:`build_context` 时对已到 deadline 的 open 预测按收盘序列结算(复用 trigger review 的历史数据路径);历史缺失 → `unresolved` + reason;保存时即判定无法程序化验证的 statement(无 target/level)→ 直接标 `manual`,不进自动结算。
-- [ ] 注入:`raw_prompt_input` 增台账摘要——open 条数、最近结算结果、累计命中率;**结算样本 <10 时显示"样本不足",禁止表述为胜率/概率**。
-- [ ] 新 CLI/MCP 工具用法(含 `--confirmed` 示例)写入 `AGENT_GUIDE.md`。
-- [ ] 测试:hit/miss/unresolved/manual 四态、到 deadline 才结算、样本不足语义、未确认拒写。
+- [x] `ForecastRecord`:`{id, created_at, statement, target?, metric(当前仅 close), comparator ∈ {above,below}, level, deadline(date), confidence ∈ {low,medium,high}, status ∈ {open,hit,miss,unresolved,manual}, resolved_at?, resolution_note?}`;确认式保存(CLI `--forecast-save`/MCP `forecast_save`);存 `.local/forecasts/`。
+- [x] 结算:`build_context` 时对已到 deadline 的 open 预测按收盘序列结算(复用 trigger review 的历史数据路径);历史缺失 → `unresolved` + reason;保存时即判定无法程序化验证的 statement(无 target/level)→ 直接标 `manual`,不进自动结算。
+- [x] 注入:`raw_prompt_input` 增台账摘要——open 条数、最近结算结果、累计命中率;**结算样本 <10 时显示"样本不足",禁止表述为胜率/概率**。
+- [x] 新 CLI/MCP 工具用法(含 `--confirmed` 示例)写入 `AGENT_GUIDE.md`。
+- [x] 测试:hit/miss/unresolved/manual 四态、到 deadline 才结算、样本不足语义、未确认拒写。
 
 **验收**:保存 ≥1 条真实预测;用 fixture 使其到期,运行后自动结算且结果出现在上下文;全局验收通过。
+
+> 完成:3372508 S1-4 预测台账完成,并按用户确认保存真实预测 `id=a850424eee514060ba97b13604a4d49e,target=a:588000,comparator=above,level=2.05,deadline=2026-07-10,confidence=medium` | 证据:`stocks/domain/models.py:655` 定义 ForecastRecord,`stocks/engine/persistence.py:142`/`:154` 保存与读取 `.local/forecasts/`,`stocks/engine/forecasts.py:16`/`:47` 到期结算与摘要,`stocks/engine/__init__.py:667`/`:850` 确认式保存与 build_context 结算写回,`stocks/engine/context_builder.py:1175` 输出【预测台账】且 `:1182` 小样本显示"样本不足",`stocks/adapters/cli.py:237` 与 `stocks/adapters/mcp.py:221` 暴露 `forecast_save`,`AGENT_GUIDE.md:89`/`:112` 同步用法,`tests/engine/test_forecasts.py:53` 覆盖 hit/miss/unresolved/manual,`:92` 覆盖未到 deadline 不结算,`:109` 覆盖样本不足语义,`tests/test_asset_adapters.py:489`/`:520` 覆盖未确认拒写与 CLI/MCP 保存列表,`:540` 覆盖到期 fixture 结算并进入上下文;真实验收 `forecast_save --confirmed` 成功,`build_context` 回显 `forecast_summary.open_count=1`,`latest_id=a850424eee514060ba97b13604a4d49e`,`raw_prompt_input` 命中【预测台账】;全局闸 `ruff`=All checks passed,`pytest`=458 passed,`compileall`=0,CLI smoke=0。
 
 ### S1-5 复盘注入整合
 
