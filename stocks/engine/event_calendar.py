@@ -21,7 +21,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Protocol
 
@@ -60,6 +60,35 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
         return None
 
 
+def _parse_time_utc(value: Optional[str]) -> Optional[time]:
+    """解析配置中的 UTC 时刻；只接受 HH:MM 或 HH:MM:SS。"""
+    if not value:
+        return None
+    try:
+        parsed = time.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc)
+
+
+def _parse_scheduled_at(event: UpcomingEvent) -> Optional[datetime]:
+    """返回可比较的 UTC 时点；不把 date-only 伪造成午夜。"""
+    if event.scheduled_at:
+        try:
+            value = str(event.scheduled_at).replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    event_date = _parse_date(event.date)
+    event_time = _parse_time_utc(event.time_utc)
+    if event_date is None or event_time is None:
+        return None
+    return datetime.combine(event_date, event_time).astimezone(timezone.utc)
+
+
 class StaticEventCalendarProvider:
     """从配置文件读取官方已公布的事件日程。"""
 
@@ -71,13 +100,22 @@ class StaticEventCalendarProvider:
             if _parse_date(item.get("date")) is None:
                 continue
             event_type = item.get("event_type", "other")
+            event_date = str(item["date"])[:10]
+            event_time = _parse_time_utc(item.get("time_utc"))
+            scheduled_at = (
+                datetime.combine(date.fromisoformat(event_date), event_time).isoformat()
+                if event_time is not None
+                else None
+            )
             self._events.append(
                 UpcomingEvent(
-                    date=str(item["date"])[:10],
+                    date=event_date,
                     name=str(item.get("name", "")) or "未命名事件",
                     event_type=event_type if event_type in _EVENT_TYPES else "other",
                     market=str(item.get("market", "global")),
                     time_utc=item.get("time_utc"),
+                    scheduled_at=scheduled_at,
+                    time_precision="datetime" if scheduled_at else "date",
                     source="static_config",
                     affected_categories=[
                         str(c) for c in item.get("affected_categories", [])
@@ -223,33 +261,59 @@ class EventCalendar:
                 "source": "none",
                 "lookahead_days": self.lookahead_days,
                 "event_count": 0,
+                "expired_count": 0,
                 "sources": {},
                 "errors": {},
             }
 
         current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        current_utc = current.astimezone(timezone.utc)
         today = current.date()
-        end = date.fromordinal(today.toordinal() + self.lookahead_days)
+        utc_today = current_utc.date()
+        # 查询窗口向 UTC 日期前扩一天，避免本地已跨日但未来 UTC 时点仍落在前一日。
+        start = min(today, utc_today) - timedelta(days=1)
+        end = max(today, utc_today) + timedelta(days=self.lookahead_days)
 
         events: list[UpcomingEvent] = []
         errors: dict[str, str] = {}
         for provider in self._providers:
             try:
                 events.extend(
-                    await provider.fetch(start=today, end=end, watchlist=watchlist)
+                    await provider.fetch(start=start, end=end, watchlist=watchlist)
                 )
             except Exception as exc:
                 errors[provider.name] = f"{type(exc).__name__}: {exc}"
                 logger.warning(f"Event provider {provider.name} failed: {exc}")
 
         enriched: list[UpcomingEvent] = []
-        for event in sorted(events, key=lambda e: (e.date, e.name)):
+        expired_count = 0
+        for event in events:
             event_date = _parse_date(event.date)
-            days_until = (
-                (event_date.toordinal() - today.toordinal())
-                if event_date is not None
-                else None
-            )
+            scheduled_at = _parse_scheduled_at(event)
+            if scheduled_at is not None:
+                if scheduled_at <= current_utc:
+                    expired_count += 1
+                    continue
+                local_event_date = scheduled_at.astimezone(current.tzinfo).date()
+                days_until = (local_event_date - today).days
+                status = (
+                    "imminent"
+                    if scheduled_at - current_utc <= timedelta(hours=24)
+                    else "scheduled"
+                )
+                precision = "datetime"
+                scheduled_iso = scheduled_at.isoformat()
+            else:
+                # date-only 没有足够信息判断日内先后，只在调用方本地日期过后失效。
+                if event_date is None or event_date < today:
+                    expired_count += 1
+                    continue
+                days_until = (event_date - today).days
+                status = "imminent" if days_until <= 1 else "scheduled"
+                precision = "date"
+                scheduled_iso = None
             affected_symbols = list(event.affected_symbols)
             if event.affected_categories:
                 wanted = {c.strip().lower() for c in event.affected_categories}
@@ -265,6 +329,9 @@ class EventCalendar:
                     event_type=event.event_type,
                     market=event.market,
                     time_utc=event.time_utc,
+                    scheduled_at=scheduled_iso,
+                    time_precision=precision,
+                    status=status,
                     source=event.source,
                     affected_categories=list(event.affected_categories),
                     affected_symbols=affected_symbols,
@@ -272,6 +339,10 @@ class EventCalendar:
                     note=event.note,
                 )
             )
+
+        enriched.sort(
+            key=lambda e: (e.scheduled_at or f"{e.date}T23:59:59+00:00", e.name)
+        )
 
         sources: dict[str, int] = {}
         for event in enriched:
@@ -290,6 +361,7 @@ class EventCalendar:
             "lookahead_days": self.lookahead_days,
             "window_end": end.isoformat(),
             "event_count": len(enriched),
+            "expired_count": expired_count,
             "sources": sources,
             "errors": errors,
         }

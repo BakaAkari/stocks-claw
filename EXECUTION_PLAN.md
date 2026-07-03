@@ -425,23 +425,25 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes --save 
 
 ### F0-1 恢复默认测试与 schema 契约
 
-- [ ] 【验证前提】重跑 `uv run python -m pytest -q --maxfail=20`,逐个列出失败测试;至少核对 `tests/engine/test_advice_triggers.py` 6 项、`test_context_builder.py` 的 schema v6→v7/data_quality v3→v4/旧 prompt 文案、`tests/test_asset_adapters.py` 旧 prompt 文案。
-- [ ] 更新所有被 v7/v4 与决策导向 prompt **预期改变**的旧断言;不得删除测试、不得放宽成“字段存在即可”。新增 schema 三处一致性测试:`models/context_builder/DATA_MODEL`。
-- [ ] Engine/端到端测试显式注入空扫描池或 mock 历史 provider,默认 pytest 禁止访问真实网络;增加守门测试,patch `urllib.request.urlopen` 为失败时全量测试仍完成。
-- [ ] 修复后跑四道闸并记录准确总数;在通过前,下列原 F 组所有“完成”记录只代表组件曾落盘,不代表阶段完成。
+- [x] 【验证前提】重跑 `uv run python -m pytest -q --maxfail=20`,逐个列出失败测试;已核对 trigger_review 6 项、schema/提示词旧断言与网络隔离问题。
+- [x] 更新所有被 schema 与决策导向 prompt **预期改变**的旧断言;未删除或放宽测试。新增 schema 三处一致性测试:`models/context_builder/DATA_MODEL`。事件字段是破坏性变更,依契约升至 AnalysisContext v8/data_quality v5。
+- [x] Engine/端到端测试显式注入空扫描池或禁用自动历史预热;全局 autouse 守门将未 mock 的 `urllib.request.urlopen` 直接判为测试失败,integration 标记除外。
+- [x] 修复后跑四道闸并记录准确总数;下列原 F 组“完成”记录仍只代表组件落盘,Phase F 继续受 D1 出口约束。
 
 ### F0-2 补齐真实 trigger_review
 
-- [ ] 在 `stocks/engine/advice_review.py` 实现 `_review_trigger` 与批量附加:price_above/price_below 必须按“建议后首次跨越”而非“任一价格已在阈值外”判 fired;百分比触发以建议后首个有效收盘为基准;不在 watchlist、历史缺失、时间非法均返回 no_data + reason。
-- [ ] `attach_advice_performance` 对每条建议始终附 `trigger_review`(无 triggers 时 `[]`);不写回 advice 源文件。
-- [ ] 让 `tests/engine/test_advice_triggers.py` 全部通过,并新增“建议时已在阈值上方但未发生上穿”不误触发测试。
+- [x] 在 `stocks/engine/advice_review.py` 实现 `_review_trigger` 与批量附加:price_above/price_below 按“建议后首次跨越”判 fired;百分比触发以建议后首个有效收盘为基准;不在 watchlist、历史缺失、时间非法均返回 no_data + reason。
+- [x] `attach_advice_performance` 对每条建议始终附 `trigger_review`(无 triggers 时 `[]`);仅修改深拷贝,不写回 advice 源文件。
+- [x] `tests/engine/test_advice_triggers.py` 全部通过,并覆盖“建议时已在阈值上方但未发生上穿”不误触发。
 
 ### F0-3 修正事件“未来”语义与配置事实
 
-- [ ] `UpcomingEvent` 引入可比较的完整事件时点(`scheduled_at` 含 timezone/UTC);只有日期没有时间时保留 date-only 并显式精度。
-- [ ] EventCalendar 以构建时刻过滤已发生事件;同日 `time_utc` 已过不得继续进入 upcoming/event_watch;状态至少区分 scheduled/imminent/released_or_expired。
-- [ ] 时区测试覆盖 Asia/Shanghai 已跨日、美国仍在前一交易日、事件发生前后 1 分钟;禁止只按 UTC `date()` 判断。
-- [ ] 核对 `engine.yaml` 实际是否存在 calendar 节;不存在则原 F-1 对应项改为待办并补配置/默认值一致性测试。
+- [x] `UpcomingEvent` 引入可比较的完整事件时点(`scheduled_at` 含 timezone/UTC);只有日期没有时间时保留 date-only 并显式 `time_precision=date`。
+- [x] EventCalendar 以构建时刻过滤已发生事件;同日 `time_utc` 已过不再进入 upcoming/event_watch;生命周期支持 scheduled/imminent/released_or_expired,已过事件过滤并计入 `expired_count`。
+- [x] 时区测试覆盖 Asia/Shanghai 已跨日、美国 UTC 事件仍在前一日、事件发生前后 1 分钟;实现不再只按 UTC `date()` 判断。
+- [x] `engine.yaml` 与 `DEFAULT_ENGINE_CONFIG` 均补齐 calendar enabled/lookahead_days/earnings.enabled,并有嵌套默认值一致性测试。
+
+> F0 完成(2026-07-03):`ruff check .`、`compileall`、`pytest 389 passed` 均通过;默认测试由 autouse 网络守门保证未 mock HTTP 立即失败。schema 因 UpcomingEvent/data_quality 字段变化从 v7/v4 单调升级为 v8/v5,DATA_MODEL 与 ARCHITECTURE 同步。Phase F 仍未验收,继续等待 D1 真实历史覆盖出口。
 
 **F0 出口验收**:`uv run python -m pytest -q` 全过且不访问真实网络;6 个 trigger_review 失败清零;事件发生后一秒不再出现在 upcoming;文档不再把 Phase F 标为已完成。
 
@@ -653,7 +655,7 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 
 - [x] 新增 `stocks/engine/event_calendar.py`:StaticEventCalendarProvider(读 `stocks/config/event_calendar.json` 官方日程) + FinnhubEarningsCalendarProvider(watchlist 美股财报日) + EventCalendar 组合器(lookahead 窗口过滤、days_until、按类别匹配 watchlist 标的)。
 - [x] 新增 `stocks/config/event_calendar.json`:2026 下半年 FOMC/CPI/非农官方日程(来源 federalreserve.gov / bls.gov,2026-07-02 核对)。
-- [ ] `engine.yaml` 增 `calendar` 节(enabled/lookahead_days/earnings.enabled);StocksEngine 已装配并注入 ContextBuilder,但 2026-07-03 复核 `engine.yaml`/`DEFAULT_ENGINE_CONFIG` 均无 calendar 节,配置任务未完成。
+- [x] `engine.yaml` 与 `DEFAULT_ENGINE_CONFIG` 增 `calendar` 节(enabled/lookahead_days/earnings.enabled),StocksEngine 装配并注入 ContextBuilder;F0-3 已补配置一致性测试。
 - [x] `AnalysisContext` 增 `upcoming_events`(v6→v7);`data_quality` 增 `upcoming_events` 节点(v3→v4);raw_prompt_input 增【未来催化剂日历】小节。
 - [x] 失败语义:无 Provider → not_configured;部分 Provider 失败 → partial + errors 明细;全失败 → missing。Finnhub key 缺失显式报错不静默。
 
@@ -670,7 +672,7 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 ### F-3 建议触发闭环(triggers)
 
 - [x] `AdviceRecord` 增可选 `triggers` 字段:{instrument:"market:code", type∈{price_above,price_below,pct_change_above,pct_change_below}, level:number, action:非空, invalidation?};严格校验,旧记录兼容按 [] 加载。
-- [ ] `advice_review.py` 增 `_review_trigger`:2026-07-03 复核确认当前文件只有 performance 回看,无触发器核对实现;由 F0-2 补齐。
+- [x] `advice_review.py` 增 `_review_trigger`:按建议后收盘序列核对跨越/百分比条件,并为缺数据场景返回结构化 no_data;F0-2 已完成。
 - [x] `engine.save_advice` 允许 triggers 透传;MCP advice_save 描述更新;raw_prompt_input【上次建议】增触发器核对行。
 
 > 复核:`AdviceRecord.triggers` schema/保存透传已落盘;trigger_review 的 6 个行为测试全部失败(KeyError),不得记完成。
@@ -679,7 +681,7 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 
 - [x] 重写 `stocks/prompts/personal_advice_prompt.txt`:六节强制结构(核心结论/上期预案复盘/催化剂情景预案/调仓触发清单/下一个机会/风险与数据边界);触发条件必须可验证;禁止无条件"观察/等待";"下一个机会"不允许空章节;保留金额脱敏与不编造红线。
 - [x] raw_prompt_input 收尾指令同步指向新契约。
-- [ ] `stocks/DATA_MODEL.md`(v7/data_quality v4/UpcomingEvent/rotation/triggers)、`ARCHITECTURE.md`、`AGENT_GUIDE.md`、PLAN 决策日志同步;2026-07-03 复核 ARCHITECTURE 头部/图仍写 AnalysisContext v6,需在 F0 同步。
+- [x] `stocks/DATA_MODEL.md`(当前 v8/data_quality v5/UpcomingEvent 生命周期/rotation/triggers)、`ARCHITECTURE.md`、`AGENT_GUIDE.md`、PLAN 决策日志同步;ARCHITECTURE 头部/图/数据流版本已在 F0 同步。
 
 > 完成:文档已同步(commit 待本机提交) | 证据:DATA_MODEL "AnalysisContext v7"/"data_quality v4"/"UpcomingEvent"/"rotation" 小节;AGENT_GUIDE triggers 示例。
 

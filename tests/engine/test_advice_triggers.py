@@ -17,7 +17,7 @@ def _history_frame(instrument: Instrument, prices: list[float]) -> pd.DataFrame:
     for index, price in enumerate(prices):
         rows.append(
             {
-                "timestamp": datetime(2026, 7, 1 + index, tzinfo=timezone.utc),
+                "timestamp": datetime(2026, 7, 1 + index, 20, 0, tzinfo=timezone.utc),
                 "code": instrument.code,
                 "name": instrument.name,
                 "market": instrument.market,
@@ -151,6 +151,28 @@ class TestTriggerReview:
         assert review["status"] == "not_fired"
         # 建议日(7/2)之前的 140 不参与核对,期间最低为建议日首根 145
         assert review["observed"]["min_price"] == 145.0
+
+    async def test_price_above_requires_cross_not_merely_already_above(self, tmp_path):
+        instrument = Instrument(code="QCOM", name="高通", market="us", category="tech")
+        cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
+        await cache.warm(instrument, _history_frame(instrument, [140, 151, 152, 153]))
+
+        records = await attach_advice_performance(
+            [
+                _advice_with_trigger(
+                    {
+                        "instrument": "us:QCOM",
+                        "type": "price_above",
+                        "level": 150.0,
+                        "action": "补回一半仓位",
+                    }
+                )
+            ],
+            watchlist=[instrument],
+            history_cache=cache,
+        )
+
+        assert records[0]["trigger_review"][0]["status"] == "not_fired"
 
     async def test_pct_change_trigger(self, tmp_path):
         instrument = Instrument(code="QCOM", name="高通", market="us", category="tech")

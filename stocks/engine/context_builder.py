@@ -224,7 +224,7 @@ class ContextBuilder:
             upcoming_events=upcoming_events,
             rotation=rotation,
             action_signals=action_signals,
-            schema_version=7,
+            schema_version=8,
         )
 
     async def _build_rotation(
@@ -358,7 +358,7 @@ class ContextBuilder:
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 4,
+            "schema_version": 5,
             "generated_at": generated_at,
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
@@ -382,6 +382,7 @@ class ContextBuilder:
                 "status": "not_configured",
                 "source": "none",
                 "event_count": 0,
+                "expired_count": 0,
                 "sources": {},
                 "errors": {},
             },

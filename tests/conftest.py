@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import urllib.request
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -16,6 +17,21 @@ from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 # ------------------------------------------------------------------
 # 通用 fixtures
 # ------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def block_unmocked_urlopen(request, monkeypatch):
+    """默认测试禁止真实 HTTP；显式 integration 用例可自行访问网络。"""
+    if request.node.get_closest_marker("integration") is not None:
+        return
+
+    def _blocked(*args, **kwargs):
+        raise AssertionError(
+            "unit test attempted real urllib.request.urlopen; mock the provider "
+            "or mark the test as integration"
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", _blocked)
 
 
 @pytest.fixture

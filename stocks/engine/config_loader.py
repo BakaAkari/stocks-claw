@@ -44,6 +44,11 @@ DEFAULT_ENGINE_CONFIG = {
         "max_snapshots": 30,
         "save_to_file": True,
     },
+    "calendar": {
+        "enabled": True,
+        "lookahead_days": 14,
+        "earnings": {"enabled": True},
+    },
     "llm": {
         "analysis_enabled": False,
         "analysis_model": "kimi-k2.6",

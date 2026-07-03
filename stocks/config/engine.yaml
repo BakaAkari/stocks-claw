@@ -56,6 +56,13 @@ macro:
     # usd_cny: 7.25
     # us_10y_yield: 4.2
 
+calendar:
+  # 启用官方宏观日程与 watchlist 美股财报日历
+  enabled: true
+  lookahead_days: 14
+  earnings:
+    enabled: true
+
 llm:
   # LLM 深度分析模块（投资建议生成）— 建议由 Agent 主脑处理，此处可禁用
   analysis_enabled: false

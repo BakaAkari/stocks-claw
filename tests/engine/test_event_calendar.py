@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from stocks.domain.models import Instrument
 from stocks.engine.event_calendar import (
@@ -88,17 +89,75 @@ class TestEventCalendar:
 
         assert quality["status"] == "ok"
         assert quality["event_count"] == 2
+        assert quality["expired_count"] == 0
         assert quality["sources"] == {"static_config": 2}
 
         nfp = events[0]
         assert nfp.days_until == 0
+        assert nfp.scheduled_at == "2026-07-02T12:30:00+00:00"
+        assert nfp.time_precision == "datetime"
+        assert nfp.status == "imminent"
         assert "us:QQQ" in nfp.affected_symbols  # tech 命中
         assert "a:518880" in nfp.affected_symbols  # gold 命中
         assert "a:159110" not in nfp.affected_symbols  # bond 未在敏感类别中
 
         cpi = events[1]
         assert cpi.days_until == 12
+        assert cpi.scheduled_at is None
+        assert cpi.time_precision == "date"
+        assert cpi.status == "scheduled"
         assert cpi.affected_symbols == ["us:QQQ"]
+
+    async def test_exact_event_is_kept_one_minute_before_and_dropped_after(self):
+        calendar = EventCalendar(
+            [StaticEventCalendarProvider(_static_config())], lookahead_days=14
+        )
+        before, before_quality = await calendar.fetch(
+            now=datetime(2026, 7, 2, 12, 29, tzinfo=timezone.utc), watchlist=[]
+        )
+        after, after_quality = await calendar.fetch(
+            now=datetime(2026, 7, 2, 12, 31, tzinfo=timezone.utc), watchlist=[]
+        )
+
+        assert "美国 6 月非农就业报告" in {event.name for event in before}
+        assert "美国 6 月非农就业报告" not in {event.name for event in after}
+        assert before_quality["expired_count"] == 0
+        assert after_quality["expired_count"] == 1
+
+    async def test_local_date_rollover_does_not_expire_future_utc_event(self):
+        config = {
+            "events": [
+                {
+                    "date": "2026-07-02",
+                    "time_utc": "20:00",
+                    "name": "美国盘中事件",
+                    "event_type": "other",
+                    "market": "us",
+                }
+            ]
+        }
+        calendar = EventCalendar(
+            [StaticEventCalendarProvider(config)], lookahead_days=2
+        )
+        shanghai_now = datetime(
+            2026, 7, 3, 3, 0, tzinfo=ZoneInfo("Asia/Shanghai")
+        )
+        events, quality = await calendar.fetch(now=shanghai_now, watchlist=[])
+
+        assert len(events) == 1
+        assert events[0].scheduled_at == "2026-07-02T20:00:00+00:00"
+        assert events[0].days_until == 0
+        assert events[0].status == "imminent"
+        assert quality["expired_count"] == 0
+
+    async def test_date_only_event_retains_explicit_precision(self):
+        calendar = EventCalendar(
+            [StaticEventCalendarProvider(_static_config())], lookahead_days=14
+        )
+        events, _ = await calendar.fetch(now=_NOW, watchlist=[])
+        cpi = next(event for event in events if event.name == "美国 6 月 CPI")
+        assert cpi.scheduled_at is None
+        assert cpi.time_precision == "date"
 
     async def test_provider_failure_reports_partial_not_silent(self):
         class FailingProvider:
@@ -148,6 +207,9 @@ class TestEventCalendar:
         assert payload["date"] == "2026-07-02"
         assert payload["event_type"] == "macro_release"
         assert payload["days_until"] == 0
+        assert payload["scheduled_at"] == "2026-07-02T12:30:00+00:00"
+        assert payload["time_precision"] == "datetime"
+        assert payload["status"] == "imminent"
 
 
 class TestFinnhubEarningsCalendarProvider:

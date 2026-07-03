@@ -166,7 +166,13 @@ def compute_action_signals(
     event_overlay: dict[str, list[str]] = {}
     for event in upcoming_events or []:
         days_until = getattr(event, "days_until", None)
-        if days_until is None or days_until > 3:
+        status = getattr(event, "status", "scheduled")
+        if (
+            days_until is None
+            or days_until < 0
+            or days_until > 3
+            or status not in {"scheduled", "imminent"}
+        ):
             continue
         label = f"{getattr(event, 'date', '?')} {getattr(event, 'name', '?')}"
         for symbol in getattr(event, "affected_symbols", []) or []:

@@ -163,6 +163,9 @@ class UpcomingEvent:
     event_type: str                          # macro_release / central_bank / earnings / other
     market: str                              # us / a / global / crypto
     time_utc: Optional[str] = None           # 已知的官方发布时间（UTC "HH:MM"），未知为 None
+    scheduled_at: Optional[str] = None       # 完整 ISO 时点（含时区）；date-only 时为 None
+    time_precision: str = "date"             # datetime / date
+    status: str = "scheduled"                # scheduled / imminent / released_or_expired
     source: str = "static_config"            # static_config / finnhub_earnings
     affected_categories: list[str] = field(default_factory=list)  # 敏感的 watchlist 类别
     affected_symbols: list[str] = field(default_factory=list)     # 命中的 "market:code"
@@ -176,6 +179,9 @@ class UpcomingEvent:
             "event_type": self.event_type,
             "market": self.market,
             "time_utc": self.time_utc,
+            "scheduled_at": self.scheduled_at,
+            "time_precision": self.time_precision,
+            "status": self.status,
             "source": self.source,
             "affected_categories": self.affected_categories,
             "affected_symbols": self.affected_symbols,
@@ -484,7 +490,7 @@ class AnalysisContext:
     action_signals: dict = field(default_factory=dict)
 
     # 元信息（带默认值）
-    schema_version: int = 7
+    schema_version: int = 8
 
     def to_dict(self) -> dict:
         return {

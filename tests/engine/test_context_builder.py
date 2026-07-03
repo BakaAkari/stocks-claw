@@ -10,7 +10,8 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pandas as pd
@@ -122,7 +123,7 @@ class TestBasicBuild:
         )
 
         assert isinstance(context, AnalysisContext)
-        assert context.schema_version == 6
+        assert context.schema_version == 8
         assert context.asset_count == 2
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
@@ -133,13 +134,22 @@ class TestBasicBuild:
         assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
-        assert context.data_quality["schema_version"] == 3
+        assert context.data_quality["schema_version"] == 5
         assert context.data_quality["quotes"]["status"] == "ok"
         assert context.data_quality["quotes"]["item_count"] == 1
         assert context.data_quality["news"]["status"] == "not_requested"
         assert context.data_quality["macro"]["status"] == "not_configured"
         assert context.data_quality["technical_indicators"]["status"] == "missing"
         assert context.data_quality["market_events"]["status"] == "not_requested"
+
+    def test_schema_versions_match_data_model_document(self):
+        """AnalysisContext/data_quality 版本必须与权威数据模型同步。"""
+        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 8
+        data_model = (
+            Path(__file__).resolve().parents[2] / "stocks" / "DATA_MODEL.md"
+        ).read_text(encoding="utf-8")
+        assert "`AnalysisContext.schema_version` 当前为 `8`" in data_model
+        assert "## data_quality v5" in data_model
 
     async def test_build_no_instruments(self, mock_fetcher, mock_scaffolds, sample_assets):
         """无 instruments 时 quotes 为空"""
@@ -481,9 +491,13 @@ class TestRawPromptStructure:
         assert "【约束配置】" in prompt
         assert "【市场行情与技术指标】" in prompt
         assert "【市场状态】" in prompt
+        assert "【未来催化剂日历】" in prompt
+        assert "【板块轮动排名】" in prompt
+        assert "【引擎动作信号】" in prompt
         assert "【新闻事件摘要】" in prompt
         assert "【相关新闻】" in prompt
-        assert "请基于以上上下文给出投资组合分析和建议" in prompt
+        assert "按 personal_advice_prompt 的决策导向契约输出" in prompt
+        assert "带触发条件的调仓清单与下一个机会提名" in prompt
 
     async def test_prompt_with_news(self, mock_fetcher, mock_scaffolds, sample_assets, sample_instruments):
         """有新闻时 prompt 应包含新闻"""
@@ -540,7 +554,7 @@ class TestDataQuality:
             "message": "network failed",
         }])
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
-        historical_at = datetime(2026, 7, 1, 20, 0, tzinfo=timezone.utc)
+        historical_at = datetime.now(timezone.utc) - timedelta(hours=6)
         await cache.warm(
             instrument,
             pd.DataFrame([{
@@ -691,7 +705,7 @@ class TestDataQuality:
 
 
 class TestAnalysisContextSerialization:
-    async def test_to_dict_includes_schema_v6_indicators_data_quality_and_advice(
+    async def test_to_dict_includes_schema_v7_decision_inputs_and_data_quality(
         self,
         mock_fetcher,
         mock_scaffolds,
@@ -699,7 +713,7 @@ class TestAnalysisContextSerialization:
         sample_instruments,
         temp_dir,
     ):
-        """to_dict 输出 schema v6、顶层事件、指标、建议与 data_quality"""
+        """to_dict 输出 schema v7、前瞻输入、指标、建议与 data_quality。"""
         portfolio_scaffold, market_scaffold = mock_scaffolds
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
         builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold, history_cache=cache)
@@ -715,7 +729,7 @@ class TestAnalysisContextSerialization:
         await cache.close()
 
         data = context.to_dict()
-        assert data["schema_version"] == 6
+        assert data["schema_version"] == 8
         assert "market_events" in data
         assert "news_digest" in data
         assert "technical_indicators" in data
@@ -791,7 +805,7 @@ class TestHistoryBackfillQuality:
         sample_assets,
         sample_instruments,
     ):
-        """D0-3: build() 未传 report 时,data_quality 出现 history_backfill=not_requested,schema=3"""
+        """未传 report 时 history_backfill=not_requested,data_quality schema=4。"""
         portfolio_scaffold, market_scaffold = mock_scaffolds
         builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
         context = await builder.build(
@@ -801,7 +815,7 @@ class TestHistoryBackfillQuality:
             instruments=sample_instruments,
             recent_snapshots=[],
         )
-        assert context.data_quality["schema_version"] == 3
+        assert context.data_quality["schema_version"] == 5
         assert "history_backfill" in context.data_quality
         assert context.data_quality["history_backfill"]["status"] == "not_requested"
 

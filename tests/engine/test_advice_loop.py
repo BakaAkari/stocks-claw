@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pandas as pd
@@ -35,11 +35,15 @@ async def test_confirmed_advice_loop_injects_review_and_keeps_prompt_desensitize
     engine._watchlist = [instrument]
     engine._history_warmed = True
 
+    first_close = (
+        datetime.now(timezone.utc).replace(hour=20, minute=0, second=0, microsecond=0)
+        + timedelta(days=1)
+    )
     await engine.history_cache.warm(
         instrument,
         pd.DataFrame([
             {
-                "timestamp": datetime(2026, 7, 2, tzinfo=timezone.utc),
+                "timestamp": first_close,
                 "code": instrument.code,
                 "name": instrument.name,
                 "market": instrument.market,
@@ -51,7 +55,7 @@ async def test_confirmed_advice_loop_injects_review_and_keeps_prompt_desensitize
                 "volume_lot": 1,
             },
             {
-                "timestamp": datetime(2026, 7, 3, tzinfo=timezone.utc),
+                "timestamp": first_close + timedelta(days=1),
                 "code": instrument.code,
                 "name": instrument.name,
                 "market": instrument.market,

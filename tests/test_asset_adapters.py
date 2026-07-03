@@ -21,6 +21,8 @@ def adapter_engine(tmp_path):
     with patch("stocks.engine.load_engine_config", return_value=config):
         engine = StocksEngine()
     engine._assets = []
+    engine._sector_scan = []
+    engine._history_warmed = True
     return engine
 
 
@@ -221,4 +223,5 @@ def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engin
     assert "risk_tolerance: conservative" in context["raw_prompt_input"]
     assert "保留应急流动性" in context["raw_prompt_input"]
     assert "12,345" not in context["raw_prompt_input"]
-    assert "请基于以上上下文给出投资组合分析和建议" in context["raw_prompt_input"]
+    assert "按 personal_advice_prompt 的决策导向契约输出" in context["raw_prompt_input"]
+    assert "带触发条件的调仓清单与下一个机会提名" in context["raw_prompt_input"]

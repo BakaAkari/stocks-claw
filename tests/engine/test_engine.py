@@ -37,6 +37,11 @@ MINIMAL_CONFIG = {
         "save_to_file": True,
     },
     "macro": {"enabled": True, "static_config": {}},
+    "calendar": {
+        "enabled": False,
+        "lookahead_days": 14,
+        "earnings": {"enabled": False},
+    },
     "llm": {
         "analysis_enabled": False,
         "analysis_model": "",
@@ -55,6 +60,7 @@ def minimal_engine(tmp_path):
     # 清除可能从真实文件加载的数据，保证测试隔离性
     engine._assets = []
     engine._watchlist = []
+    engine._sector_scan = []
     engine._constraints = {}
     engine._profile = {}
     return engine

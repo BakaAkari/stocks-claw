@@ -1,7 +1,7 @@
 # 现行数据模型
 
 本文只描述当前代码中的 schema。权威实现位于 `stocks/domain/models.py`，
-`AnalysisContext.schema_version` 当前为 `7`。
+`AnalysisContext.schema_version` 当前为 `8`。
 
 ## FinancialAsset
 
@@ -95,6 +95,10 @@
 
 - `date`（ISO 日期）、`name`、`event_type ∈ {macro_release, central_bank, earnings, other}`
 - `market`、`time_utc`（未知为 `null`）
+- `scheduled_at`：可比较的 UTC ISO 时点；只有日期时为 `null`，禁止伪造午夜
+- `time_precision ∈ {datetime, date}`：明确事件时间精度
+- `status ∈ {scheduled, imminent, released_or_expired}`；上下文只返回仍为
+  `scheduled`/`imminent` 的事件，已发生事件被过滤并计入质量节点
 - `source ∈ {static_config, finnhub_earnings}`
 - `affected_categories`：对该事件敏感的 watchlist 类别（路径事实，非方向判断）
 - `affected_symbols`：按类别匹配命中的 `market:code` 列表
@@ -163,7 +167,7 @@
 
 目标资产桶缺失时，当前占比按 0% 检查，不能跳过。
 
-## AnalysisContext v7
+## AnalysisContext v8
 
 Agent 的统一入口：
 
@@ -180,14 +184,15 @@ Agent 的统一入口：
 - 扩展数据：`macro_snapshot`、`technical_indicators`
 - 质量与溯源：`data_quality`
 
-v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶层
-字段，`recent_advice` 附加派生 `trigger_review`；其余字段不变。
+v8 相对 v7 扩展 `UpcomingEvent` 的完整时点、时间精度与生命周期状态；
+v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶层字段，
+`recent_advice` 附加派生 `trigger_review`；其余字段不变。
 
 `raw_prompt_input` 遵循
 `stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
 精确值仍存在于结构化 `assets`，供受控调用方按需使用。
 
-## data_quality v4
+## data_quality v5
 
 `data_quality` 包含：
 
@@ -207,7 +212,8 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 
 - `upcoming_events`：事件日历质量。`status ∈ {ok, partial, missing,
   not_configured}`、`lookahead_days`、`window_end`、`event_count`、
-  `sources`（按来源计数）与 `errors`（按 Provider 记录失败原因，
+  `sources`（按来源计数）、`expired_count`（本次过滤的已发生事件数）与
+  `errors`（按 Provider 记录失败原因，
   例如 Finnhub key 未配置时财报日历显式报错而非静默缺失）
 - `rotation`：轮动脚手架覆盖。`status`、`as_of`、`item_count`、
   `missing_count` 与 `missing` 列表
@@ -217,7 +223,8 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `not_requested` 和 `not_configured`。美股单源失败额外标记
 `single_source_failed`，历史价格回填标记为 stale。
 
-`schema_version` 语义：v4 相对 v3 新增 `upcoming_events`、`rotation` 与
+`schema_version` 语义：v5 相对 v4 为 `upcoming_events` 增加
+`expired_count`；v4 相对 v3 新增 `upcoming_events`、`rotation` 与
 `action_signals` 三个节点；v3 相对 v2 新增 `history_backfill` 节点；
 其余节点结构不变。
 字段增减为破坏性变更，须同步更新本文件、

@@ -25,7 +25,7 @@ def _advice() -> dict:
 def _history_frame(instrument: Instrument) -> pd.DataFrame:
     return pd.DataFrame([
         {
-            "timestamp": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            "timestamp": datetime(2026, 7, 1, 20, 0, tzinfo=timezone.utc),
             "code": instrument.code,
             "name": instrument.name,
             "market": instrument.market,
@@ -37,7 +37,7 @@ def _history_frame(instrument: Instrument) -> pd.DataFrame:
             "volume_lot": 1,
         },
         {
-            "timestamp": datetime(2026, 7, 2, tzinfo=timezone.utc),
+            "timestamp": datetime(2026, 7, 2, 20, 0, tzinfo=timezone.utc),
             "code": instrument.code,
             "name": instrument.name,
             "market": instrument.market,
@@ -49,7 +49,7 @@ def _history_frame(instrument: Instrument) -> pd.DataFrame:
             "volume_lot": 1,
         },
         {
-            "timestamp": datetime(2026, 7, 3, tzinfo=timezone.utc),
+            "timestamp": datetime(2026, 7, 3, 20, 0, tzinfo=timezone.utc),
             "code": instrument.code,
             "name": instrument.name,
             "market": instrument.market,

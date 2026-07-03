@@ -97,6 +97,9 @@ def e2e_engine(tmp_path):
     engine._constraints = dict(SAMPLE_CONSTRAINTS)
     engine._profile = dict(SAMPLE_PROFILE)
     engine._watchlist = list(SAMPLE_WATCHLIST)
+    engine._sector_scan = []
+    # 历史回填由专用 fixture 显式执行；普通端到端测试不得访问真实网络。
+    engine._history_warmed = True
 
     # Mock 外部依赖
     engine.fetcher.fetch_quotes = AsyncMock(return_value={
@@ -313,7 +316,7 @@ class TestJSONSerialization:
         # 反序列化验证
         parsed = json.loads(json_str)
         assert parsed["asset_count"] == 2
-        assert parsed["schema_version"] == 6
+        assert parsed["schema_version"] == 8
         assert "quotes" in parsed
         assert "a" in parsed["quotes"]
         assert parsed["news_count"] == 1
@@ -357,7 +360,7 @@ class TestJSONSerialization:
         d = context.to_dict()
 
         quality = d["data_quality"]
-        assert quality["schema_version"] == 3
+        assert quality["schema_version"] == 5
         assert quality["quotes"]["item_count"] == 1
         assert quality["news"]["sources"] == {"rss:36kr": 1}
         assert quality["market_events"]["event_count"] == 1
@@ -427,6 +430,7 @@ class TestHistoryBackfillCooldown:
         """全部失败时:_history_warm_last_failed_at 被设置,data_quality.history_backfill.status=failed"""
         # 缩短冷却便于验证过期分支
         e2e_engine._history_warm_retry_cooldown = timedelta(milliseconds=50)
+        e2e_engine._history_warmed = False
 
         failed_report = [
             {"symbol": f"{inst.market}:{inst.code}", "market": inst.market,

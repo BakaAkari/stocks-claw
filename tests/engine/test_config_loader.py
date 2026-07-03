@@ -121,7 +121,25 @@ class TestLoadEngineConfig:
         assert config["providers"]["tencent_a"]["enabled"] is True
         assert config["cache"]["history_ttl"] == 7776000
         assert config["cache"]["history_dir"] is None
+        assert config["calendar"] == {
+            "enabled": True,
+            "lookahead_days": 14,
+            "earnings": {"enabled": True},
+        }
         assert config["llm"]["analysis_enabled"] is False
+
+    def test_calendar_yaml_partial_override_keeps_nested_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yaml_path = Path(tmpdir) / "engine.yaml"
+            yaml_path.write_text(
+                "calendar:\n  lookahead_days: 21\n  earnings:\n    enabled: false\n",
+                encoding="utf-8",
+            )
+            config = load_engine_config(config_path=yaml_path)
+
+        assert config["calendar"]["enabled"] is True
+        assert config["calendar"]["lookahead_days"] == 21
+        assert config["calendar"]["earnings"]["enabled"] is False
 
     def test_yaml_override(self):
         """YAML 文件覆盖默认值"""
