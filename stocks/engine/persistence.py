@@ -5,7 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from stocks.domain.models import AdviceRecord, AnalysisContext, ExecutionRecord
+from stocks.domain.models import (
+    AdviceRecord,
+    AnalysisContext,
+    ExecutionRecord,
+    ForecastRecord,
+)
 
 
 class DataPersistence:
@@ -21,6 +26,8 @@ class DataPersistence:
         max_advice_records: int = 30,
         execution_dir: str | None = None,
         max_execution_records: int = 200,
+        forecast_dir: str | None = None,
+        max_forecast_records: int = 200,
     ):
         self.base_dir = Path(base_dir)
         self.enabled = enabled
@@ -31,6 +38,10 @@ class DataPersistence:
             Path(execution_dir) if execution_dir else self.base_dir.parent / "executions"
         )
         self.max_execution_records = max(1, int(max_execution_records))
+        self.forecast_dir = (
+            Path(forecast_dir) if forecast_dir else self.base_dir.parent / "forecasts"
+        )
+        self.max_forecast_records = max(1, int(max_forecast_records))
         if self.enabled:
             self.base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,6 +139,22 @@ class DataPersistence:
         """列出所有执行记录（按 recorded_at 倒序）。"""
         return [record.to_dict() for record in self._load_execution_records()]
 
+    def save_forecast(self, record: ForecastRecord) -> str:
+        """保存一条确认预测记录或结算后的预测记录，并按上限滚动清理。"""
+        self.forecast_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{self._safe_timestamp(record.created_at)}_{record.id}.json"
+        filepath = self.forecast_dir / filename
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(record.to_dict(), f, ensure_ascii=False, indent=2)
+
+        self._trim_forecasts()
+        return str(filepath)
+
+    def list_forecasts(self) -> list[dict]:
+        """列出所有预测记录（按 created_at 倒序）。"""
+        return [record.to_dict() for record in self._load_forecast_records()]
+
     def _list_snapshot_files(self) -> list[Path]:
         """获取目录下所有 JSON 快照文件的完整路径，按修改时间倒序"""
         if not self.base_dir.is_dir():
@@ -182,6 +209,28 @@ class DataPersistence:
 
     def _trim_executions(self) -> None:
         for path in self._list_execution_files()[self.max_execution_records:]:
+            path.unlink(missing_ok=True)
+
+    def _load_forecast_records(self) -> list[ForecastRecord]:
+        records: list[ForecastRecord] = []
+        for path in self._list_forecast_files():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    records.append(ForecastRecord.from_dict(json.load(f)))
+            except Exception:
+                continue
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        return records
+
+    def _list_forecast_files(self) -> list[Path]:
+        if not self.forecast_dir.is_dir():
+            return []
+        files = list(self.forecast_dir.glob("*.json"))
+        files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        return files
+
+    def _trim_forecasts(self) -> None:
+        for path in self._list_forecast_files()[self.max_forecast_records:]:
             path.unlink(missing_ok=True)
 
     @staticmethod

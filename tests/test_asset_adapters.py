@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from stocks.adapters.cli import CLIAdapter
 from stocks.adapters.mcp import MCPAdapter
-from stocks.domain.models import FinancialAsset
+from stocks.domain.models import FinancialAsset, ForecastRecord, Instrument
 from stocks.engine import StocksEngine
 from tests.engine.test_engine import MINIMAL_CONFIG
 
@@ -464,6 +466,133 @@ def test_cli_execution_save_and_list(adapter_engine, capsys):
     listed = json.loads(capsys.readouterr().out)
     assert listed["data"][0]["target"] == "a:588000"
     assert listed["data"][0]["extent"] == "partial"
+
+
+def _forecast_payload(
+    *,
+    deadline: str = "2999-01-01",
+    target: str | None = "a:588000",
+    level: float | None = 1.0,
+) -> dict:
+    payload = {
+        "statement": "科创50ETF 到期收盘高于 1.0",
+        "target": target,
+        "metric": "close",
+        "comparator": "above",
+        "level": level,
+        "deadline": deadline,
+        "confidence": "medium",
+    }
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def test_mcp_forecast_save_requires_confirmation_and_lists(adapter_engine, tmp_path):
+    adapter = MCPAdapter(adapter_engine)
+    denied = adapter.handle_request({
+        "method": "forecast_save",
+        "params": {"forecast": _forecast_payload()},
+    })
+    assert denied["success"] is False
+    assert not (tmp_path / "forecasts").exists()
+
+    saved = adapter.handle_request({
+        "method": "forecast_save",
+        "params": {"forecast": _forecast_payload(), "confirmed": True},
+    })
+    assert saved["success"] is True
+    assert saved["data"]["status"] == "open"
+
+    manual = adapter.handle_request({
+        "method": "forecast_save",
+        "params": {
+            "forecast": _forecast_payload(target=None, level=None),
+            "confirmed": True,
+        },
+    })
+    assert manual["success"] is True
+    assert manual["data"]["status"] == "manual"
+
+    listed = adapter.handle_request({"method": "forecast_list"})
+    assert len(listed["data"]) == 2
+    assert {item["status"] for item in listed["data"]} == {"open", "manual"}
+
+
+def test_cli_forecast_save_and_list(adapter_engine, capsys):
+    adapter = CLIAdapter(adapter_engine)
+
+    adapter.run(["--forecast-save", json.dumps(_forecast_payload(), ensure_ascii=False)])
+    denied = json.loads(capsys.readouterr().out)
+    assert denied["success"] is False
+
+    adapter.run([
+        "--forecast-save",
+        json.dumps(_forecast_payload(), ensure_ascii=False),
+        "--confirmed",
+    ])
+    assert json.loads(capsys.readouterr().out)["success"] is True
+
+    adapter.run(["--forecast-list"])
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["data"][0]["status"] == "open"
+    assert listed["data"][0]["metric"] == "close"
+
+
+def test_due_forecast_settles_and_feeds_context(adapter_engine):
+    instrument = Instrument("588000", "科创50ETF", "a")
+    adapter_engine._watchlist = [instrument]
+    history = pd.DataFrame([
+        {
+            "timestamp": pd.Timestamp("2026-07-02", tz="UTC"),
+            "code": "588000",
+            "name": "科创50ETF",
+            "market": "a",
+            "price": 1.2,
+            "open_price": 1.2,
+            "high": 1.2,
+            "low": 1.2,
+            "prev_close": 1.0,
+            "volume_lot": 100,
+            "data_source": "provider",
+        }
+    ])
+    asyncio.run(adapter_engine.history_cache.warm(instrument, history))
+    adapter_engine.persistence.save_forecast(ForecastRecord(
+        id="fixture-hit",
+        created_at="2026-07-01T00:00:00+00:00",
+        statement="科创50ETF 到期收盘高于 1.0",
+        target="a:588000",
+        metric="close",
+        comparator="above",
+        level=1.0,
+        deadline="2026-07-02",
+        confidence="medium",
+        status="open",
+    ))
+
+    adapter = MCPAdapter(adapter_engine)
+    context_result = adapter.handle_request({
+        "method": "get_analysis_context",
+        "params": {
+            "include_news": False,
+            "include_quotes": False,
+            "include_history": True,
+        },
+    })
+
+    assert context_result["success"] is True
+    summary = context_result["data"]["forecast_summary"]
+    assert summary["open_count"] == 0
+    assert summary["recent_settlements"][0]["id"] == "fixture-hit"
+    assert summary["recent_settlements"][0]["status"] == "hit"
+    prompt = context_result["data"]["raw_prompt_input"]
+    assert "【预测台账】" in prompt
+    assert "fixture-hit" not in prompt
+    assert "a:588000 | hit | 科创50ETF 到期收盘高于 1.0" in prompt
+    assert "样本不足" in prompt
+    assert "累计命中率" not in prompt
+    assert "胜率" not in prompt
+    assert "概率" not in prompt
+    assert adapter_engine.persistence.list_forecasts()[0]["status"] == "hit"
 
 
 def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engine):

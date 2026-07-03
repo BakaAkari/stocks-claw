@@ -111,6 +111,16 @@ class CLIAdapter:
             metavar="JSON",
             help="保存一条执行记录；值为 ExecutionRecord 字段的 JSON 对象",
         )
+        asset_actions.add_argument(
+            "--forecast-list",
+            action="store_true",
+            help="列出已确认保存的预测记录",
+        )
+        asset_actions.add_argument(
+            "--forecast-save",
+            metavar="JSON",
+            help="保存一条预测记录；值为 ForecastRecord 字段的 JSON 对象",
+        )
         parser.add_argument(
             "--confirmed",
             action="store_true",
@@ -182,6 +192,8 @@ class CLIAdapter:
             return {"success": True, "data": self.engine.list_advice()}
         if args.execution_list:
             return {"success": True, "data": self.engine.list_executions()}
+        if args.forecast_list:
+            return {"success": True, "data": self.engine.list_forecasts()}
         if args.assets_list:
             return {
                 "success": True,
@@ -196,6 +208,7 @@ class CLIAdapter:
                 args.profile_update,
                 args.advice_save,
                 args.execution_save,
+                args.forecast_save,
             )
         )
         if not write_requested:
@@ -220,6 +233,15 @@ class CLIAdapter:
                     "success": True,
                     "data": execution,
                     "action": "execution_saved",
+                }
+            if args.forecast_save:
+                forecast = self.engine.save_forecast(
+                    self._parse_json_object(args.forecast_save)
+                )
+                return {
+                    "success": True,
+                    "data": forecast,
+                    "action": "forecast_saved",
                 }
             if args.profile_update:
                 profile = self.engine.update_profile(

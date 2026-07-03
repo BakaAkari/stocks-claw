@@ -73,6 +73,7 @@ class ContextBuilder:
         history_backfill_report: Optional[list[dict]] = None,
         scan_instruments: Optional[list] = None,
         execution_records: Optional[list[dict]] = None,
+        forecast_summary: Optional[dict] = None,
     ) -> AnalysisContext:
         """构建完整分析上下文"""
         generated_at = datetime.now(timezone.utc).isoformat()
@@ -216,6 +217,7 @@ class ContextBuilder:
             upcoming_events=upcoming_events,
             rotation=rotation,
             action_signals=action_signals,
+            forecast_summary=forecast_summary,
         )
 
         data_quality = self._build_data_quality(
@@ -262,7 +264,8 @@ class ContextBuilder:
             upcoming_events=upcoming_events,
             rotation=rotation,
             action_signals=action_signals,
-            schema_version=10,
+            forecast_summary=forecast_summary or {},
+            schema_version=11,
         )
 
     async def _build_rotation(
@@ -1019,6 +1022,7 @@ class ContextBuilder:
         upcoming_events: Optional[list] = None,
         rotation: Optional[dict] = None,
         action_signals: Optional[dict] = None,
+        forecast_summary: Optional[dict] = None,
     ) -> str:
         """生成人类可读的原始输入文本，供 LLM 阅读"""
         lines: list[str] = []
@@ -1166,6 +1170,36 @@ class ContextBuilder:
                         lines.append(head)
                         if item.get("action"):
                             lines.append(f"   预设动作: {item['action']}")
+            lines.append("")
+
+        if forecast_summary:
+            lines.append("【预测台账】")
+            lines.append(f" open 条数: {forecast_summary.get('open_count', 0)}")
+            sample_count = int(forecast_summary.get("sample_count") or 0)
+            hit_count = int(forecast_summary.get("hit_count") or 0)
+            hit_rate = forecast_summary.get("hit_rate")
+            if hit_rate is None:
+                lines.append(
+                    f" 累计统计: 样本不足 (hit/miss 样本 {sample_count}/10)"
+                )
+            else:
+                lines.append(
+                    f" 累计命中率: {hit_rate * 100:.1f}% ({hit_count}/{sample_count})"
+                )
+            settlements = forecast_summary.get("recent_settlements", [])
+            if settlements:
+                lines.append(" 最近结算:")
+                for item in settlements[:5]:
+                    target = item.get("target") or "manual"
+                    line = (
+                        f" - {item.get('deadline', 'unknown')} | {target} | "
+                        f"{item.get('status', 'unknown')} | {item.get('statement', '')}"
+                    )
+                    if item.get("resolution_note"):
+                        line += f" | {item.get('resolution_note')}"
+                    lines.append(line)
+            else:
+                lines.append(" 最近结算: 无")
             lines.append("")
 
         # 组合结构

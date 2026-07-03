@@ -84,12 +84,19 @@ uv run python -m stocks.adapters.cli \
   --confirmed
 
 uv run python -m stocks.adapters.cli --execution-list
+
+uv run python -m stocks.adapters.cli \
+  --forecast-save '{"statement":"科创50ETF 一周内收盘高于 1.0","target":"a:588000","metric":"close","comparator":"above","level":1.0,"deadline":"2026-07-10","confidence":"medium"}' \
+  --confirmed
+
+uv run python -m stocks.adapters.cli --forecast-list
 ```
 
 资产保存在 `.local/financial_assets.json`，画像保存在
 `.local/investor_profile.json`。没有本地资产文件时才读取
 `stocks/data/financial_assets.json` 示例。画像结构示例见
-`stocks/data/investor_profile.example.json`。确认保存的建议摘要位于 `.local/advice/`。
+`stocks/data/investor_profile.example.json`。确认保存的建议摘要位于 `.local/advice/`，
+执行记录位于 `.local/executions/`，预测台账位于 `.local/forecasts/`。
 
 MCP 对应工具：
 
@@ -102,6 +109,9 @@ MCP 对应工具：
   用于保存结构化调仓动作，`size_hint` 只能写比例或自然语言，不写具体金额
 - `execution_list`、`execution_save`，保存建议执行记录必须确认；执行对照只按
   `advice_id + target` 精确匹配，匹配不到显示 `unknown`
+- `forecast_list`、`forecast_save`，保存预测记录必须确认；有 `target + level`
+  的预测到期后按历史收盘价自动结算，缺 `target` 或 `level` 的记录保存为
+  `manual`，不自动判断
 - `get_analysis_context`、`get_quotes`、`get_news`、
   `get_portfolio_summary`
 

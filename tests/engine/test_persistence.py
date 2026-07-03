@@ -8,6 +8,7 @@ from stocks.domain.models import (
     AdviceRecord,
     DriftCheck,
     ExecutionRecord,
+    ForecastRecord,
     MarketState,
     PortfolioMapping,
 )
@@ -134,6 +135,70 @@ def test_execution_record_validates_action_and_extent():
         ExecutionRecord.create(
             target="a:588000",
             action="increase",
+        )
+
+
+def _forecast(index: int, status: str = "open") -> ForecastRecord:
+    return ForecastRecord(
+        id=f"forecast-{index}",
+        created_at=f"2026-07-0{index}T00:00:00+00:00",
+        statement=f"科创50 到期收盘高于 1.{index}",
+        target="a:588000",
+        metric="close",
+        comparator="above",
+        level=1.0 + index / 10,
+        deadline=f"2026-07-0{index + 1}",
+        confidence="medium",
+        status=status,
+    )
+
+
+def test_forecast_record_round_trip_and_rolls_over(tmp_path):
+    persistence = DataPersistence(
+        str(tmp_path / "snapshots"),
+        forecast_dir=str(tmp_path / "forecasts"),
+        max_forecast_records=2,
+    )
+
+    persistence.save_forecast(_forecast(1))
+    persistence.save_forecast(_forecast(2))
+    persistence.save_forecast(_forecast(3, status="hit"))
+
+    records = persistence.list_forecasts()
+    assert len(records) == 2
+    assert records[0]["id"] == "forecast-3"
+    assert records[0]["status"] == "hit"
+    assert records[1]["target"] == "a:588000"
+
+
+def test_forecast_record_manual_and_validation():
+    manual = ForecastRecord.create(
+        statement="市场风险偏好可能转弱，需要人工复盘。",
+        comparator="below",
+        deadline="2026-07-10",
+        confidence="low",
+    )
+
+    assert manual.status == "manual"
+    assert "missing target, level" in manual.resolution_note
+    with pytest.raises(ValueError, match="metric"):
+        ForecastRecord.create(
+            statement="非法指标",
+            target="a:588000",
+            metric="volume",
+            comparator="above",
+            level=1.0,
+            deadline="2026-07-10",
+            confidence="medium",
+        )
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        ForecastRecord.create(
+            statement="非法日期",
+            target="a:588000",
+            comparator="above",
+            level=1.0,
+            deadline="2026/07/10",
+            confidence="medium",
         )
 
 

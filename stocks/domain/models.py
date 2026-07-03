@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
@@ -384,11 +384,38 @@ _ADVICE_ACTIONS = {"add", "increase", "reduce", "exit", "hold", "watch"}
 _ADVICE_HORIZONS = {"short", "medium", "long"}
 _EXECUTION_ACTIONS = _ADVICE_ACTIONS | {"none"}
 _EXECUTION_EXTENTS = {"full", "partial"}
+_FORECAST_METRICS = {"close"}
+_FORECAST_COMPARATORS = {"above", "below"}
+_FORECAST_CONFIDENCES = {"low", "medium", "high"}
+_FORECAST_STATUSES = {"open", "hit", "miss", "unresolved", "manual"}
 _EXACT_MONEY_RE = re.compile(
     r"(?:[$¥￥]\s*\d[\d,]*(?:\.\d+)?)|"
     r"(?:\d[\d,]*(?:\.\d+)?\s*(?:元|人民币|美元|美金|港元|USD|CNY|HKD))",
     re.IGNORECASE,
 )
+
+
+def _normalize_optional_float(value, field_name: str) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a number") from exc
+    return number
+
+
+def _normalize_date_string(value, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a YYYY-MM-DD date")
+    raw = value.strip()
+    try:
+        date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a YYYY-MM-DD date") from exc
+    return raw
 
 
 @dataclass(frozen=True)
@@ -625,6 +652,141 @@ class ExecutionRecord:
 
 
 @dataclass(frozen=True)
+class ForecastRecord:
+    """用户确认保存的一条可问责预测或人工预测记录。"""
+
+    id: str
+    created_at: str
+    statement: str
+    metric: str
+    comparator: str
+    deadline: str
+    confidence: str
+    status: str
+    target: Optional[str] = None
+    level: Optional[float] = None
+    resolved_at: Optional[str] = None
+    resolution_note: Optional[str] = None
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        statement: str,
+        comparator: str,
+        deadline: str,
+        confidence: str,
+        target: Optional[str] = None,
+        level=None,
+        metric: str = "close",
+        id: Optional[str] = None,
+    ) -> "ForecastRecord":
+        normalized_target = _normalize_instrument_key(target)
+        normalized_level = _normalize_optional_float(level, "forecast.level")
+        status = "open"
+        resolution_note = None
+        if normalized_target is None or normalized_level is None:
+            status = "manual"
+            missing = []
+            if normalized_target is None:
+                missing.append("target")
+            if normalized_level is None:
+                missing.append("level")
+            resolution_note = f"manual_review_required: missing {', '.join(missing)}"
+        return cls(
+            id=id or uuid4().hex,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            statement=statement,
+            target=normalized_target,
+            metric=metric,
+            comparator=comparator,
+            level=normalized_level,
+            deadline=deadline,
+            confidence=confidence,
+            status=status,
+            resolution_note=resolution_note,
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ForecastRecord":
+        return cls(
+            id=str(data.get("id", "")),
+            created_at=str(data.get("created_at", "")),
+            statement=str(data.get("statement", "")),
+            target=data.get("target"),
+            metric=str(data.get("metric", "")),
+            comparator=str(data.get("comparator", "")),
+            level=data.get("level"),
+            deadline=str(data.get("deadline", "")),
+            confidence=str(data.get("confidence", "")),
+            status=str(data.get("status", "")),
+            resolved_at=data.get("resolved_at"),
+            resolution_note=data.get("resolution_note"),
+        )
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError("forecast.id is required")
+        if not self.created_at:
+            raise ValueError("forecast.created_at is required")
+        if not isinstance(self.statement, str) or not self.statement.strip():
+            raise ValueError("forecast.statement must be a non-empty string")
+        if len(self.statement) > 500:
+            raise ValueError("forecast.statement must be 500 characters or fewer")
+        object.__setattr__(self, "target", _normalize_instrument_key(self.target))
+        object.__setattr__(
+            self,
+            "level",
+            _normalize_optional_float(self.level, "forecast.level"),
+        )
+        object.__setattr__(
+            self,
+            "deadline",
+            _normalize_date_string(self.deadline, "forecast.deadline"),
+        )
+        if self.metric not in _FORECAST_METRICS:
+            raise ValueError(f"forecast.metric must be one of {sorted(_FORECAST_METRICS)}")
+        if self.comparator not in _FORECAST_COMPARATORS:
+            raise ValueError(
+                f"forecast.comparator must be one of {sorted(_FORECAST_COMPARATORS)}"
+            )
+        if self.confidence not in _FORECAST_CONFIDENCES:
+            raise ValueError(
+                f"forecast.confidence must be one of {sorted(_FORECAST_CONFIDENCES)}"
+            )
+        if self.status not in _FORECAST_STATUSES:
+            raise ValueError(f"forecast.status must be one of {sorted(_FORECAST_STATUSES)}")
+        if self.status == "open" and (self.target is None or self.level is None):
+            raise ValueError("open forecasts require target and level")
+        if self.status == "manual" and not self.resolution_note:
+            object.__setattr__(
+                self,
+                "resolution_note",
+                "manual_review_required",
+            )
+        if self.resolved_at is not None and not isinstance(self.resolved_at, str):
+            raise ValueError("forecast.resolved_at must be a string when present")
+        if self.resolution_note is not None and not isinstance(self.resolution_note, str):
+            raise ValueError("forecast.resolution_note must be a string when present")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "created_at": self.created_at,
+            "statement": self.statement,
+            "target": self.target,
+            "metric": self.metric,
+            "comparator": self.comparator,
+            "level": self.level,
+            "deadline": self.deadline,
+            "confidence": self.confidence,
+            "status": self.status,
+            "resolved_at": self.resolved_at,
+            "resolution_note": self.resolution_note,
+        }
+
+
+@dataclass(frozen=True)
 class AnalysisContext:
     """统一分析上下文 — 核心接口契约
 
@@ -684,8 +846,11 @@ class AnalysisContext:
     # 引擎动作信号（规则化方向性候选动作，2026-07-02 用户裁决启用）
     action_signals: dict = field(default_factory=dict)
 
+    # 预测台账摘要（S1-4）
+    forecast_summary: dict = field(default_factory=dict)
+
     # 元信息（带默认值）
-    schema_version: int = 10
+    schema_version: int = 11
 
     def to_dict(self) -> dict:
         return {
@@ -712,6 +877,7 @@ class AnalysisContext:
             "upcoming_events": [e.to_dict() for e in self.upcoming_events],
             "rotation": self.rotation,
             "action_signals": self.action_signals,
+            "forecast_summary": self.forecast_summary,
         }
 
 

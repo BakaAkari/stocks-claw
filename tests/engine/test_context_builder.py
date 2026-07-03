@@ -124,7 +124,7 @@ class TestBasicBuild:
         )
 
         assert isinstance(context, AnalysisContext)
-        assert context.schema_version == 10
+        assert context.schema_version == 11
         assert context.asset_count == 2
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
@@ -145,11 +145,11 @@ class TestBasicBuild:
 
     def test_schema_versions_match_data_model_document(self):
         """AnalysisContext/data_quality 版本必须与权威数据模型同步。"""
-        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 10
+        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 11
         data_model = (
             Path(__file__).resolve().parents[2] / "stocks" / "DATA_MODEL.md"
         ).read_text(encoding="utf-8")
-        assert "`AnalysisContext.schema_version` 当前为 `10`" in data_model
+        assert "`AnalysisContext.schema_version` 当前为 `11`" in data_model
         assert "## data_quality v9" in data_model
 
     async def test_build_no_instruments(self, mock_fetcher, mock_scaffolds, sample_assets):
@@ -936,12 +936,13 @@ class TestAnalysisContextSerialization:
         await cache.close()
 
         data = context.to_dict()
-        assert data["schema_version"] == 10
+        assert data["schema_version"] == 11
         assert "market_events" in data
         assert "news_digest" in data
         assert "technical_indicators" in data
         assert "data_quality" in data
         assert data["recent_advice"] == []
+        assert data["forecast_summary"] == {}
         # D0-1:data_points=1 → 单项 missing,聚合 missing(不再报假 ok)
         assert data["technical_indicators"]["a:000001"]["status"] == "missing"
         assert data["technical_indicators"]["a:000001"]["data_points"] == 1

@@ -1,7 +1,7 @@
 # 现行数据模型
 
 本文只描述当前代码中的 schema。权威实现位于 `stocks/domain/models.py`，
-`AnalysisContext.schema_version` 当前为 `10`。
+`AnalysisContext.schema_version` 当前为 `11`。
 
 ## DecisionEnvelope v1
 
@@ -98,6 +98,28 @@
 - `note`
 - `executed_at`：实际执行或确认未执行的时间
 - `recorded_at`：系统记录时间
+
+## ForecastRecord
+
+用户确认保存的预测台账记录，位于 `.local/forecasts/`：
+
+- `id`：系统生成的记录 id
+- `created_at`：系统生成的 UTC ISO 时间
+- `statement`：500 字以内的预测陈述
+- `target`：可选；可程序化结算时为 `market:code`
+- `metric`：当前仅支持 `close`
+- `comparator ∈ {above, below}`
+- `level`：可选；可程序化结算时为收盘价比较阈值
+- `deadline`：`YYYY-MM-DD` 日期
+- `confidence ∈ {low, medium, high}`
+- `status ∈ {open, hit, miss, unresolved, manual}`
+- `resolved_at`：自动结算或转入未决时的 UTC ISO 时间
+- `resolution_note`：结算依据或无法结算原因
+
+保存时缺 `target` 或 `level` 的记录直接标记为 `manual`，不进入自动结算。
+`build_context(include_history=True)` 会对已到 `deadline` 的 `open` 记录按历史收盘价
+结算：命中比较条件为 `hit`，未命中为 `miss`；目标不在 watchlist/扫描池、历史缓存不可用或
+缺少可用收盘价时标记为 `unresolved` 并写明原因。结算结果会写回本地台账。
 
 ## Instrument 与 Quote
 
@@ -230,7 +252,7 @@
 Composite 按字段合并 FRED → Yahoo → static_config，上游部分成功不会阻止下游
 补齐缺失字段。官方月度统计使用 24 小时本地缓存。
 
-## AnalysisContext v10
+## AnalysisContext v11
 
 Agent 的统一入口：
 
@@ -243,10 +265,13 @@ Agent 的统一入口：
 - 决策语义：`action_signals`
 - 前瞻输入：`upcoming_events`
 - 历史：`recent_snapshots`、`recent_advice`
+- 预测台账：`forecast_summary`
 - Agent 输入：`raw_prompt_input`
 - 扩展数据：`macro_snapshot`、`technical_indicators`
 - 质量与溯源：`data_quality`
 
+v11 相对 v10 新增 `forecast_summary`，包含预测台账 open 条数、最近结算结果、
+hit/miss 样本统计；样本少于 10 条时只标记“样本不足”，不输出命中率。
 v10 相对 v9 为 `NewsItem` 增加 `scope`，用于持仓定向来源优先匹配；
 v9 相对 v8 扩展 `macro_snapshot` 的 `official_stats` 与逐字段来源/观测日；
 v8 相对 v7 扩展 `UpcomingEvent` 的完整时点、时间精度与生命周期状态；

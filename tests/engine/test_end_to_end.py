@@ -332,7 +332,7 @@ class TestJSONSerialization:
         # 反序列化验证
         parsed = json.loads(json_str)
         assert parsed["asset_count"] == 2
-        assert parsed["schema_version"] == 10
+        assert parsed["schema_version"] == 11
         assert "quotes" in parsed
         assert "a" in parsed["quotes"]
         assert parsed["news_count"] == 1
@@ -340,6 +340,7 @@ class TestJSONSerialization:
         assert parsed["news_digest"]["event_count"] == 1
         assert parsed["macro_snapshot"] is not None
         assert "technical_indicators" in parsed
+        assert "forecast_summary" in parsed
         # D0-1:e2e_engine 无历史预热,SAMPLE_QUOTE 不携带 indicators → missing 是正确判级
         assert parsed["technical_indicators"]["a:000001"]["status"] == "missing"
         assert "data_quality" in parsed

@@ -28,6 +28,7 @@ from stocks.domain.models import (
     AnalysisContext,
     ExecutionRecord,
     FinancialAsset,
+    ForecastRecord,
     Instrument,
     NewsItem,
     PortfolioMapping,
@@ -42,6 +43,7 @@ from stocks.engine.event_calendar import (
 )
 from stocks.engine.exchange_rate import convert_to_cny
 from stocks.engine.fetchers import DataFetcher
+from stocks.engine.forecasts import settle_due_forecasts, summarize_forecasts
 from stocks.engine.history_cache import HistoryCache
 from stocks.engine.history_provider import CompositeKLineProvider, warm_history_cache
 from stocks.engine.llm_analysis import LLMAnalysis
@@ -662,6 +664,40 @@ class StocksEngine:
         """列出已确认的执行记录。"""
         return self.persistence.list_executions()
 
+    def save_forecast(self, payload: dict) -> dict:
+        """保存用户确认过的预测记录。"""
+        if not isinstance(payload, dict):
+            raise ValueError("Forecast payload must be an object")
+        allowed = {
+            "id",
+            "statement",
+            "target",
+            "metric",
+            "comparator",
+            "level",
+            "deadline",
+            "confidence",
+        }
+        unknown = set(payload) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported forecast fields: {sorted(unknown)}")
+        record = ForecastRecord.create(
+            id=payload.get("id"),
+            statement=payload.get("statement", ""),
+            target=payload.get("target"),
+            metric=payload.get("metric", "close"),
+            comparator=payload.get("comparator", ""),
+            level=payload.get("level"),
+            deadline=payload.get("deadline", ""),
+            confidence=payload.get("confidence", ""),
+        )
+        self.persistence.save_forecast(record)
+        return record.to_dict()
+
+    def list_forecasts(self) -> list[dict]:
+        """列出已确认的预测记录。"""
+        return self.persistence.list_forecasts()
+
     def _validate_advice_action_targets(self, actions: list[dict]) -> list[dict]:
         if not actions:
             return []
@@ -804,10 +840,21 @@ class StocksEngine:
         recent_snapshots: list[dict] = []
         recent_advice: list[dict] = []
         execution_records: list[dict] = []
+        forecast_records: list[dict] = []
+        forecast_summary: dict = {}
         if include_history:
             recent_snapshots = self.persistence.load_recent(count=5)
             recent_advice = self.persistence.load_recent_advice(count=3)
             execution_records = self.persistence.list_executions()
+            forecast_records = self.persistence.list_forecasts()
+            forecast_records, settled_forecasts = await settle_due_forecasts(
+                forecast_records,
+                watchlist=list(self._watchlist) + list(self._sector_scan),
+                history_cache=self.history_cache,
+            )
+            for record in settled_forecasts:
+                self.persistence.save_forecast(record)
+            forecast_summary = summarize_forecasts(forecast_records)
 
         # 5. 构建 AnalysisContext
         context = await self.context_builder.build(
@@ -824,6 +871,7 @@ class StocksEngine:
             news_provider_errors=dict(self.news_aggregator.last_errors),
             history_backfill_report=self._history_backfill_report,
             scan_instruments=scan_instruments,
+            forecast_summary=forecast_summary,
         )
 
         # 保存最小快照，供下一次上下文进行前后对照。

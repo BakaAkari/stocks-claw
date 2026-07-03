@@ -68,6 +68,10 @@ class MCPAdapter:
             return {"success": True, "data": self.engine.list_executions()}
         elif method == "execution_save":
             return self._execution_save(params)
+        elif method == "forecast_list":
+            return {"success": True, "data": self.engine.list_forecasts()}
+        elif method == "forecast_save":
+            return self._forecast_save(params)
         else:
             return {"error": f"Unknown method: {method}"}
 
@@ -211,6 +215,19 @@ class MCPAdapter:
         try:
             record = self.engine.save_execution(execution)
             return {"success": True, "data": record, "action": "execution_saved"}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _forecast_save(self, params: dict) -> dict:
+        confirmation_error = self._confirmed(params)
+        if confirmation_error:
+            return confirmation_error
+        forecast = params.get("forecast")
+        if not isinstance(forecast, dict):
+            return {"success": False, "error": "forecast object is required"}
+        try:
+            record = self.engine.save_forecast(forecast)
+            return {"success": True, "data": record, "action": "forecast_saved"}
         except (TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
 
@@ -433,6 +450,23 @@ class MCPAdapter:
                     "required": ["execution", "confirmed"],
                     "properties": {
                         "execution": {"type": "object"},
+                        "confirmed": {"type": "boolean", "const": True},
+                    },
+                },
+            },
+            {
+                "name": "forecast_list",
+                "description": "列出已确认保存的预测记录。",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "forecast_save",
+                "description": "在用户明确确认后保存预测记录。",
+                "parameters": {
+                    "type": "object",
+                    "required": ["forecast", "confirmed"],
+                    "properties": {
+                        "forecast": {"type": "object"},
                         "confirmed": {"type": "boolean", "const": True},
                     },
                 },
