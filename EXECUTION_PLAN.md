@@ -96,11 +96,13 @@
 
 **文件**:`stocks/engine/context_builder.py`、`stocks/engine/advice_review.py`、`stocks/prompts/personal_advice_prompt.txt`、`tests/`
 
-- [ ] `raw_prompt_input` 的【上次建议】升级为【复盘】小节,顺序固定:上期建议 actions → 触发核对(既有 trigger_review)→ 执行对照(S1-3)→ 到期预测结算(S1-4);四段中缺哪段显式写明缺哪段及原因。
-- [ ] prompt 契约"上期预案复盘"节指向本小节,要求当班 Agent 逐条回应。
-- [ ] 端到端测试:fixture 组合含建议+执行+预测,断言【复盘】四段齐全、顺序正确、缺段时有显式说明。
+- [x] `raw_prompt_input` 的【上次建议】升级为【复盘】小节,顺序固定:上期建议 actions → 触发核对(既有 trigger_review)→ 执行对照(S1-3)→ 到期预测结算(S1-4);四段中缺哪段显式写明缺哪段及原因。
+- [x] prompt 契约"上期预案复盘"节指向本小节,要求当班 Agent 逐条回应。
+- [x] 端到端测试:fixture 组合含建议+执行+预测,断言【复盘】四段齐全、顺序正确、缺段时有显式说明。
 
 **验收**:一次真实运行输出完整【复盘】小节;全局验收通过。
+
+> 完成:d9d74b1 S1-5 复盘注入整合完成,raw_prompt 已统一为【复盘】四段并要求当班 Agent 逐条回应 | 证据:`stocks/engine/context_builder.py:1400` 定义 `_append_review_section`,`stocks/engine/context_builder.py:1414`/`:1443`/`:1475`/`:1504` 固定输出 actions/触发核对/执行对照/到期预测结算四段且缺段显式写"缺失",`stocks/engine/context_builder.py:1393` 末尾指令要求先按【复盘】四段回应,`stocks/prompts/personal_advice_prompt.txt:32` prompt 契约指向【复盘】固定四段,`tests/engine/test_context_builder.py:643` 覆盖建议+执行+预测组合且断言四段顺序,`:723` 覆盖缺段说明,`tests/test_asset_adapters.py:236`/`:352`/`:541` 覆盖 advice actions、执行对照、预测结算在新【复盘】结构内回显;真实运行 `stocks.adapters.cli --output json --no-news --no-quotes` 输出【复盘】且四段 marker 全为 True,内容包含真实建议 actions、`a:588000 → executed`、预测 open_count=1 与"暂无到期预测结算";全局闸 `ruff`=All checks passed,`pytest`=460 passed,`compileall`=0,CLI smoke=0。
 
 ### S1-E 切片 1 出口(用户验收,非工程验收)
 
