@@ -8,7 +8,7 @@
 `stocks-claw` 是 Agent 的个人金融上下文工具，不是自动交易系统。
 
 - Engine 负责读取确认过的金融记忆、获取市场数据、计算轻量脚手架、记录质量与溯源，
-  最终构建 `AnalysisContext v9`。
+  最终构建 `AnalysisContext v10`。
 - 外部 Agent 读取上下文并完成最终判断。
 - 可选 `LLMAnalysis` 能生成兼容报告，但默认关闭，不改变主边界。
 - 系统没有券商连接和下单能力。
@@ -27,7 +27,7 @@ assets/profile         quotes/news      snapshots/cache
   +-----------> ContextBuilder <------------+
                   |
                   v
-          AnalysisContext v9
+          AnalysisContext v10
                   |
                   v
              external Agent
@@ -97,6 +97,8 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - 历史 K 线：A 股为东方财富→腾讯，美股为 Nasdaq→Yahoo，crypto 为
   Binance→Yahoo；每次回填保留逐源降级记录。
 - RSS：读取 RSS 2.0 或 Atom 新闻。
+- SEC EDGAR / 巨潮：仅查询 watchlist 的一手公告；Google News 模板按
+  watchlist 动态生成 holding-scope RSS。
 
 Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实时源；失败时质量信息标记
 `single_source_failed`，并在历史存在时返回 `stale: true` 的最近收盘价。
@@ -116,7 +118,7 @@ Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实�
 8. 提取市场事件、拉取未来催化剂日历、计算轮动排名与动作信号、
    构建组合映射、偏离检查和市场状态；对最近建议做表现回看与触发器核对。
 9. 生成 `raw_prompt_input` 与 `data_quality`。
-10. 返回 `AnalysisContext v9`，随后保存本次最小快照。
+10. 返回 `AnalysisContext v10`，随后保存本次最小快照。
 
 由于“先读后写”，同一次运行不会把自身当作历史；第二次运行可以引用第一次快照。
 

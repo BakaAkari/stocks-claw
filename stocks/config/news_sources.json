@@ -1,4 +1,11 @@
 {
+  "watchlist_templates": [
+    {
+      "name": "Google News 持仓定向",
+      "type": "google_news_rss",
+      "enabled": true
+    }
+  ],
   "sources": [
     {
       "name": "中新网财经",

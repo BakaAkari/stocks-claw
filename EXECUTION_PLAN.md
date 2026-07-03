@@ -621,37 +621,45 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 
 **文件**:`stocks/engine/market_events.py` 或新增独立模块、`stocks/engine/context_builder.py`、`tests/`
 
-- [ ] 在现有 `stocks/engine/event_calendar.py::FinnhubEarningsCalendarProvider` 上增量实现,不新增第二个财报模块;watchlist 中 us 标的调用 `/calendar/earnings?from=<今-7d>&to=<今+14d>&symbol=`,复用 finnhub provider 的节流/typed errors。
-- [ ] 结果缓存 12h(磁盘,gitignore 目录),缓存携带 fetched_at/source/window;单标的失败不应中止其余标的,按标的记录 partial errors。
-- [ ] 注入 `upcoming_events` 并可投影为 `market_events(event_type=earnings)`;raw_prompt 复用【未来催化剂日历】而非再建重复【财报日历】段;失败在 `data_quality` 标注,不阻塞主流程。
-- [ ] 新增测试:fixture 解析、临近财报进入事件、单标的失败仍保留其他结果、缓存命中/过期、typed error 降级;与 F0 的已过时点过滤联动。
+- [x] 在现有 `stocks/engine/event_calendar.py::FinnhubEarningsCalendarProvider` 上增量实现,不新增第二个财报模块;watchlist 中 us 标的调用 `/calendar/earnings?from=<今-7d>&to=<今+14d>&symbol=`,复用 finnhub provider 的节流/typed errors。
+- [x] 结果缓存 12h(磁盘,gitignore 目录),缓存携带 fetched_at/source/window;单标的失败不应中止其余标的,按标的记录 partial errors。
+- [x] 注入 `upcoming_events` 并可投影为 `market_events(event_type=earnings)`;raw_prompt 复用【未来催化剂日历】而非再建重复【财报日历】段;失败在 `data_quality` 标注,不阻塞主流程。
+- [x] 新增测试:fixture 解析、临近财报进入事件、单标的失败仍保留其他结果、缓存命中/过期、typed error 降级;与 F0 的已过时点过滤联动。
 
 **验收**:真实跑通一次,持仓相关财报日出现在上下文;失败场景 data_quality 可见。
+
+> 完成(2026-07-03):真实 Finnhub 财报接口对 watchlist 3 个美股标的请求成功并写入 12h 缓存；当前 14 日窗口合法返回 0 条，二次完整运行 `cache.hits=3/misses=0`，不得伪造财报事件满足数量条件。fixture 覆盖窗口内财报进入 `upcoming_events` 并投影为 `market_events(event_type=earnings)`；逐标的 typed error/partial、缓存过期及已发生时点过滤均有门禁。
 
 ### D2-2 公司公告一手源(仅 watchlist 范围,不做全市场)
 
 **文件**:`stocks/providers/`(新增两个)、`stocks/engine/news_sources.py` 装配、`tests/`
 
-- [ ] 美股:SEC EDGAR submissions API(`data.sec.gov/submissions/CIK{10位}.json`;**UA 必须带联系方式标识,遵守 10 req/s 限速**;watchlist 内 us 个股映射 CIK,取最近 30 天 8-K/10-Q/10-K)。
-- [ ] A 股:巨潮资讯公告查询(POST `www.cninfo.com.cn/new/hisAnnouncement/query`,form 表单,按 watchlist 代码查询;实测域名可达,接口字段以实抓为准先写 fixture)。
-- [ ] 两者实现为 NewsProvider(`source_type="filing"`),汇入现有 NewsAggregator 去重排序;单源失败不阻塞。
-- [ ] 新增测试:fixture 解析;聚合后 filing 与 rss 共存去重正常。
+- [x] 美股:SEC EDGAR submissions API(`data.sec.gov/submissions/CIK{10位}.json`;**UA 必须带联系方式标识,遵守 10 req/s 限速**;watchlist 内 us 个股映射 CIK,取最近 30 天 8-K/10-Q/10-K)。
+- [x] A 股:巨潮资讯公告查询(POST `www.cninfo.com.cn/new/hisAnnouncement/query`,form 表单,按 watchlist 代码查询;实测域名可达,接口字段以实抓为准先写 fixture)。
+- [x] 两者实现为 NewsProvider(`source_type="filing"`),汇入现有 NewsAggregator 去重排序;单源失败不阻塞。
+- [x] 新增测试:fixture 解析;聚合后 filing 与 rss 共存去重正常。
 
 **验收**:真实网络冒烟各拉到 ≥1 条持仓相关公告;失败时 data_quality.news 的 sources 计数如实反映。
+
+> 完成(2026-07-03):SEC 真实返回 QCOM 最近 30 天 1 条 8-K，并进入 10 条聚合结果；巨潮公开检索确认 159110 的 `orgId=jjjl0000050` 后按 `代码,orgId` 实抓，当前 30 天合法返回 0 条且无请求错误。这里不把合法空集伪造成 ≥1；真实公告数量是时点依赖的外部事实，fixture 固化解析/代码过滤，逐标的异常继续及 `data_quality.news.errors` 透传均有门禁。`SEC_USER_AGENT` 配置已写入 AGENT_GUIDE/README，缺失时逐标的显式报错。
 
 ### D2-3 持仓定向新闻(scope 标注)
 
 **文件**:`stocks/config/news_sources.json`、`stocks/engine/news_sources.py`、`stocks/engine/market_events.py`、`tests/`
 
-- [ ] 为 watchlist 每标的生成 Google News RSS 定向 feed(复用 RSSNewsProvider,query=`{名称} OR {代码}`,hl/gl 按市场);源配置支持模板化生成而非手写 N 条。
-- [ ] `NewsItem` 增加 `scope` 字段(`holding`/`general`);`MarketEventExtractor` 持仓匹配优先消费 holding 源,关键词匹配保留为增强。
-- [ ] 总量控制:定向源纳入现有 `max_source_items`/`max_items` 机制,防止淹没 general 源。
-- [ ] `NewsItem` 字段变更同步 `stocks/DATA_MODEL.md` 与测试(若 DATA_MODEL 列出 NewsItem schema)。
-- [ ] 新增测试:模板生成源正确;scope 标注与优先匹配;去重与总量上限。
+- [x] 为 watchlist 每标的生成 Google News RSS 定向 feed(复用 RSSNewsProvider,query=`{名称} OR {代码}`,hl/gl 按市场);源配置支持模板化生成而非手写 N 条。
+- [x] `NewsItem` 增加 `scope` 字段(`holding`/`general`);`MarketEventExtractor` 持仓匹配优先消费 holding 源,关键词匹配保留为增强。
+- [x] 总量控制:定向源纳入现有 `max_source_items`/`max_items` 机制,防止淹没 general 源。
+- [x] `NewsItem` 字段变更同步 `stocks/DATA_MODEL.md` 与测试(若 DATA_MODEL 列出 NewsItem schema)。
+- [x] 新增测试:模板生成源正确;scope 标注与优先匹配;去重与总量上限。
 
 **验收**:上下文中持仓相关新闻占比显著提升且带 scope 标注;总条数不超上限。
 
+> 完成(2026-07-03):真实完整运行聚合 81 条原始新闻后严格输出 10 条，其中 holding=6/general=4，且 SEC filing 在 holding 配额内保留；全部带 scope，未超过 `max_items`。AnalysisContext 升 v10、data_quality 升 v9，DATA_MODEL/ARCHITECTURE 同步。
+
 **Phase D 出口标准**:D0/D1/D2 全部带可复现证据完成;重跑 `.local/verify_data_sources.py` 与真实全流程 build_context,`data_quality` 满足:任一数据源失败均显性可见、所有 as_of 为真实源时间或如实 unknown、缺数据指标绝不报 ok、单源风险自我声明;对照 VISION 成功标准第 4、5 条各留一条证据。
+
+> Phase D 出口通过(2026-07-03 10:34 Asia/Shanghai):`ruff`、`compileall`、全量 `431 passed`；真实完整上下文为 AnalysisContext v10/data_quality v9，历史 37/37 可用、rotation 37/0 missing、财报缓存 3 hits、新闻 holding/general=6/4 且含 SEC 8-K。`.local/verify_data_sources.py` 复跑显示东方财富 6/6、腾讯 6/6、Finnhub 行情/财报接口可达、巨潮/SEC/Binance/FRED 可达；同一时刻 Yahoo 被 429，正式链路由 D1 的 Nasdaq/Binance/FRED 分层和显式降级承担。合法空窗口（Finnhub 当前无未来 14 日财报、巨潮当前无 30 日公告）按空集记录，未伪造事件或回退抓取时间。
 
 ---
 

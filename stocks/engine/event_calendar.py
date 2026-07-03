@@ -17,21 +17,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import urllib.error
-import urllib.parse
-import urllib.request
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Protocol
 
 from stocks.domain.models import Instrument, UpcomingEvent
 from stocks.logging_utils import get_logger
+from stocks.providers.finnhub_quote import FinnhubQuoteProvider
 
 logger = get_logger("event_calendar")
-
-ROOT = Path(__file__).resolve().parents[2]
-FINNHUB_KEY_PATH = ROOT / ".secret" / "finnhub-key.md"
 
 _EVENT_TYPES = {"macro_release", "central_bank", "earnings", "other"}
 
@@ -151,38 +146,85 @@ class FinnhubEarningsCalendarProvider:
     免费档可用；失败抛出异常由 EventCalendar 记录为质量错误，不静默。
     """
 
-    def __init__(self, api_key: Optional[str] = None, timeout: float = 15.0):
-        if api_key:
-            self.api_key = api_key
-        else:
-            env_key = os.environ.get("FINNHUB_API_KEY", "").strip()
-            if env_key:
-                self.api_key = env_key
-            elif FINNHUB_KEY_PATH.exists():
-                self.api_key = FINNHUB_KEY_PATH.read_text(encoding="utf-8").strip()
-            else:
-                self.api_key = ""
-        self._timeout = timeout
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        *,
+        cache_dir: Optional[Path] = None,
+        cache_ttl: int = 12 * 60 * 60,
+        client: Optional[FinnhubQuoteProvider] = None,
+    ):
+        self._client = client or FinnhubQuoteProvider(api_key=api_key)
+        self._cache_dir = Path(cache_dir) if cache_dir else None
+        self._cache_ttl = max(0, int(cache_ttl))
+        self.last_errors: dict[str, str] = {}
+        self.last_cache = {"hits": 0, "misses": 0}
 
     @property
     def name(self) -> str:
         return "finnhub_earnings"
 
     def _fetch_sync(self, symbol: str, start: date, end: date) -> list[dict]:
-        params = urllib.parse.urlencode(
+        data = self._client.request_json(
+            "calendar/earnings",
             {
                 "from": start.isoformat(),
                 "to": end.isoformat(),
                 "symbol": symbol,
-                "token": self.api_key,
-            }
+            },
         )
-        url = f"https://finnhub.io/api/v1/calendar/earnings?{params}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
         calendar = data.get("earningsCalendar", [])
         return calendar if isinstance(calendar, list) else []
+
+    def _cache_path(self, symbol: str) -> Optional[Path]:
+        if self._cache_dir is None:
+            return None
+        safe_symbol = re.sub(r"[^A-Z0-9_.-]", "_", symbol.upper())
+        return self._cache_dir / f"finnhub_earnings_{safe_symbol}.json"
+
+    def _load_cache(self, symbol: str, start: date, end: date) -> Optional[list[dict]]:
+        path = self._cache_path(symbol)
+        if path is None or not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            fetched_at = datetime.fromisoformat(payload["fetched_at"])
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - fetched_at).total_seconds()
+            if (
+                age <= self._cache_ttl
+                and date.fromisoformat(payload["window"]["start"]) <= start
+                and date.fromisoformat(payload["window"]["end"]) >= end
+                and isinstance(payload.get("events"), list)
+            ):
+                return payload["events"]
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return None
+
+    def _save_cache(
+        self, symbol: str, start: date, end: date, rows: list[dict]
+    ) -> None:
+        path = self._cache_path(symbol)
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "source": "finnhub_earnings",
+                    "window": {"start": start.isoformat(), "end": end.isoformat()},
+                    "events": rows,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
 
     async def fetch(
         self,
@@ -191,26 +233,33 @@ class FinnhubEarningsCalendarProvider:
         end: date,
         watchlist: list[Instrument],
     ) -> list[UpcomingEvent]:
-        if not self.api_key:
-            raise RuntimeError("Finnhub API key 未配置")
+        self.last_errors = {}
+        self.last_cache = {"hits": 0, "misses": 0}
         us_instruments = [i for i in watchlist if i.market == "us"]
         events: list[UpcomingEvent] = []
+        request_start = start - timedelta(days=6)
         for instrument in us_instruments:
+            symbol = instrument.code.upper()
+            rows = self._load_cache(symbol, request_start, end)
+            if rows is not None:
+                self.last_cache["hits"] += 1
+            else:
+                self.last_cache["misses"] += 1
             try:
-                rows = await asyncio.to_thread(
-                    self._fetch_sync, instrument.code.upper(), start, end
-                )
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-                # 单标的失败记录日志后继续，整体失败语义由 EventCalendar 判定
+                if rows is None:
+                    rows = await asyncio.to_thread(
+                        self._fetch_sync, symbol, request_start, end
+                    )
+                    self._save_cache(symbol, request_start, end, rows)
+            except Exception as exc:
                 logger.warning(
                     f"Finnhub earnings calendar failed for {instrument.code}: {exc}"
                 )
-                raise RuntimeError(
-                    f"finnhub earnings fetch failed for {instrument.code}: {exc}"
-                ) from exc
+                self.last_errors[symbol] = f"{type(exc).__name__}: {exc}"
+                continue
             for row in rows:
                 event_date = _parse_date(row.get("date"))
-                if event_date is None or not (start <= event_date <= end):
+                if event_date is None or not (request_start <= event_date <= end):
                     continue
                 events.append(
                     UpcomingEvent(
@@ -262,6 +311,7 @@ class EventCalendar:
                 "lookahead_days": self.lookahead_days,
                 "event_count": 0,
                 "expired_count": 0,
+                "cache": {"hits": 0, "misses": 0},
                 "sources": {},
                 "errors": {},
             }
@@ -278,14 +328,23 @@ class EventCalendar:
 
         events: list[UpcomingEvent] = []
         errors: dict[str, str] = {}
+        cache_quality = {"hits": 0, "misses": 0}
+        successful_providers = 0
         for provider in self._providers:
             try:
                 events.extend(
                     await provider.fetch(start=start, end=end, watchlist=watchlist)
                 )
+                successful_providers += 1
             except Exception as exc:
                 errors[provider.name] = f"{type(exc).__name__}: {exc}"
                 logger.warning(f"Event provider {provider.name} failed: {exc}")
+            provider_errors = getattr(provider, "last_errors", {})
+            for symbol, error in provider_errors.items():
+                errors[f"{provider.name}:{symbol}"] = error
+            provider_cache = getattr(provider, "last_cache", {})
+            cache_quality["hits"] += int(provider_cache.get("hits", 0))
+            cache_quality["misses"] += int(provider_cache.get("misses", 0))
 
         enriched: list[UpcomingEvent] = []
         expired_count = 0
@@ -348,9 +407,9 @@ class EventCalendar:
         for event in enriched:
             sources[event.source] = sources.get(event.source, 0) + 1
 
-        if enriched and not errors:
+        if successful_providers and not errors:
             status = "ok"
-        elif enriched and errors:
+        elif successful_providers and errors:
             status = "partial"
         else:
             status = "missing"
@@ -362,6 +421,7 @@ class EventCalendar:
             "window_end": end.isoformat(),
             "event_count": len(enriched),
             "expired_count": expired_count,
+            "cache": cache_quality,
             "sources": sources,
             "errors": errors,
         }

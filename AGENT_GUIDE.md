@@ -126,9 +126,19 @@ STOCKS_FETCHER__MAX_RETRIES=3
 本地路径：
 
 - `.local/history/`：行情历史缓存
+- `.local/event_cache/`：Finnhub 财报日历 12 小时缓存
 - `.local/snapshots/`：最多 30 份最小上下文快照
 - `data/cache/`：非隐私运行缓存，例如汇率
 - `.secret/`：API key、HTTP token；禁止提交
+
+Finnhub 行情/财报日历读取 `FINNHUB_API_KEY`（或
+`.secret/finnhub-key.md`）。SEC EDGAR 要求请求 UA 带可联系邮箱，启用公告源时设置：
+
+```bash
+export SEC_USER_AGENT="stocks-claw/1.0 you@example.com"
+```
+
+缺少该变量不会伪装成功；`data_quality.news.errors` 会逐标的报告配置缺失。
 
 ## 5. HTTP 边界
 

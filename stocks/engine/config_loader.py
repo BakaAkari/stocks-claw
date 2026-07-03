@@ -51,6 +51,12 @@ DEFAULT_ENGINE_CONFIG = {
         "lookahead_days": 14,
         "earnings": {"enabled": True},
     },
+    "filings": {
+        "enabled": True,
+        "sec": {"enabled": True},
+        "cninfo": {"enabled": True},
+    },
+    "news": {"watchlist_templates_enabled": True},
     "llm": {
         "analysis_enabled": False,
         "analysis_model": "kimi-k2.6",

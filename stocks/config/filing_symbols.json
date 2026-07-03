@@ -1,0 +1,10 @@
+{
+  "sec_cik": {
+    "AAPL": "0000320193",
+    "QCOM": "0000804328"
+  },
+  "cninfo_org_id": {
+    "159110": "jjjl0000050"
+  },
+  "sec_user_agent_env": "SEC_USER_AGENT"
+}

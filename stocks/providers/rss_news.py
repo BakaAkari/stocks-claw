@@ -24,6 +24,7 @@ def _parse_rss_item(
     *,
     source_name: str,
     language: str,
+    scope: str = "general",
 ) -> Optional[NewsItem]:
     """解析单个 RSS <item> 元素为 NewsItem。"""
     title = ""
@@ -65,6 +66,7 @@ def _parse_rss_item(
         published_at=pub_date,
         summary=description if description else None,
         language=language,
+        scope=scope,
     )
 
 
@@ -85,10 +87,12 @@ class RSSNewsProvider:
         *,
         source_name: str = "中新网财经",
         language: str = "unknown",
+        scope: str = "general",
     ):
         self.rss_url = rss_url or _DEFAULT_RSS_URL
         self.source_name = source_name
         self.language = language
+        self.scope = scope
 
     def _fetch_sync(self) -> list[NewsItem]:
         """同步获取并解析 RSS feed。"""
@@ -124,6 +128,7 @@ class RSSNewsProvider:
                 item_elem,
                 source_name=self.source_name,
                 language=self.language,
+                scope=self.scope,
             )
             if news is not None:
                 items.append(news)

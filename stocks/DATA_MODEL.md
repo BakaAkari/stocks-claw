@@ -1,7 +1,7 @@
 # 现行数据模型
 
 本文只描述当前代码中的 schema。权威实现位于 `stocks/domain/models.py`，
-`AnalysisContext.schema_version` 当前为 `9`。
+`AnalysisContext.schema_version` 当前为 `10`。
 
 ## FinancialAsset
 
@@ -80,6 +80,8 @@
 - `title`、`url`
 - `source_name`、`source_type`
 - `published_at`、`summary`、`language`、`tags`
+- `scope ∈ {holding, general}`：watchlist 定向 RSS/一手公告为 holding，
+  通用新闻为 general
 - `raw_metadata` 仅供内部调试，不进入序列化输出
 
 `MarketEvent` 是从新闻中规则提取的事件，包含：
@@ -182,7 +184,7 @@
 Composite 按字段合并 FRED → Yahoo → static_config，上游部分成功不会阻止下游
 补齐缺失字段。官方月度统计使用 24 小时本地缓存。
 
-## AnalysisContext v9
+## AnalysisContext v10
 
 Agent 的统一入口：
 
@@ -199,6 +201,7 @@ Agent 的统一入口：
 - 扩展数据：`macro_snapshot`、`technical_indicators`
 - 质量与溯源：`data_quality`
 
+v10 相对 v9 为 `NewsItem` 增加 `scope`，用于持仓定向来源优先匹配；
 v9 相对 v8 扩展 `macro_snapshot` 的 `official_stats` 与逐字段来源/观测日；
 v8 相对 v7 扩展 `UpcomingEvent` 的完整时点、时间精度与生命周期状态；
 v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶层字段，
@@ -208,18 +211,19 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
 精确值仍存在于结构化 `assets`，供受控调用方按需使用。
 
-## data_quality v8
+## data_quality v9
 
 `data_quality` 包含：
 
 - `currency_conversion`：每项外币换算状态、来源与失败统计
 - `quotes`：真实行情 `as_of` 的最旧值、缺失时间数量、请求/返回数量、按市场
   `as_of` 与状态、`single_source` 单源事实、Provider 与降级记录
-- `news`：请求状态、来源分布和时效
+- `news`：请求状态、来源分布、`scopes` 数量、Provider `errors` 和时效
 - `macro`：按全部市场/官方统计字段给出来源、最旧真实 `as_of`、freshness、
   `missing_as_of`、`field_sources`、已填充/缺失字段和逐源错误
 - `technical_indicators`：覆盖与缺失标的
-- `market_events`：提取数量、紧急度和持仓命中数
+- `market_events`：新闻提取与财报日历投影的数量、`calendar_event_count`、
+  紧急度和持仓命中数
 - `history_backfill`：启动时历史 K 线回填的结构化上报。字段包括
   `status`、`requested_count`、`ok_count`、`skipped_cached_count`、
   `failed_count` 与 `items`。每个 item 结构为
@@ -233,6 +237,7 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 - `upcoming_events`：事件日历质量。`status ∈ {ok, partial, missing,
   not_configured}`、`lookahead_days`、`window_end`、`event_count`、
   `sources`（按来源计数）、`expired_count`（本次过滤的已发生事件数）与
+  `cache`（Finnhub 财报日历 12h 缓存 hits/misses）、
   `errors`（按 Provider 记录失败原因，
   例如 Finnhub key 未配置时财报日历显式报错而非静默缺失）
 - `rotation`：轮动脚手架覆盖。`status`、`as_of`、`item_count`、
@@ -243,8 +248,10 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `not_requested` 和 `not_configured`。美股单源失败额外标记
 `single_source_failed`，历史价格回填标记为 stale。
 
-`schema_version` 语义：v8 相对 v7 扩展 `macro` 的逐字段来源、真实最旧时点与
-官方统计质量；v7 相对 v6 扩展 `history_backfill.items` 的逐源降级字段；
+`schema_version` 语义：v9 相对 v8 扩展 `upcoming_events.cache`、
+`market_events.calendar_event_count` 以及 `news.scopes/errors`；
+v8 相对 v7 扩展 `macro` 的逐字段来源、
+真实最旧时点与官方统计质量；v7 相对 v6 扩展 `history_backfill.items` 的逐源降级字段；
 v6 相对 v5 为 `quotes.by_market` 增加 `single_source`；
 v5 相对 v4 为 `upcoming_events` 增加 `expired_count`；
 v4 相对 v3 新增 `upcoming_events`、`rotation` 与

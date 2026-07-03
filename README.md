@@ -92,6 +92,9 @@ STOCKS_FETCHER__MAX_RETRIES=3
 
 Finnhub requires `FINNHUB_API_KEY`. Optional OpenAI-compatible reporting uses
 `OPENAI_API_KEY` and `OPENAI_BASE_URL`.
+SEC EDGAR filings require a contact-bearing user agent, for example
+`SEC_USER_AGENT="stocks-claw/1.0 you@example.com"`; missing configuration is
+reported in `data_quality.news.errors`.
 
 ## Interfaces
 

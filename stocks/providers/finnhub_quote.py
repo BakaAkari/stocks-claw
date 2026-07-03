@@ -94,11 +94,16 @@ class FinnhubQuoteProvider(QuoteProvider):
 
     def _fetch_sync(self, symbol: str) -> Optional[dict]:
         """同步请求 Finnhub quote 接口，返回 JSON 字典。"""
+        return self.request_json("quote", {"symbol": symbol})
+
+    def request_json(self, endpoint: str, params: dict) -> dict:
+        """复用节流和 typed errors 请求 Finnhub JSON 端点。"""
         if not self.api_key:
             raise ProviderConfigError("Finnhub API key 未配置", source=self.name)
         self._throttle()
-        params = urllib.parse.urlencode({"symbol": symbol, "token": self.api_key})
-        url = f"https://finnhub.io/api/v1/quote?{params}"
+        encoded = urllib.parse.urlencode({**params, "token": self.api_key})
+        endpoint = endpoint.strip("/")
+        url = f"https://finnhub.io/api/v1/{endpoint}?{encoded}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:

@@ -67,6 +67,18 @@ calendar:
   earnings:
     enabled: true
 
+filings:
+  # 仅查询 watchlist：SEC 8-K/10-Q/10-K 与巨潮公告
+  enabled: true
+  sec:
+    enabled: true
+  cninfo:
+    enabled: true
+
+news:
+  # 为 watchlist 动态生成 Google News RSS 定向源
+  watchlist_templates_enabled: true
+
 llm:
   # LLM 深度分析模块（投资建议生成）— 建议由 Agent 主脑处理，此处可禁用
   analysis_enabled: false

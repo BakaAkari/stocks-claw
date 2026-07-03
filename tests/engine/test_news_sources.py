@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
-from stocks.domain.models import NewsItem
-from stocks.engine.news_sources import NewsAggregator
-from stocks.providers.rss_news import _parse_rss_item
+from stocks.domain.models import Instrument, NewsItem
+from stocks.engine.news_sources import NewsAggregator, WatchlistGoogleNewsProvider
+from stocks.providers.rss_news import RSSNewsProvider, _parse_rss_item
 
 
 # Mock Provider 辅助类
@@ -242,6 +243,58 @@ class TestTruncation:
 
         assert len(result) == 5  # 单源截断到 5 条
 
+    async def test_holding_sources_do_not_drown_general_sources(self):
+        holding = [
+            NewsItem(
+                title=f"Holding {i}",
+                url=f"https://holding.test/{i}",
+                source_name="holding",
+                source_type="rss",
+                published_at=datetime.now(timezone.utc) - timedelta(minutes=i),
+                summary=None,
+                scope="holding",
+            )
+            for i in range(20)
+        ]
+        general = [make_news(f"General {i}", f"https://general.test/{i}", i) for i in range(20)]
+        result = await NewsAggregator([
+            MockNewsProvider(holding), MockNewsProvider(general)
+        ]).fetch(max_items=10)
+
+        assert len(result) == 10
+        assert sum(item.scope == "holding" for item in result) == 6
+        assert sum(item.scope == "general" for item in result) == 4
+
+    async def test_filing_is_reserved_within_holding_quota(self):
+        recent_holding = [
+            NewsItem(
+                title=f"RSS {i}",
+                url=f"https://rss.test/{i}",
+                source_name="holding-rss",
+                source_type="rss",
+                published_at=datetime.now(timezone.utc) - timedelta(minutes=i),
+                summary=None,
+                scope="holding",
+            )
+            for i in range(5)
+        ]
+        filing = NewsItem(
+            title="8-K",
+            url="https://sec.test/8k",
+            source_name="SEC EDGAR",
+            source_type="filing",
+            published_at=datetime.now(timezone.utc) - timedelta(days=10),
+            summary=None,
+            scope="holding",
+        )
+        general = [make_news("General", "https://general.test/1")]
+
+        result = await NewsAggregator([
+            MockNewsProvider([*recent_holding, filing]), MockNewsProvider(general)
+        ]).fetch(max_items=4)
+
+        assert any(item.source_type == "filing" for item in result)
+
 
 # ------------------------------------------------------------------
 # 降级与容错
@@ -270,6 +323,7 @@ class TestFallback:
         ])
         result = await aggregator.fetch(max_items=10)
         assert result == []
+        assert len(aggregator.last_errors) == 2
 
     async def test_provider_returns_none(self):
         """provider 返回 None 应视为空列表"""
@@ -280,3 +334,57 @@ class TestFallback:
         aggregator = NewsAggregator([NoneProvider()])
         result = await aggregator.fetch(max_items=10)
         assert result == []
+
+    async def test_provider_scoped_errors_are_exposed(self):
+        class PartialProvider:
+            name = "partial"
+
+            def __init__(self):
+                self.last_errors = {"AAPL": "TimeoutError: timeout"}
+
+            async def fetch(self, max_items: int = 10) -> list[NewsItem]:
+                return [make_news("Other symbol", "https://example.com/ok")]
+
+        aggregator = NewsAggregator([PartialProvider()])
+        result = await aggregator.fetch(max_items=10)
+
+        assert len(result) == 1
+        assert aggregator.last_errors == {
+            "partial:AAPL": "TimeoutError: timeout"
+        }
+
+
+class TestWatchlistGoogleNewsProvider:
+    def test_build_url_uses_market_locale_and_symbol_query(self):
+        a_url = WatchlistGoogleNewsProvider.build_url(
+            Instrument("000300", "沪深300", "a")
+        )
+        us_url = WatchlistGoogleNewsProvider.build_url(
+            Instrument("AAPL", "Apple", "us")
+        )
+
+        assert "%E6%B2%AA%E6%B7%B1300%20OR%20000300" in a_url
+        assert "ceid=CN:zh-Hans" in a_url
+        assert "Apple%20OR%20AAPL" in us_url
+        assert "ceid=US:en" in us_url
+
+    async def test_generated_items_are_holding_scoped_with_symbol_metadata(self):
+        instrument = Instrument("AAPL", "Apple", "us")
+        provider = WatchlistGoogleNewsProvider(lambda: [instrument])
+        item = NewsItem(
+            title="Apple earnings",
+            url="https://example.com/apple",
+            source_name="placeholder",
+            source_type="rss",
+            published_at=datetime.now(timezone.utc),
+            summary=None,
+            scope="holding",
+        )
+        with patch.object(RSSNewsProvider, "fetch", new=AsyncMock(return_value=[item])):
+            result = await provider.fetch(max_items=5)
+
+        assert len(result) == 1
+        assert result[0].scope == "holding"
+        assert result[0].raw_metadata["symbol"] == "AAPL"
+        assert result[0].raw_metadata["market"] == "us"
+        assert "AAPL" in result[0].tags

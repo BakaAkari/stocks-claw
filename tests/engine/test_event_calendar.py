@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+import json
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from stocks.domain.models import Instrument
@@ -11,6 +12,8 @@ from stocks.engine.event_calendar import (
     FinnhubEarningsCalendarProvider,
     StaticEventCalendarProvider,
 )
+from stocks.errors import ProviderRateLimitError
+from stocks.providers.finnhub_quote import FinnhubQuoteProvider
 
 _NOW = datetime(2026, 7, 2, 10, 0, tzinfo=timezone.utc)
 
@@ -191,6 +194,12 @@ class TestEventCalendar:
         assert events == []
         assert quality["status"] == "missing"
 
+    async def test_successful_provider_with_no_scheduled_events_is_ok(self):
+        calendar = EventCalendar([StaticEventCalendarProvider({})], lookahead_days=14)
+        events, quality = await calendar.fetch(now=_NOW, watchlist=[])
+        assert events == []
+        assert quality["status"] == "ok"
+
     async def test_no_providers_reports_not_configured(self):
         calendar = EventCalendar([], lookahead_days=14)
         events, quality = await calendar.fetch(now=_NOW, watchlist=[])
@@ -239,12 +248,74 @@ class TestFinnhubEarningsCalendarProvider:
         assert event.affected_symbols == ["us:QCOM"]
         assert event.affected_categories == ["tech"]
 
-    async def test_missing_api_key_raises(self):
-        provider = FinnhubEarningsCalendarProvider(api_key="")
-        provider.api_key = ""
-        try:
-            await provider.fetch(start=date(2026, 7, 2), end=date(2026, 7, 16), watchlist=[])
-        except RuntimeError as exc:
-            assert "key" in str(exc).lower() or "未配置" in str(exc)
-        else:
-            raise AssertionError("expected RuntimeError when api key missing")
+    async def test_missing_api_key_is_per_symbol_error_not_global_abort(self):
+        client = FinnhubQuoteProvider("placeholder", min_request_interval=0)
+        client.api_key = ""
+        provider = FinnhubEarningsCalendarProvider(client=client)
+        events = await provider.fetch(
+            start=date(2026, 7, 2),
+            end=date(2026, 7, 16),
+            watchlist=[Instrument("QCOM", "高通", "us")],
+        )
+
+        assert events == []
+        assert "QCOM" in provider.last_errors
+        assert "ProviderConfigError" in provider.last_errors["QCOM"]
+
+    async def test_single_symbol_failure_keeps_other_symbol_and_reports_partial(
+        self, monkeypatch
+    ):
+        provider = FinnhubEarningsCalendarProvider(api_key="test-key")
+
+        def fake_fetch(symbol, start, end):
+            if symbol == "AAPL":
+                raise ProviderRateLimitError("limited")
+            return [{"date": "2026-07-10", "hour": "bmo"}]
+
+        monkeypatch.setattr(provider, "_fetch_sync", fake_fetch)
+        calendar = EventCalendar([provider], lookahead_days=14)
+        events, quality = await calendar.fetch(
+            now=_NOW,
+            watchlist=[
+                Instrument("AAPL", "Apple", "us"),
+                Instrument("QCOM", "高通", "us"),
+            ],
+        )
+
+        assert [event.affected_symbols for event in events] == [["us:QCOM"]]
+        assert quality["status"] == "partial"
+        assert "finnhub_earnings:AAPL" in quality["errors"]
+
+    async def test_cache_hit_and_expiry(self, tmp_path, monkeypatch):
+        provider = FinnhubEarningsCalendarProvider(
+            api_key="test-key", cache_dir=tmp_path, cache_ttl=3600
+        )
+        calls = 0
+
+        def fake_fetch(symbol, start, end):
+            nonlocal calls
+            calls += 1
+            return [{"date": "2026-07-10", "hour": "amc"}]
+
+        monkeypatch.setattr(provider, "_fetch_sync", fake_fetch)
+        kwargs = {
+            "start": date(2026, 7, 2),
+            "end": date(2026, 7, 16),
+            "watchlist": [Instrument("QCOM", "高通", "us")],
+        }
+        first = await provider.fetch(**kwargs)
+        second = await provider.fetch(**kwargs)
+
+        assert len(first) == len(second) == 1
+        assert calls == 1
+        assert provider.last_cache == {"hits": 1, "misses": 0}
+
+        cache_path = tmp_path / "finnhub_earnings_QCOM.json"
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        payload["fetched_at"] = (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        ).isoformat()
+        cache_path.write_text(json.dumps(payload), encoding="utf-8")
+        await provider.fetch(**kwargs)
+        assert calls == 2
+        assert provider.last_cache == {"hits": 0, "misses": 1}

@@ -88,7 +88,12 @@ class NewsItem:
     summary: Optional[str]             # 摘要，缺失为 None（不是空字符串）
     language: str = "unknown"            # "en" | "zh" | "unknown"
     tags: list[str] = field(default_factory=list)
+    scope: str = "general"               # holding / general
     raw_metadata: dict = field(default_factory=dict)  # 原始字段保留
+
+    def __post_init__(self) -> None:
+        if self.scope not in {"holding", "general"}:
+            raise ValueError("NewsItem.scope 必须是 holding 或 general")
 
     def to_dict(self) -> dict:
         return {
@@ -100,6 +105,7 @@ class NewsItem:
             "summary": self.summary,
             "language": self.language,
             "tags": self.tags,
+            "scope": self.scope,
             # raw_metadata 不序列化，避免输出过大
         }
 
@@ -490,7 +496,7 @@ class AnalysisContext:
     action_signals: dict = field(default_factory=dict)
 
     # 元信息（带默认值）
-    schema_version: int = 9
+    schema_version: int = 10
 
     def to_dict(self) -> dict:
         return {

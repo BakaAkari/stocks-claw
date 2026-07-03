@@ -129,6 +129,10 @@ class TestLoadEngineConfig:
             "lookahead_days": 14,
             "earnings": {"enabled": True},
         }
+        assert config["filings"]["enabled"] is True
+        assert config["filings"]["sec"]["enabled"] is True
+        assert config["filings"]["cninfo"]["enabled"] is True
+        assert config["news"]["watchlist_templates_enabled"] is True
         assert config["llm"]["analysis_enabled"] is False
 
     def test_calendar_yaml_partial_override_keeps_nested_defaults(self):

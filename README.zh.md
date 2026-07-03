@@ -91,6 +91,9 @@ STOCKS_FETCHER__MAX_RETRIES=3
 
 Finnhub 使用 `FINNHUB_API_KEY`。可选 OpenAI-compatible 报告使用
 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`。
+SEC EDGAR 公告请求必须配置带联系邮箱的 UA，例如
+`SEC_USER_AGENT="stocks-claw/1.0 you@example.com"`；缺失时会在
+`data_quality.news.errors` 中显式报告。
 
 ## 接口
 

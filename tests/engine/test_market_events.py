@@ -70,3 +70,27 @@ def test_empty_news_returns_empty_digest():
     assert events == []
     assert digest["event_count"] == 0
     assert digest["top_events"] == []
+
+
+def test_holding_scope_uses_source_metadata_before_keyword_matching():
+    item = NewsItem(
+        title="Quarterly update",
+        url="https://example.com/qcom",
+        source_name="Google News 持仓:QCOM",
+        source_type="rss",
+        published_at=datetime.now(timezone.utc),
+        summary=None,
+        scope="holding",
+        raw_metadata={"market": "us", "symbol": "QCOM"},
+    )
+    events, _ = MarketEventExtractor().extract(
+        [item],
+        assets=[],
+        instruments=[Instrument("QCOM", "高通", "us")],
+        generated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    assert events[0].affected_symbols == ["us:QCOM"]
+    assert events[0].affected_markets == ["us"]
+    assert "scope=holding" in events[0].rationale
+    assert events[0].confidence >= 0.47

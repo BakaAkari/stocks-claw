@@ -8,6 +8,7 @@ from stocks.domain.models import (
     AnalysisContext,
     DriftCheck,
     FinancialAsset,
+    MarketEvent,
     MarketState,
     NewsItem,
     PortfolioMapping,
@@ -64,6 +65,7 @@ class ContextBuilder:
         watchlist: Optional[list] = None,
         news: Optional[list[NewsItem]] = None,
         news_requested: Optional[bool] = None,
+        news_provider_errors: Optional[dict[str, str]] = None,
         history_backfill_report: Optional[list[dict]] = None,
         scan_instruments: Optional[list] = None,
     ) -> AnalysisContext:
@@ -136,6 +138,32 @@ class ContextBuilder:
                     "errors": {"calendar": f"{type(e).__name__}: {e}"},
                 }
 
+        # 财报日历复用同一事件对象投影到 market_events，不另建平行模块。
+        for event in upcoming_events:
+            if event.event_type != "earnings":
+                continue
+            market_events.append(
+                MarketEvent(
+                    title=event.name,
+                    url="",
+                    source_name=event.source,
+                    source_type="calendar",
+                    published_at=self._parse_iso_datetime(event.scheduled_at),
+                    summary=event.note,
+                    event_type="earnings",
+                    themes=["earnings"],
+                    affected_markets=[event.market],
+                    affected_symbols=list(event.affected_symbols),
+                    matched_holdings=list(event.affected_symbols),
+                    sentiment="unknown",
+                    urgency="high" if (event.days_until or 0) <= 3 else "medium",
+                    impact_horizon="immediate",
+                    confidence=1.0,
+                    rationale="官方财报日历中的未来事件",
+                    raw_news_index=-1,
+                )
+            )
+
         # 7.6 板块轮动脚手架（watchlist + 扫描池，基于历史收盘）
         # 只依赖历史缓存，不依赖实时行情，因此 --no-quotes 时仍以 watchlist 计算
         rotation, rotation_frames, rotation_universe, scan_keys = (
@@ -189,6 +217,7 @@ class ContextBuilder:
             degradation_log=degradation_log,
             news=news,
             news_requested=news_was_requested,
+            news_provider_errors=news_provider_errors or {},
             macro_snapshot=macro_snapshot.to_dict() if macro_snapshot else None,
             macro_error=macro_error,
             technical_indicators=technical_indicators,
@@ -224,7 +253,7 @@ class ContextBuilder:
             upcoming_events=upcoming_events,
             rotation=rotation,
             action_signals=action_signals,
-            schema_version=9,
+            schema_version=10,
         )
 
     async def _build_rotation(
@@ -346,6 +375,7 @@ class ContextBuilder:
         degradation_log: list[dict],
         news: list[NewsItem],
         news_requested: bool,
+        news_provider_errors: dict[str, str],
         macro_snapshot: Optional[dict],
         macro_error: Optional[str],
         technical_indicators: dict[str, dict],
@@ -358,11 +388,13 @@ class ContextBuilder:
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 8,
+            "schema_version": 9,
             "generated_at": generated_at,
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
-            "news": self._news_quality(generated_at, news, news_requested),
+            "news": self._news_quality(
+                generated_at, news, news_requested, news_provider_errors
+            ),
             "macro": self._macro_quality(generated_at, macro_snapshot, macro_error),
             "technical_indicators": self._indicator_quality(
                 generated_at,
@@ -383,6 +415,7 @@ class ContextBuilder:
                 "source": "none",
                 "event_count": 0,
                 "expired_count": 0,
+                "cache": {"hits": 0, "misses": 0},
                 "sources": {},
                 "errors": {},
             },
@@ -616,7 +649,14 @@ class ContextBuilder:
         # 测试替身或旧 fetcher 无法证明存在独立备用源时，保守标为单源。
         return True
 
-    def _news_quality(self, generated_at: str, news: list[NewsItem], requested: bool) -> dict:
+    def _news_quality(
+        self,
+        generated_at: str,
+        news: list[NewsItem],
+        requested: bool,
+        provider_errors: Optional[dict[str, str]] = None,
+    ) -> dict:
+        provider_errors = provider_errors or {}
         if not requested:
             return {
                 "status": "not_requested",
@@ -625,14 +665,18 @@ class ContextBuilder:
                 "freshness": "not_requested",
                 "item_count": 0,
                 "sources": {},
+                "scopes": {},
+                "errors": {},
             }
 
         sources: dict[str, int] = {}
+        scopes: dict[str, int] = {}
         missing_published_at = 0
         newest = None
         for item in news:
             source_key = f"{item.source_type}:{item.source_name}"
             sources[source_key] = sources.get(source_key, 0) + 1
+            scopes[item.scope] = scopes.get(item.scope, 0) + 1
             if item.published_at is None:
                 missing_published_at += 1
                 continue
@@ -645,7 +689,7 @@ class ContextBuilder:
         if not news:
             status = "missing"
             freshness = "missing"
-        elif missing_published_at:
+        elif missing_published_at or provider_errors:
             status = "partial"
             freshness = self._freshness_from_datetime(newest, generated_at)["freshness"] if newest else "unknown"
         else:
@@ -661,7 +705,9 @@ class ContextBuilder:
             "age_seconds": age_info["age_seconds"],
             "item_count": len(news),
             "sources": sources,
+            "scopes": scopes,
             "missing_published_at": missing_published_at,
+            "errors": provider_errors,
         }
 
     def _macro_quality(
@@ -786,7 +832,15 @@ class ContextBuilder:
         market_events: list,
         news_digest: dict,
     ) -> dict:
-        if not news_requested:
+        calendar_event_count = sum(
+            1
+            for event in market_events
+            if getattr(event, "source_type", "") == "calendar"
+        )
+        if calendar_event_count and not news:
+            status = "ok"
+            freshness = "fresh"
+        elif not news_requested:
             status = "not_requested"
             freshness = "not_requested"
         elif not news:
@@ -802,14 +856,24 @@ class ContextBuilder:
             status = "ok"
             freshness = "fresh"
 
+        matched_holdings = {
+            symbol
+            for event in market_events
+            for symbol in getattr(event, "matched_holdings", [])
+        }
         return {
             "status": status,
-            "source": "MarketEventExtractor",
+            "source": (
+                "MarketEventExtractor+EventCalendar"
+                if calendar_event_count
+                else "MarketEventExtractor"
+            ),
             "freshness": freshness,
             "news_count": len(news),
             "event_count": len(market_events),
+            "calendar_event_count": calendar_event_count,
             "top_urgency": next(iter(news_digest.get("urgency", {})), None),
-            "matched_holdings_count": len(news_digest.get("matched_holdings", [])),
+            "matched_holdings_count": len(matched_holdings),
         }
 
     def _freshness_from_iso(self, value: Optional[str], generated_at: str) -> dict:

@@ -50,12 +50,13 @@ from stocks.engine.macro_data import (
     StaticMacroProvider,
     YahooFinanceMacroProvider,
 )
-from stocks.engine.news_sources import NewsAggregator
+from stocks.engine.news_sources import NewsAggregator, WatchlistGoogleNewsProvider
 from stocks.engine.persistence import DataPersistence
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.logging_utils import setup_logging
 from stocks.providers.binance_quote import BinanceQuoteProvider
 from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
+from stocks.providers.filings import CninfoFilingsProvider, SecEdgarFilingsProvider
 from stocks.providers.finnhub_quote import FinnhubQuoteProvider
 from stocks.providers.registry import ProviderRegistry
 from stocks.providers.rss_news import RSSNewsProvider
@@ -173,6 +174,39 @@ class StocksEngine:
             for source in rss_sources
             if source.get("url")
         ]
+        def instruments_getter() -> list[Instrument]:
+            return list(getattr(self, "_watchlist", []))
+        if self._config.get("news", {}).get(
+            "watchlist_templates_enabled", False
+        ) and any(
+            template.get("type") == "google_news_rss"
+            and template.get("enabled", True)
+            for template in news_cfg.get("watchlist_templates", [])
+        ):
+            news_providers.append(WatchlistGoogleNewsProvider(instruments_getter))
+        filings_cfg = self._config.get("filings", {})
+        filing_symbols = self._load_json("filing_symbols.json") or {}
+        if filings_cfg.get("enabled", False):
+            if filings_cfg.get("sec", {}).get("enabled", True):
+                news_providers.append(
+                    SecEdgarFilingsProvider(
+                        instruments_getter,
+                        filing_symbols.get("sec_cik", {}),
+                        user_agent=os.environ.get(
+                            filing_symbols.get(
+                                "sec_user_agent_env", "SEC_USER_AGENT"
+                            ),
+                            "",
+                        ).strip(),
+                    )
+                )
+            if filings_cfg.get("cninfo", {}).get("enabled", True):
+                news_providers.append(
+                    CninfoFilingsProvider(
+                        instruments_getter,
+                        filing_symbols.get("cninfo_org_id", {}),
+                    )
+                )
         self.news_aggregator = NewsAggregator(
             providers=news_providers,
             max_source_items=20,
@@ -203,7 +237,17 @@ class StocksEngine:
             if earnings_cfg.get("enabled", True) and prov_cfg.get(
                 "finnhub", {}
             ).get("enabled", True):
-                calendar_providers.append(FinnhubEarningsCalendarProvider())
+                finnhub_client = self.registry.get("finnhub")
+                calendar_providers.append(
+                    FinnhubEarningsCalendarProvider(
+                        cache_dir=self._local_data_dir / "event_cache",
+                        client=(
+                            finnhub_client
+                            if isinstance(finnhub_client, FinnhubQuoteProvider)
+                            else None
+                        ),
+                    )
+                )
             if calendar_providers:
                 self.event_calendar = EventCalendar(
                     calendar_providers,
@@ -687,6 +731,7 @@ class StocksEngine:
             watchlist=self._watchlist,
             news=news,
             news_requested=include_news,
+            news_provider_errors=dict(self.news_aggregator.last_errors),
             history_backfill_report=self._history_backfill_report,
             scan_instruments=scan_instruments,
         )

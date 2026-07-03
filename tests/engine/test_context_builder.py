@@ -25,6 +25,7 @@ from stocks.domain.models import (
     NewsItem,
     PortfolioMapping,
     Quote,
+    UpcomingEvent,
 )
 from stocks.engine.context_builder import ContextBuilder
 from stocks.engine.history_cache import HistoryCache
@@ -123,7 +124,7 @@ class TestBasicBuild:
         )
 
         assert isinstance(context, AnalysisContext)
-        assert context.schema_version == 9
+        assert context.schema_version == 10
         assert context.asset_count == 2
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
@@ -134,7 +135,7 @@ class TestBasicBuild:
         assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
-        assert context.data_quality["schema_version"] == 8
+        assert context.data_quality["schema_version"] == 9
         assert context.data_quality["quotes"]["status"] == "ok"
         assert context.data_quality["quotes"]["item_count"] == 1
         assert context.data_quality["news"]["status"] == "not_requested"
@@ -144,12 +145,12 @@ class TestBasicBuild:
 
     def test_schema_versions_match_data_model_document(self):
         """AnalysisContext/data_quality 版本必须与权威数据模型同步。"""
-        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 9
+        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 10
         data_model = (
             Path(__file__).resolve().parents[2] / "stocks" / "DATA_MODEL.md"
         ).read_text(encoding="utf-8")
-        assert "`AnalysisContext.schema_version` 当前为 `9`" in data_model
-        assert "## data_quality v8" in data_model
+        assert "`AnalysisContext.schema_version` 当前为 `10`" in data_model
+        assert "## data_quality v9" in data_model
 
     async def test_build_no_instruments(self, mock_fetcher, mock_scaffolds, sample_assets):
         """无 instruments 时 quotes 为空"""
@@ -519,6 +520,60 @@ class TestMacroData:
         assert quality["missing_as_of"] == 0
 
 
+class TestEarningsEventProjection:
+    async def test_upcoming_earnings_projects_into_market_events_without_news(
+        self, mock_fetcher, mock_scaffolds, sample_assets
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        calendar = Mock()
+        calendar.fetch = AsyncMock(return_value=(
+            [
+                UpcomingEvent(
+                    date="2026-07-10",
+                    name="Apple 财报",
+                    event_type="earnings",
+                    market="us",
+                    source="finnhub_earnings",
+                    affected_symbols=["us:AAPL"],
+                    days_until=2,
+                    status="scheduled",
+                    time_precision="date",
+                )
+            ],
+            {
+                "status": "ok",
+                "event_count": 1,
+                "expired_count": 0,
+                "cache": {"hits": 1, "misses": 0},
+                "sources": {"finnhub_earnings": 1},
+                "errors": {},
+            },
+        ))
+        builder = ContextBuilder(
+            mock_fetcher,
+            portfolio_scaffold,
+            market_scaffold,
+            event_calendar=calendar,
+        )
+
+        context = await builder.build(
+            assets=sample_assets,
+            constraints={},
+            profile={},
+            instruments=[Instrument("AAPL", "Apple", "us")],
+            recent_snapshots=[],
+            news=None,
+            news_requested=False,
+        )
+
+        earnings = [event for event in context.market_events if event.event_type == "earnings"]
+        assert len(earnings) == 1
+        assert earnings[0].source_type == "calendar"
+        assert earnings[0].affected_symbols == ["us:AAPL"]
+        assert context.data_quality["market_events"]["status"] == "ok"
+        assert context.data_quality["market_events"]["calendar_event_count"] == 1
+
+
 # ------------------------------------------------------------------
 # raw_prompt 结构验证
 # ------------------------------------------------------------------
@@ -590,6 +645,42 @@ class TestRawPromptStructure:
 
 
 class TestDataQuality:
+    def test_news_quality_reports_scopes_and_provider_errors(
+        self, mock_fetcher, mock_scaffolds
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        news = [
+            NewsItem(
+                title="Holding news",
+                url="https://example.com/holding",
+                source_name="holding",
+                source_type="rss",
+                published_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+                summary=None,
+                scope="holding",
+            ),
+            NewsItem(
+                title="General news",
+                url="https://example.com/general",
+                source_name="general",
+                source_type="rss",
+                published_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+                summary=None,
+            ),
+        ]
+
+        quality = builder._news_quality(
+            "2026-07-03T01:00:00+00:00",
+            news,
+            True,
+            {"sec_edgar": "ProviderNetworkError: unavailable"},
+        )
+
+        assert quality["status"] == "partial"
+        assert quality["scopes"] == {"holding": 1, "general": 1}
+        assert "sec_edgar" in quality["errors"]
+
     async def test_us_single_source_failure_uses_stale_history(
         self,
         mock_scaffolds,
@@ -789,7 +880,7 @@ class TestDataQuality:
 
 
 class TestAnalysisContextSerialization:
-    async def test_to_dict_includes_schema_v9_decision_inputs_and_data_quality(
+    async def test_to_dict_includes_schema_v10_decision_inputs_and_data_quality(
         self,
         mock_fetcher,
         mock_scaffolds,
@@ -797,7 +888,7 @@ class TestAnalysisContextSerialization:
         sample_instruments,
         temp_dir,
     ):
-        """to_dict 输出 schema v9、前瞻输入、指标、建议与 data_quality。"""
+        """to_dict 输出 schema v10、前瞻输入、指标、建议与 data_quality。"""
         portfolio_scaffold, market_scaffold = mock_scaffolds
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
         builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold, history_cache=cache)
@@ -813,7 +904,7 @@ class TestAnalysisContextSerialization:
         await cache.close()
 
         data = context.to_dict()
-        assert data["schema_version"] == 9
+        assert data["schema_version"] == 10
         assert "market_events" in data
         assert "news_digest" in data
         assert "technical_indicators" in data
@@ -899,7 +990,7 @@ class TestHistoryBackfillQuality:
             instruments=sample_instruments,
             recent_snapshots=[],
         )
-        assert context.data_quality["schema_version"] == 8
+        assert context.data_quality["schema_version"] == 9
         assert "history_backfill" in context.data_quality
         assert context.data_quality["history_backfill"]["status"] == "not_requested"
 

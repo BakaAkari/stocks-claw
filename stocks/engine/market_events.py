@@ -125,8 +125,8 @@ class MarketEventExtractor:
         text = self._event_text(item)
         event_type, event_hits = self._event_type(text, item)
         themes = self._themes(text, item)
-        affected_markets = self._affected_markets(text, instruments)
-        affected_symbols = self._affected_symbols(text, instruments)
+        affected_markets = self._affected_markets(text, instruments, item)
+        affected_symbols = self._affected_symbols(text, instruments, item)
         matched_holdings = self._matched_holdings(text, assets)
         sentiment = self._sentiment(text, item)
         urgency = self._urgency(text, item, generated_at)
@@ -138,7 +138,9 @@ class MarketEventExtractor:
             matched_holdings=matched_holdings,
             item=item,
         )
-        rationale = self._rationale(event_type, themes, affected_markets, matched_holdings)
+        rationale = self._rationale(
+            event_type, themes, affected_markets, matched_holdings, item.scope
+        )
 
         return MarketEvent(
             title=item.title,
@@ -186,7 +188,9 @@ class MarketEventExtractor:
         }
         return sorted(themes)
 
-    def _affected_markets(self, text: str, instruments: list[Instrument]) -> list[str]:
+    def _affected_markets(
+        self, text: str, instruments: list[Instrument], item: NewsItem
+    ) -> list[str]:
         markets = {
             market
             for market, keywords in _MARKET_KEYWORDS.items()
@@ -195,12 +199,20 @@ class MarketEventExtractor:
         for inst in instruments:
             if inst.code.lower() in text or inst.name.lower() in text:
                 markets.add(inst.market)
+        if item.scope == "holding" and item.raw_metadata.get("market"):
+            markets.add(str(item.raw_metadata["market"]))
         if not markets and any(keyword in text for keyword in ("全球", "美元", "原油", "黄金")):
             markets.add("global")
         return sorted(markets)
 
-    def _affected_symbols(self, text: str, instruments: list[Instrument]) -> list[str]:
+    def _affected_symbols(
+        self, text: str, instruments: list[Instrument], item: NewsItem
+    ) -> list[str]:
         symbols = []
+        if item.scope == "holding" and item.raw_metadata.get("symbol"):
+            market = item.raw_metadata.get("market")
+            if market:
+                symbols.append(f"{market}:{item.raw_metadata['symbol']}")
         for inst in instruments:
             if inst.code.lower() in text or inst.name.lower() in text:
                 symbols.append(f"{inst.market}:{inst.code}")
@@ -261,6 +273,8 @@ class MarketEventExtractor:
             score += 0.12
         if matched_holdings:
             score += 0.12
+        if item.scope == "holding":
+            score += 0.12
         return round(min(score, 0.95), 2)
 
     def _rationale(
@@ -269,6 +283,7 @@ class MarketEventExtractor:
         themes: list[str],
         affected_markets: list[str],
         matched_holdings: list[str],
+        scope: str,
     ) -> str:
         parts = [f"event_type={event_type}"]
         if themes:
@@ -277,6 +292,8 @@ class MarketEventExtractor:
             parts.append("markets=" + ",".join(affected_markets))
         if matched_holdings:
             parts.append("holdings=" + ",".join(matched_holdings[:3]))
+        if scope == "holding":
+            parts.append("scope=holding")
         return "; ".join(parts)
 
     def _sort_key(self, event: MarketEvent) -> tuple:
