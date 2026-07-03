@@ -20,16 +20,23 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional, Protocol
 
 from stocks.logging_utils import get_logger
 
 logger = get_logger("macro_data")
+
+_MARKET_FIELDS = ("usd_cny", "vix", "us_10y_yield", "dxy", "gold", "crude_oil")
+_OFFICIAL_FIELDS = ("cpi_yoy", "us_unemployment", "fed_funds_rate")
 
 
 # ------------------------------------------------------------------
@@ -51,6 +58,8 @@ class MacroSnapshot:
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     source: str = "yahoo_finance"
     errors: dict[str, str] = field(default_factory=dict)
+    field_sources: dict[str, dict] = field(default_factory=dict)
+    official_stats: dict[str, Optional[float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -63,6 +72,8 @@ class MacroSnapshot:
             "timestamp": self.timestamp,
             "source": self.source,
             "errors": self.errors,
+            "field_sources": self.field_sources,
+            "official_stats": self.official_stats,
         }
 
 
@@ -114,6 +125,7 @@ class YahooFinanceMacroProvider:
         """获取所有宏观指标，并行请求，失败项记录到 errors"""
         results: dict[str, Optional[float]] = {}
         errors: dict[str, str] = {}
+        field_sources: dict[str, dict] = {}
 
         # 并行获取所有指标
         tasks = {
@@ -123,9 +135,13 @@ class YahooFinanceMacroProvider:
 
         for key, task in tasks.items():
             try:
-                value = await asyncio.wait_for(task, timeout=self._timeout + 2)
+                value, as_of = await asyncio.wait_for(task, timeout=self._timeout + 2)
                 if value is not None:
                     results[key] = value
+                    field_sources[key] = {
+                        "source": "yahoo_finance",
+                        "as_of": as_of,
+                    }
                 else:
                     errors[key] = "API returned empty data"
             except asyncio.TimeoutError:
@@ -143,9 +159,12 @@ class YahooFinanceMacroProvider:
             gold=results.get("gold"),
             crude_oil=results.get("crude_oil"),
             errors=errors,
+            field_sources=field_sources,
         )
 
-    async def _fetch_one(self, key: str, ticker: str) -> Optional[float]:
+    async def _fetch_one(
+        self, key: str, ticker: str
+    ) -> tuple[Optional[float], Optional[str]]:
         """获取单个指标的价格数据"""
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
 
@@ -158,18 +177,217 @@ class YahooFinanceMacroProvider:
             data = await asyncio.to_thread(_request)
             result = data.get("chart", {}).get("result", [None])[0]
             if not result:
-                return None
+                return None, None
 
             meta = result.get("meta", {})
             price = meta.get("regularMarketPrice") or meta.get("previousClose")
-            return float(price) if price is not None else None
+            raw_time = meta.get("regularMarketTime")
+            if raw_time is None:
+                timestamps = result.get("timestamp") or []
+                raw_time = timestamps[-1] if timestamps else None
+            as_of = None
+            if raw_time:
+                as_of = datetime.fromtimestamp(
+                    float(raw_time), tz=timezone.utc
+                ).isoformat()
+            return (float(price) if price is not None else None), as_of
 
         except urllib.error.HTTPError as e:
             logger.warning(f"Yahoo Finance HTTP {e.code} for {key} ({ticker})")
-            return None
+            return None, None
         except Exception as e:
             logger.warning(f"Yahoo Finance error for {key} ({ticker}): {e}")
+            return None, None
+
+
+# ------------------------------------------------------------------
+# FRED 权威日度/月度数据
+# ------------------------------------------------------------------
+
+_FRED_MARKET_SERIES = {
+    "vix": "VIXCLS",
+    "us_10y_yield": "DGS10",
+    "dxy": "DTWEXBGS",
+    "usd_cny": "DEXCHUS",
+    "crude_oil": "DCOILWTICO",
+}
+_FRED_OFFICIAL_SERIES = {
+    "cpi_yoy": "CPIAUCSL",
+    "us_unemployment": "UNRATE",
+    "fed_funds_rate": "FEDFUNDS",
+}
+
+
+class FredMacroProvider:
+    """FRED CSV 免 key Provider；月度官方统计使用 24h 磁盘缓存。"""
+
+    def __init__(
+        self,
+        *,
+        cache_dir: Optional[Path] = None,
+        cache_ttl: int = 86400,
+        timeout: float = 8.0,
+    ):
+        self._cache_dir = Path(cache_dir) if cache_dir else None
+        self._cache_ttl = max(0, int(cache_ttl))
+        self._timeout = timeout
+
+    def _fetch_series_sync(self, series_id: str) -> list[tuple[str, float]]:
+        return self._fetch_many_sync([series_id]).get(series_id, [])
+
+    def _fetch_many_sync(
+        self, series_ids: list[str]
+    ) -> dict[str, list[tuple[str, float]]]:
+        start = (datetime.now(timezone.utc).date() - timedelta(days=800)).isoformat()
+        query = urllib.parse.urlencode({"id": ",".join(series_ids), "cosd": start})
+        request = urllib.request.Request(
+            f"https://fred.stlouisfed.org/graph/fredgraph.csv?{query}",
+            headers={"User-Agent": "stocks-claw/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            text = response.read().decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text))
+        observations: dict[str, list[tuple[str, float]]] = {
+            series_id: [] for series_id in series_ids
+        }
+        for row in reader:
+            date_value = row.get("DATE") or row.get("observation_date")
+            if not date_value:
+                continue
+            for series_id in series_ids:
+                raw_value = row.get(series_id)
+                if raw_value in (None, "", "."):
+                    continue
+                try:
+                    observations[series_id].append((date_value, float(raw_value)))
+                except ValueError:
+                    continue
+        return observations
+
+    async def _fetch_series(self, series_id: str) -> list[tuple[str, float]]:
+        return await asyncio.to_thread(self._fetch_series_sync, series_id)
+
+    async def _fetch_many(
+        self, series_ids: list[str]
+    ) -> dict[str, list[tuple[str, float]]]:
+        return await asyncio.to_thread(self._fetch_many_sync, series_ids)
+
+    @property
+    def _official_cache_path(self) -> Optional[Path]:
+        return self._cache_dir / "fred_official_stats.json" if self._cache_dir else None
+
+    def _load_official_cache(self) -> Optional[dict]:
+        path = self._official_cache_path
+        if path is None or not path.exists():
             return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            fetched_at = datetime.fromisoformat(payload["fetched_at"])
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - fetched_at).total_seconds()
+            if age <= self._cache_ttl:
+                return payload
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return None
+
+    def _save_official_cache(self, payload: dict) -> None:
+        path = self._official_cache_path
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        temporary.replace(path)
+
+    async def fetch(self) -> MacroSnapshot:
+        values: dict[str, float] = {}
+        field_sources: dict[str, dict] = {}
+        errors: dict[str, str] = {}
+
+        market_observations: dict[str, list[tuple[str, float]]] = {}
+        try:
+            market_observations = await self._fetch_many(
+                list(_FRED_MARKET_SERIES.values())
+            )
+        except Exception as exc:
+            for field_name in _FRED_MARKET_SERIES:
+                errors[field_name] = f"{type(exc).__name__}: {exc}"
+        for field_name, series_id in _FRED_MARKET_SERIES.items():
+            series_id = _FRED_MARKET_SERIES[field_name]
+            try:
+                observations = market_observations.get(series_id, [])
+                if not observations:
+                    raise ValueError("no observations")
+                as_of, value = observations[-1]
+                values[field_name] = value
+                field_sources[field_name] = {
+                    "source": f"fred:{series_id}",
+                    "as_of": as_of,
+                }
+            except Exception as exc:
+                errors.setdefault(field_name, f"{type(exc).__name__}: {exc}")
+
+        official_values: dict[str, Optional[float]] = {}
+        cached = self._load_official_cache()
+        if cached:
+            official_values.update(cached.get("values", {}))
+            field_sources.update(cached.get("field_sources", {}))
+        else:
+            official_observations: dict[str, list[tuple[str, float]]] = {}
+            try:
+                official_observations = await self._fetch_many(
+                    list(_FRED_OFFICIAL_SERIES.values())
+                )
+            except Exception as exc:
+                for field_name in _FRED_OFFICIAL_SERIES:
+                    errors[f"official_stats.{field_name}"] = (
+                        f"{type(exc).__name__}: {exc}"
+                    )
+            for field_name, series_id in _FRED_OFFICIAL_SERIES.items():
+                series_id = _FRED_OFFICIAL_SERIES[field_name]
+                source_key = f"official_stats.{field_name}"
+                try:
+                    observations = official_observations.get(series_id, [])
+                    if not observations:
+                        raise ValueError("no observations")
+                    as_of, value = observations[-1]
+                    if field_name == "cpi_yoy":
+                        if len(observations) < 13 or observations[-13][1] == 0:
+                            raise ValueError("insufficient CPI observations for YoY")
+                        value = (value / observations[-13][1] - 1.0) * 100
+                    official_values[field_name] = round(value, 4)
+                    field_sources[source_key] = {
+                        "source": f"fred:{series_id}",
+                        "as_of": as_of,
+                    }
+                except Exception as exc:
+                    errors.setdefault(source_key, f"{type(exc).__name__}: {exc}")
+            if official_values:
+                self._save_official_cache({
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "values": official_values,
+                    "field_sources": {
+                        key: value
+                        for key, value in field_sources.items()
+                        if key.startswith("official_stats.")
+                    },
+                })
+
+        return MacroSnapshot(
+            usd_cny=values.get("usd_cny"),
+            vix=values.get("vix"),
+            us_10y_yield=values.get("us_10y_yield"),
+            dxy=values.get("dxy"),
+            crude_oil=values.get("crude_oil"),
+            source="fred",
+            errors=errors,
+            field_sources=field_sources,
+            official_stats=official_values,
+        )
 
 
 # ------------------------------------------------------------------
@@ -183,6 +401,21 @@ class StaticMacroProvider:
         self._config = config
 
     async def fetch(self) -> MacroSnapshot:
+        values = {field_name: self._config.get(field_name) for field_name in _MARKET_FIELDS}
+        official_stats = dict(self._config.get("official_stats", {}))
+        field_sources = {
+            field_name: {"source": "static_config", "as_of": None}
+            for field_name, value in values.items()
+            if value is not None
+        }
+        field_sources.update({
+            f"official_stats.{field_name}": {
+                "source": "static_config",
+                "as_of": None,
+            }
+            for field_name, value in official_stats.items()
+            if value is not None
+        })
         return MacroSnapshot(
             usd_cny=self._config.get("usd_cny"),
             vix=self._config.get("vix"),
@@ -191,6 +424,8 @@ class StaticMacroProvider:
             gold=self._config.get("gold"),
             crude_oil=self._config.get("crude_oil"),
             source="static_config",
+            field_sources=field_sources,
+            official_stats=official_stats,
         )
 
 
@@ -213,20 +448,50 @@ class CompositeMacroProvider:
         self._providers = providers
 
     async def fetch(self) -> MacroSnapshot:
-        """按优先级获取，第一个成功即返回"""
+        """按字段优先级合并；上游缺失字段由下游补齐。"""
+        values: dict[str, Optional[float]] = {field_name: None for field_name in _MARKET_FIELDS}
+        official_stats: dict[str, Optional[float]] = {
+            field_name: None for field_name in _OFFICIAL_FIELDS
+        }
+        field_sources: dict[str, dict] = {}
+        errors: dict[str, str] = {}
+        provider_names: list[str] = []
+
         for provider in self._providers:
             try:
                 snapshot = await provider.fetch()
-                # 只要有任意数据即返回（不要求全部成功）
-                has_data = any([
-                    snapshot.usd_cny, snapshot.vix, snapshot.us_10y_yield,
-                    snapshot.dxy, snapshot.gold, snapshot.crude_oil,
-                ])
-                if has_data:
-                    return snapshot
+                provider_names.append(snapshot.source)
+                for field_name in _MARKET_FIELDS:
+                    value = getattr(snapshot, field_name)
+                    if values[field_name] is None and value is not None:
+                        values[field_name] = value
+                        field_sources[field_name] = snapshot.field_sources.get(
+                            field_name,
+                            {"source": snapshot.source, "as_of": None},
+                        )
+                for field_name in _OFFICIAL_FIELDS:
+                    value = snapshot.official_stats.get(field_name)
+                    source_key = f"official_stats.{field_name}"
+                    if official_stats[field_name] is None and value is not None:
+                        official_stats[field_name] = value
+                        field_sources[source_key] = snapshot.field_sources.get(
+                            source_key,
+                            {"source": snapshot.source, "as_of": None},
+                        )
+                for field_name, error in snapshot.errors.items():
+                    errors[f"{snapshot.source}:{field_name}"] = error
             except Exception as e:
-                logger.warning(f"Macro provider {type(provider).__name__} failed: {e}")
-                continue
+                provider_name = type(provider).__name__
+                errors[f"{provider_name}:provider"] = f"{type(e).__name__}: {e}"
+                logger.warning(f"Macro provider {provider_name} failed: {e}")
 
-        # 全部失败，返回空快照
-        return MacroSnapshot(source="all_failed")
+        has_data = any(value is not None for value in values.values()) or any(
+            value is not None for value in official_stats.values()
+        )
+        return MacroSnapshot(
+            **values,
+            source="composite" if has_data else "all_failed",
+            errors=errors,
+            field_sources=field_sources,
+            official_stats=official_stats,
+        )

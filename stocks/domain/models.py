@@ -490,7 +490,7 @@ class AnalysisContext:
     action_signals: dict = field(default_factory=dict)
 
     # 元信息（带默认值）
-    schema_version: int = 8
+    schema_version: int = 9
 
     def to_dict(self) -> dict:
         return {

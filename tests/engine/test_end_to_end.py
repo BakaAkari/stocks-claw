@@ -72,6 +72,19 @@ SAMPLE_MACRO.to_dict = Mock(return_value={
     "timestamp": datetime.now(timezone.utc).isoformat(),
     "source": "yahoo_finance",
     "errors": {},
+    "field_sources": {
+        field: {"source": "test", "as_of": "2026-07-02"}
+        for field in (
+            "vix", "usd_cny", "us_10y_yield", "dxy", "gold", "crude_oil",
+            "official_stats.cpi_yoy", "official_stats.us_unemployment",
+            "official_stats.fed_funds_rate",
+        )
+    },
+    "official_stats": {
+        "cpi_yoy": 2.4,
+        "us_unemployment": 4.1,
+        "fed_funds_rate": 3.64,
+    },
 })
 
 
@@ -220,6 +233,7 @@ class TestBuildContextEndToEnd:
         assert context.macro_snapshot is not None
         assert context.macro_snapshot["vix"] == 22.5
         assert context.macro_snapshot["usd_cny"] == 7.25
+        assert context.macro_snapshot["official_stats"]["cpi_yoy"] == 2.4
 
     async def test_build_context_portfolio_mapping(self, e2e_engine):
         """portfolio_mapping 正确计算"""
@@ -259,6 +273,8 @@ class TestRawPromptContent:
         """raw_prompt 包含宏观环境段落"""
         context = await e2e_engine.build_context()
         assert "【宏观环境】" in context.raw_prompt_input
+        assert "官方统计（滞后月度，不代表实时）" in context.raw_prompt_input
+        assert "美国 CPI 同比: 2.40%" in context.raw_prompt_input
 
     async def test_raw_prompt_contains_news_section(self, e2e_engine):
         """raw_prompt 包含新闻段落"""
@@ -316,7 +332,7 @@ class TestJSONSerialization:
         # 反序列化验证
         parsed = json.loads(json_str)
         assert parsed["asset_count"] == 2
-        assert parsed["schema_version"] == 8
+        assert parsed["schema_version"] == 9
         assert "quotes" in parsed
         assert "a" in parsed["quotes"]
         assert parsed["news_count"] == 1
@@ -360,7 +376,7 @@ class TestJSONSerialization:
         d = context.to_dict()
 
         quality = d["data_quality"]
-        assert quality["schema_version"] == 7
+        assert quality["schema_version"] == 8
         assert quality["quotes"]["item_count"] == 1
         assert quality["news"]["sources"] == {"rss:36kr": 1}
         assert quality["market_events"]["event_count"] == 1

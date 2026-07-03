@@ -52,7 +52,7 @@ cache:
   save_to_file: true
 
 macro:
-  # 启用宏观数据采集
+  # 启用宏观数据采集（FRED 主源 → Yahoo 备源 → static_config 兜底）
   enabled: true
   # 静态配置兜底（离线时使用）
   static_config:

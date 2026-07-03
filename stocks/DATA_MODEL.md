@@ -1,7 +1,7 @@
 # 现行数据模型
 
 本文只描述当前代码中的 schema。权威实现位于 `stocks/domain/models.py`，
-`AnalysisContext.schema_version` 当前为 `8`。
+`AnalysisContext.schema_version` 当前为 `9`。
 
 ## FinancialAsset
 
@@ -167,7 +167,22 @@
 
 目标资产桶缺失时，当前占比按 0% 检查，不能跳过。
 
-## AnalysisContext v8
+## MacroSnapshot
+
+`macro_snapshot` 将市场定价代理与滞后官方统计分开：
+
+- 顶层市场字段：`usd_cny`、`vix`、`us_10y_yield`、`dxy`（FRED
+  广义美元指数代理）、`gold`、`crude_oil`
+- `official_stats`：`cpi_yoy`（由 CPIAUCSL 同比换算）、
+  `us_unemployment`、`fed_funds_rate`
+- `field_sources`：每个已填字段对应 `{source, as_of}`；日期为原始观测日，
+  不使用抓取时刻冒充
+- `source`、`errors`、`timestamp`；`timestamp` 只表示本次组装时刻
+
+Composite 按字段合并 FRED → Yahoo → static_config，上游部分成功不会阻止下游
+补齐缺失字段。官方月度统计使用 24 小时本地缓存。
+
+## AnalysisContext v9
 
 Agent 的统一入口：
 
@@ -184,6 +199,7 @@ Agent 的统一入口：
 - 扩展数据：`macro_snapshot`、`technical_indicators`
 - 质量与溯源：`data_quality`
 
+v9 相对 v8 扩展 `macro_snapshot` 的 `official_stats` 与逐字段来源/观测日；
 v8 相对 v7 扩展 `UpcomingEvent` 的完整时点、时间精度与生命周期状态；
 v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶层字段，
 `recent_advice` 附加派生 `trigger_review`；其余字段不变。
@@ -192,7 +208,7 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
 精确值仍存在于结构化 `assets`，供受控调用方按需使用。
 
-## data_quality v7
+## data_quality v8
 
 `data_quality` 包含：
 
@@ -200,7 +216,8 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 - `quotes`：真实行情 `as_of` 的最旧值、缺失时间数量、请求/返回数量、按市场
   `as_of` 与状态、`single_source` 单源事实、Provider 与降级记录
 - `news`：请求状态、来源分布和时效
-- `macro`：来源、已填充/缺失字段和错误
+- `macro`：按全部市场/官方统计字段给出来源、最旧真实 `as_of`、freshness、
+  `missing_as_of`、`field_sources`、已填充/缺失字段和逐源错误
 - `technical_indicators`：覆盖与缺失标的
 - `market_events`：提取数量、紧急度和持仓命中数
 - `history_backfill`：启动时历史 K 线回填的结构化上报。字段包括
@@ -226,7 +243,8 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `not_requested` 和 `not_configured`。美股单源失败额外标记
 `single_source_failed`，历史价格回填标记为 stale。
 
-`schema_version` 语义：v7 相对 v6 扩展 `history_backfill.items` 的逐源降级字段；
+`schema_version` 语义：v8 相对 v7 扩展 `macro` 的逐字段来源、真实最旧时点与
+官方统计质量；v7 相对 v6 扩展 `history_backfill.items` 的逐源降级字段；
 v6 相对 v5 为 `quotes.by_market` 增加 `single_source`；
 v5 相对 v4 为 `upcoming_events` 增加 `expired_count`；
 v4 相对 v3 新增 `upcoming_events`、`rotation` 与

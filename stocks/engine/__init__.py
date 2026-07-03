@@ -46,6 +46,7 @@ from stocks.engine.history_provider import CompositeKLineProvider, warm_history_
 from stocks.engine.llm_analysis import LLMAnalysis
 from stocks.engine.macro_data import (
     CompositeMacroProvider,
+    FredMacroProvider,
     StaticMacroProvider,
     YahooFinanceMacroProvider,
 )
@@ -182,10 +183,12 @@ class StocksEngine:
         self.macro_provider = None
         if macro_cfg.get("enabled", True):
             static_config = macro_cfg.get("static_config", {})
-            providers = []
+            providers = [
+                FredMacroProvider(cache_dir=self._local_data_dir / "macro_cache"),
+                YahooFinanceMacroProvider(),
+            ]
             if static_config:
                 providers.append(StaticMacroProvider(static_config))
-            providers.append(YahooFinanceMacroProvider())
             self.macro_provider = CompositeMacroProvider(providers)
 
         # 2.35 初始化未来事件日历（官方日程 + 财报日历）

@@ -123,7 +123,7 @@ class TestBasicBuild:
         )
 
         assert isinstance(context, AnalysisContext)
-        assert context.schema_version == 8
+        assert context.schema_version == 9
         assert context.asset_count == 2
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
@@ -134,7 +134,7 @@ class TestBasicBuild:
         assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
-        assert context.data_quality["schema_version"] == 7
+        assert context.data_quality["schema_version"] == 8
         assert context.data_quality["quotes"]["status"] == "ok"
         assert context.data_quality["quotes"]["item_count"] == 1
         assert context.data_quality["news"]["status"] == "not_requested"
@@ -144,12 +144,12 @@ class TestBasicBuild:
 
     def test_schema_versions_match_data_model_document(self):
         """AnalysisContext/data_quality 版本必须与权威数据模型同步。"""
-        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 8
+        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 9
         data_model = (
             Path(__file__).resolve().parents[2] / "stocks" / "DATA_MODEL.md"
         ).read_text(encoding="utf-8")
-        assert "`AnalysisContext.schema_version` 当前为 `8`" in data_model
-        assert "## data_quality v7" in data_model
+        assert "`AnalysisContext.schema_version` 当前为 `9`" in data_model
+        assert "## data_quality v8" in data_model
 
     async def test_build_no_instruments(self, mock_fetcher, mock_scaffolds, sample_assets):
         """无 instruments 时 quotes 为空"""
@@ -423,6 +423,12 @@ class TestMacroData:
                 "usd_cny": 7.25,
                 "us_10y_yield": 4.2,
                 "errors": {},
+                "field_sources": {
+                    "vix": {"source": "test", "as_of": "2026-07-02"},
+                    "usd_cny": {"source": "test", "as_of": "2026-07-02"},
+                    "us_10y_yield": {"source": "test", "as_of": "2026-07-02"},
+                },
+                "official_stats": {},
             })
         ))
 
@@ -441,6 +447,8 @@ class TestMacroData:
         assert context.data_quality["macro"]["filled_fields"] == 3
         assert "【宏观环境】" in context.raw_prompt_input
         assert "VIX 恐慌指数" in context.raw_prompt_input
+        assert "市场定价代理" in context.raw_prompt_input
+        assert "官方统计（滞后月度，不代表实时）" in context.raw_prompt_input
 
     async def test_macro_provider_failure(self, mock_fetcher, mock_scaffolds, sample_assets, sample_instruments):
         """macro_provider 失败不应阻断整体流程"""
@@ -463,6 +471,52 @@ class TestMacroData:
         assert "Network error" in context.data_quality["macro"]["errors"]["provider"]
         assert "【宏观环境】" not in context.raw_prompt_input
         assert context.raw_prompt_input != ""
+
+    def test_macro_quality_uses_oldest_field_as_of(self, mock_fetcher, mock_scaffolds):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        market_fields = {
+            "usd_cny": 6.8,
+            "vix": 18.0,
+            "us_10y_yield": 4.2,
+            "dxy": 120.0,
+            "gold": 2400.0,
+            "crude_oil": 72.0,
+        }
+        official = {
+            "cpi_yoy": 2.4,
+            "us_unemployment": 4.1,
+            "fed_funds_rate": 3.64,
+        }
+        field_sources = {
+            field_name: {"source": "fred:test", "as_of": "2026-07-02"}
+            for field_name in market_fields
+        }
+        field_sources.update({
+            f"official_stats.{field_name}": {
+                "source": "fred:test",
+                "as_of": "2026-05-01",
+            }
+            for field_name in official
+        })
+
+        quality = builder._macro_quality(
+            "2026-07-03T08:00:00+00:00",
+            {
+                **market_fields,
+                "official_stats": official,
+                "field_sources": field_sources,
+                "source": "composite",
+                "errors": {},
+            },
+            None,
+        )
+
+        assert quality["status"] == "ok"
+        assert quality["as_of"] == "2026-05-01T00:00:00+00:00"
+        assert quality["freshness"] == "old"
+        assert quality["filled_fields"] == 9
+        assert quality["missing_as_of"] == 0
 
 
 # ------------------------------------------------------------------
@@ -735,7 +789,7 @@ class TestDataQuality:
 
 
 class TestAnalysisContextSerialization:
-    async def test_to_dict_includes_schema_v8_decision_inputs_and_data_quality(
+    async def test_to_dict_includes_schema_v9_decision_inputs_and_data_quality(
         self,
         mock_fetcher,
         mock_scaffolds,
@@ -743,7 +797,7 @@ class TestAnalysisContextSerialization:
         sample_instruments,
         temp_dir,
     ):
-        """to_dict 输出 schema v8、前瞻输入、指标、建议与 data_quality。"""
+        """to_dict 输出 schema v9、前瞻输入、指标、建议与 data_quality。"""
         portfolio_scaffold, market_scaffold = mock_scaffolds
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
         builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold, history_cache=cache)
@@ -759,7 +813,7 @@ class TestAnalysisContextSerialization:
         await cache.close()
 
         data = context.to_dict()
-        assert data["schema_version"] == 8
+        assert data["schema_version"] == 9
         assert "market_events" in data
         assert "news_digest" in data
         assert "technical_indicators" in data
@@ -845,7 +899,7 @@ class TestHistoryBackfillQuality:
             instruments=sample_instruments,
             recent_snapshots=[],
         )
-        assert context.data_quality["schema_version"] == 7
+        assert context.data_quality["schema_version"] == 8
         assert "history_backfill" in context.data_quality
         assert context.data_quality["history_backfill"]["status"] == "not_requested"
 

@@ -602,16 +602,20 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 **文件**:`stocks/engine/macro_data.py`、`stocks/engine/context_builder.py`、`stocks/DATA_MODEL.md`、`tests/engine/test_macro_data.py`
 **证据(2026-07-02 实测)**:Yahoo 宏观 6 指标 0/6(HTTP 429);FRED `fredgraph.csv` 可达免 key(276ms)。现另有设计缺陷:`CompositeMacroProvider` "第一个提供者有任意字段即整体返回",Yahoo 只回 1 个字段也会短路后续兜底。
 
-- [ ] 现有 6 指标改为按字段降级链,FRED 为主源(序列映射:`VIXCLS`→vix、`DGS10`→us_10y_yield、`DTWEXBGS`→dxy、`DEXCHUS`→usd_cny(注意该序列是 CNY per USD,核对方向)、`DCOILWTICO`→crude_oil;gold 无现行 FRED 序列 → Stooq `xauusd` 或维持 Yahoo,失败如实记 errors),Yahoo 降为备源,static_config 兜底不变。
-- [ ] `CompositeMacroProvider` 改为**按字段合并**:主源缺的字段由备源补,而非首个非空快照短路。
-- [ ] 每字段携带 `source` 与 `as_of`(FRED 为日度序列的观测日期,**它不是实时值,必须如实标注日期,禁止冒充实时**);`MacroSnapshot` 扩展 `field_sources`;`_macro_quality` 的 as_of/freshness 按字段级最旧值计算。
-- [ ] 新增官方统计组(月度,磁盘缓存 24h):`CPIAUCSL`→cpi(换算同比,换算逻辑加单测)、`UNRATE`→us_unemployment、`FEDFUNDS`→fed_funds_rate,归入 `official_stats` 子结构;raw_prompt 宏观段分组展示"市场定价代理"与"官方统计(滞后月度)"。
-- [ ] `macro_snapshot` 结构扩展属于 AnalysisContext schema 变更;任务开工时以 F0 收口后的现行版本为基线单调 +1(当前代码已是 v7,若无其他先行 schema 变更则应升 **v8**,禁止倒写/重复 v7),红线三处同步(`stocks/DATA_MODEL.md` + context_builder/models + schema 断言测试)。
-- [ ] 新增测试:FRED CSV fixture 解析;字段级降级合并;official_stats 缓存命中;schema v7 三处同步断言。
+- [x] 6 个市场指标改为逐字段降级链:FRED 主源(VIXCLS/DGS10/DTWEXBGS/DEXCHUS/DCOILWTICO),gold 由 Yahoo 提供;Yahoo 备源、static_config 最后兜底。DEXCHUS 口径核对为“人民币/1 美元”;DTWEXBGS 在 prompt 明示为广义美元指数代理。
+- [x] `CompositeMacroProvider` 改为按字段合并,上游部分成功不再阻断下游补齐;逐源错误即使被补齐仍保留用于降级审计。
+- [x] `MacroSnapshot.field_sources` 为每字段携带 source/as_of;FRED 使用观测日期,Yahoo 使用 regularMarketTime/最后 chart timestamp,static 不伪造时点;`_macro_quality` 取全部有效字段最旧 as_of 并报告 missing_as_of。
+- [x] 新增月度 `official_stats`(CPIAUCSL 同比、UNRATE、FEDFUNDS)与 24h 原子磁盘缓存;raw prompt 分组展示“市场定价代理”与“官方统计（滞后月度，不代表实时）”。
+- [x] 开工时 AnalysisContext 已因 F0 升至 v8,本任务按单调 +1 升 v9;data_quality 宏观节点扩展由 v7 升 v8;models/context_builder/DATA_MODEL/tests 三处同步,未倒写计划中的旧基线 v7。
+- [x] 新增测试:FRED 单/多序列 CSV、CPI 同比、官方缓存命中、字段级合并、Yahoo 全 429 时 FRED 仍提供 5 个市场字段+3 官方统计、最旧 as_of、prompt 分组、schema 三处一致。
+
+> 完成(2026-07-03):全量 `414 passed`。真实出口时 FRED 连接超时被逐字段显式记录,Yahoo 恢复并补齐 6/6 市场字段,宏观 status=partial/freshness=stale(最旧真实时点),官方统计如实 missing；fixture 验证相反故障方向(Yahoo 全 429)仍由 FRED 提供 5+3 字段。真实故障与测试故障两向均不静默。
 
 **验收**:mock Yahoo 全 429 时宏观仍 ≥ 5 字段有值且逐字段来源可溯;LLM 上下文能区分市场代理与官方统计;全局验收通过。
 
 **D1 出口验收**:重跑 `.local/verify_data_sources.py` + 真实全流程 build_context,对照 D0 出口留存输出:A 股/美股/crypto 历史、宏观在任一主源失败下仍有数据且降级全程可见。**通过后才能开工 D2。**
+
+> D1 出口通过(2026-07-03 10:05 Asia/Shanghai):诊断重跑见 D1-1/D1-2 完成记录;真实全流程 history_backfill=ok(37/37 usable,7 新回填中 eastmoney 5 成功、2 失败由 tencent fallback_success),rotation=ok(37 items/0 missing)。美股 Nasdaq 与 crypto Binance 独立日 K 各实测 60 bars;crypto Binance 实时可用。宏观真实运行中 FRED timeout、Yahoo 逐字段补齐 6/6 且 FRED errors 全保留;反向 Yahoo 429/FRED 成功由 fixture 门禁覆盖。相较 D0 的 30/37,历史覆盖已达到 100%,D2 开工门槛满足。
 
 ### D2-1 财报日历可靠化(Finnhub 免费 tier,合并现有 F-1,禁止另建平行模块)
 

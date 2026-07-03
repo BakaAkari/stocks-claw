@@ -224,7 +224,7 @@ class ContextBuilder:
             upcoming_events=upcoming_events,
             rotation=rotation,
             action_signals=action_signals,
-            schema_version=8,
+            schema_version=9,
         )
 
     async def _build_rotation(
@@ -358,7 +358,7 @@ class ContextBuilder:
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 7,
+            "schema_version": 8,
             "generated_at": generated_at,
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
@@ -681,9 +681,23 @@ class ContextBuilder:
                 "errors": {"provider": macro_error} if macro_error else {},
             }
 
-        metric_fields = ["usd_cny", "vix", "us_10y_yield", "dxy", "gold", "crude_oil"]
-        filled = [field for field in metric_fields if macro_snapshot.get(field) is not None]
-        missing = [field for field in metric_fields if macro_snapshot.get(field) is None]
+        market_fields = ["usd_cny", "vix", "us_10y_yield", "dxy", "gold", "crude_oil"]
+        official_fields = [
+            "official_stats.cpi_yoy",
+            "official_stats.us_unemployment",
+            "official_stats.fed_funds_rate",
+        ]
+        official_stats = macro_snapshot.get("official_stats") or {}
+        filled = [field for field in market_fields if macro_snapshot.get(field) is not None]
+        filled.extend(
+            field for field in official_fields
+            if official_stats.get(field.split(".", 1)[1]) is not None
+        )
+        missing = [field for field in market_fields if macro_snapshot.get(field) is None]
+        missing.extend(
+            field for field in official_fields
+            if official_stats.get(field.split(".", 1)[1]) is None
+        )
         errors = macro_snapshot.get("errors") or {}
         if not filled:
             status = "missing"
@@ -692,16 +706,33 @@ class ContextBuilder:
         else:
             status = "ok"
 
-        timestamp = macro_snapshot.get("timestamp")
-        freshness_info = self._freshness_from_iso(timestamp, generated_at)
+        field_sources = macro_snapshot.get("field_sources") or {}
+        as_of_values = [
+            parsed
+            for metadata in field_sources.values()
+            if (parsed := self._parse_iso_datetime(metadata.get("as_of"))) is not None
+        ]
+        oldest_as_of = min(as_of_values) if as_of_values else None
+        freshness_info = self._freshness_from_datetime(oldest_as_of, generated_at)
+        sources = sorted({
+            metadata.get("source")
+            for metadata in field_sources.values()
+            if metadata.get("source")
+        })
+        missing_as_of = max(0, len(filled) - len(as_of_values))
+        if status == "ok" and missing_as_of:
+            status = "partial"
         return {
             "status": status,
             "source": macro_snapshot.get("source", "unknown"),
-            "as_of": timestamp,
+            "as_of": oldest_as_of.isoformat() if oldest_as_of else None,
             "freshness": freshness_info["freshness"],
             "age_seconds": freshness_info["age_seconds"],
             "filled_fields": len(filled),
             "missing_fields": missing,
+            "missing_as_of": missing_as_of,
+            "sources": sources,
+            "field_sources": field_sources,
             "errors": errors,
         }
 
@@ -1126,6 +1157,7 @@ class ContextBuilder:
         # 宏观数据
         if macro_snapshot:
             lines.append("【宏观环境】")
+            lines.append(" 市场定价代理（日度/实时，以字段观测日为准）:")
             if macro_snapshot.get("vix") is not None:
                 vix = macro_snapshot["vix"]
                 vix_state = "恐慌" if vix > 30 else "警惕" if vix > 20 else "平静"
@@ -1136,13 +1168,21 @@ class ContextBuilder:
             if macro_snapshot.get("usd_cny") is not None:
                 lines.append(f" 美元兑人民币: {macro_snapshot['usd_cny']:.4f}")
             if macro_snapshot.get("dxy") is not None:
-                lines.append(f" 美元指数: {macro_snapshot['dxy']:.2f}")
+                lines.append(f" 美元广义指数代理: {macro_snapshot['dxy']:.2f}")
             if macro_snapshot.get("gold") is not None:
                 lines.append(f" 黄金: {macro_snapshot['gold']:.2f} USD/oz")
             if macro_snapshot.get("crude_oil") is not None:
                 lines.append(f" 原油: {macro_snapshot['crude_oil']:.2f} USD/bbl")
+            official_stats = macro_snapshot.get("official_stats") or {}
+            lines.append(" 官方统计（滞后月度，不代表实时）:")
+            if official_stats.get("cpi_yoy") is not None:
+                lines.append(f" 美国 CPI 同比: {official_stats['cpi_yoy']:.2f}%")
+            if official_stats.get("us_unemployment") is not None:
+                lines.append(f" 美国失业率: {official_stats['us_unemployment']:.2f}%")
+            if official_stats.get("fed_funds_rate") is not None:
+                lines.append(f" 联邦基金有效利率: {official_stats['fed_funds_rate']:.2f}%")
             if macro_snapshot.get("errors"):
-                lines.append(f" 数据缺失: {', '.join(macro_snapshot['errors'].keys())}")
+                lines.append(f" 数据源降级: {', '.join(macro_snapshot['errors'].keys())}")
             lines.append("")
 
         # 市场状态

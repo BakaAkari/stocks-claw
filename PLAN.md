@@ -115,4 +115,5 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-03:D0-4 删除 us 指向 finnhub 自身的伪 fallback,us/crypto 显式空链,并由 quotes.by_market.single_source 暴露真实单源风险;data_quality v5→v6。真实出口验证 37 个历史标的 30 可用/7 缺失,质量节点与磁盘逐项一致,D0 完成后进入 D1。依据:降级能力必须由独立 Provider 证明,不能由配置键存在推断。
 - 2026-07-03:D1-1 接入腾讯 A 股前复权日 K 作为东方财富备用源,历史回填逐项暴露主源/备用源/降级结果/逐源错误,data_quality v6→v7。真实复测东方财富 0/6 时腾讯仍为正确 exchange 的 6/6 标的返回 60~61 bars。依据:同一网络下主源持续 RemoteDisconnected,备用源必须实际接管而非只写配置。
 - 2026-07-03:D1-2 硬门槛确认 Finnhub candle 免费权限 403,原备选 Stooq CSV 又返回 JS 反爬页,因此以实测可用性优先改接 Nasdaq 免 key美股日 K,Yahoo 为备;crypto 采用 Binance 日 K主源+实时 fallback。依据:计划的目标是独立可接管的数据源,不能为遵守候选名称而接入当前不可机器读取的端点。
+- 2026-07-03:D1-3 宏观改为 FRED→Yahoo→static 逐字段合并,新增逐字段真实观测日与 CPI同比/失业率/联邦基金利率月度官方统计;AnalysisContext v8→v9,data_quality v7→v8。D1 真实出口历史覆盖由 30/37 升至 37/37;宏观主备源故障两向均有可复现证据。依据:某个 Provider 部分成功不应阻断其他字段补齐,滞后统计也不能冒充实时。
 - (追加格式:`日期:决定;依据`)
