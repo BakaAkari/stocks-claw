@@ -640,6 +640,110 @@ class TestRawPromptStructure:
         assert "标的: a:000001 | 当前持有 1200 | 可交易" in prompt
         assert "平安银行 (000001): 10.50 (+2.94%) | 当前持有 1200" in prompt
 
+    async def test_review_section_orders_advice_execution_and_forecasts(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+        sample_assets,
+        sample_instruments,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        advice_id = "2026-07-01T00:00:00+00:00"
+        recent_advice = [{
+            "created_at": advice_id,
+            "instruments": [{"market": "a", "code": "000001", "name": "平安银行"}],
+            "direction": {"a:000001": "watch"},
+            "rationale_summary": "等待价格触发后再处理。",
+            "based_on": ["quotes", "portfolio"],
+            "boundary": [{"type": "fact", "text": "现金偏高"}],
+            "actions": [{
+                "target": "a:000001",
+                "action": "increase",
+                "size_hint": "一成",
+                "trigger": "收盘站上12.5",
+                "invalidation": "跌破11.8",
+                "horizon": "short",
+            }],
+            "triggers": [{
+                "instrument": "a:000001",
+                "type": "price_above",
+                "level": 12.5,
+                "action": "增加一成",
+                "invalidation": "跌破11.8",
+            }],
+        }]
+        forecast_summary = {
+            "open_count": 0,
+            "sample_count": 1,
+            "hit_count": 1,
+            "hit_rate": None,
+            "sample_note": "样本不足",
+            "recent_settlements": [{
+                "deadline": "2026-07-02",
+                "target": "a:000001",
+                "status": "hit",
+                "statement": "平安银行收盘高于12.5",
+                "resolution_note": "deadline_close=12.8 at 2026-07-02",
+            }],
+            "recent_records": [],
+        }
+
+        context = await builder.build(
+            assets=sample_assets,
+            constraints={},
+            profile={},
+            instruments=sample_instruments,
+            recent_snapshots=[],
+            recent_advice=recent_advice,
+            execution_records=[{
+                "advice_id": advice_id,
+                "target": "a:000001",
+                "action": "increase",
+                "extent": "full",
+                "note": "已执行",
+            }],
+            forecast_summary=forecast_summary,
+        )
+
+        prompt = context.raw_prompt_input
+        assert "【复盘】" in prompt
+        positions = [
+            prompt.index("1. 上期建议 actions"),
+            prompt.index("2. 触发核对"),
+            prompt.index("3. 执行对照"),
+            prompt.index("4. 到期预测结算"),
+        ]
+        assert positions == sorted(positions)
+        assert "a:000001 | increase | 一成 | short" in prompt
+        assert "a:000001 price_above 12.5 → no_data" in prompt
+        assert "a:000001 | 建议 increase → executed | 记录 increase/full" in prompt
+        assert "a:000001 | hit | 平安银行收盘高于12.5" in prompt
+
+    async def test_review_section_marks_missing_segments(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+        sample_assets,
+        sample_instruments,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+
+        context = await builder.build(
+            assets=sample_assets,
+            constraints={},
+            profile={},
+            instruments=sample_instruments,
+            recent_snapshots=[],
+        )
+
+        prompt = context.raw_prompt_input
+        assert "缺失: 无已确认保存的上期建议" in prompt
+        assert "缺失: 无上期建议，无法核对触发器" in prompt
+        assert "缺失: 无上期建议，无法匹配执行记录" in prompt
+        assert "缺失: 未加载预测台账或暂无预测记录" in prompt
+
     async def test_prompt_with_news(self, mock_fetcher, mock_scaffolds, sample_assets, sample_instruments):
         """有新闻时 prompt 应包含新闻"""
         portfolio_scaffold, market_scaffold = mock_scaffolds

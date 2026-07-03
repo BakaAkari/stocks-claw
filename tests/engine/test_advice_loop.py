@@ -91,8 +91,8 @@ async def test_confirmed_advice_loop_injects_review_and_keeps_prompt_desensitize
     assert performance["status"] == "ok"
     assert performance["direction"] == "watch"
     assert performance["pct_change"] == 10.0
-    assert "【上次建议】" in second.raw_prompt_input
-    assert "此后涨跌幅 10.00%" in second.raw_prompt_input
+    assert "【复盘】" in second.raw_prompt_input
+    assert "缺失: 上期建议未保存结构化 actions" in second.raw_prompt_input
     assert "50,000.00" not in second.raw_prompt_input
     assert "30,000.00" not in second.raw_prompt_input
     assert "占比" in second.raw_prompt_input

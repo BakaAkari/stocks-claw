@@ -292,7 +292,8 @@ def test_mcp_advice_actions_validate_target_and_context_echo(adapter_engine):
     assert context_result["success"] is True
     advice = context_result["data"]["recent_advice"][0]
     assert advice["actions"] == payload["actions"]
-    assert "结构化动作:" in context_result["data"]["raw_prompt_input"]
+    assert "【复盘】" in context_result["data"]["raw_prompt_input"]
+    assert "1. 上期建议 actions" in context_result["data"]["raw_prompt_input"]
     assert "a:588000 | increase | 5%~8% | short" in context_result["data"]["raw_prompt_input"]
 
 
@@ -424,7 +425,7 @@ def test_mcp_execution_save_requires_confirmation_and_review_four_states(adapter
         "黄金": "unknown",
     }
     prompt = context_result["data"]["raw_prompt_input"]
-    assert "建议 vs 执行:" in prompt
+    assert "3. 执行对照" in prompt
     assert "a:588000 | 建议 increase → executed" in prompt
     assert "固收 | 建议 increase → not_executed | 记录 none" in prompt
 
@@ -585,7 +586,8 @@ def test_due_forecast_settles_and_feeds_context(adapter_engine):
     assert summary["recent_settlements"][0]["id"] == "fixture-hit"
     assert summary["recent_settlements"][0]["status"] == "hit"
     prompt = context_result["data"]["raw_prompt_input"]
-    assert "【预测台账】" in prompt
+    assert "【复盘】" in prompt
+    assert "4. 到期预测结算" in prompt
     assert "fixture-hit" not in prompt
     assert "a:588000 | hit | 科创50ETF 到期收盘高于 1.0" in prompt
     assert "样本不足" in prompt

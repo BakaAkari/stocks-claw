@@ -1078,129 +1078,11 @@ class ContextBuilder:
                 )
             lines.append("")
 
-        if recent_advice:
-            lines.append("【上次建议】")
-            for advice in recent_advice[:3]:
-                instruments_text = ", ".join(
-                    f"{item.get('name', '')}({item.get('market', '')}:{item.get('code', '')})"
-                    for item in advice.get("instruments", [])
-                )
-                direction = advice.get("direction", {})
-                based_on = ", ".join(advice.get("based_on", []))
-                lines.append(
-                    f" {advice.get('created_at', 'unknown')} | "
-                    f"标的: {instruments_text or '无'} | "
-                    f"方向: {direction} | 来源: {based_on or '未标注'}"
-                )
-                lines.append(f" 摘要: {advice.get('rationale_summary', '')}")
-                boundary = advice.get("boundary", [])
-                if boundary:
-                    boundary_text = "; ".join(
-                        f"{item.get('type')}: {item.get('text')}"
-                        for item in boundary
-                    )
-                    lines.append(f" 边界: {boundary_text}")
-                actions = advice.get("actions", [])
-                if actions:
-                    lines.append(" 结构化动作:")
-                    for item in actions:
-                        detail = (
-                            f" - {item.get('target')} | {item.get('action')} | "
-                            f"{item.get('size_hint')} | {item.get('horizon')}"
-                        )
-                        if item.get("trigger"):
-                            detail += f" | trigger: {item.get('trigger')}"
-                        if item.get("invalidation"):
-                            detail += f" | invalidation: {item.get('invalidation')}"
-                        lines.append(detail)
-                execution_review = advice.get("execution_review", [])
-                if execution_review:
-                    lines.append(" 建议 vs 执行:")
-                    for item in execution_review:
-                        line = (
-                            f" - {item.get('target')} | 建议 {item.get('recommended_action')} "
-                            f"→ {item.get('status')}"
-                        )
-                        execution = item.get("execution") or {}
-                        if execution.get("action"):
-                            line += f" | 记录 {execution.get('action')}"
-                            if execution.get("extent"):
-                                line += f"/{execution.get('extent')}"
-                        if execution.get("note"):
-                            line += f" | note: {execution.get('note')}"
-                        lines.append(line)
-                performance = advice.get("performance", [])
-                if performance:
-                    for item in performance:
-                        instrument = item.get("instrument", {})
-                        label = (
-                            f"{instrument.get('name', '')}"
-                            f"({instrument.get('market', '')}:{instrument.get('code', '')})"
-                        )
-                        if item.get("status") == "ok":
-                            lines.append(
-                                f" 表现: {label} | 当时方向 {item.get('direction')} | "
-                                f"此后涨跌幅 {item.get('pct_change'):.2f}%"
-                            )
-                        else:
-                            lines.append(
-                                f" 表现: {label} | 当时方向 {item.get('direction')} | "
-                                f"status: no_data ({item.get('reason', 'unknown')})"
-                            )
-                trigger_review = advice.get("trigger_review", [])
-                if trigger_review:
-                    lines.append(" 触发器核对(按收盘价):")
-                    for item in trigger_review:
-                        status = item.get("status", "no_data")
-                        head = (
-                            f" - {item.get('instrument')} {item.get('type')} "
-                            f"{item.get('level')} → {status}"
-                        )
-                        observed = item.get("observed") or {}
-                        if status in ("fired", "not_fired") and observed:
-                            head += (
-                                f" | 期间最高 {observed.get('max_price')} / "
-                                f"最低 {observed.get('min_price')} / "
-                                f"最新 {observed.get('latest_price')}"
-                            )
-                            if observed.get("pct_change") is not None:
-                                head += f" | 累计 {observed['pct_change']:+.2f}%"
-                        elif status == "no_data":
-                            head += f" ({item.get('reason', 'unknown')})"
-                        lines.append(head)
-                        if item.get("action"):
-                            lines.append(f"   预设动作: {item['action']}")
-            lines.append("")
-
-        if forecast_summary:
-            lines.append("【预测台账】")
-            lines.append(f" open 条数: {forecast_summary.get('open_count', 0)}")
-            sample_count = int(forecast_summary.get("sample_count") or 0)
-            hit_count = int(forecast_summary.get("hit_count") or 0)
-            hit_rate = forecast_summary.get("hit_rate")
-            if hit_rate is None:
-                lines.append(
-                    f" 累计统计: 样本不足 (hit/miss 样本 {sample_count}/10)"
-                )
-            else:
-                lines.append(
-                    f" 累计命中率: {hit_rate * 100:.1f}% ({hit_count}/{sample_count})"
-                )
-            settlements = forecast_summary.get("recent_settlements", [])
-            if settlements:
-                lines.append(" 最近结算:")
-                for item in settlements[:5]:
-                    target = item.get("target") or "manual"
-                    line = (
-                        f" - {item.get('deadline', 'unknown')} | {target} | "
-                        f"{item.get('status', 'unknown')} | {item.get('statement', '')}"
-                    )
-                    if item.get("resolution_note"):
-                        line += f" | {item.get('resolution_note')}"
-                    lines.append(line)
-            else:
-                lines.append(" 最近结算: 无")
-            lines.append("")
+        self._append_review_section(
+            lines,
+            recent_advice=recent_advice or [],
+            forecast_summary=forecast_summary or {},
+        )
 
         # 组合结构
         lines.append("【组合结构】")
@@ -1508,12 +1390,145 @@ class ContextBuilder:
         lines.append("=" * 50)
         lines.append(
             "请基于以上上下文,按 personal_advice_prompt 的决策导向契约输出:"
-            "先复盘上期触发器,再围绕未来催化剂给出情景预案、"
+            "先按【复盘】四段逐条回应,再围绕未来催化剂给出情景预案、"
             "带触发条件的调仓清单与下一个机会提名。"
         )
         lines.append("=" * 50)
 
         return "\n".join(lines)
+
+    def _append_review_section(
+        self,
+        lines: list[str],
+        *,
+        recent_advice: list[dict],
+        forecast_summary: dict,
+    ) -> None:
+        lines.append("【复盘】")
+        self._append_review_actions(lines, recent_advice)
+        self._append_review_triggers(lines, recent_advice)
+        self._append_review_executions(lines, recent_advice)
+        self._append_review_forecasts(lines, forecast_summary)
+        lines.append("")
+
+    def _append_review_actions(self, lines: list[str], recent_advice: list[dict]) -> None:
+        lines.append("1. 上期建议 actions")
+        if not recent_advice:
+            lines.append(" - 缺失: 无已确认保存的上期建议。")
+            return
+
+        found = False
+        for advice in recent_advice[:3]:
+            actions = advice.get("actions", [])
+            if not actions:
+                continue
+            found = True
+            lines.append(
+                f" - {advice.get('created_at', 'unknown')} | "
+                f"摘要: {advice.get('rationale_summary', '')}"
+            )
+            for item in actions:
+                detail = (
+                    f"   - {item.get('target')} | {item.get('action')} | "
+                    f"{item.get('size_hint')} | {item.get('horizon')}"
+                )
+                if item.get("trigger"):
+                    detail += f" | trigger: {item.get('trigger')}"
+                if item.get("invalidation"):
+                    detail += f" | invalidation: {item.get('invalidation')}"
+                lines.append(detail)
+        if not found:
+            lines.append(" - 缺失: 上期建议未保存结构化 actions。")
+
+    def _append_review_triggers(self, lines: list[str], recent_advice: list[dict]) -> None:
+        lines.append("2. 触发核对")
+        if not recent_advice:
+            lines.append(" - 缺失: 无上期建议，无法核对触发器。")
+            return
+
+        found = False
+        for advice in recent_advice[:3]:
+            for item in advice.get("trigger_review", []):
+                found = True
+                status = item.get("status", "no_data")
+                head = (
+                    f" - {item.get('instrument')} {item.get('type')} "
+                    f"{item.get('level')} → {status}"
+                )
+                observed = item.get("observed") or {}
+                if status in ("fired", "not_fired") and observed:
+                    head += (
+                        f" | 期间最高 {observed.get('max_price')} / "
+                        f"最低 {observed.get('min_price')} / "
+                        f"最新 {observed.get('latest_price')}"
+                    )
+                    if observed.get("pct_change") is not None:
+                        head += f" | 累计 {observed['pct_change']:+.2f}%"
+                elif status == "no_data":
+                    head += f" ({item.get('reason', 'unknown')})"
+                lines.append(head)
+                if item.get("action"):
+                    lines.append(f"   预设动作: {item['action']}")
+        if not found:
+            lines.append(" - 缺失: 上期建议没有 triggers，或尚无可核对历史。")
+
+    def _append_review_executions(
+        self,
+        lines: list[str],
+        recent_advice: list[dict],
+    ) -> None:
+        lines.append("3. 执行对照")
+        if not recent_advice:
+            lines.append(" - 缺失: 无上期建议，无法匹配执行记录。")
+            return
+
+        found = False
+        for advice in recent_advice[:3]:
+            for item in advice.get("execution_review", []):
+                found = True
+                line = (
+                    f" - {item.get('target')} | 建议 {item.get('recommended_action')} "
+                    f"→ {item.get('status')}"
+                )
+                execution = item.get("execution") or {}
+                if execution.get("action"):
+                    line += f" | 记录 {execution.get('action')}"
+                    if execution.get("extent"):
+                        line += f"/{execution.get('extent')}"
+                if execution.get("note"):
+                    line += f" | note: {execution.get('note')}"
+                lines.append(line)
+        if not found:
+            lines.append(" - 缺失: 上期建议没有结构化 actions，无法按 advice_id + target 对照。")
+
+    def _append_review_forecasts(self, lines: list[str], forecast_summary: dict) -> None:
+        lines.append("4. 到期预测结算")
+        if not forecast_summary:
+            lines.append(" - 缺失: 未加载预测台账或暂无预测记录。")
+            return
+
+        lines.append(f" - open 条数: {forecast_summary.get('open_count', 0)}")
+        sample_count = int(forecast_summary.get("sample_count") or 0)
+        hit_count = int(forecast_summary.get("hit_count") or 0)
+        hit_rate = forecast_summary.get("hit_rate")
+        if hit_rate is None:
+            lines.append(f" - 累计统计: 样本不足 (hit/miss 样本 {sample_count}/10)")
+        else:
+            lines.append(f" - 累计命中率: {hit_rate * 100:.1f}% ({hit_count}/{sample_count})")
+
+        settlements = forecast_summary.get("recent_settlements", [])
+        if not settlements:
+            lines.append(" - 缺失: 暂无到期预测结算。")
+            return
+        for item in settlements[:5]:
+            target = item.get("target") or "manual"
+            line = (
+                f" - {item.get('deadline', 'unknown')} | {target} | "
+                f"{item.get('status', 'unknown')} | {item.get('statement', '')}"
+            )
+            if item.get("resolution_note"):
+                line += f" | {item.get('resolution_note')}"
+            lines.append(line)
 
     @staticmethod
     def _amount_band(value: float) -> str:

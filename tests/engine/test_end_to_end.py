@@ -222,9 +222,9 @@ class TestBuildContextEndToEnd:
         assert len(second.recent_advice) == 1
         assert second.recent_advice[0]["direction"]["a:000001"] == "watch"
         assert second.recent_advice[0]["performance"][0]["status"] == "no_data"
-        assert "【上次建议】" in second.raw_prompt_input
-        assert "平安银行继续观察" in second.raw_prompt_input
-        assert "status: no_data" in second.raw_prompt_input
+        assert "【复盘】" in second.raw_prompt_input
+        assert "1. 上期建议 actions" in second.raw_prompt_input
+        assert "缺失: 上期建议未保存结构化 actions" in second.raw_prompt_input
 
     async def test_build_context_contains_macro(self, e2e_engine):
         """macro_snapshot 包含宏观数据"""
