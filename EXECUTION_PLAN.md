@@ -69,12 +69,14 @@
 
 **文件**:`stocks/domain/models.py`、`stocks/engine/persistence.py`、`stocks/adapters/cli.py`、`stocks/adapters/mcp.py`、`stocks/DATA_MODEL.md`、`tests/`
 
-- [ ] `ExecutionRecord`:`{id, advice_id?, target, action(建议 action 枚举 + none 表示"明确未执行"), extent ∈ {full,partial}(action=none 时省略), note, executed_at, recorded_at}`;存 `.local/executions/`(gitignore 确认覆盖);确认式写入:CLI `--execution-save ... --confirmed`、MCP `execution_save`(`confirmed: true`);`--execution-list`/`execution_list` 读取。
-- [ ] `build_context` 复盘对照:上期建议每条 action 按 advice_id+target 匹配——有记录且 extent=full → `executed`;extent=partial → `partial`;action=none → `not_executed`;无记录 → `unknown`。**匹配不到一律 unknown,不猜。**
-- [ ] 新 CLI/MCP 工具用法(含 `--confirmed` 示例)写入 `AGENT_GUIDE.md`。
-- [ ] 测试:未确认拒写、关联/不关联建议两种保存、对照四态、round-trip。
+- [x] `ExecutionRecord`:`{id, advice_id?, target, action(建议 action 枚举 + none 表示"明确未执行"), extent ∈ {full,partial}(action=none 时省略), note, executed_at, recorded_at}`;存 `.local/executions/`(gitignore 确认覆盖);确认式写入:CLI `--execution-save ... --confirmed`、MCP `execution_save`(`confirmed: true`);`--execution-list`/`execution_list` 读取。
+- [x] `build_context` 复盘对照:上期建议每条 action 按 advice_id+target 匹配——有记录且 extent=full → `executed`;extent=partial → `partial`;action=none → `not_executed`;无记录 → `unknown`。**匹配不到一律 unknown,不猜。**
+- [x] 新 CLI/MCP 工具用法(含 `--confirmed` 示例)写入 `AGENT_GUIDE.md`。
+- [x] 测试:未确认拒写、关联/不关联建议两种保存、对照四态、round-trip。
 
 **验收**:记录一条真实执行后,下次上下文出现"建议 vs 执行"对照;全局验收通过。
+
+> 完成:b75427e S1-3 执行记录完成,并按用户确认保存真实执行记录 `advice_id=2026-07-03T04:40:29.112458+00:00,target=a:588000,action=increase,extent=full` | 证据:`stocks/domain/models.py:542` 定义 ExecutionRecord,`stocks/engine/persistence.py:115`/`:127` 保存与读取 `.local/executions/`(根 `.gitignore:2` 覆盖 `.local/`),`stocks/adapters/cli.py:183`/`:215` 与 `stocks/adapters/mcp.py:204` 暴露确认式工具,`stocks/engine/advice_review.py:66` 按 advice_id+target 精确匹配,`stocks/engine/context_builder.py:1114` 输出"建议 vs 执行",`AGENT_GUIDE.md:103` 与 `stocks/DATA_MODEL.md:89` 同步文档,`tests/engine/test_persistence.py:84` 覆盖 round-trip,`tests/test_asset_adapters.py:349`/`:430` 覆盖未确认拒写、关联/无关联保存、四态对照与 CLI 列表;真实验收 `execution_save --confirmed` 成功,`build_context` 回显 `a:588000 → executed | 记录 increase/full`,未记录的 `现金 → unknown`;全局闸 `ruff`=All checks passed,`pytest`=450 passed,`compileall`=0,CLI smoke=0。
 
 ### S1-4 预测台账
 
