@@ -41,13 +41,15 @@
 
 **文件**:`stocks/domain/models.py`、资产 CRUD 与持久化(`stocks/adapters/cli.py`、`stocks/adapters/mcp.py`、engine 资产读写)、`stocks/engine/context_builder.py` 或 `scaffolds.py`、`stocks/DATA_MODEL.md`、`tests/`
 
-- [ ] 【验证前提】grep 确认 `FinancialAsset` 当前没有 `instrument_key`/`quantity`/`tradable` 字段;确认资产写路径(CLI/MCP)均要求 confirmed。
-- [ ] `FinancialAsset` 增可选字段:`instrument_key`(格式 `market:code`,非证券资产为 None)、`quantity`(可 None)、`tradable`(可 None);旧记录缺字段照常加载,round-trip 不丢失、不改写源金额/币种。
-- [ ] 映射只能来自用户确认的写操作;**禁止按资产名称模糊猜证券代码**;`--asset-update`/MCP `asset_update` 支持这三个字段,格式非法(不匹配 `market:code` 或市场未知)拒绝并给结构化错误。
-- [ ] context 侧:已映射资产与 watchlist/行情按 `instrument_key` 关联;`raw_prompt_input` 组合小节对已映射持仓标注"当前持有"(有 quantity 则带上);未映射资产照旧参与资产桶,不阻塞。若 `AnalysisContext` 字段有变化,schema 单调 +1 并三处同步。
-- [ ] 测试:旧记录兼容加载、未确认拒写、round-trip、非法 instrument_key 拒绝、映射后 context 标注正确。
+- [x] 【验证前提】grep 确认 `FinancialAsset` 当前没有 `instrument_key`/`quantity`/`tradable` 字段;确认资产写路径(CLI/MCP)均要求 confirmed。
+- [x] `FinancialAsset` 增可选字段:`instrument_key`(格式 `market:code`,非证券资产为 None)、`quantity`(可 None)、`tradable`(可 None);旧记录缺字段照常加载,round-trip 不丢失、不改写源金额/币种。
+- [x] 映射只能来自用户确认的写操作;**禁止按资产名称模糊猜证券代码**;`--asset-update`/MCP `asset_update` 支持这三个字段,格式非法(不匹配 `market:code` 或市场未知)拒绝并给结构化错误。
+- [x] context 侧:已映射资产与 watchlist/行情按 `instrument_key` 关联;`raw_prompt_input` 组合小节对已映射持仓标注"当前持有"(有 quantity 则带上);未映射资产照旧参与资产桶,不阻塞。若 `AnalysisContext` 字段有变化,schema 单调 +1 并三处同步。
+- [x] 测试:旧记录兼容加载、未确认拒写、round-trip、非法 instrument_key 拒绝、映射后 context 标注正确。
 
 **验收**:用户真实资产中 ≥1 条证券持仓完成映射后,`raw_prompt_input` 能看到该标的"当前持有";全局验收通过。
+
+> 完成:b12ad1d S1-1 最小持仓映射完成,并按用户确认将真实资产"科创50ETF华夏"映射为 `a:588000`/`quantity=1800`/`tradable=true` | 证据:`stocks/domain/models.py:221-303` 定义/校验/持久化字段,`stocks/adapters/cli.py:240-258` 与 `stocks/adapters/mcp.py:105-141` 支持确认式写入,`stocks/engine/context_builder.py:1032-1053`/`:1187-1196` 标注已映射持仓,`tests/engine/test_engine.py:293` 覆盖旧记录兼容与 round-trip,`tests/test_asset_adapters.py:100` 覆盖 CLI/MCP 校验,`tests/engine/test_context_builder.py:611` 覆盖 raw_prompt "当前持有";真实验收命中 `"instrument_key":"a:588000","quantity":1800.0,"tradable":true` 与 raw_prompt `科创50ETF华夏 ... 标的: a:588000 | 当前持有 1800 | 可交易`;全局闸 `ruff`=All checks passed,`pytest`=439 passed,`compileall`=0,CLI smoke=0。
 
 ### S1-2 结构化建议 actions(AdviceRecord 扩展,不建引擎)
 
