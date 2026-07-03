@@ -65,7 +65,7 @@ def compute_rotation(
     scan_keys = scan_keys or set()
     items: list[dict] = []
     missing: list[str] = []
-    latest_as_of: Optional[pd.Timestamp] = None
+    oldest_as_of: Optional[pd.Timestamp] = None
 
     for key, instrument in instruments.items():
         frame = _clean_frame(frames.get(key))
@@ -83,8 +83,8 @@ def compute_rotation(
         )
         latest_price = float(prices.iloc[-1])
         as_of = frame["timestamp"].iloc[-1]
-        if latest_as_of is None or as_of > latest_as_of:
-            latest_as_of = as_of
+        if oldest_as_of is None or as_of < oldest_as_of:
+            oldest_as_of = as_of
         items.append(
             {
                 "symbol": key,
@@ -152,7 +152,7 @@ def compute_rotation(
     return {
         "schema_version": ROTATION_SCHEMA_VERSION,
         "status": status,
-        "as_of": latest_as_of.isoformat() if latest_as_of is not None else None,
+        "as_of": oldest_as_of.isoformat() if oldest_as_of is not None else None,
         "window": {"short_bars": SHORT_BARS, "long_bars": LONG_BARS},
         "items": items,
         "category_momentum": category_momentum,

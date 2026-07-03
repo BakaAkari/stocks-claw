@@ -75,6 +75,22 @@ class TestComputeRotation:
         # r20 缺失的标的排在有 r20 的后面
         assert by_symbol["a:512880"]["rank"] > by_symbol["us:XLK"]["rank"]
 
+    def test_top_level_as_of_is_oldest_instrument_timestamp(self):
+        newer = _frame([100 + i for i in range(25)])
+        older = _frame([100 - i * 0.1 for i in range(25)])
+        newer["timestamp"] = pd.to_datetime(newer["timestamp"]) + pd.Timedelta(days=1)
+        result = compute_rotation(
+            {"us:XLK": newer, "us:XLE": older},
+            {
+                "us:XLK": _instruments()["us:XLK"],
+                "us:XLE": _instruments()["us:XLE"],
+            },
+        )
+
+        assert result["as_of"] == pd.Timestamp(
+            older["timestamp"].iloc[-1]
+        ).isoformat()
+
     def test_no_frames_is_no_data(self):
         result = compute_rotation({}, _instruments())
         assert result["status"] == "no_data"

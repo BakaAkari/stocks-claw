@@ -44,10 +44,10 @@ def _by_symbol(result: dict) -> dict:
 
 class TestSignalRules:
     def test_uptrend_not_hot_is_accumulate(self):
-        # 带回撤的净上升趋势(+0.8/-0.6 交替):RSI 中性偏强,不过热
+        # 带回撤的净上升趋势(+1.0/-0.6 交替):强度有效且 RSI 不过热
         prices = [100.0]
         for i in range(39):
-            prices.append(prices[-1] + (0.8 if i % 2 == 0 else -0.6))
+            prices.append(prices[-1] + (1.0 if i % 2 == 0 else -0.6))
         result = _run({"us:AAA": prices}, {"us:AAA": _inst("AAA")})
         item = _by_symbol(result)["us:AAA"]
         assert item["signal"] == "accumulate_candidate"
@@ -80,6 +80,15 @@ class TestSignalRules:
     def test_flat_is_neutral_hold(self):
         # 单标的宇宙(排名无统计意义)+横盘 → 不得误判为轮动候选
         prices = [100.0, 100.1] * 20
+        result = _run({"us:AAA": prices}, {"us:AAA": _inst("AAA")})
+        item = _by_symbol(result)["us:AAA"]
+        assert item["signal"] == "neutral_hold"
+
+    def test_slightly_positive_r20_is_not_accumulate(self):
+        # 20 日仅约 +0.4% 是横盘噪声，不能包装成布局机会。
+        prices = [100.0]
+        for i in range(39):
+            prices.append(prices[-1] + (0.12 if i % 2 == 0 else -0.08))
         result = _run({"us:AAA": prices}, {"us:AAA": _inst("AAA")})
         item = _by_symbol(result)["us:AAA"]
         assert item["signal"] == "neutral_hold"

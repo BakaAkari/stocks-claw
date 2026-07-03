@@ -141,7 +141,8 @@
 - `signal ∈ {accumulate_candidate, wait_for_pullback, reduce_risk,
   avoid_catching_falling_knife, rotation_candidate, neutral_hold, no_data}`
 - 规则阈值集中定义于 `stocks/engine/action_signals.py` 头部；
-  历史 <15 bars 一律 `no_data`，不给方向
+  历史 <15 bars 一律 `no_data`；`accumulate_candidate` 要求 20 日涨幅至少
+  2%，排除仅略大于 0 的横盘噪声
 - 信号是"候选动作"而非指令，最终判断归用户与 Agent
 
 ## PortfolioMapping、MarketState 与 DriftCheck

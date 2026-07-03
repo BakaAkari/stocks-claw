@@ -38,6 +38,7 @@ _REDUCE_R20 = -5.0        # 20 根 K 线跌幅超过该值视为趋势转弱
 _PULLBACK_R20 = 5.0       # 趋势强劲阈值
 _PULLBACK_RSI = 65.0
 _PULLBACK_POSITION = 85.0  # 布林带位置百分比
+_ACCUMULATE_R20 = 2.0      # 排除仅略高于 0 的横盘噪声
 _ACCUMULATE_RSI_LOW = 40.0
 _ACCUMULATE_RSI_HIGH = 65.0
 
@@ -121,13 +122,15 @@ def _signal_for_item(
         ma20 is not None
         and price > ma20
         and r20 is not None
-        and r20 > 0
+        and r20 >= _ACCUMULATE_R20
         and rsi is not None
         and _ACCUMULATE_RSI_LOW <= rsi < _ACCUMULATE_RSI_HIGH
         and (macd_hist is None or macd_hist > 0 or (r5 is not None and r5 > 0))
     ):
         reasons.append(f"现价 {price:.2f} 站上 MA20 {ma20:.2f}")
-        reasons.append(f"近20根K线累计 {r20:+.2f}%")
+        reasons.append(
+            f"近20根K线累计 {r20:+.2f}%（≥{_ACCUMULATE_R20}%）"
+        )
         reasons.append(f"RSI {rsi:.1f} 中性偏强，未过热")
         if macd_hist is not None and macd_hist > 0:
             reasons.append(f"MACD 柱 {macd_hist:.3f} 为正")
