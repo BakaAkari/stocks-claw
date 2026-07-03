@@ -256,6 +256,31 @@ class TestFetchQuotesFallbackFail:
 
         assert selected is fallback
 
+    def test_explicit_empty_fallback_disables_registry_auto_discovery(
+        self,
+        registry_with_two_providers,
+    ):
+        registry, primary, _ = registry_with_two_providers
+        fetcher = DataFetcher(registry, fallback_order={"a": []})
+
+        assert fetcher._pick_fallback_provider("a", primary.name) is None
+        assert fetcher.is_single_source("a", primary.name) is True
+
+    def test_independent_fallback_marks_market_multi_source(
+        self,
+        registry_with_two_providers,
+    ):
+        registry, primary, fallback = registry_with_two_providers
+        fetcher = DataFetcher(
+            registry,
+            fallback_order={"a": [primary.name, fallback.name]},
+        )
+
+        assert fetcher.independent_fallback_names("a", primary.name) == [
+            fallback.name
+        ]
+        assert fetcher.is_single_source("a", primary.name) is False
+
 
 # ------------------------------------------------------------------
 # 降级链：不可恢复异常

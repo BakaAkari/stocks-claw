@@ -554,14 +554,18 @@ python3 .local/verify_data_sources.py   # 网络诊断,输出留存对照
 **文件**:`stocks/config/engine.yaml`(25-30 行)、`stocks/engine/context_builder.py`、`tests/engine/test_fetchers.py` 或 `test_context_builder.py`
 **问题**:`fallback.us: [finnhub]` 的备用源就是主源自己(markets.json 中 us 主源即 finnhub),`_pick_fallback_provider` 按名排除已失败主源后实际候选为空,`fallback_success` 分支对 us 永远无法触发;`crypto` 在 fallback 映射中连键都没有。配置制造了"有降级链"的错觉。
 
-- [ ] 【验证前提】读 engine.yaml 25-30 行与 `stocks/config/markets.json`,确认 us/crypto 主源均为 finnhub、fallback 现状如上。
-- [ ] engine.yaml:删除 `us: [finnhub]` 自我回退;显式写 `us: []`、`crypto: []`,注释"当前无独立第二源,接入见 D1-2"。
-- [ ] `_quote_quality.by_market` 每市场增加 `single_source: true/false`(该市场 fallback 候选去除主源后为空即 true);既有 `us_quotes: "single_source_failed"` 逻辑保持兼容。
-- [ ] 新增测试:us/crypto 的 by_market 含 `single_source: true`,a 为 false;配置空列表不导致降级链代码报错。
+- [x] 【验证前提】已核对 `engine.yaml` 与 `stocks/config/markets.json`:us/crypto 主源均为 finnhub,旧 us fallback 指向主源自身且 crypto 缺键。
+- [x] engine.yaml/代码默认值删除 `us: [finnhub]` 自我回退;显式写 `us: []`、`crypto: []`,注释"当前无独立第二源,接入见 D1-2"。
+- [x] `_quote_quality.by_market` 每市场增加 `single_source: true/false`;DataFetcher 按“显式配置候选去除主源后是否为空”计算,既有 `us_quotes: "single_source_failed"` 保持兼容。
+- [x] 新增测试:us/crypto 的 by_market 为 single_source true、a 为 false;显式空列表禁用 registry 自动发现且不报错;独立备用源存在时为 false。
+
+> 完成(2026-07-03):`DataFetcher.independent_fallback_names/is_single_source` 统一运行时与质量层口径;显式空 fallback 不再被“自动发现”覆盖。`quotes.by_market` 新字段属于契约变化,data_quality v5→v6,DATA_MODEL/context_builder/tests 三处同步。定向 `101 passed`;全量门禁见本阶段提交记录。
 
 **验收**:`data_quality` 自己承认单源事实;`engine.yaml` 中不存在指向主源自身的假降级配置。
 
 **D0 出口验收**:D0-1~D0-4 全部完成后,真实网络跑一次全流程 `build_context`(含行情+新闻),把 `data_quality` 输出与 `.local/history/` 磁盘实况人工比对一致(回填失败可见、as_of 真实、缺数据指标非 ok),留存输出。**通过后才能开工 D1。**
+
+> D0 出口通过(2026-07-03 09:20 Asia/Shanghai):真实 CLI 全流程返回 AnalysisContext v8/data_quality v6;quotes 11/11、最旧 as_of=`2026-07-02T20:00:00+00:00`、freshness=stale,A 股 single_source=false、us/crypto=true;news 10 条且 freshness=fresh;history_backfill=partial(37 请求,2 ok,28 skipped_cached,7 failed);technical_indicators=partial 且 `a:588000` 明确 missing;rotation=partial(30 可用/7 missing);upcoming_events 过滤 1 个已发生事件。磁盘复核:可用缓存为 59~61 records,7 个 rotation missing 中 6 个无文件、`a_588000.json` 仅 2 records,与 data_quality 完全一致。D1 开工门槛已满足。
 
 ### D1-1 A 股历史 K 线接入腾讯第二源 + 回填降级链
 

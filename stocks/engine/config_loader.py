@@ -30,7 +30,8 @@ DEFAULT_ENGINE_CONFIG = {
         "finnhub": {"enabled": True},
         "fallback": {
             "a": ["eastmoney_a", "tencent_a"],
-            "us": ["finnhub"],
+            "us": [],
+            "crypto": [],
         },
     },
     "fetcher": {

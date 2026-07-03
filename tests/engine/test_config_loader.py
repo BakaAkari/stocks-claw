@@ -119,6 +119,8 @@ class TestLoadEngineConfig:
         assert config["fetcher"]["max_retries"] == 1
         assert config["fetcher"]["retry_delay"] == 1.0
         assert config["providers"]["tencent_a"]["enabled"] is True
+        assert config["providers"]["fallback"]["us"] == []
+        assert config["providers"]["fallback"]["crypto"] == []
         assert config["cache"]["history_ttl"] == 7776000
         assert config["cache"]["history_dir"] is None
         assert config["calendar"] == {

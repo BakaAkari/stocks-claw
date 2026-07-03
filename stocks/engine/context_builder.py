@@ -358,7 +358,7 @@ class ContextBuilder:
     ) -> dict[str, dict]:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 5,
+            "schema_version": 6,
             "generated_at": generated_at,
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
@@ -574,6 +574,9 @@ class ContextBuilder:
             by_market[market] = {
                 "status": market_status,
                 "as_of": market_oldest_as_of.isoformat() if market_oldest_as_of else None,
+                "single_source": self._is_single_source(
+                    market, record.get("primary_provider")
+                ),
                 "requested_count": market_requested,
                 "item_count": market_quote_count,
                 "primary_provider": record.get("primary_provider"),
@@ -602,6 +605,16 @@ class ContextBuilder:
             "by_market": by_market,
             "degradation": degradation_log,
         }
+
+    def _is_single_source(self, market: str, primary_provider: Optional[str]) -> bool:
+        """从 DataFetcher 的实际 registry/config 计算单源事实。"""
+        checker = getattr(self.fetcher, "is_single_source", None)
+        if callable(checker):
+            result = checker(market, primary_provider)
+            if isinstance(result, bool):
+                return result
+        # 测试替身或旧 fetcher 无法证明存在独立备用源时，保守标为单源。
+        return True
 
     def _news_quality(self, generated_at: str, news: list[NewsItem], requested: bool) -> dict:
         if not requested:

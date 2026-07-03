@@ -134,7 +134,7 @@ class TestBasicBuild:
         assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
-        assert context.data_quality["schema_version"] == 5
+        assert context.data_quality["schema_version"] == 6
         assert context.data_quality["quotes"]["status"] == "ok"
         assert context.data_quality["quotes"]["item_count"] == 1
         assert context.data_quality["news"]["status"] == "not_requested"
@@ -149,7 +149,7 @@ class TestBasicBuild:
             Path(__file__).resolve().parents[2] / "stocks" / "DATA_MODEL.md"
         ).read_text(encoding="utf-8")
         assert "`AnalysisContext.schema_version` 当前为 `8`" in data_model
-        assert "## data_quality v5" in data_model
+        assert "## data_quality v6" in data_model
 
     async def test_build_no_instruments(self, mock_fetcher, mock_scaffolds, sample_assets):
         """无 instruments 时 quotes 为空"""
@@ -703,9 +703,39 @@ class TestDataQuality:
         assert quality["missing_as_of"] == 1
         assert quality["by_market"]["a"]["as_of"] is None
 
+    def test_quote_quality_reports_single_source_by_market(self, mock_scaffolds):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        fetcher = Mock()
+        fetcher.is_single_source = Mock(
+            side_effect=lambda market, primary: market in {"us", "crypto"}
+        )
+        builder = ContextBuilder(fetcher, portfolio_scaffold, market_scaffold)
+        instruments = [
+            Instrument("000001", "平安银行", "a"),
+            Instrument("AAPL", "Apple", "us"),
+            Instrument("BINANCE:BTCUSDT", "Bitcoin", "crypto"),
+        ]
+        quotes = {
+            instrument.market: [Quote(instrument, price=10.0)]
+            for instrument in instruments
+        }
+        degradation = [
+            {"market": "a", "primary_provider": "tencent_a", "result": "success"},
+            {"market": "us", "primary_provider": "finnhub", "result": "success"},
+            {"market": "crypto", "primary_provider": "finnhub", "result": "success"},
+        ]
+
+        quality = builder._quote_quality(
+            "2026-07-03T08:00:00+00:00", instruments, quotes, degradation
+        )
+
+        assert quality["by_market"]["a"]["single_source"] is False
+        assert quality["by_market"]["us"]["single_source"] is True
+        assert quality["by_market"]["crypto"]["single_source"] is True
+
 
 class TestAnalysisContextSerialization:
-    async def test_to_dict_includes_schema_v7_decision_inputs_and_data_quality(
+    async def test_to_dict_includes_schema_v8_decision_inputs_and_data_quality(
         self,
         mock_fetcher,
         mock_scaffolds,
@@ -713,7 +743,7 @@ class TestAnalysisContextSerialization:
         sample_instruments,
         temp_dir,
     ):
-        """to_dict 输出 schema v7、前瞻输入、指标、建议与 data_quality。"""
+        """to_dict 输出 schema v8、前瞻输入、指标、建议与 data_quality。"""
         portfolio_scaffold, market_scaffold = mock_scaffolds
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
         builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold, history_cache=cache)
@@ -815,7 +845,7 @@ class TestHistoryBackfillQuality:
             instruments=sample_instruments,
             recent_snapshots=[],
         )
-        assert context.data_quality["schema_version"] == 5
+        assert context.data_quality["schema_version"] == 6
         assert "history_backfill" in context.data_quality
         assert context.data_quality["history_backfill"]["status"] == "not_requested"
 

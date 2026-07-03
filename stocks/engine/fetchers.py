@@ -221,16 +221,38 @@ class DataFetcher:
         self, market: str, exclude: str
     ) -> Optional[object]:
         """为指定市场选择备用 Provider（排除已失败的主 Provider）"""
-        configured = self.fallback_order.get(market, [])
-        candidates = configured or [
-            provider.name for provider in self.registry.list_for_market(market)
-        ]
+        for name in self.independent_fallback_names(market, exclude):
+            provider = self.registry.get(name)
+            if provider is not None:
+                return provider
+        return None
+
+    def independent_fallback_names(self, market: str, exclude: str) -> list[str]:
+        """返回配置允许且真实可用的独立备用源名。"""
+        if market in self.fallback_order:
+            configured = self.fallback_order.get(market)
+            candidates = configured if isinstance(configured, list) else []
+        else:
+            candidates = [
+                provider.name for provider in self.registry.list_for_market(market)
+            ]
+        names: list[str] = []
         for name in candidates:
             provider = self.registry.get(name)
             if (
                 provider is not None
                 and name != exclude
                 and market in getattr(provider, "supported_markets", [])
+                and name not in names
             ):
-                return provider
-        return None
+                names.append(name)
+        return names
+
+    def is_single_source(
+        self, market: str, primary_name: Optional[str] = None
+    ) -> bool:
+        """该市场在当前 registry/config 下是否没有独立行情备用源。"""
+        if not primary_name:
+            primary = self._pick_provider(market)
+            primary_name = getattr(primary, "name", "") if primary else ""
+        return not self.independent_fallback_names(market, primary_name)

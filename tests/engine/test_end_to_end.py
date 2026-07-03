@@ -360,7 +360,7 @@ class TestJSONSerialization:
         d = context.to_dict()
 
         quality = d["data_quality"]
-        assert quality["schema_version"] == 5
+        assert quality["schema_version"] == 6
         assert quality["quotes"]["item_count"] == 1
         assert quality["news"]["sources"] == {"rss:36kr": 1}
         assert quality["market_events"]["event_count"] == 1

@@ -192,13 +192,13 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
 精确值仍存在于结构化 `assets`，供受控调用方按需使用。
 
-## data_quality v5
+## data_quality v6
 
 `data_quality` 包含：
 
 - `currency_conversion`：每项外币换算状态、来源与失败统计
 - `quotes`：真实行情 `as_of` 的最旧值、缺失时间数量、请求/返回数量、按市场
-  `as_of` 与状态、Provider 与降级记录
+  `as_of` 与状态、`single_source` 单源事实、Provider 与降级记录
 - `news`：请求状态、来源分布和时效
 - `macro`：来源、已填充/缺失字段和错误
 - `technical_indicators`：覆盖与缺失标的
@@ -223,8 +223,9 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `not_requested` 和 `not_configured`。美股单源失败额外标记
 `single_source_failed`，历史价格回填标记为 stale。
 
-`schema_version` 语义：v5 相对 v4 为 `upcoming_events` 增加
-`expired_count`；v4 相对 v3 新增 `upcoming_events`、`rotation` 与
+`schema_version` 语义：v6 相对 v5 为 `quotes.by_market` 增加
+`single_source`；v5 相对 v4 为 `upcoming_events` 增加 `expired_count`；
+v4 相对 v3 新增 `upcoming_events`、`rotation` 与
 `action_signals` 三个节点；v3 相对 v2 新增 `history_backfill` 节点；
 其余节点结构不变。
 字段增减为破坏性变更，须同步更新本文件、
