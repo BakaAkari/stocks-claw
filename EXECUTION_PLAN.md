@@ -126,11 +126,13 @@
 
 ### S2-0 基线核验
 
-- [ ] 跑全局验收四道闸,记录 pytest 通过数(上一基线:S1-5 时 460 passed),不一致列差异。
-- [ ] 【验证前提】grep 确认:`FinancialAsset` 含 `instrument_key/quantity/tradable` 且无 `cost_basis`;`stocks/engine/scaffolds.py` 存在 asset_type 关键词映射表;`convert_to_cny` 仅支持 CNY/USD;`AnalysisContext.schema_version == 11`;`_ADVICE_TRIGGER_TYPES` 仅含 price/pct_change 四型;资产文件真实加载入口(grep `financial_assets`)的函数与路径。
-- [ ] 定位 `raw_prompt_input` 金额区间脱敏的实现位置与行号(供 S2-4);定位 HTTP `include_amounts` 剥离逻辑行号(供 S2-4 决定是否同步)。
+- [x] 跑全局验收四道闸,记录 pytest 通过数(上一基线:S1-5 时 460 passed),不一致列差异。
+- [x] 【验证前提】grep 确认:`FinancialAsset` 含 `instrument_key/quantity/tradable` 且无 `cost_basis`;`stocks/engine/scaffolds.py` 存在 asset_type 关键词映射表;`convert_to_cny` 仅支持 CNY/USD;`AnalysisContext.schema_version == 11`;`_ADVICE_TRIGGER_TYPES` 仅含 price/pct_change 四型;资产文件真实加载入口(grep `financial_assets`)的函数与路径。
+- [x] 定位 `raw_prompt_input` 金额区间脱敏的实现位置与行号(供 S2-4);定位 HTTP `include_amounts` 剥离逻辑行号(供 S2-4 决定是否同步)。
 
 **验收**:基线数字与 grep 证据写入完成记录;与 PLAN §2 冲突先修 PLAN。
+
+> 完成:5493c8d S2-0 基线核验完成,当前 pytest 基线为 461 passed(较 S1-5 记录 460 passed +1,不影响 PLAN §2 已归档状态);CLI smoke `asset_count=7`, `schema_version=11`, `data_quality_schema=9` | 证据:四道闸 `uv run ruff check .`=All checks passed,`uv run python -m pytest -q`=461 passed,`uv run python -m compileall -q stocks tests`=0,`uv run python -m stocks.adapters.cli --output json --no-news --no-quotes`=JSON ok;`FinancialAsset` 字段 `stocks/domain/models.py:223/232/233/234`,全文件 grep 未见 `cost_basis`;asset_type 关键词映射 `stocks/engine/scaffolds.py:8/47`;`convert_to_cny` 仅 CNY/USD 自动换算 `stocks/engine/exchange_rate.py:163/174/176/185`;`AnalysisContext.schema_version` 为 11 `stocks/domain/models.py:853`;trigger 四型 `stocks/domain/models.py:377-381`;资产加载入口 `.local/financial_assets.json`→`stocks/data/financial_assets.json` 在 `stocks/engine/__init__.py:373-384`,写回入口 `:938`;raw_prompt 金额区间脱敏在 `stocks/engine/context_builder.py:1049/1057/1063/1534`;HTTP `include_amounts` 与剥离逻辑在 `stocks/adapters/http.py:138/149/185/202/239/245`。
 
 ### S2-1 v2 领域模型(纯模型层,不接线)
 
