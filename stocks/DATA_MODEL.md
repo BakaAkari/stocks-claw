@@ -25,7 +25,7 @@
 
 ## FinancialAsset
 
-用户确认的单条金融资产：
+用户确认的单条 v1 金融资产：
 
 - `name`、`platform`、`amount`
 - `asset_type`、`notes`、`confirmed`
@@ -39,6 +39,46 @@
 
 持久化只写原始资产字段与用户确认的映射字段；`amount_cny` 等运行时派生字段不写回。
 换算失败的外币资产仍保留原金额和币种，但 `valuation_cny` 为 `null`，不能静默计入组合总值。
+
+## Account / Position v2（纯模型层，尚未接线）
+
+`FinancialAsset` 仍是当前加载与上下文链路的 v1 兼容层。v2 模型已在
+`stocks/domain/models.py` 中落盘，但在 S2-1 阶段**不改变资产文件格式、不改变
+AnalysisContext、不接线 CLI/MCP/context_builder**。
+
+`Account` 表示账户层级：
+
+- `account_id`、`display_name`
+- `institution_type ∈ {brokerage, fund_platform, bank, insurance, manual}`
+- `market_scope?`
+- `base_currency`
+- `default_liquidity_tier?`
+- `notes?`
+
+`Position` 统一表达持仓、现金、手工资产、保险等资产事实：
+
+- `position_id`、`account_id`、`display_name`、`currency`
+- `classification`：`Classification {asset_class, product_type, subtype?, exposure_tags[]}`
+- `instrument?`：含 `instrument_key` 时仍复用 `market:code` 与当前支持市场 `a/us/crypto`
+- `holding?`：`Holding {quantity, unit ∈ {share, gram, unit}, cost_basis?}`
+- `valuation_input`：`ValuationInput {method, manual_amount?, as_of?}`，
+  `method ∈ {market_quote, fund_nav, manual_amount, precious_metal_quote, insurance_value}`
+- `liquidity`：`Liquidity {tradable?, rebalance_eligible?, tier, redemption_rule?, lockup_until?, maturity_date?}`，
+  `tier ∈ {cash, t0, t1, t2_plus, periodic_open, locked, unknown}`
+- `role?`、`reported_performance?`、`data_completeness`、`confirmed`、`notes?`
+
+受控词表：
+
+- `asset_class ∈ {cash, cash_equivalent, fixed_income, equity, commodity, insurance, alternative, unknown}`
+- `product_type ∈ {cash, money_market_fund, bank_wealth_management, fixed_income_plus_fund, mixed_fund, qdii_fund, feeder_fund, exchange_traded_fund, stock, short_treasury_etf, precious_metal_account, insurance_policy, manual_asset}`
+
+当前 v2 校验规则：
+
+- `market_quote` 必须有 `instrument.instrument_key` 与 `holding.quantity`
+- `manual_amount` / `insurance_value` 必须有 `valuation_input.manual_amount`
+- `insurance_policy` 默认 `liquidity.tradable=false`、`rebalance_eligible=false`、`tier=locked`
+- `data_completeness.missing_fields` 机器可读记录：上市持仓缺成本、手工估值缺 `as_of`、分类未知等
+- `to_storage_dict()` 不含任何运行时派生估值字段
 
 ## Investor profile
 

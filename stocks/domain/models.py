@@ -304,6 +304,458 @@ class FinancialAsset:
         return data
 
 
+_ACCOUNT_INSTITUTION_TYPES = {"brokerage", "fund_platform", "bank", "insurance", "manual"}
+_ASSET_CLASSES = {
+    "cash",
+    "cash_equivalent",
+    "fixed_income",
+    "equity",
+    "commodity",
+    "insurance",
+    "alternative",
+    "unknown",
+}
+_PRODUCT_TYPES = {
+    "cash",
+    "money_market_fund",
+    "bank_wealth_management",
+    "fixed_income_plus_fund",
+    "mixed_fund",
+    "qdii_fund",
+    "feeder_fund",
+    "exchange_traded_fund",
+    "stock",
+    "short_treasury_etf",
+    "precious_metal_account",
+    "insurance_policy",
+    "manual_asset",
+}
+_HOLDING_UNITS = {"share", "gram", "unit"}
+_VALUATION_METHODS = {
+    "market_quote",
+    "fund_nav",
+    "manual_amount",
+    "precious_metal_quote",
+    "insurance_value",
+}
+_LIQUIDITY_TIERS = {"cash", "t0", "t1", "t2_plus", "periodic_open", "locked", "unknown"}
+_COST_BASIS_METHODS = {"average"}
+
+
+def _require_string(value, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def _normalize_currency(value: Optional[str]) -> str:
+    return (value or "CNY").upper().strip()
+
+
+def _normalize_tag(value: str) -> str:
+    tag = value.strip().lower().replace("-", " ").replace("/", " ")
+    tag = re.sub(r"\s+", "_", tag)
+    tag = re.sub(r"[^a-z0-9_]+", "", tag)
+    return tag
+
+
+def _validate_choice(value: str, allowed: set[str], field_name: str) -> str:
+    if value not in allowed:
+        raise ValueError(f"{field_name} must be one of {sorted(allowed)}")
+    return value
+
+
+@dataclass(frozen=True)
+class Account:
+    """v2 账户层级；只保存用户确认的本地账户事实。"""
+
+    account_id: str
+    display_name: str
+    institution_type: str
+    market_scope: Optional[list[str]] = None
+    base_currency: str = "CNY"
+    default_liquidity_tier: Optional[str] = None
+    notes: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "account_id", _require_string(self.account_id, "account_id"))
+        object.__setattr__(self, "display_name", _require_string(self.display_name, "display_name"))
+        object.__setattr__(
+            self,
+            "institution_type",
+            _validate_choice(self.institution_type, _ACCOUNT_INSTITUTION_TYPES, "institution_type"),
+        )
+        object.__setattr__(self, "base_currency", _normalize_currency(self.base_currency))
+        if self.default_liquidity_tier is not None:
+            object.__setattr__(
+                self,
+                "default_liquidity_tier",
+                _validate_choice(
+                    self.default_liquidity_tier,
+                    _LIQUIDITY_TIERS,
+                    "default_liquidity_tier",
+                ),
+            )
+        if self.market_scope is not None:
+            if not isinstance(self.market_scope, list):
+                raise ValueError("market_scope must be a list or null")
+            object.__setattr__(self, "market_scope", [str(item).strip() for item in self.market_scope])
+
+    def to_dict(self) -> dict:
+        return {
+            "account_id": self.account_id,
+            "display_name": self.display_name,
+            "institution_type": self.institution_type,
+            "market_scope": self.market_scope,
+            "base_currency": self.base_currency,
+            "default_liquidity_tier": self.default_liquidity_tier,
+            "notes": self.notes,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Account":
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class CostBasis:
+    """持仓成本事实；平均成本是 v2 首个支持方法。"""
+
+    method: str = "average"
+    unit_cost: Optional[float] = None
+    cost_amount: Optional[float] = None
+    currency: str = "CNY"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "method", _validate_choice(self.method, _COST_BASIS_METHODS, "cost_basis.method"))
+        object.__setattr__(self, "currency", _normalize_currency(self.currency))
+        unit_cost = _normalize_optional_float(self.unit_cost, "cost_basis.unit_cost")
+        cost_amount = _normalize_optional_float(self.cost_amount, "cost_basis.cost_amount")
+        if unit_cost is None and cost_amount is None:
+            raise ValueError("cost_basis requires unit_cost or cost_amount")
+        if unit_cost is not None and unit_cost < 0:
+            raise ValueError("cost_basis.unit_cost cannot be negative")
+        if cost_amount is not None and cost_amount < 0:
+            raise ValueError("cost_basis.cost_amount cannot be negative")
+        object.__setattr__(self, "unit_cost", unit_cost)
+        object.__setattr__(self, "cost_amount", cost_amount)
+
+    def to_dict(self) -> dict:
+        return {
+            "method": self.method,
+            "unit_cost": self.unit_cost,
+            "cost_amount": self.cost_amount,
+            "currency": self.currency,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> Optional["CostBasis"]:
+        if data is None:
+            return None
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class Holding:
+    """持有数量与成本。"""
+
+    quantity: float
+    unit: str = "share"
+    cost_basis: Optional[CostBasis] = None
+
+    def __post_init__(self) -> None:
+        quantity = _normalize_optional_float(self.quantity, "holding.quantity")
+        if quantity is None or quantity < 0:
+            raise ValueError("holding.quantity must be a non-negative number")
+        object.__setattr__(self, "quantity", quantity)
+        object.__setattr__(self, "unit", _validate_choice(self.unit, _HOLDING_UNITS, "holding.unit"))
+        if isinstance(self.cost_basis, dict):
+            object.__setattr__(self, "cost_basis", CostBasis.from_dict(self.cost_basis))
+
+    def to_dict(self) -> dict:
+        return {
+            "quantity": self.quantity,
+            "unit": self.unit,
+            "cost_basis": self.cost_basis.to_dict() if self.cost_basis else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> Optional["Holding"]:
+        if data is None:
+            return None
+        if "quantity" not in data:
+            raise ValueError("holding.quantity must be a non-negative number")
+        return cls(
+            quantity=data["quantity"],
+            unit=data.get("unit", "share"),
+            cost_basis=CostBasis.from_dict(data.get("cost_basis")),
+        )
+
+
+@dataclass(frozen=True)
+class Classification:
+    """资产经济属性与暴露标签；替代 v1 自由文本 asset_type。"""
+
+    asset_class: str
+    product_type: str
+    subtype: Optional[str] = None
+    exposure_tags: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "asset_class", _validate_choice(self.asset_class, _ASSET_CLASSES, "asset_class"))
+        object.__setattr__(self, "product_type", _validate_choice(self.product_type, _PRODUCT_TYPES, "product_type"))
+        if not isinstance(self.exposure_tags, list):
+            raise ValueError("exposure_tags must be a list")
+        tags = []
+        for item in self.exposure_tags:
+            tag = _normalize_tag(str(item))
+            if tag and tag not in tags:
+                tags.append(tag)
+        object.__setattr__(self, "exposure_tags", tags)
+
+    def to_dict(self) -> dict:
+        return {
+            "asset_class": self.asset_class,
+            "product_type": self.product_type,
+            "subtype": self.subtype,
+            "exposure_tags": list(self.exposure_tags),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Classification":
+        return cls(
+            asset_class=data.get("asset_class", "unknown"),
+            product_type=data.get("product_type", "manual_asset"),
+            subtype=data.get("subtype"),
+            exposure_tags=data.get("exposure_tags", []),
+        )
+
+
+@dataclass(frozen=True)
+class ValuationInput:
+    """估值输入路由；只保存源事实，不保存派生市值。"""
+
+    method: str
+    manual_amount: Optional[float] = None
+    as_of: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "method", _validate_choice(self.method, _VALUATION_METHODS, "valuation_input.method"))
+        manual_amount = _normalize_optional_float(self.manual_amount, "valuation_input.manual_amount")
+        if manual_amount is not None and manual_amount < 0:
+            raise ValueError("valuation_input.manual_amount cannot be negative")
+        object.__setattr__(self, "manual_amount", manual_amount)
+
+    def to_dict(self) -> dict:
+        return {"method": self.method, "manual_amount": self.manual_amount, "as_of": self.as_of}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ValuationInput":
+        return cls(
+            method=data.get("method", "manual_amount"),
+            manual_amount=data.get("manual_amount"),
+            as_of=data.get("as_of"),
+        )
+
+
+@dataclass(frozen=True)
+class Liquidity:
+    """可交易性、可调仓性与流动性。"""
+
+    tradable: Optional[bool] = None
+    rebalance_eligible: Optional[bool] = None
+    tier: str = "unknown"
+    redemption_rule: Optional[str] = None
+    lockup_until: Optional[str] = None
+    maturity_date: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tier", _validate_choice(self.tier, _LIQUIDITY_TIERS, "liquidity.tier"))
+        if self.tradable is not None and not isinstance(self.tradable, bool):
+            raise ValueError("liquidity.tradable must be bool or null")
+        if self.rebalance_eligible is not None and not isinstance(self.rebalance_eligible, bool):
+            raise ValueError("liquidity.rebalance_eligible must be bool or null")
+
+    def to_dict(self) -> dict:
+        return {
+            "tradable": self.tradable,
+            "rebalance_eligible": self.rebalance_eligible,
+            "tier": self.tier,
+            "redemption_rule": self.redemption_rule,
+            "lockup_until": self.lockup_until,
+            "maturity_date": self.maturity_date,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> "Liquidity":
+        if data is None:
+            return cls()
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class ReportedPerformance:
+    """渠道报告的对账快照；不替代可计算 PnL。"""
+
+    unrealized_pnl: Optional[float] = None
+    cumulative_pnl: Optional[float] = None
+    as_of: str = ""
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "unrealized_pnl", _normalize_optional_float(self.unrealized_pnl, "reported_performance.unrealized_pnl"))
+        object.__setattr__(self, "cumulative_pnl", _normalize_optional_float(self.cumulative_pnl, "reported_performance.cumulative_pnl"))
+        object.__setattr__(self, "as_of", _require_string(self.as_of, "reported_performance.as_of"))
+        object.__setattr__(self, "source", _require_string(self.source, "reported_performance.source"))
+
+    def to_dict(self) -> dict:
+        return {
+            "unrealized_pnl": self.unrealized_pnl,
+            "cumulative_pnl": self.cumulative_pnl,
+            "as_of": self.as_of,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> Optional["ReportedPerformance"]:
+        if data is None:
+            return None
+        return cls(**data)
+
+
+@dataclass(frozen=True)
+class Position:
+    """v2 持仓模型；统一表达证券、基金、现金、手工资产和保险。"""
+
+    position_id: str
+    account_id: str
+    display_name: str
+    currency: str
+    classification: Classification
+    valuation_input: ValuationInput
+    liquidity: Liquidity
+    instrument: Optional[dict] = None
+    holding: Optional[Holding] = None
+    role: Optional[str] = None
+    reported_performance: Optional[ReportedPerformance] = None
+    data_completeness: dict = field(default_factory=dict)
+    confirmed: bool = True
+    notes: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "position_id", _require_string(self.position_id, "position_id"))
+        object.__setattr__(self, "account_id", _require_string(self.account_id, "account_id"))
+        object.__setattr__(self, "display_name", _require_string(self.display_name, "display_name"))
+        object.__setattr__(self, "currency", _normalize_currency(self.currency))
+        if isinstance(self.classification, dict):
+            object.__setattr__(self, "classification", Classification.from_dict(self.classification))
+        if isinstance(self.valuation_input, dict):
+            object.__setattr__(self, "valuation_input", ValuationInput.from_dict(self.valuation_input))
+        if isinstance(self.liquidity, dict):
+            object.__setattr__(self, "liquidity", Liquidity.from_dict(self.liquidity))
+        if isinstance(self.holding, dict):
+            object.__setattr__(self, "holding", Holding.from_dict(self.holding))
+        if isinstance(self.reported_performance, dict):
+            object.__setattr__(
+                self,
+                "reported_performance",
+                ReportedPerformance.from_dict(self.reported_performance),
+            )
+        instrument = dict(self.instrument or {})
+        if instrument.get("instrument_key") is not None:
+            instrument["instrument_key"] = _normalize_instrument_key(instrument.get("instrument_key"))
+        object.__setattr__(self, "instrument", instrument or None)
+
+        liquidity = self.liquidity
+        if self.classification.product_type == "insurance_policy":
+            liquidity = Liquidity(
+                tradable=False if liquidity.tradable is None else liquidity.tradable,
+                rebalance_eligible=False
+                if liquidity.rebalance_eligible is None
+                else liquidity.rebalance_eligible,
+                tier="locked" if liquidity.tier == "unknown" else liquidity.tier,
+                redemption_rule=liquidity.redemption_rule,
+                lockup_until=liquidity.lockup_until,
+                maturity_date=liquidity.maturity_date,
+            )
+            object.__setattr__(self, "liquidity", liquidity)
+
+        self._validate_valuation_contract()
+        object.__setattr__(self, "data_completeness", self._derive_completeness())
+
+    @property
+    def instrument_key(self) -> Optional[str]:
+        return (self.instrument or {}).get("instrument_key")
+
+    def _validate_valuation_contract(self) -> None:
+        method = self.valuation_input.method
+        if method in {"manual_amount", "insurance_value"}:
+            if self.valuation_input.manual_amount is None:
+                raise ValueError(f"{method} requires valuation_input.manual_amount")
+        if method == "market_quote":
+            if not self.instrument_key:
+                raise ValueError("market_quote requires instrument_key")
+            if self.holding is None or self.holding.quantity is None:
+                raise ValueError("market_quote requires holding.quantity")
+
+    def _derive_completeness(self) -> dict:
+        missing: list[str] = []
+        if self.classification.asset_class == "unknown":
+            missing.append("classification")
+        if self.valuation_input.method in {"manual_amount", "insurance_value"} and not self.valuation_input.as_of:
+            missing.append("valuation_as_of")
+        if self.valuation_input.method == "market_quote":
+            if not self.instrument_key:
+                missing.append("instrument_key")
+            if self.holding is None:
+                missing.append("quantity")
+                missing.append("cost_basis")
+            elif self.holding.cost_basis is None:
+                missing.append("cost_basis")
+        return {"missing_fields": missing}
+
+    def to_dict(self) -> dict:
+        return {
+            "position_id": self.position_id,
+            "account_id": self.account_id,
+            "display_name": self.display_name,
+            "currency": self.currency,
+            "classification": self.classification.to_dict(),
+            "instrument": dict(self.instrument) if self.instrument else None,
+            "holding": self.holding.to_dict() if self.holding else None,
+            "valuation_input": self.valuation_input.to_dict(),
+            "liquidity": self.liquidity.to_dict(),
+            "role": self.role,
+            "reported_performance": (
+                self.reported_performance.to_dict() if self.reported_performance else None
+            ),
+            "data_completeness": dict(self.data_completeness),
+            "confirmed": self.confirmed,
+            "notes": self.notes,
+        }
+
+    def to_storage_dict(self) -> dict:
+        return self.to_dict()
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Position":
+        return cls(
+            position_id=data.get("position_id", ""),
+            account_id=data.get("account_id", ""),
+            display_name=data.get("display_name", ""),
+            currency=data.get("currency", "CNY"),
+            classification=Classification.from_dict(data.get("classification", {})),
+            instrument=data.get("instrument"),
+            holding=Holding.from_dict(data.get("holding")),
+            valuation_input=ValuationInput.from_dict(data.get("valuation_input", {})),
+            liquidity=Liquidity.from_dict(data.get("liquidity")),
+            role=data.get("role"),
+            reported_performance=ReportedPerformance.from_dict(data.get("reported_performance")),
+            confirmed=data.get("confirmed", True),
+            notes=data.get("notes"),
+        )
+
+
 @dataclass(frozen=True)
 class PortfolioMapping:
     """组合映射脚手架 — 轻量规则输出，供 LLM 参考"""

@@ -138,13 +138,15 @@
 
 **文件**:`stocks/domain/models.py`、`stocks/DATA_MODEL.md`、`tests/engine/test_asset_v2_models.py`(新增)
 
-- [ ] 【验证前提】grep 确认 models.py 无 `Position`/`Account`/`CostBasis`/`Holding`/`Classification`/`ValuationInput`/`Liquidity` 类名冲突。
-- [ ] 新增 frozen dataclass:`Account {account_id, display_name, institution_type ∈ {brokerage, fund_platform, bank, insurance, manual}, market_scope?, base_currency, default_liquidity_tier?, notes?}`;`CostBasis {method="average", unit_cost?, cost_amount?, currency}`(两者至少其一);`Holding {quantity, unit ∈ {share, gram, unit}, cost_basis?}`;`Classification {asset_class, product_type, subtype?, exposure_tags[]}`(受控词表按设计文档 §3.3 定义为模块级 frozenset;tags 小写蛇形归一化);`ValuationInput {method ∈ {market_quote, fund_nav, manual_amount, precious_metal_quote, insurance_value}, manual_amount?, as_of?}`;`Liquidity {tradable?, rebalance_eligible?, tier ∈ {cash, t0, t1, t2_plus, periodic_open, locked, unknown}, redemption_rule?, lockup_until?, maturity_date?}`;`ReportedPerformance {unrealized_pnl?, cumulative_pnl?, as_of, source}`;`Position {position_id, account_id, display_name, currency, classification, instrument?, holding?, valuation_input, liquidity, role?, reported_performance?, data_completeness, confirmed, notes?}`。
-- [ ] 校验:`manual_amount`/`insurance_value` 必带 `manual_amount + as_of`;`market_quote` 必带 `instrument_key + holding.quantity`;`insurance_policy` 默认 `rebalance_eligible=false, tier=locked`;`instrument_key` 复用 `_normalize_instrument_key`(市场仍限 a/us/crypto);`__post_init__` 计算 `data_completeness.missing_fields`(规则:上市持仓缺 cost_basis、manual 缺 as_of、classification 为 unknown 等,机器可读枚举)。
-- [ ] `to_dict`/`from_dict`/`to_storage_dict` 齐备;storage dict 不含任何派生字段;`FinancialAsset` 零改动。
-- [ ] 测试:受控枚举非法值拒绝、insurance 默认锁定、completeness 规则逐条、round-trip 无损。
+- [x] 【验证前提】grep 确认 models.py 无 `Position`/`Account`/`CostBasis`/`Holding`/`Classification`/`ValuationInput`/`Liquidity` 类名冲突。
+- [x] 新增 frozen dataclass:`Account {account_id, display_name, institution_type ∈ {brokerage, fund_platform, bank, insurance, manual}, market_scope?, base_currency, default_liquidity_tier?, notes?}`;`CostBasis {method="average", unit_cost?, cost_amount?, currency}`(两者至少其一);`Holding {quantity, unit ∈ {share, gram, unit}, cost_basis?}`;`Classification {asset_class, product_type, subtype?, exposure_tags[]}`(受控词表按设计文档 §3.3 定义为模块级 frozenset;tags 小写蛇形归一化);`ValuationInput {method ∈ {market_quote, fund_nav, manual_amount, precious_metal_quote, insurance_value}, manual_amount?, as_of?}`;`Liquidity {tradable?, rebalance_eligible?, tier ∈ {cash, t0, t1, t2_plus, periodic_open, locked, unknown}, redemption_rule?, lockup_until?, maturity_date?}`;`ReportedPerformance {unrealized_pnl?, cumulative_pnl?, as_of, source}`;`Position {position_id, account_id, display_name, currency, classification, instrument?, holding?, valuation_input, liquidity, role?, reported_performance?, data_completeness, confirmed, notes?}`。
+- [x] 校验:`manual_amount`/`insurance_value` 必带 `manual_amount` 且缺 `as_of` 进入 `data_completeness.missing_fields`(与 S2-2 v1→v2 内存映射 as_of=null 要求一致);`market_quote` 必带 `instrument_key + holding.quantity`;`insurance_policy` 默认 `rebalance_eligible=false, tier=locked`;`instrument_key` 复用 `_normalize_instrument_key`(市场仍限 a/us/crypto);`__post_init__` 计算 `data_completeness.missing_fields`(规则:上市持仓缺 cost_basis、manual 缺 as_of、classification 为 unknown 等,机器可读枚举)。
+- [x] `to_dict`/`from_dict`/`to_storage_dict` 齐备;storage dict 不含任何派生字段;`FinancialAsset` 零改动。
+- [x] 测试:受控枚举非法值拒绝、insurance 默认锁定、completeness 规则逐条、round-trip 无损。
 
 **验收**:全局四道闸通过;`FinancialAsset` 既有测试零改动全绿。
+
+> 完成:59fa539 S2-1 v2 领域模型完成,新增纯模型层与测试,未接线 context/CLI/MCP/资产加载,`FinancialAsset` 未改动 | 证据:类定义 `stocks/domain/models.py:369/421/459/496/535/562/597/627`;DATA_MODEL v2 纯模型说明 `stocks/DATA_MODEL.md:43/77-80`;测试 `tests/engine/test_asset_v2_models.py:15/49/66/83/142/147`;局部测试 `uv run python -m pytest tests/engine/test_asset_v2_models.py -q`=7 passed;全局闸 `uv run ruff check .`=All checks passed,`uv run python -m pytest -q`=468 passed,`uv run python -m compileall -q stocks tests`=0,CLI smoke JSON ok且 `schema_version=11`/`data_quality_schema=9`。
 
 ### S2-2 v2 文件格式与双格式加载(不自动写回)
 
