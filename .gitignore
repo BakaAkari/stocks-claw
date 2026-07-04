@@ -21,3 +21,4 @@ __pycache__/
 data/snapshots/
 data/cache/
 stocks/data/history/
+_to_delete/

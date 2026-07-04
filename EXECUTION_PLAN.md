@@ -8,7 +8,7 @@
 
 ## 使用说明(执行 Agent 必读)
 
-1. **读**:`PLAN.md`(尤其 §2 状态、§6 禁止事项、§7 执行协议)→ 本使用说明 → 认领的任务。当前队列:**S0 → S1-1 → S1-2 → S1-3 → S1-4 → S1-5 → S1-E**,严格顺序,不得越级。
+1. **读**:`PLAN.md`(尤其 §2 状态、§6 禁止事项、§7 执行协议)→ 本使用说明 → 认领的任务。当前队列:**S0 → S1-1 → S1-2 → S1-3 → S1-4 → S1-5 → S1-E → S2-0 → S2-1 → S2-2 → S2-3 → S2-4 → S2-5 → S2-6 → S2-7 → S2-E**,严格顺序,不得越级;**S1-E 未关闭前 S2 组不得开工**。
 2. 每完成一个任务,跑全局验收(文末),全部通过后才能进入下一任务。
 3. 勾选格式:完成后把 `- [ ]` 改为 `- [x]`,任务末尾追加一行 `> 完成:<commit> <一句话说明> | 证据:<grep 命中行号/测试名及关键断言>`。**只写 commit hash 无效;勾选未验证的项是最严重违规。**
 4. 前提不成立(代码已改过、文件不存在等)→ 记 `> 跳过:<原因>`,不改代码,报告用户。
@@ -114,9 +114,121 @@
 
 ---
 
+## 切片 2 — 资产数据结构 v2 与止盈止损基建(S2 组)
+
+**用户场景(本切片要兑现的体验)**:"系统认识我的复合型资产——保险是动不了的固定资金,基金理财按暴露板块管理,股票 ETF 逐支带成本;它能算出我每笔持仓的真实盈亏和跨包装的暴露集中度,能把'浮盈 20% 止盈一半、回到成本价清仓'写成机器可核对的触发器,并且永远不建议我动那些动不了的钱。"
+
+**立项依据(2026-07-04 用户裁决,见 PLAN §9)**:三决策点——①新增 `Position`/`Account` dataclass,`FinancialAsset` 保留为 v1 兼容层;②加载 v1 只做内存映射不自动写回,迁移由用户确认的一次性命令完成;③废除 `raw_prompt_input` 金额区间脱敏,上下文使用真实金额。设计依据:`docs/archive/ASSET_ENTRY_REDESIGN_20260704_zh.md` 与 `docs/archive/VISION_GAP_AUDIT_20260704.md`。
+
+**边界(明确不做)**:不新增数据 Provider(基金净值/贵金属报价/USD 外 FX 为后续独立切片);不做交易流水/税务批次;不接线 DecisionEnvelope;不改内部 LLM;不自动解析 notes 提取金融事实;不引入数据库;不做主动推送(pull→push 为切片 3 候选)。
+
+### S2-0 基线核验
+
+- [ ] 跑全局验收四道闸,记录 pytest 通过数(上一基线:S1-5 时 460 passed),不一致列差异。
+- [ ] 【验证前提】grep 确认:`FinancialAsset` 含 `instrument_key/quantity/tradable` 且无 `cost_basis`;`stocks/engine/scaffolds.py` 存在 asset_type 关键词映射表;`convert_to_cny` 仅支持 CNY/USD;`AnalysisContext.schema_version == 11`;`_ADVICE_TRIGGER_TYPES` 仅含 price/pct_change 四型;资产文件真实加载入口(grep `financial_assets`)的函数与路径。
+- [ ] 定位 `raw_prompt_input` 金额区间脱敏的实现位置与行号(供 S2-4);定位 HTTP `include_amounts` 剥离逻辑行号(供 S2-4 决定是否同步)。
+
+**验收**:基线数字与 grep 证据写入完成记录;与 PLAN §2 冲突先修 PLAN。
+
+### S2-1 v2 领域模型(纯模型层,不接线)
+
+**文件**:`stocks/domain/models.py`、`stocks/DATA_MODEL.md`、`tests/engine/test_asset_v2_models.py`(新增)
+
+- [ ] 【验证前提】grep 确认 models.py 无 `Position`/`Account`/`CostBasis`/`Holding`/`Classification`/`ValuationInput`/`Liquidity` 类名冲突。
+- [ ] 新增 frozen dataclass:`Account {account_id, display_name, institution_type ∈ {brokerage, fund_platform, bank, insurance, manual}, market_scope?, base_currency, default_liquidity_tier?, notes?}`;`CostBasis {method="average", unit_cost?, cost_amount?, currency}`(两者至少其一);`Holding {quantity, unit ∈ {share, gram, unit}, cost_basis?}`;`Classification {asset_class, product_type, subtype?, exposure_tags[]}`(受控词表按设计文档 §3.3 定义为模块级 frozenset;tags 小写蛇形归一化);`ValuationInput {method ∈ {market_quote, fund_nav, manual_amount, precious_metal_quote, insurance_value}, manual_amount?, as_of?}`;`Liquidity {tradable?, rebalance_eligible?, tier ∈ {cash, t0, t1, t2_plus, periodic_open, locked, unknown}, redemption_rule?, lockup_until?, maturity_date?}`;`ReportedPerformance {unrealized_pnl?, cumulative_pnl?, as_of, source}`;`Position {position_id, account_id, display_name, currency, classification, instrument?, holding?, valuation_input, liquidity, role?, reported_performance?, data_completeness, confirmed, notes?}`。
+- [ ] 校验:`manual_amount`/`insurance_value` 必带 `manual_amount + as_of`;`market_quote` 必带 `instrument_key + holding.quantity`;`insurance_policy` 默认 `rebalance_eligible=false, tier=locked`;`instrument_key` 复用 `_normalize_instrument_key`(市场仍限 a/us/crypto);`__post_init__` 计算 `data_completeness.missing_fields`(规则:上市持仓缺 cost_basis、manual 缺 as_of、classification 为 unknown 等,机器可读枚举)。
+- [ ] `to_dict`/`from_dict`/`to_storage_dict` 齐备;storage dict 不含任何派生字段;`FinancialAsset` 零改动。
+- [ ] 测试:受控枚举非法值拒绝、insurance 默认锁定、completeness 规则逐条、round-trip 无损。
+
+**验收**:全局四道闸通过;`FinancialAsset` 既有测试零改动全绿。
+
+### S2-2 v2 文件格式与双格式加载(不自动写回)
+
+**文件**:资产读写模块(以 S2-0 grep 为准)、`stocks/domain/models.py`(仅映射函数)、`stocks/DATA_MODEL.md`、`tests/`
+
+- [ ] v2 文件格式:`{schema_version: 2, base_currency: "CNY", accounts: [], positions: []}`;加载器:顶层 list → v1,顶层 dict 且 `schema_version==2` → v2,其他 → 结构化错误。
+- [ ] v1→v2 内存映射函数(确定性,无猜测):`name→display_name`;`platform→` slug 化 `account_id` 并聚合 accounts;`amount→valuation_input{manual_amount, as_of: null}`(as_of 缺失计入 missing_fields);`asset_type→classification` 用显式映射表(迁入 scaffolds 关键词表全部键,新增 贵金属/保险/QDII/固收+/理财/货基;**映射不到 → asset_class=unknown,禁止默认成权益**);`instrument_key/quantity/tradable` 同名迁移(有 key+quantity → method=market_quote)。
+- [ ] **加载 v1 不写回文件**;data_quality 提示"v1 格式,建议迁移"。
+- [ ] v2 CRUD:CLI/MCP 资产写工具沿用确认式写入;文件为 v1 时拒写 v2 字段并提示先迁移。
+- [ ] 测试:v1 加载映射正确(含 unknown)、v2 round-trip、非法顶层报错、v1 加载后源文件字节不变。
+
+**验收**:现有 v1 示例文件加载零告警(除格式建议);全局四道闸通过。
+
+### S2-3 一次性确认迁移命令
+
+**文件**:`stocks/adapters/cli.py`、`stocks/adapters/mcp.py`、`AGENT_GUIDE.md`、`tests/`
+
+- [ ] CLI `--asset-migrate-v2`(MCP `asset_migrate_v2`):无 `--confirmed` 只输出完整迁移预览(每条 position 映射结果与 missing_fields),不落盘;`--confirmed` 时写 v2 并把原文件备份为 `financial_assets.v1.bak.json`。
+- [ ] 迁移后输出 missing_fields 汇总与补录优先级(上市持仓 cost_basis → 基金代码/份额 → 黄金克数 → 保险现金价值)。
+- [ ] 二次迁移(已是 v2)拒绝并提示;`AGENT_GUIDE.md` 增补用法。
+- [ ] 测试:未确认不写盘、确认后落盘且备份存在、二次迁移拒绝。
+
+**验收**:对真实资产文件执行一次预览(不确认),输出可读;全局四道闸通过。
+
+### S2-4 派生估值与上下文接线(AnalysisContext v11→v12)
+
+**文件**:`stocks/engine/context_builder.py`、`stocks/engine/scaffolds.py`、`stocks/domain/models.py`(AnalysisContext)、`stocks/DATA_MODEL.md`、`stocks/prompts/personal_advice_prompt.txt`、`ARCHITECTURE.md` §6、`tests/`
+
+- [ ] 【验证前提】grep test_context_builder 中 schema_version 断言行号;确认 trigger_review 历史收盘路径可取最新收盘价。
+- [ ] 每持仓运行时估值快照(仅上下文,不落盘):market_quote → 最新价(缺则历史收盘标 stale)× quantity → 原币市值 → CNY(复用 convert_to_cny 溯源);有 cost_basis → 未实现盈亏与盈亏比;manual → 金额直取,`as_of` >30 天标 `stale_manual`;每快照带 `{price_source, as_of, fx_source, flags}`。
+- [ ] 分桶改造:PortfolioMapping/DriftCheck 桶由 `asset_class` 确定性映射(equity→权益、fixed_income→固收、cash/cash_equivalent→现金、commodity+gold→黄金、insurance→锁定);关键词表仅存活于 v1→v2 映射函数内;`unknown` 单列"未分类"桶计入 data_quality,不并入约束桶。
+- [ ] 新增组合派生:`exposure_summary`(按 exposure_tags 聚合 CNY 市值与占比)、`liquidity_summary`(可动用 = tier ∈ {cash,t0,t1} 且 rebalance_eligible≠false;受限类现金;锁定)。
+- [ ] AnalysisContext v11→v12:新增 `position_valuations`、`exposure_summary`、`liquidity_summary`;data_quality 增 `asset_completeness` 节点;**三处同步**(DATA_MODEL + models/builder + schema 断言测试)。
+- [ ] **废除金额区间脱敏**(用户裁决③):raw_prompt_input 改用真实金额与市值;prompt 文件"资产描述方式"节的"不暴露具体金额数字"同步删除(仓位动作仍允许相对幅度表达);DATA_MODEL 与 ARCHITECTURE §6 对应段落同步;HTTP `include_amounts` 默认行为本卡不改(远程边界与本地上下文语义不同),仅在 ARCHITECTURE 注明。
+- [ ] raw_prompt_input 新增小节:【暴露集中度】(exposure_summary 对照约束上限)、【可动用资金】(三档)。
+- [ ] 测试:估值/盈亏计算(fixture 行情)、stale_manual、unknown 不入约束桶、跨包装同 tag 聚合、v12 断言、raw_prompt 真实金额与新小节。
+
+**验收**:fixture(≥1 上市持仓带成本、≥1 manual、≥2 个共享 gold tag 的不同包装)构建 context,盈亏与黄金聚合数字正确;全局四道闸通过。
+
+### S2-5 建议护栏与完备性告警
+
+**文件**:advice 校验路径(grep 为准,S1-2 记录指 `stocks/engine/__init__.py:632` 附近)、`stocks/engine/context_builder.py`、`stocks/DATA_MODEL.md`、`AGENT_GUIDE.md`、`tests/`
+
+- [ ] actions 保存校验扩展:target 命中 `rebalance_eligible=false` 持仓 → `add/increase/reduce/exit` 一律拒绝并给结构化错误;`tradable=false` 同理拒绝市场动作。
+- [ ] data_quality `asset_completeness` 告警(确定性逐条):已映射持仓不在行情宇宙、上市持仓缺 quantity、有 quantity 缺 cost_basis、manual 缺/过期 as_of、不支持币种、asset_class=unknown。
+- [ ] raw_prompt_input【复盘】前增数据边界声明:列出因缺口被降级的分析能力(如"XX 缺成本价,盈亏不可计")。
+- [ ] 测试:锁定资产 target 拒绝、每类告警触发/不触发、边界声明文案。
+
+**验收**:fixture 含保险资产时对其保存 reduce action 被拒且错误可读;全局四道闸通过。
+
+### S2-6 建议粒度推导与暴露代理映射
+
+**文件**:`stocks/domain/models.py` 或 `stocks/engine/scaffolds.py`(粒度推导)、`stocks/config/exposure_proxy.json`(新增)、`stocks/engine/context_builder.py`、`stocks/prompts/personal_advice_prompt.txt`、`stocks/DATA_MODEL.md`、`tests/`
+
+- [ ] 派生字段 `advice_granularity`(运行时推导,不落盘,不允许用户直接录入):`detailed` = 有 instrument_key + quantity;`sector` = 无实时可交易标的但 exposure_tags 非空且 rebalance_eligible≠false;`fixed` = rebalance_eligible=false。推导规则集中一处定义,测试逐条覆盖;用户补齐字段(如基金 instrument_key)后粒度自动升级,无需手工改分类。
+- [ ] 新增 `stocks/config/exposure_proxy.json`:`{tag: "market:code"}` 映射(初始:nasdaq100→us:QQQ、gold→a:518880、csi300→a:510300、tech_growth→us:XLK、short_treasury→us:SGOV;代理标的必须已在 watchlist/扫描池,加载时校验,不在则 data_quality 报 `proxy_not_in_universe`,禁止静默拉新行情)。
+- [ ] context 接线:`sector` 粒度持仓在 raw_prompt_input 组合小节标注其代理标的的最新信号与轮动排名(如"纳指QDII层(代理 us:QQQ):reduce_risk");代理信号仅作参考事实注入,**不得**把代理标的的价格触发器直接挂到场外基金上(净值≠代理价格,注明该边界)。
+- [ ] prompt 契约同步:调仓触发清单对 `sector` 层的动作以暴露层为 target(约束 bucket 或 tag),幅度用相对表达;对 `fixed` 层禁止给出任何动作。
+- [ ] 测试:三档粒度推导逐条、字段补齐后自动升级、proxy 配置校验、raw_prompt 代理标注、fixed 层无动作注入。
+
+**验收**:fixture 含一只带 nasdaq100 tag 的 manual 基金时,context 能回显 QQQ 的信号作为该层参考;全局四道闸通过。
+
+### S2-7 成本基准触发器与行情宇宙守门
+
+**文件**:`stocks/domain/models.py`(`_ADVICE_TRIGGER_TYPES`)、`stocks/engine/advice_review.py`、`stocks/engine/context_builder.py` 或 engine 编排层、`stocks/DATA_MODEL.md`、`stocks/prompts/personal_advice_prompt.txt`、`tests/`
+
+- [ ] 【验证前提】grep `_ADVICE_TRIGGER_TYPES` 当前四型与 `advice_review` 的 trigger 核对入口。
+- [ ] `_ADVICE_TRIGGER_TYPES` 增 `pnl_pct_above` / `pnl_pct_below`:基准 = 该 instrument 对应 `detailed` 持仓的 cost_basis(unit_cost 优先,否则 cost_amount/quantity);保存时校验:target 持仓必须存在且有 cost_basis,否则拒绝并提示先补成本(结构化错误,不静默降级为 pct_change)。
+- [ ] `advice_review` 核对扩展:pnl 型触发器按 (最新收盘 − 成本价)/成本价 计算,`observed` 附 `{cost_basis_unit, latest_price, pnl_pct}`;成本数据在核对时已缺失(持仓被删改)→ `no_data + reason`,不猜。
+- [ ] 行情宇宙守门:build_context 时每个 `detailed` 持仓的 instrument_key 若不在 watchlist/扫描池 → **自动加入本次行情与历史请求**(仅运行时,不写 watchlist 文件),data_quality 记 `auto_included_holdings`;历史回填失败照常走降级链并暴露。
+- [ ] prompt 契约同步:触发清单允许且鼓励对有成本的持仓使用 pnl 型触发器表达止盈/止损(如"浮盈 ≥20% 止盈一半");明示 pnl 基准是用户成本而非建议日。
+- [ ] 测试:pnl 触发器保存校验(无成本拒绝)、hit/not_fired 核对含负盈亏、守门自动纳入与失败暴露、prompt 注入。
+
+**验收**:fixture 中对一只带成本持仓保存 `pnl_pct_above 20` 触发器,推动价格 fixture 越过阈值后 trigger_review 报 fired 且 observed 含 pnl_pct;全局四道闸通过。
+
+### S2-E 切片 2 出口(用户验收,非工程验收)
+
+- [ ] 工程闸:四道闸全绿;默认测试零外网;`financial_assets.v1.bak.json` 与 `.local/` 均被 gitignore 覆盖;**真实资产文件位置裁决**:迁移后含真实持仓与成本,建议移至 `.local/`,`stocks/data/` 只留 example(需用户确认)。
+- [ ] 使用闸:用户完成真实迁移;9 只上市持仓(510300/512890/561560/588000/ITA/NEM/NVDA/SGOV/XLE)录入 quantity + cost_basis;≥1 次真实 build_context 输出逐持仓盈亏、黄金/纳指暴露聚合、可动用资金三档、≥1 条 sector 层代理信号;保存 ≥1 条 pnl 型止盈或止损触发器。
+- [ ] 价值裁决(用户亲答,写入 PLAN §9):①逐持仓盈亏与暴露聚合是否改变决策质量?②三档粒度与护栏是否符合直觉?③止盈止损触发器是否可用?④下一切片:主动推送(pull→push)、基金净值 Provider、还是其他?
+
+**说明**:价值裁决不许执行 Agent 代答。
+
+---
+
 ## Backlog(未排期,禁止开工;仅供了解方向,详见 PLAN §4/§5)
 
-估值数据层 / 定时扫描与触发推送 / 论点笔记本 / 组合归因 / 危机预案 / 分批执行计划 / DecisionPlan 引擎化与内部 LLM 双路径(原 G1~G7;G0 契约已落盘休眠,设计参考归档件)。
+定时扫描与触发推送(pull→push,切片 3 首选候选,依赖 S2 的成本触发器)/ 基金净值与贵金属报价 Provider(依赖用户补录基金代码/份额/克数)/ 估值数据层 / 论点笔记本 / 组合归因 / 危机预案 / 分批执行计划 / DecisionPlan 引擎化与内部 LLM 双路径(原 G1~G7;G0 契约已落盘休眠,设计参考归档件)。
 
 ---
 
