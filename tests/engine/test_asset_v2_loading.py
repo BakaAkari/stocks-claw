@@ -110,6 +110,28 @@ def test_invalid_top_level_is_structured_error(engine, tmp_path):
     assert engine._asset_load_warning == "asset_file_invalid_top_level"
 
 
+def test_legacy_crud_refuses_to_overwrite_v2_file(engine, tmp_path):
+    path = tmp_path / "financial_assets.json"
+    original = json.dumps({
+        "schema_version": 2,
+        "base_currency": "CNY",
+        "accounts": [],
+        "positions": [],
+    }, ensure_ascii=False)
+    path.write_text(original, encoding="utf-8")
+    assert engine._load_assets_from_file() == []
+    assert engine._asset_schema_version == 2
+
+    with pytest.raises(ValueError, match="schema_version=2"):
+        engine.add_asset(FinancialAsset(name="现金", platform="银行", amount=1000))
+    with pytest.raises(ValueError, match="schema_version=2"):
+        engine.update_asset("现金", amount=2000)
+    with pytest.raises(ValueError, match="schema_version=2"):
+        engine.remove_asset("现金")
+
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_v1_to_v2_mapping_covers_new_keywords_and_unknown() -> None:
     assert classification_from_v1_asset_type("贵金属").asset_class == "commodity"
     assert classification_from_v1_asset_type("保险").product_type == "insurance_policy"

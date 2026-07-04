@@ -957,13 +957,23 @@ class StocksEngine:
     # 资产 CRUD 接口
     # ------------------------------------------------------------------
 
+    def _ensure_legacy_asset_writable(self) -> None:
+        """S2 过渡期保护：旧 FinancialAsset CRUD 不能覆盖 v2 文件。"""
+        if self._asset_schema_version == 2:
+            raise ValueError(
+                "financial_assets.json is schema_version=2; legacy asset CRUD is disabled "
+                "to avoid downgrading the file. Use the v2 migration/edit flow."
+            )
+
     def add_asset(self, asset: FinancialAsset) -> None:
         """添加资产并持久化到本地文件。"""
+        self._ensure_legacy_asset_writable()
         self._assets.append(self._with_cny_valuation(asset))
         self._save_assets()
 
     def remove_asset(self, name: str) -> bool:
         """按名称移除资产并持久化。"""
+        self._ensure_legacy_asset_writable()
         original_len = len(self._assets)
         self._assets = [a for a in self._assets if a.name != name]
         if len(self._assets) < original_len:
@@ -973,6 +983,7 @@ class StocksEngine:
 
     def update_asset(self, name: str, **kwargs) -> bool:
         """按名称更新资产字段并持久化。"""
+        self._ensure_legacy_asset_writable()
         for i, asset in enumerate(self._assets):
             if asset.name == name:
                 # 由于 dataclass 是 frozen，需要重建
@@ -986,6 +997,7 @@ class StocksEngine:
 
     def _save_assets(self) -> None:
         """将当前资产列表保存到本地隐私文件。"""
+        self._ensure_legacy_asset_writable()
         local_path = self._local_data_dir / "financial_assets.json"
         self._local_data_dir.mkdir(parents=True, exist_ok=True)
         with open(local_path, "w", encoding="utf-8") as f:
