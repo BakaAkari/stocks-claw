@@ -42,9 +42,13 @@
 
 ## Account / Position v2（纯模型层，尚未接线）
 
-`FinancialAsset` 仍是当前加载与上下文链路的 v1 兼容层。v2 模型已在
-`stocks/domain/models.py` 中落盘，但在 S2-1 阶段**不改变资产文件格式、不改变
-AnalysisContext、不接线 CLI/MCP/context_builder**。
+`FinancialAsset` 仍是当前上下文链路的 v1 兼容层。资产加载器已兼容两种文件格式：
+
+- v1：顶层 list，元素为 `FinancialAsset` 字段；加载时在内存中确定性映射到 v2 `Account` / `Position`，但不自动写回文件
+- v2：顶层 dict，形如 `{schema_version: 2, base_currency: "CNY", accounts: [], positions: []}`
+
+v2 模型已在 `stocks/domain/models.py` 中落盘。S2-2 后加载器可识别 v2 文件，但
+`AnalysisContext` 仍消费 v1 兼容层；真实迁移必须通过后续用户确认命令完成。
 
 `Account` 表示账户层级：
 

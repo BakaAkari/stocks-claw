@@ -152,13 +152,15 @@
 
 **文件**:资产读写模块(以 S2-0 grep 为准)、`stocks/domain/models.py`(仅映射函数)、`stocks/DATA_MODEL.md`、`tests/`
 
-- [ ] v2 文件格式:`{schema_version: 2, base_currency: "CNY", accounts: [], positions: []}`;加载器:顶层 list → v1,顶层 dict 且 `schema_version==2` → v2,其他 → 结构化错误。
-- [ ] v1→v2 内存映射函数(确定性,无猜测):`name→display_name`;`platform→` slug 化 `account_id` 并聚合 accounts;`amount→valuation_input{manual_amount, as_of: null}`(as_of 缺失计入 missing_fields);`asset_type→classification` 用显式映射表(迁入 scaffolds 关键词表全部键,新增 贵金属/保险/QDII/固收+/理财/货基;**映射不到 → asset_class=unknown,禁止默认成权益**);`instrument_key/quantity/tradable` 同名迁移(有 key+quantity → method=market_quote)。
-- [ ] **加载 v1 不写回文件**;data_quality 提示"v1 格式,建议迁移"。
-- [ ] v2 CRUD:CLI/MCP 资产写工具沿用确认式写入;文件为 v1 时拒写 v2 字段并提示先迁移。
-- [ ] 测试:v1 加载映射正确(含 unknown)、v2 round-trip、非法顶层报错、v1 加载后源文件字节不变。
+- [x] v2 文件格式:`{schema_version: 2, base_currency: "CNY", accounts: [], positions: []}`;加载器:顶层 list → v1,顶层 dict 且 `schema_version==2` → v2,其他 → 结构化错误。
+- [x] v1→v2 内存映射函数(确定性,无猜测):`name→display_name`;`platform→` slug 化 `account_id` 并聚合 accounts;`amount→valuation_input{manual_amount, as_of: null}`(as_of 缺失计入 missing_fields);`asset_type→classification` 用显式映射表(迁入 scaffolds 关键词表全部键,新增 贵金属/保险/QDII/固收+/理财/货基;**映射不到 → asset_class=unknown,禁止默认成权益**);`instrument_key/quantity/tradable` 同名迁移(有 key+quantity → method=market_quote)。
+- [x] **加载 v1 不写回文件**;data_quality 提示"v1 格式,建议迁移"。
+- [x] v2 CRUD:CLI/MCP 资产写工具沿用确认式写入;文件为 v1 时拒写 v2 字段并提示先迁移。
+- [x] 测试:v1 加载映射正确(含 unknown)、v2 round-trip、非法顶层报错、v1 加载后源文件字节不变。
 
 **验收**:现有 v1 示例文件加载零告警(除格式建议);全局四道闸通过。
+
+> 完成:51fc5cb S2-2 双格式加载完成,加载器兼容 v1 list 与 v2 dict,v1 仅内存映射不写回,AnalysisContext 仍通过 v1 兼容层消费资产 | 证据:加载入口 `stocks/engine/__init__.py:387/422/462`,v1→v2 映射 `stocks/domain/models.py:808/830`,data_quality 提示 `stocks/engine/context_builder.py:405/440`,测试 `tests/engine/test_asset_v2_loading.py:114-120`;局部测试 `uv run python -m pytest tests/engine/test_asset_v2_models.py tests/engine/test_asset_v2_loading.py -q`=11 passed;全局闸 `uv run ruff check .`=All checks passed,`uv run python -m pytest -q`=472 passed,`uv run python -m compileall -q stocks tests`=0,CLI smoke JSON ok且 `asset_format.status=migration_recommended`。
 
 ### S2-3 一次性确认迁移命令
 

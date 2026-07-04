@@ -397,11 +397,12 @@ class ContextBuilder:
         calendar_quality: Optional[dict] = None,
         rotation: Optional[dict] = None,
         action_signals: Optional[dict] = None,
-    ) -> dict[str, dict]:
+    ) -> dict:
         """生成统一数据质量与溯源摘要。"""
         return {
             "schema_version": 9,
             "generated_at": generated_at,
+            "asset_format": self._asset_format_quality(assets),
             "currency_conversion": self._currency_conversion_quality(assets),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
             "news": self._news_quality(
@@ -433,6 +434,16 @@ class ContextBuilder:
             },
             "rotation": self._rotation_quality(rotation),
             "action_signals": self._action_signal_quality(action_signals),
+        }
+
+    @staticmethod
+    def _asset_format_quality(assets: list[FinancialAsset]) -> dict:
+        """资产格式兼容提示；S2 期间 AnalysisContext 仍消费 v1 FinancialAsset。"""
+        return {
+            "status": "migration_recommended" if assets else "no_assets",
+            "schema_version": 1,
+            "loaded_count": len(assets),
+            "message": "v1 FinancialAsset compatibility layer loaded; migrate to schema_version=2 when ready",
         }
 
     @staticmethod

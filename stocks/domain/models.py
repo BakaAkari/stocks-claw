@@ -756,6 +756,121 @@ class Position:
         )
 
 
+_V1_ASSET_TYPE_CLASSIFICATION = {
+    "equity": ("equity", "stock", []),
+    "stock": ("equity", "stock", []),
+    "股票": ("equity", "stock", []),
+    "fund": ("equity", "mixed_fund", []),
+    "基金": ("equity", "mixed_fund", []),
+    "股票ETF": ("equity", "exchange_traded_fund", []),
+    "股票etf": ("equity", "exchange_traded_fund", []),
+    "etf": ("equity", "exchange_traded_fund", []),
+    "指数基金": ("equity", "mixed_fund", []),
+    "指数": ("equity", "mixed_fund", []),
+    "qdii": ("equity", "qdii_fund", ["qdii_delayed_nav"]),
+    "QDII": ("equity", "qdii_fund", ["qdii_delayed_nav"]),
+    "bond": ("fixed_income", "manual_asset", ["fixed_income"]),
+    "fixed_income": ("fixed_income", "manual_asset", ["fixed_income"]),
+    "理财": ("fixed_income", "bank_wealth_management", ["bank_wmp"]),
+    "固收": ("fixed_income", "manual_asset", ["fixed_income"]),
+    "固收+": ("fixed_income", "fixed_income_plus_fund", ["fixed_income"]),
+    "债券": ("fixed_income", "manual_asset", ["fixed_income"]),
+    "cash": ("cash", "cash", ["cash_like"]),
+    "现金": ("cash", "cash", ["cash_like"]),
+    "deposit": ("cash", "cash", ["cash_like"]),
+    "money_market": ("cash_equivalent", "money_market_fund", ["money_market", "cash_like"]),
+    "现金管理": ("cash_equivalent", "money_market_fund", ["cash_like"]),
+    "货币基金": ("cash_equivalent", "money_market_fund", ["money_market", "cash_like"]),
+    "货基": ("cash_equivalent", "money_market_fund", ["money_market", "cash_like"]),
+    "活期": ("cash", "cash", ["cash_like"]),
+    "gold": ("commodity", "precious_metal_account", ["gold"]),
+    "黄金ETF": ("commodity", "exchange_traded_fund", ["gold"]),
+    "黄金etf": ("commodity", "exchange_traded_fund", ["gold"]),
+    "贵金属": ("commodity", "precious_metal_account", ["precious_metals"]),
+    "commodity": ("commodity", "manual_asset", []),
+    "insurance": ("insurance", "insurance_policy", ["locked"]),
+    "保险": ("insurance", "insurance_policy", ["locked"]),
+    "locked": ("alternative", "manual_asset", ["locked"]),
+    "crypto": ("alternative", "manual_asset", []),
+    "reits": ("alternative", "manual_asset", []),
+    "alternative": ("alternative", "manual_asset", []),
+    "unknown": ("unknown", "manual_asset", []),
+}
+
+
+def _slugify_account_id(value: str) -> str:
+    raw = (value or "manual").strip().lower().replace("-", " ").replace("/", " ")
+    slug = re.sub(r"\s+", "_", raw)
+    slug = re.sub(r"[^\w_]+", "", slug, flags=re.UNICODE)
+    return slug or "manual"
+
+
+def classification_from_v1_asset_type(asset_type: str) -> Classification:
+    key = asset_type or "unknown"
+    asset_class, product_type, tags = _V1_ASSET_TYPE_CLASSIFICATION.get(
+        key,
+        _V1_ASSET_TYPE_CLASSIFICATION.get(key.lower(), ("unknown", "manual_asset", [])),
+    )
+    return Classification(
+        asset_class=asset_class,
+        product_type=product_type,
+        exposure_tags=tags,
+    )
+
+
+def account_from_v1_platform(platform: str, base_currency: str = "CNY") -> Account:
+    return Account(
+        account_id=_slugify_account_id(platform),
+        display_name=platform or "未知账户",
+        institution_type="manual",
+        base_currency=base_currency,
+    )
+
+
+def financial_asset_to_position_v2(asset: FinancialAsset) -> Position:
+    classification = classification_from_v1_asset_type(asset.asset_type)
+    account_id = _slugify_account_id(asset.platform)
+    if asset.instrument_key and asset.quantity is not None:
+        valuation_input = ValuationInput(method="market_quote")
+        holding = Holding(quantity=asset.quantity, unit="share")
+        instrument = {"instrument_key": asset.instrument_key}
+    else:
+        valuation_input = ValuationInput(method="manual_amount", manual_amount=asset.amount)
+        holding = None
+        instrument = {"instrument_key": asset.instrument_key} if asset.instrument_key else None
+    return Position(
+        position_id=f"{account_id}_{_normalize_tag(asset.name)}",
+        account_id=account_id,
+        display_name=asset.name,
+        currency=asset.currency,
+        classification=classification,
+        instrument=instrument,
+        holding=holding,
+        valuation_input=valuation_input,
+        liquidity=Liquidity(tradable=asset.tradable),
+        confirmed=asset.confirmed,
+        notes=asset.notes,
+    )
+
+
+def position_v2_to_financial_asset(position: Position) -> FinancialAsset:
+    amount = position.valuation_input.manual_amount
+    if amount is None:
+        amount = 0.0
+    return FinancialAsset(
+        name=position.display_name,
+        platform=position.account_id,
+        amount=amount,
+        asset_type=position.classification.asset_class,
+        notes=position.notes,
+        confirmed=position.confirmed,
+        currency=position.currency,
+        instrument_key=position.instrument_key,
+        quantity=position.holding.quantity if position.holding else None,
+        tradable=position.liquidity.tradable,
+    )
+
+
 @dataclass(frozen=True)
 class PortfolioMapping:
     """组合映射脚手架 — 轻量规则输出，供 LLM 参考"""

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from stocks.domain.models import (
+    Account,
     AdviceRecord,
     AnalysisContext,
     ExecutionRecord,
@@ -32,7 +33,11 @@ from stocks.domain.models import (
     Instrument,
     NewsItem,
     PortfolioMapping,
+    Position,
     Quote,
+    account_from_v1_platform,
+    financial_asset_to_position_v2,
+    position_v2_to_financial_asset,
 )
 from stocks.engine.config_loader import load_engine_config
 from stocks.engine.context_builder import ContextBuilder
@@ -300,6 +305,11 @@ class StocksEngine:
 
         # 4. 加载配置
         self._assets: list[FinancialAsset] = []
+        self._asset_schema_version: int = 1
+        self._asset_base_currency: str = "CNY"
+        self._asset_accounts_v2: list[Account] = []
+        self._asset_positions_v2: list[Position] = []
+        self._asset_load_warning: Optional[str] = None
         self._constraints: dict = {}
         self._profile: dict = {}
         self._watchlist: list[Instrument] = []
@@ -370,18 +380,18 @@ class StocksEngine:
         except (json.JSONDecodeError, OSError):
             return None
 
-    def _load_assets_from_file(self) -> list[FinancialAsset]:
-        """从 ``financial_assets.json`` 加载资产列表。
-
-        加载优先级：
-        1. ``.local/financial_assets.json`` — 本地隐私数据（不提交 git）
-        2. ``stocks/data/financial_assets.json`` — 项目默认数据
-
-        数据格式：扁平数组 [{"name": ..., "platform": ..., ...}, ...]
-        """
-        # 优先加载本地隐私数据
+    def _asset_file_path(self) -> Path:
         local_path = self._local_data_dir / "financial_assets.json"
-        path = local_path if local_path.exists() else (self.data_dir / "financial_assets.json")
+        return local_path if local_path.exists() else (self.data_dir / "financial_assets.json")
+
+    def _load_assets_from_file(self) -> list[FinancialAsset]:
+        """从 ``financial_assets.json`` 加载资产列表，兼容 v1 list 与 v2 dict。"""
+        self._asset_schema_version = 1
+        self._asset_base_currency = "CNY"
+        self._asset_accounts_v2 = []
+        self._asset_positions_v2 = []
+        self._asset_load_warning = None
+        path = self._asset_file_path()
 
         if not path.exists():
             return []
@@ -389,11 +399,27 @@ class StocksEngine:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
+            self._asset_load_warning = "asset_file_unreadable"
             return []
 
-        if not isinstance(data, list):
-            return []
+        if isinstance(data, list):
+            assets = self._load_assets_v1(data)
+            self._asset_positions_v2 = [financial_asset_to_position_v2(asset) for asset in assets]
+            accounts_by_id: dict[str, Account] = {}
+            for asset in assets:
+                account = account_from_v1_platform(asset.platform, asset.currency)
+                accounts_by_id.setdefault(account.account_id, account)
+            self._asset_accounts_v2 = list(accounts_by_id.values())
+            self._asset_load_warning = "v1_format_migration_recommended"
+            return assets
 
+        if isinstance(data, dict):
+            return self._load_assets_v2(data)
+
+        self._asset_load_warning = "asset_file_invalid_top_level"
+        return []
+
+    def _load_assets_v1(self, data: list) -> list[FinancialAsset]:
         assets: list[FinancialAsset] = []
         for item in data:
             if not isinstance(item, dict):
@@ -432,6 +458,31 @@ class StocksEngine:
             except (ValueError, TypeError):
                 continue
         return assets
+
+    def _load_assets_v2(self, data: dict) -> list[FinancialAsset]:
+        if data.get("schema_version") != 2:
+            self._asset_load_warning = "asset_file_unsupported_schema"
+            return []
+        accounts = data.get("accounts")
+        positions = data.get("positions")
+        if not isinstance(accounts, list) or not isinstance(positions, list):
+            self._asset_load_warning = "asset_file_invalid_v2_shape"
+            return []
+        try:
+            self._asset_schema_version = 2
+            self._asset_base_currency = (data.get("base_currency") or "CNY").upper()
+            self._asset_accounts_v2 = [Account.from_dict(item) for item in accounts]
+            self._asset_positions_v2 = [Position.from_dict(item) for item in positions]
+        except (TypeError, ValueError):
+            self._asset_load_warning = "asset_file_invalid_v2_record"
+            self._asset_schema_version = 1
+            self._asset_accounts_v2 = []
+            self._asset_positions_v2 = []
+            return []
+        return [
+            self._with_cny_valuation(position_v2_to_financial_asset(position))
+            for position in self._asset_positions_v2
+        ]
 
     def _load_profile(self) -> dict:
         """加载本地投资者画像；兼容旧配置目录但不加载 example。"""
