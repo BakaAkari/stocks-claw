@@ -1,7 +1,7 @@
 # 现行数据模型
 
 本文只描述当前代码中的 schema。权威实现位于 `stocks/domain/models.py`，
-`AnalysisContext.schema_version` 当前为 `11`。
+`AnalysisContext.schema_version` 当前为 `12`。
 
 ## DecisionEnvelope v1
 
@@ -40,15 +40,17 @@
 持久化只写原始资产字段与用户确认的映射字段；`amount_cny` 等运行时派生字段不写回。
 换算失败的外币资产仍保留原金额和币种，但 `valuation_cny` 为 `null`，不能静默计入组合总值。
 
-## Account / Position v2（纯模型层，尚未接线）
+## Account / Position v2
 
-`FinancialAsset` 仍是当前上下文链路的 v1 兼容层。资产加载器已兼容两种文件格式：
+`Position` / `Account` 是当前细粒度资产入口。`FinancialAsset` 保留为 v1
+兼容层和旧 Adapter 的只读/受限写入形态。资产加载器兼容两种文件格式：
 
 - v1：顶层 list，元素为 `FinancialAsset` 字段；加载时在内存中确定性映射到 v2 `Account` / `Position`，但不自动写回文件
 - v2：顶层 dict，形如 `{schema_version: 2, base_currency: "CNY", accounts: [], positions: []}`
 
-v2 模型已在 `stocks/domain/models.py` 中落盘。S2-2 后加载器可识别 v2 文件，但
-`AnalysisContext` 仍消费 v1 兼容层；真实迁移必须通过后续用户确认命令完成。
+v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-migrate-v2`
+预览后由用户确认完成。v2 文件加载后，旧 `asset_add/update/remove` 会拒绝写入，
+避免把 v2 文件降级覆盖。
 
 `Account` 表示账户层级：
 
@@ -84,6 +86,27 @@ v2 模型已在 `stocks/domain/models.py` 中落盘。S2-2 后加载器可识别
 - `data_completeness.missing_fields` 机器可读记录：上市持仓缺成本、手工估值缺 `as_of`、分类未知等
 - `to_storage_dict()` 不含任何运行时派生估值字段
 
+`AnalysisContext.position_valuations` 是运行时派生估值快照，不写回资产文件：
+
+- `market_quote`：最新行情价 × `holding.quantity`；行情缺失时显式降级到
+  `valuation_input.manual_amount` 或成本兜底，并在 `flags` 标记
+- `manual_amount` / `insurance_value`：直接使用用户确认金额；`as_of` 超过 30 天
+  标记 `stale_manual`
+- 每项包含 `market_value`、`market_value_cny`、`fx_rate`、`fx_source`、
+  `price_source`、`as_of`、`flags`
+- 有 `cost_basis` 时计算 `unrealized_pnl`、`unrealized_pnl_cny`、`pnl_pct`
+
+组合级派生字段：
+
+- `exposure_summary`：按 `classification.exposure_tags` 聚合 CNY 暴露
+- `liquidity_summary`：按 `cash_or_t0`、`t1_t2`、`locked_or_ineligible`、
+  `unknown` 四档聚合可动用性
+- `asset_data_boundaries`：列出缺成本、缺估值日期、手工估值过期、缺行情、
+  FX 不支持等会降级或阻断分析能力的问题
+- `advice_granularity`：逐持仓标记 `detailed`、`sector`、`fixed` 或 `manual`；
+  `sector` 可通过 `stocks/config/exposure_proxy.json` 注入代理标的信号，代理仅作
+  板块参考，不等同于该持仓价格或净值
+
 ## Investor profile
 
 画像保存在 `.local/investor_profile.json`，是可扩展 JSON 对象。当前示例字段：
@@ -107,8 +130,11 @@ v2 模型已在 `stocks/domain/models.py` 中落盘。S2-2 后加载器可识别
 - `boundary`：`[{type: "fact"|"inference", text}]`
 - `triggers`（可选，默认 `[]`）：可核对的触发条件，每条为
   `{instrument: "market:code", type, level, action, invalidation?}`，
-  `type ∈ {price_above, price_below, pct_change_above, pct_change_below}`，
+  `type ∈ {price_above, price_below, pct_change_above, pct_change_below,
+  pnl_pct_above, pnl_pct_below}`，
   `level` 为数字（价位或百分数），`action` 为非空动作描述。
+  `pnl_pct_*` 的基准是用户 `holding.cost_basis`，保存时若目标持仓不存在或缺成本
+  会结构化拒绝。
   旧记录缺失该字段时按 `[]` 加载。
 - `actions`（可选，默认 `[]`）：结构化调仓动作，每条为
   `{target, action, size_hint, trigger?, invalidation?, horizon}`。
@@ -302,7 +328,7 @@ Agent 的统一入口：
 
 - 元信息：`generated_at`、`schema_version`
 - 金融记忆：`assets`、`asset_count`、`portfolio_constraints`、
-  `portfolio_profile`
+  `portfolio_profile`、`asset_accounts`、`asset_positions`
 - 市场输入：`quotes`、`news`、`news_count`
 - 结构化事件：`market_events`、`news_digest`
 - 脚手架：`market_state`、`portfolio_mapping`、`drift_checks`、`rotation`
@@ -310,10 +336,13 @@ Agent 的统一入口：
 - 前瞻输入：`upcoming_events`
 - 历史：`recent_snapshots`、`recent_advice`
 - 预测台账：`forecast_summary`
+- v2 资产派生：`position_valuations`、`exposure_summary`、`liquidity_summary`、
+  `asset_data_boundaries`、`advice_granularity`
 - Agent 输入：`raw_prompt_input`
 - 扩展数据：`macro_snapshot`、`technical_indicators`
 - 质量与溯源：`data_quality`
 
+v12 相对 v11 新增 v2 资产运行时估值、暴露、流动性、数据边界与建议粒度字段；
 v11 相对 v10 新增 `forecast_summary`，包含预测台账 open 条数、最近结算结果、
 hit/miss 样本统计；样本少于 10 条时只标记“样本不足”，不输出命中率。
 v10 相对 v9 为 `NewsItem` 增加 `scope`，用于持仓定向来源优先匹配；
@@ -323,14 +352,20 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 `recent_advice` 附加派生 `trigger_review`；其余字段不变。
 
 `raw_prompt_input` 遵循
-`stocks/prompts/personal_advice_prompt.txt`，只表达资产金额区间，不暴露逐笔精确金额。
-精确值仍存在于结构化 `assets`，供受控调用方按需使用。
+`stocks/prompts/personal_advice_prompt.txt`，在本地 Agent 上下文中输出真实资产金额、
+逐持仓市值、盈亏、暴露和流动性边界。仓位动作仍用比例、区间或自然语言表达，
+不得保存具体货币金额。HTTP 适配器默认隐藏精确金额是远程接口安全策略，不改变
+本地 `raw_prompt_input` 的真实金额语义。
 
-## data_quality v9
+## data_quality v10
 
 `data_quality` 包含：
 
 - `currency_conversion`：每项外币换算状态、来源与失败统计
+- `asset_format`：当前资产文件 schema、base_currency、加载条数、position 数量与
+  迁移/加载告警
+- `asset_completeness`：逐 position 缺字段与降级/阻断问题，来源为
+  `asset_data_boundaries`
 - `quotes`：真实行情 `as_of` 的最旧值、缺失时间数量、请求/返回数量、按市场
   `as_of` 与状态、`single_source` 单源事实、Provider 与降级记录
 - `news`：请求状态、来源分布、`scopes` 数量、Provider `errors` 和时效
@@ -358,12 +393,18 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 - `rotation`：轮动脚手架覆盖。`status`、`as_of`、`item_count`、
   `missing_count` 与 `missing` 列表
 - `action_signals`：动作信号覆盖。`status`、`item_count` 与按信号的 `counts`
+- `auto_included_holdings`：本次 build_context 运行时自动加入行情/历史请求的
+  detailed 持仓列表；只影响本次上下文，不写 watchlist
+- `exposure_summary`、`liquidity_summary`、`advice_granularity`：对应顶层派生字段
+  的质量摘要
 
 通用状态包括 `ok`、`partial`、`degraded`、`missing`、
 `not_requested` 和 `not_configured`。美股单源失败额外标记
 `single_source_failed`，历史价格回填标记为 stale。
 
-`schema_version` 语义：v9 相对 v8 扩展 `upcoming_events.cache`、
+`schema_version` 语义：v10 相对 v9 新增 `asset_completeness`、
+`auto_included_holdings`、`exposure_summary`、`liquidity_summary` 与
+`advice_granularity`；v9 相对 v8 扩展 `upcoming_events.cache`、
 `market_events.calendar_event_count` 以及 `news.scopes/errors`；
 v8 相对 v7 扩展 `macro` 的逐字段来源、
 真实最旧时点与官方统计质量；v7 相对 v6 扩展 `history_backfill.items` 的逐源降级字段；

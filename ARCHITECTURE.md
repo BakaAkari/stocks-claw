@@ -165,11 +165,12 @@ CLI 写操作要求 `--confirmed`；MCP 写操作要求 `confirmed: true`。确�
 ## 6. Prompt 与金额边界
 
 `stocks/prompts/personal_advice_prompt.txt` 是内置 LLM 与外部 Agent 共用的分析约束。
-`raw_prompt_input` 使用金额区间，不含逐笔精确金额。完整结构化 context 的
-`assets` 仍包含原始精确值，供受控调用方按需读取。
+`raw_prompt_input` 是本地 Agent 证据包，当前包含真实资产金额、逐持仓市值、盈亏、
+暴露集中度、可动用资金和数据边界；仓位动作仍要求用比例、区间或自然语言表达，
+不得保存具体下单金额。
 
-HTTP 默认递归移除 `amount`、`amount_cny` 和 `total_value`；调用方只有显式使用
-`?include_amounts=true` 才能请求精确金额。
+HTTP 是远程接口边界，默认仍递归移除 `amount`、`amount_cny` 和 `total_value`；
+调用方只有显式使用 `?include_amounts=true` 才能请求精确金额。
 
 ## 7. 本地持久化
 

@@ -82,6 +82,11 @@ class CLIAdapter:
             help="按名称删除资产",
         )
         asset_actions.add_argument(
+            "--asset-migrate-v2",
+            action="store_true",
+            help="预览或确认迁移 financial_assets.json 到 schema_version=2",
+        )
+        asset_actions.add_argument(
             "--profile-get",
             action="store_true",
             help="读取投资者画像并退出",
@@ -199,6 +204,8 @@ class CLIAdapter:
                 "success": True,
                 "data": [asset.to_dict() for asset in self.engine.load_assets()],
             }
+        if args.asset_migrate_v2:
+            return self.engine.migrate_assets_v2(confirmed=args.confirmed)
 
         write_requested = any(
             (

@@ -4,11 +4,13 @@ from stocks.domain.models import (
     Account,
     Classification,
     CostBasis,
+    FinancialAsset,
     Holding,
     Liquidity,
     Position,
     ReportedPerformance,
     ValuationInput,
+    financial_asset_to_position_v2,
 )
 
 
@@ -163,3 +165,37 @@ def test_account_and_reported_performance_round_trip() -> None:
         source="broker",
     )
     assert ReportedPerformance.from_dict(perf.to_dict()) == perf
+
+
+def test_v1_position_id_generation_does_not_collide_for_chinese_names() -> None:
+    first = financial_asset_to_position_v2(
+        FinancialAsset(name="神秘资产", platform="其他", amount=1, asset_type="unknown")
+    )
+    second = financial_asset_to_position_v2(
+        FinancialAsset(name="测试资产", platform="其他", amount=1, asset_type="unknown")
+    )
+    cash = financial_asset_to_position_v2(
+        FinancialAsset(name="现金", platform="银行", amount=1, asset_type="现金")
+    )
+    demand = financial_asset_to_position_v2(
+        FinancialAsset(name="活期", platform="银行", amount=1, asset_type="活期")
+    )
+
+    assert first.position_id != second.position_id
+    assert cash.position_id != demand.position_id
+    assert first.position_id.startswith("其他_神秘资产_")
+    assert cash.position_id.startswith("银行_现金_")
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ([], "position must be an object"),
+        ({"classification": []}, "classification must be an object"),
+        ({"valuation_input": []}, "valuation_input must be an object"),
+        ({"holding": []}, "holding must be an object"),
+    ],
+)
+def test_position_from_dict_rejects_invalid_nested_shapes(payload, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        Position.from_dict(payload)

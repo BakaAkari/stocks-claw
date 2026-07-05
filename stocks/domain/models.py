@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -365,6 +366,12 @@ def _validate_choice(value: str, allowed: set[str], field_name: str) -> str:
     return value
 
 
+def _require_mapping(value, field_name: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    return value
+
+
 @dataclass(frozen=True)
 class Account:
     """v2 账户层级；只保存用户确认的本地账户事实。"""
@@ -414,6 +421,7 @@ class Account:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Account":
+        data = _require_mapping(data, "account")
         return cls(**data)
 
 
@@ -452,6 +460,7 @@ class CostBasis:
     def from_dict(cls, data: Optional[dict]) -> Optional["CostBasis"]:
         if data is None:
             return None
+        data = _require_mapping(data, "cost_basis")
         return cls(**data)
 
 
@@ -483,6 +492,7 @@ class Holding:
     def from_dict(cls, data: Optional[dict]) -> Optional["Holding"]:
         if data is None:
             return None
+        data = _require_mapping(data, "holding")
         if "quantity" not in data:
             raise ValueError("holding.quantity must be a non-negative number")
         return cls(
@@ -523,6 +533,7 @@ class Classification:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Classification":
+        data = _require_mapping(data, "classification")
         return cls(
             asset_class=data.get("asset_class", "unknown"),
             product_type=data.get("product_type", "manual_asset"),
@@ -551,6 +562,7 @@ class ValuationInput:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ValuationInput":
+        data = _require_mapping(data, "valuation_input")
         return cls(
             method=data.get("method", "manual_amount"),
             manual_amount=data.get("manual_amount"),
@@ -590,6 +602,7 @@ class Liquidity:
     def from_dict(cls, data: Optional[dict]) -> "Liquidity":
         if data is None:
             return cls()
+        data = _require_mapping(data, "liquidity")
         return cls(**data)
 
 
@@ -620,6 +633,7 @@ class ReportedPerformance:
     def from_dict(cls, data: Optional[dict]) -> Optional["ReportedPerformance"]:
         if data is None:
             return None
+        data = _require_mapping(data, "reported_performance")
         return cls(**data)
 
 
@@ -739,6 +753,7 @@ class Position:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Position":
+        data = _require_mapping(data, "position")
         return cls(
             position_id=data.get("position_id", ""),
             account_id=data.get("account_id", ""),
@@ -827,6 +842,23 @@ def account_from_v1_platform(platform: str, base_currency: str = "CNY") -> Accou
     )
 
 
+def position_id_from_v1_asset(asset: FinancialAsset) -> str:
+    """为 v1 资产生成稳定、不碰撞、可读的 v2 position_id。"""
+    account_id = _slugify_account_id(asset.platform)
+    name_slug = _slugify_account_id(asset.name)
+    fingerprint = "|".join(
+        [
+            asset.platform or "",
+            asset.name or "",
+            asset.currency or "",
+            asset.asset_type or "",
+            asset.instrument_key or "",
+        ]
+    )
+    digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:8]
+    return f"{account_id}_{name_slug}_{digest}"
+
+
 def financial_asset_to_position_v2(asset: FinancialAsset) -> Position:
     classification = classification_from_v1_asset_type(asset.asset_type)
     account_id = _slugify_account_id(asset.platform)
@@ -839,7 +871,7 @@ def financial_asset_to_position_v2(asset: FinancialAsset) -> Position:
         holding = None
         instrument = {"instrument_key": asset.instrument_key} if asset.instrument_key else None
     return Position(
-        position_id=f"{account_id}_{_normalize_tag(asset.name)}",
+        position_id=position_id_from_v1_asset(asset),
         account_id=account_id,
         display_name=asset.name,
         currency=asset.currency,
@@ -946,6 +978,8 @@ _ADVICE_TRIGGER_TYPES = {
     "price_below",       # 收盘价下穿 level
     "pct_change_above",  # 建议日以来累计涨跌幅 >= level（百分数）
     "pct_change_below",  # 建议日以来累计涨跌幅 <= level（百分数）
+    "pnl_pct_above",     # 最新/期间收盘相对用户成本浮盈 >= level（百分数）
+    "pnl_pct_below",     # 最新/期间收盘相对用户成本浮盈 <= level（百分数）
 }
 _ADVICE_ACTIONS = {"add", "increase", "reduce", "exit", "hold", "watch"}
 _ADVICE_HORIZONS = {"short", "medium", "long"}
@@ -1416,8 +1450,17 @@ class AnalysisContext:
     # 预测台账摘要（S1-4）
     forecast_summary: dict = field(default_factory=dict)
 
+    # v2 资产事实与运行时派生估值（S2）
+    asset_accounts: list[dict] = field(default_factory=list)
+    asset_positions: list[dict] = field(default_factory=list)
+    position_valuations: list[dict] = field(default_factory=list)
+    exposure_summary: dict = field(default_factory=dict)
+    liquidity_summary: dict = field(default_factory=dict)
+    asset_data_boundaries: dict = field(default_factory=dict)
+    advice_granularity: dict = field(default_factory=dict)
+
     # 元信息（带默认值）
-    schema_version: int = 11
+    schema_version: int = 12
 
     def to_dict(self) -> dict:
         return {
@@ -1445,6 +1488,13 @@ class AnalysisContext:
             "rotation": self.rotation,
             "action_signals": self.action_signals,
             "forecast_summary": self.forecast_summary,
+            "asset_accounts": self.asset_accounts,
+            "asset_positions": self.asset_positions,
+            "position_valuations": self.position_valuations,
+            "exposure_summary": self.exposure_summary,
+            "liquidity_summary": self.liquidity_summary,
+            "asset_data_boundaries": self.asset_data_boundaries,
+            "advice_granularity": self.advice_granularity,
         }
 
 

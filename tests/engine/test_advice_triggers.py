@@ -7,7 +7,16 @@ from datetime import datetime, timezone
 import pandas as pd
 import pytest
 
-from stocks.domain.models import AdviceRecord, Instrument
+from stocks.domain.models import (
+    AdviceRecord,
+    Classification,
+    CostBasis,
+    Holding,
+    Instrument,
+    Liquidity,
+    Position,
+    ValuationInput,
+)
 from stocks.engine.advice_review import attach_advice_performance
 from stocks.engine.history_cache import HistoryCache
 
@@ -198,6 +207,49 @@ class TestTriggerReview:
         review = records[0]["trigger_review"][0]
         assert review["status"] == "fired"
         assert review["observed"]["pct_change"] == pytest.approx(2.0690, abs=1e-3)
+
+    async def test_pnl_pct_trigger_uses_position_cost_basis(self, tmp_path):
+        instrument = Instrument(code="QCOM", name="高通", market="us", category="tech")
+        cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
+        # 建议日(7/2)后最高 130，相对成本 100 浮盈 30%，触发 20% 止盈线。
+        await cache.warm(instrument, _history_frame(instrument, [95, 110, 130, 118]))
+        position = Position(
+            position_id="ibkr_qcom",
+            account_id="ibkr",
+            display_name="QCOM",
+            currency="USD",
+            classification=Classification(asset_class="equity", product_type="stock"),
+            instrument={"instrument_key": "us:QCOM"},
+            holding=Holding(
+                quantity=10,
+                unit="share",
+                cost_basis=CostBasis(unit_cost=100, currency="USD"),
+            ),
+            valuation_input=ValuationInput(method="market_quote"),
+            liquidity=Liquidity(tradable=True, rebalance_eligible=True, tier="t1"),
+        )
+
+        records = await attach_advice_performance(
+            [
+                _advice_with_trigger(
+                    {
+                        "instrument": "us:QCOM",
+                        "type": "pnl_pct_above",
+                        "level": 20.0,
+                        "action": "浮盈超过20%减半",
+                    }
+                )
+            ],
+            watchlist=[instrument],
+            history_cache=cache,
+            positions=[position],
+        )
+
+        review = records[0]["trigger_review"][0]
+        assert review["status"] == "fired"
+        assert review["observed"]["cost_basis_unit"] == 100.0
+        assert review["observed"]["pnl_pct"] == 18.0
+        assert review["observed"]["max_pnl_pct"] == 30.0
 
     async def test_unknown_instrument_is_no_data(self, tmp_path):
         cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)

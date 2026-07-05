@@ -18,14 +18,21 @@ import pandas as pd
 import pytest
 
 from stocks.domain.models import (
+    Account,
     AnalysisContext,
+    Classification,
+    CostBasis,
     FinancialAsset,
+    Holding,
     Instrument,
+    Liquidity,
     MarketState,
     NewsItem,
     PortfolioMapping,
+    Position,
     Quote,
     UpcomingEvent,
+    ValuationInput,
 )
 from stocks.engine.context_builder import ContextBuilder
 from stocks.engine.history_cache import HistoryCache
@@ -124,18 +131,18 @@ class TestBasicBuild:
         )
 
         assert isinstance(context, AnalysisContext)
-        assert context.schema_version == 11
+        assert context.schema_version == 12
         assert context.asset_count == 2
         assert context.raw_prompt_input != ""
         assert "【投资组合分析上下文】" in context.raw_prompt_input
         assert "risk_tolerance: moderate" in context.raw_prompt_input
-        assert "50,000.00" not in context.raw_prompt_input
-        assert "30,000.00" not in context.raw_prompt_input
+        assert "50,000.00 CNY" in context.raw_prompt_input
+        assert "30,000.00 CNY" in context.raw_prompt_input
         assert "占比" in context.raw_prompt_input
         assert context.to_dict()["assets"][0]["amount"] == 50000
         assert context.macro_snapshot is None
         assert context.technical_indicators["a:000001"]["status"] == "missing"
-        assert context.data_quality["schema_version"] == 9
+        assert context.data_quality["schema_version"] == 10
         assert context.data_quality["quotes"]["status"] == "ok"
         assert context.data_quality["quotes"]["item_count"] == 1
         assert context.data_quality["news"]["status"] == "not_requested"
@@ -145,12 +152,12 @@ class TestBasicBuild:
 
     def test_schema_versions_match_data_model_document(self):
         """AnalysisContext/data_quality 版本必须与权威数据模型同步。"""
-        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 11
+        assert AnalysisContext.__dataclass_fields__["schema_version"].default == 12
         data_model = (
             Path(__file__).resolve().parents[2] / "stocks" / "DATA_MODEL.md"
         ).read_text(encoding="utf-8")
-        assert "`AnalysisContext.schema_version` 当前为 `11`" in data_model
-        assert "## data_quality v9" in data_model
+        assert "`AnalysisContext.schema_version` 当前为 `12`" in data_model
+        assert "## data_quality v10" in data_model
 
     async def test_build_no_instruments(self, mock_fetcher, mock_scaffolds, sample_assets):
         """无 instruments 时 quotes 为空"""
@@ -608,6 +615,123 @@ class TestRawPromptStructure:
         assert "按 personal_advice_prompt 的决策导向契约输出" in prompt
         assert "带触发条件的调仓清单与下一个机会提名" in prompt
 
+    async def test_v12_position_valuation_exposure_liquidity_and_boundaries(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+        sample_instruments,
+    ):
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        accounts = [
+            Account(
+                account_id="broker",
+                display_name="券商",
+                institution_type="brokerage",
+                base_currency="CNY",
+            ),
+            Account(
+                account_id="fund",
+                display_name="基金平台",
+                institution_type="fund_platform",
+                base_currency="CNY",
+            ),
+        ]
+        positions = [
+            Position(
+                position_id="broker_000001",
+                account_id="broker",
+                display_name="平安银行持仓",
+                currency="CNY",
+                classification=Classification(
+                    asset_class="equity",
+                    product_type="stock",
+                    exposure_tags=["cn_equity"],
+                ),
+                instrument={"instrument_key": "a:000001"},
+                holding=Holding(
+                    quantity=100,
+                    unit="share",
+                    cost_basis=CostBasis(unit_cost=8.0, currency="CNY"),
+                ),
+                valuation_input=ValuationInput(method="market_quote"),
+                liquidity=Liquidity(tradable=True, rebalance_eligible=True, tier="t1"),
+            ),
+            Position(
+                position_id="fund_nasdaq",
+                account_id="fund",
+                display_name="纳指基金",
+                currency="CNY",
+                classification=Classification(
+                    asset_class="equity",
+                    product_type="qdii_fund",
+                    exposure_tags=["nasdaq100"],
+                ),
+                valuation_input=ValuationInput(
+                    method="manual_amount",
+                    manual_amount=2000,
+                    as_of="2026-01-01",
+                ),
+                liquidity=Liquidity(tradable=False, rebalance_eligible=True, tier="t2_plus"),
+            ),
+            Position(
+                position_id="bank_cash",
+                account_id="bank",
+                display_name="现金",
+                currency="CNY",
+                classification=Classification(
+                    asset_class="cash",
+                    product_type="cash",
+                    exposure_tags=["cash_like"],
+                ),
+                valuation_input=ValuationInput(
+                    method="manual_amount",
+                    manual_amount=500,
+                    as_of="2026-07-04",
+                ),
+                liquidity=Liquidity(tradable=True, rebalance_eligible=True, tier="cash"),
+            ),
+        ]
+
+        context = await builder.build(
+            assets=[],
+            constraints={},
+            profile={},
+            instruments=sample_instruments,
+            scan_instruments=[Instrument(code="QQQ", name="QQQ", market="us")],
+            recent_snapshots=[],
+            asset_schema_version=2,
+            asset_accounts_v2=accounts,
+            asset_positions_v2=positions,
+            exposure_proxy={
+                "nasdaq100": {
+                    "instrument_key": "us:QQQ",
+                    "note": "纳指100代理",
+                }
+            },
+        )
+
+        by_id = {item["position_id"]: item for item in context.position_valuations}
+        assert context.schema_version == 12
+        assert context.data_quality["schema_version"] == 10
+        assert context.data_quality["asset_format"]["schema_version"] == 2
+        assert by_id["broker_000001"]["market_value_cny"] == 1050.0
+        assert by_id["broker_000001"]["pnl_pct"] == 31.25
+        assert by_id["fund_nasdaq"]["advice_granularity"] == "sector"
+        assert by_id["fund_nasdaq"]["proxy"]["instrument_key"] == "us:QQQ"
+        assert "stale_manual" in by_id["fund_nasdaq"]["flags"]
+        assert context.exposure_summary["exposures"]["nasdaq100"]["value_cny"] == 2000.0
+        assert context.liquidity_summary["buckets"]["cash_or_t0"]["value_cny"] == 500.0
+        assert context.liquidity_summary["buckets"]["t1_t2"]["value_cny"] == 1050.0
+        assert context.liquidity_summary["buckets"]["locked_or_ineligible"]["value_cny"] == 2000.0
+        assert context.asset_data_boundaries["issue_count"] >= 1
+        assert "【逐持仓估值】" in context.raw_prompt_input
+        assert "未实现盈亏 250.00 CNY (+31.25%)" in context.raw_prompt_input
+        assert "【暴露集中度】" in context.raw_prompt_input
+        assert "nasdaq100: 2,000.00 CNY" in context.raw_prompt_input
+        assert "【可动用资金】" in context.raw_prompt_input
+        assert "代理参考: nasdaq100 -> us:QQQ" in context.raw_prompt_input
+
     async def test_prompt_marks_mapped_holding_by_instrument_key(
         self,
         mock_fetcher,
@@ -1040,7 +1164,7 @@ class TestAnalysisContextSerialization:
         await cache.close()
 
         data = context.to_dict()
-        assert data["schema_version"] == 11
+        assert data["schema_version"] == 12
         assert "market_events" in data
         assert "news_digest" in data
         assert "technical_indicators" in data
@@ -1127,7 +1251,7 @@ class TestHistoryBackfillQuality:
             instruments=sample_instruments,
             recent_snapshots=[],
         )
-        assert context.data_quality["schema_version"] == 9
+        assert context.data_quality["schema_version"] == 10
         assert "history_backfill" in context.data_quality
         assert context.data_quality["history_backfill"]["status"] == "not_requested"
 

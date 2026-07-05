@@ -11,7 +11,7 @@ from typing import Optional
 
 import pandas as pd
 
-from stocks.domain.models import Instrument
+from stocks.domain.models import Instrument, Position
 from stocks.engine.history_cache import HistoryCache
 
 
@@ -20,6 +20,7 @@ async def attach_advice_performance(
     *,
     watchlist: list[Instrument],
     history_cache: Optional[HistoryCache],
+    positions: Optional[list[Position]] = None,
 ) -> list[dict]:
     """为最近建议附加 watchlist 标的的历史表现事实。"""
     if not advice_records:
@@ -29,6 +30,8 @@ async def attach_advice_performance(
         _instrument_key(instrument): instrument
         for instrument in watchlist
     }
+    positions = positions or []
+    cost_by_key = _position_cost_by_key(positions)
     enriched_records: list[dict] = []
     for advice in advice_records:
         enriched = deepcopy(advice)
@@ -56,6 +59,7 @@ async def attach_advice_performance(
                     created_at=advice.get("created_at"),
                     watchlist_by_key=watchlist_by_key,
                     history_cache=history_cache,
+                    cost_by_key=cost_by_key,
                 )
             )
         enriched["trigger_review"] = trigger_review
@@ -130,6 +134,7 @@ async def _review_trigger(
     created_at: Optional[str],
     watchlist_by_key: dict[str, Instrument],
     history_cache: Optional[HistoryCache],
+    cost_by_key: dict[str, dict],
 ) -> dict:
     """按建议日后的收盘序列核对单个触发条件。"""
     key = str(trigger.get("instrument", ""))
@@ -189,6 +194,25 @@ async def _review_trigger(
             fired = bool((changes >= level).any())
         else:
             fired = bool((changes <= level).any())
+    elif trigger_type in ("pnl_pct_above", "pnl_pct_below"):
+        cost = cost_by_key.get(key)
+        if cost is None:
+            return {**base, "status": "no_data", "reason": "missing_cost_basis"}
+        unit_cost = cost.get("unit_cost")
+        if unit_cost is None or unit_cost <= 0:
+            return {**base, "status": "no_data", "reason": "invalid_cost_basis"}
+        pnl_changes = (prices / unit_cost - 1.0) * 100
+        observed.update({
+            "cost_basis_unit": round(unit_cost, 6),
+            "cost_currency": cost.get("currency"),
+            "pnl_pct": round(float(pnl_changes.iloc[-1]), 4),
+            "max_pnl_pct": round(float(pnl_changes.max()), 4),
+            "min_pnl_pct": round(float(pnl_changes.min()), 4),
+        })
+        if trigger_type == "pnl_pct_above":
+            fired = bool((pnl_changes >= level).any())
+        else:
+            fired = bool((pnl_changes <= level).any())
     else:
         return {**base, "status": "no_data", "reason": "unsupported_trigger_type"}
 
@@ -249,6 +273,37 @@ def _clean_history_since(history: pd.DataFrame, advice_at: datetime) -> pd.DataF
     frame["price"] = pd.to_numeric(frame["price"], errors="coerce")
     frame = frame.dropna(subset=["timestamp", "price"]).sort_values("timestamp")
     return frame[frame["timestamp"] >= advice_at]
+
+
+def _position_cost_by_key(positions: list[Position]) -> dict[str, dict]:
+    totals: dict[str, dict] = {}
+    for position in positions:
+        if not position.instrument_key or not position.holding or not position.holding.cost_basis:
+            continue
+        quantity = position.holding.quantity
+        cost_basis = position.holding.cost_basis
+        cost_amount = cost_basis.cost_amount
+        if cost_amount is None and cost_basis.unit_cost is not None:
+            cost_amount = cost_basis.unit_cost * quantity
+        if cost_amount is None or quantity <= 0:
+            continue
+        bucket = totals.setdefault(
+            position.instrument_key,
+            {"quantity": 0.0, "cost_amount": 0.0, "currency": cost_basis.currency},
+        )
+        if bucket["currency"] != cost_basis.currency:
+            bucket["currency"] = "mixed"
+        bucket["quantity"] += quantity
+        bucket["cost_amount"] += cost_amount
+    result: dict[str, dict] = {}
+    for key, item in totals.items():
+        if item["quantity"] <= 0:
+            continue
+        result[key] = {
+            "unit_cost": item["cost_amount"] / item["quantity"],
+            "currency": item["currency"],
+        }
+    return result
 
 
 def _advice_datetime(value: Optional[str]) -> Optional[datetime]:

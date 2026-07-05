@@ -56,6 +56,8 @@ class MCPAdapter:
             return self._asset_update(params)
         elif method == "asset_remove":
             return self._asset_remove(params)
+        elif method == "asset_migrate_v2":
+            return self._asset_migrate_v2(params)
         elif method == "profile_get":
             return {"success": True, "data": self.engine.get_profile()}
         elif method == "profile_update":
@@ -174,6 +176,15 @@ class MCPAdapter:
             return {"success": False, "error": "name is required"}
         removed = self.engine.remove_asset(name)
         return {"success": removed, "data": name, "action": "removed"}
+
+    def _asset_migrate_v2(self, params: dict) -> dict:
+        try:
+            result = self.engine.migrate_assets_v2(
+                confirmed=params.get("confirmed") is True,
+            )
+            return result
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
 
     def _profile_update(self, params: dict) -> dict:
         confirmation_error = self._confirmed(params)
@@ -400,6 +411,19 @@ class MCPAdapter:
                     "properties": {
                         "name": {"type": "string"},
                         "confirmed": {"type": "boolean", "const": True},
+                    },
+                },
+            },
+            {
+                "name": "asset_migrate_v2",
+                "description": (
+                    "预览或确认迁移金融资产文件到 schema_version=2；"
+                    "confirmed=false 只返回完整预览，confirmed=true 才写入本地 .local 文件。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "confirmed": {"type": "boolean", "default": False},
                     },
                 },
             },

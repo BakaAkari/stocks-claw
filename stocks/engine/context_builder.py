@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from stocks.domain.models import (
+    Account,
     AnalysisContext,
     DriftCheck,
     FinancialAsset,
@@ -12,11 +13,14 @@ from stocks.domain.models import (
     MarketState,
     NewsItem,
     PortfolioMapping,
+    Position,
     Quote,
+    financial_asset_to_position_v2,
 )
 from stocks.engine.action_signals import compute_action_signals
 from stocks.engine.advice_review import attach_advice_performance, attach_execution_review
 from stocks.engine.event_calendar import EventCalendar
+from stocks.engine.exchange_rate import convert_to_cny
 from stocks.engine.fetchers import DataFetcher
 from stocks.engine.history_cache import HistoryCache
 from stocks.engine.indicators import TechnicalIndicators
@@ -35,6 +39,18 @@ def _optional_float(value) -> Optional[float]:
 
 def _instrument_key(instrument) -> str:
     return f"{instrument.market}:{instrument.code}"
+
+
+def _dedupe_instruments(instruments: list) -> list:
+    result = []
+    seen = set()
+    for instrument in instruments:
+        key = _instrument_key(instrument)
+        if key in seen:
+            continue
+        result.append(instrument)
+        seen.add(key)
+    return result
 
 
 class ContextBuilder:
@@ -74,6 +90,13 @@ class ContextBuilder:
         scan_instruments: Optional[list] = None,
         execution_records: Optional[list[dict]] = None,
         forecast_summary: Optional[dict] = None,
+        asset_schema_version: int = 1,
+        asset_load_warning: Optional[str] = None,
+        asset_base_currency: str = "CNY",
+        asset_accounts_v2: Optional[list[Account]] = None,
+        asset_positions_v2: Optional[list[Position]] = None,
+        auto_included_holdings: Optional[list[str]] = None,
+        exposure_proxy: Optional[dict] = None,
     ) -> AnalysisContext:
         """构建完整分析上下文"""
         generated_at = datetime.now(timezone.utc).isoformat()
@@ -95,6 +118,22 @@ class ContextBuilder:
             quotes = await self._enrich_with_indicators(quotes)
         technical_indicators = self._collect_technical_indicators(quotes)
 
+        positions = list(asset_positions_v2 or [])
+        if not positions and assets:
+            positions = [financial_asset_to_position_v2(asset) for asset in assets]
+        position_valuations = self._build_position_valuations(
+            positions=positions,
+            quotes=quotes,
+            generated_at=generated_at,
+            exposure_proxy=exposure_proxy or {},
+            action_signals=None,
+        )
+        valuation_assets = self._assets_from_position_valuations(
+            positions,
+            position_valuations,
+        )
+        analysis_assets = valuation_assets if positions else assets
+
         # 3. 获取宏观数据
         macro_snapshot = None
         macro_error = None
@@ -111,13 +150,13 @@ class ContextBuilder:
 
         market_events, news_digest = self.market_event_extractor.extract(
             news,
-            assets=assets,
+            assets=analysis_assets,
             instruments=instruments,
             generated_at=generated_at,
         )
 
         # 5. 构建 PortfolioMapping
-        mapping = self.portfolio_scaffold.build(assets, constraints)
+        mapping = self.portfolio_scaffold.build(analysis_assets, constraints)
 
         # 6. 检查 Drift
         drift_checks = self.portfolio_scaffold.check_drift(mapping, constraints)
@@ -187,12 +226,29 @@ class ContextBuilder:
             upcoming_events=upcoming_events,
             scan_keys=scan_keys,
         )
+        position_valuations = self._build_position_valuations(
+            positions=positions,
+            quotes=quotes,
+            generated_at=generated_at,
+            exposure_proxy=exposure_proxy or {},
+            action_signals=action_signals,
+        )
+        valuation_assets = self._assets_from_position_valuations(
+            positions,
+            position_valuations,
+        )
+        analysis_assets = valuation_assets if positions else assets
+        exposure_summary = self._build_exposure_summary(position_valuations)
+        liquidity_summary = self._build_liquidity_summary(position_valuations)
+        asset_data_boundaries = self._build_asset_data_boundaries(position_valuations)
+        advice_granularity = self._build_advice_granularity_summary(position_valuations)
 
         # 8. 对最近建议做历史表现事实回看与触发器核对
         reviewed_advice = await attach_advice_performance(
             recent_advice or [],
-            watchlist=watchlist or instruments,
+            watchlist=_dedupe_instruments(list(watchlist or []) + list(instruments)),
             history_cache=self.history_cache,
+            positions=positions,
         )
         reviewed_advice = attach_execution_review(
             reviewed_advice,
@@ -201,7 +257,7 @@ class ContextBuilder:
 
         # 9. 生成 raw_prompt_input（人类可读文本）
         raw_prompt = self._build_raw_prompt(
-            assets=assets,
+            assets=analysis_assets,
             quotes=quotes,
             news=news,
             mapping=mapping,
@@ -218,11 +274,19 @@ class ContextBuilder:
             rotation=rotation,
             action_signals=action_signals,
             forecast_summary=forecast_summary,
+            asset_accounts=asset_accounts_v2 or [],
+            asset_positions=positions,
+            position_valuations=position_valuations,
+            exposure_summary=exposure_summary,
+            liquidity_summary=liquidity_summary,
+            asset_data_boundaries=asset_data_boundaries,
+            advice_granularity=advice_granularity,
         )
 
         data_quality = self._build_data_quality(
             generated_at=generated_at,
             assets=assets,
+            positions=positions,
             instruments=instruments,
             quotes=quotes,
             degradation_log=degradation_log,
@@ -238,13 +302,22 @@ class ContextBuilder:
             calendar_quality=calendar_quality,
             rotation=rotation,
             action_signals=action_signals,
+            asset_schema_version=asset_schema_version,
+            asset_load_warning=asset_load_warning,
+            asset_base_currency=asset_base_currency,
+            auto_included_holdings=auto_included_holdings or [],
+            position_valuations=position_valuations,
+            exposure_summary=exposure_summary,
+            liquidity_summary=liquidity_summary,
+            asset_data_boundaries=asset_data_boundaries,
+            advice_granularity=advice_granularity,
         )
 
         # 10. 组装 AnalysisContext
         return AnalysisContext(
             generated_at=generated_at,
-            assets=assets,
-            asset_count=len(assets),
+            assets=analysis_assets,
+            asset_count=len(analysis_assets),
             portfolio_constraints=constraints,
             portfolio_profile=profile,
             quotes=quotes,
@@ -265,7 +338,14 @@ class ContextBuilder:
             rotation=rotation,
             action_signals=action_signals,
             forecast_summary=forecast_summary or {},
-            schema_version=11,
+            asset_accounts=[account.to_dict() for account in (asset_accounts_v2 or [])],
+            asset_positions=[position.to_dict() for position in positions],
+            position_valuations=position_valuations,
+            exposure_summary=exposure_summary,
+            liquidity_summary=liquidity_summary,
+            asset_data_boundaries=asset_data_boundaries,
+            advice_granularity=advice_granularity,
+            schema_version=12,
         )
 
     async def _build_rotation(
@@ -331,6 +411,427 @@ class ContextBuilder:
                 result.append(record)
         return result
 
+    def _build_position_valuations(
+        self,
+        *,
+        positions: list[Position],
+        quotes: dict[str, list[Quote]],
+        generated_at: str,
+        exposure_proxy: dict,
+        action_signals: Optional[dict],
+    ) -> list[dict]:
+        """按 v2 position 生成运行时估值快照；只进入上下文，不持久化。"""
+        if not positions:
+            return []
+        quotes_by_key = {
+            f"{quote.instrument.market}:{quote.instrument.code}": quote
+            for items in quotes.values()
+            for quote in items
+        }
+        signal_by_symbol = {
+            item.get("symbol"): item
+            for item in (action_signals or {}).get("items", [])
+            if item.get("symbol")
+        }
+        items: list[dict] = []
+        for position in positions:
+            item = self._value_position(
+                position,
+                quotes_by_key=quotes_by_key,
+                generated_at=generated_at,
+                exposure_proxy=exposure_proxy,
+                signal_by_symbol=signal_by_symbol,
+            )
+            items.append(item)
+
+        total_cny = sum(item.get("market_value_cny") or 0.0 for item in items)
+        for item in items:
+            value_cny = item.get("market_value_cny")
+            item["portfolio_weight"] = (
+                round(value_cny / total_cny, 6)
+                if total_cny > 0 and value_cny is not None
+                else None
+            )
+        return items
+
+    def _value_position(
+        self,
+        position: Position,
+        *,
+        quotes_by_key: dict[str, Quote],
+        generated_at: str,
+        exposure_proxy: dict,
+        signal_by_symbol: dict[str, dict],
+    ) -> dict:
+        flags: list[str] = []
+        method = position.valuation_input.method
+        quote = quotes_by_key.get(position.instrument_key or "")
+        price = None
+        price_source = method
+        as_of = position.valuation_input.as_of
+        market_value = None
+
+        if method == "market_quote":
+            quantity = position.holding.quantity if position.holding else None
+            if quote and quote.price is not None and quantity is not None:
+                price = float(quote.price)
+                market_value = price * quantity
+                price_source = quote.source or "quote"
+                as_of = quote.as_of
+                if quote.stale:
+                    flags.append("stale_quote")
+            elif position.valuation_input.manual_amount is not None:
+                market_value = position.valuation_input.manual_amount
+                price_source = "manual_fallback"
+                flags.extend(["missing_quote", "manual_fallback"])
+            else:
+                cost_amount = self._position_cost_amount(position)
+                if cost_amount is not None:
+                    market_value = cost_amount
+                    price_source = "cost_basis_fallback"
+                    flags.extend(["missing_quote", "cost_basis_fallback"])
+                else:
+                    flags.append("missing_quote")
+        elif method in {
+            "manual_amount",
+            "insurance_value",
+            "fund_nav",
+            "precious_metal_quote",
+        }:
+            market_value = position.valuation_input.manual_amount
+            price_source = method
+            if market_value is None:
+                flags.append("missing_manual_amount")
+            if self._is_stale_as_of(position.valuation_input.as_of, generated_at):
+                flags.append("stale_manual")
+
+        conversion = None
+        market_value_cny = None
+        if market_value is not None:
+            conversion = convert_to_cny(market_value, position.currency)
+            market_value_cny = conversion.amount_cny
+            if conversion.status != "ok":
+                flags.append(f"fx_{conversion.status}")
+        elif position.currency != "CNY":
+            flags.append("fx_not_computed")
+
+        cost_amount = self._position_cost_amount(position)
+        cost_currency = (
+            position.holding.cost_basis.currency
+            if position.holding and position.holding.cost_basis
+            else None
+        )
+        pnl = None
+        pnl_pct = None
+        pnl_cny = None
+        if cost_amount is not None and market_value is not None:
+            if cost_currency and cost_currency != position.currency:
+                flags.append("cost_currency_mismatch")
+            else:
+                pnl = market_value - cost_amount
+                pnl_pct = (pnl / cost_amount * 100) if cost_amount > 0 else None
+                if pnl is not None:
+                    pnl_conversion = convert_to_cny(pnl, position.currency)
+                    pnl_cny = pnl_conversion.amount_cny
+
+        missing_fields = list(position.data_completeness.get("missing_fields", []))
+        if market_value is None:
+            missing_fields.append("valuation")
+        if position.currency not in {"CNY", "USD"}:
+            missing_fields.append("supported_fx")
+
+        granularity = self._position_advice_granularity(position)
+        proxy = self._position_proxy(position, exposure_proxy, signal_by_symbol)
+        if granularity == "sector" and proxy is None:
+            flags.append("missing_proxy")
+        elif proxy is not None and proxy.get("signal") is None:
+            flags.append("proxy_not_in_universe")
+
+        return {
+            "position_id": position.position_id,
+            "account_id": position.account_id,
+            "display_name": position.display_name,
+            "instrument_key": position.instrument_key,
+            "currency": position.currency,
+            "classification": position.classification.to_dict(),
+            "liquidity": position.liquidity.to_dict(),
+            "valuation_method": method,
+            "quantity": position.holding.quantity if position.holding else None,
+            "price": price,
+            "price_source": price_source,
+            "as_of": as_of,
+            "market_value": round(market_value, 4) if market_value is not None else None,
+            "market_value_cny": round(market_value_cny, 4) if market_value_cny is not None else None,
+            "fx_rate": conversion.rate if conversion else None,
+            "fx_source": conversion.source if conversion else None,
+            "conversion_status": conversion.status if conversion else "not_computed",
+            "cost_amount": round(cost_amount, 4) if cost_amount is not None else None,
+            "cost_currency": cost_currency,
+            "unrealized_pnl": round(pnl, 4) if pnl is not None else None,
+            "unrealized_pnl_cny": round(pnl_cny, 4) if pnl_cny is not None else None,
+            "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
+            "portfolio_weight": None,
+            "advice_granularity": granularity,
+            "proxy": proxy,
+            "flags": sorted(set(flags)),
+            "missing_fields": sorted(set(missing_fields)),
+            "confirmed": position.confirmed,
+            "notes": position.notes,
+        }
+
+    @staticmethod
+    def _position_cost_amount(position: Position) -> Optional[float]:
+        if not position.holding or not position.holding.cost_basis:
+            return None
+        cost_basis = position.holding.cost_basis
+        if cost_basis.cost_amount is not None:
+            return cost_basis.cost_amount
+        if cost_basis.unit_cost is not None:
+            return cost_basis.unit_cost * position.holding.quantity
+        return None
+
+    @staticmethod
+    def _position_advice_granularity(position: Position) -> str:
+        if position.liquidity.rebalance_eligible is False or position.liquidity.tier == "locked":
+            return "fixed"
+        if (
+            position.valuation_input.method == "market_quote"
+            and position.instrument_key
+            and position.holding
+            and position.holding.quantity is not None
+        ):
+            return "detailed"
+        if (
+            position.classification.exposure_tags
+            and position.classification.asset_class
+            in {"equity", "commodity", "alternative", "fixed_income"}
+            and position.classification.product_type
+            not in {"cash", "money_market_fund", "bank_wealth_management"}
+        ):
+            return "sector"
+        return "manual"
+
+    @staticmethod
+    def _position_proxy(
+        position: Position,
+        exposure_proxy: dict,
+        signal_by_symbol: dict[str, dict],
+    ) -> Optional[dict]:
+        if not position.classification.exposure_tags:
+            return None
+        for tag in position.classification.exposure_tags:
+            proxy = exposure_proxy.get(tag)
+            if not isinstance(proxy, dict):
+                continue
+            instrument_key = proxy.get("instrument_key")
+            if not isinstance(instrument_key, str):
+                continue
+            signal = signal_by_symbol.get(instrument_key)
+            return {
+                "tag": tag,
+                "instrument_key": instrument_key,
+                "note": proxy.get("note"),
+                "signal": signal.get("signal") if signal else None,
+                "action_hint": signal.get("action_hint") if signal else None,
+                "rank": signal.get("rank") if signal else None,
+            }
+        return None
+
+    def _assets_from_position_valuations(
+        self,
+        positions: list[Position],
+        valuations: list[dict],
+    ) -> list[FinancialAsset]:
+        assets: list[FinancialAsset] = []
+        by_id = {position.position_id: position for position in positions}
+        for item in valuations:
+            position = by_id.get(item["position_id"])
+            if position is None:
+                continue
+            amount = item.get("market_value")
+            if amount is None:
+                amount = position.valuation_input.manual_amount or 0.0
+            asset_type = position.classification.asset_class
+            if "gold" in position.classification.exposure_tags:
+                asset_type = "gold"
+            elif position.classification.asset_class == "insurance":
+                asset_type = "locked"
+            elif position.classification.asset_class == "cash_equivalent":
+                asset_type = "cash"
+            asset = FinancialAsset(
+                name=position.display_name,
+                platform=position.account_id,
+                amount=amount,
+                asset_type=asset_type,
+                notes=position.notes,
+                confirmed=position.confirmed,
+                currency=position.currency,
+                instrument_key=position.instrument_key,
+                quantity=position.holding.quantity if position.holding else None,
+                tradable=position.liquidity.tradable,
+                amount_cny=item.get("market_value_cny"),
+                conversion_status=item.get("conversion_status", "not_computed"),
+                conversion_source=item.get("fx_source") or "not_computed",
+                conversion_rate=item.get("fx_rate"),
+            )
+            assets.append(asset)
+        return assets
+
+    @staticmethod
+    def _build_exposure_summary(position_valuations: list[dict]) -> dict:
+        total = sum(item.get("market_value_cny") or 0.0 for item in position_valuations)
+        exposures: dict[str, dict] = {}
+        for item in position_valuations:
+            value = item.get("market_value_cny")
+            if value is None:
+                continue
+            classification = item.get("classification") or {}
+            tags = classification.get("exposure_tags") or [classification.get("asset_class", "unknown")]
+            for tag in tags:
+                bucket = exposures.setdefault(
+                    tag,
+                    {"value_cny": 0.0, "ratio": 0.0, "positions": []},
+                )
+                bucket["value_cny"] += value
+                bucket["positions"].append(item["position_id"])
+        for bucket in exposures.values():
+            bucket["value_cny"] = round(bucket["value_cny"], 4)
+            bucket["ratio"] = round(bucket["value_cny"] / total, 6) if total > 0 else None
+        top = sorted(
+            (
+                {"tag": tag, **value}
+                for tag, value in exposures.items()
+            ),
+            key=lambda item: item.get("value_cny") or 0.0,
+            reverse=True,
+        )
+        return {
+            "total_value_cny": round(total, 4),
+            "exposures": exposures,
+            "top": top[:10],
+        }
+
+    @staticmethod
+    def _build_liquidity_summary(position_valuations: list[dict]) -> dict:
+        buckets = {
+            "cash_or_t0": {"value_cny": 0.0, "positions": []},
+            "t1_t2": {"value_cny": 0.0, "positions": []},
+            "locked_or_ineligible": {"value_cny": 0.0, "positions": []},
+            "unknown": {"value_cny": 0.0, "positions": []},
+        }
+        for item in position_valuations:
+            value = item.get("market_value_cny") or 0.0
+            liquidity = item.get("liquidity") or {}
+            tier = liquidity.get("tier") or "unknown"
+            eligible = liquidity.get("rebalance_eligible")
+            tradable = liquidity.get("tradable")
+            if eligible is False or tradable is False or tier in {"locked", "periodic_open"}:
+                bucket_name = "locked_or_ineligible"
+            elif tier in {"cash", "t0"}:
+                bucket_name = "cash_or_t0"
+            elif tier in {"t1", "t2_plus"} and tradable is not False:
+                bucket_name = "t1_t2"
+            else:
+                bucket_name = "unknown"
+            buckets[bucket_name]["value_cny"] += value
+            buckets[bucket_name]["positions"].append(item["position_id"])
+        for bucket in buckets.values():
+            bucket["value_cny"] = round(bucket["value_cny"], 4)
+        deployable = buckets["cash_or_t0"]["value_cny"] + buckets["t1_t2"]["value_cny"]
+        return {
+            "deployable_value_cny": round(deployable, 4),
+            "buckets": buckets,
+        }
+
+    @staticmethod
+    def _build_asset_data_boundaries(position_valuations: list[dict]) -> dict:
+        issues: list[dict] = []
+        for item in position_valuations:
+            missing = set(item.get("missing_fields") or [])
+            flags = set(item.get("flags") or [])
+            if "cost_basis" in missing:
+                issues.append({
+                    "position_id": item["position_id"],
+                    "severity": "degraded",
+                    "capability": "pnl",
+                    "message": f"{item['display_name']} 缺成本价，无法计算未实现盈亏和 pnl 型触发器",
+                })
+            if "valuation_as_of" in missing:
+                issues.append({
+                    "position_id": item["position_id"],
+                    "severity": "degraded",
+                    "capability": "freshness",
+                    "message": f"{item['display_name']} 缺估值日期，手工金额无法判断时效",
+                })
+            if "stale_manual" in flags:
+                issues.append({
+                    "position_id": item["position_id"],
+                    "severity": "degraded",
+                    "capability": "valuation",
+                    "message": f"{item['display_name']} 手工估值超过 30 天，精确调仓需先更新金额",
+                })
+            if "missing_quote" in flags:
+                issues.append({
+                    "position_id": item["position_id"],
+                    "severity": "degraded",
+                    "capability": "market_quote",
+                    "message": f"{item['display_name']} 缺最新行情，估值使用降级路径或无法估值",
+                })
+            if "proxy_not_in_universe" in flags:
+                proxy = item.get("proxy") or {}
+                issues.append({
+                    "position_id": item["position_id"],
+                    "severity": "degraded",
+                    "capability": "proxy",
+                    "message": (
+                        f"{item['display_name']} 的代理 {proxy.get('instrument_key')} "
+                        "不在 watchlist/扫描池，本轮无代理信号"
+                    ),
+                })
+            if "supported_fx" in missing:
+                issues.append({
+                    "position_id": item["position_id"],
+                    "severity": "blocked",
+                    "capability": "cny_valuation",
+                    "message": f"{item['display_name']} 币种 {item['currency']} 暂不支持自动换算",
+                })
+        return {
+            "issue_count": len(issues),
+            "issues": issues,
+        }
+
+    @staticmethod
+    def _build_advice_granularity_summary(position_valuations: list[dict]) -> dict:
+        counts: dict[str, int] = {}
+        items = []
+        for item in position_valuations:
+            granularity = item.get("advice_granularity", "unknown")
+            counts[granularity] = counts.get(granularity, 0) + 1
+            items.append({
+                "position_id": item["position_id"],
+                "instrument_key": item.get("instrument_key"),
+                "granularity": granularity,
+                "proxy": item.get("proxy"),
+            })
+        return {"counts": counts, "items": items}
+
+    def _is_stale_as_of(self, value: Optional[str], generated_at: str) -> bool:
+        parsed = self._parse_iso_datetime(value)
+        if parsed is None and value:
+            try:
+                parsed = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+            except ValueError:
+                return True
+        if parsed is None:
+            return False
+        try:
+            now = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        except ValueError:
+            now = datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return (now - parsed).days > 30
+
     async def _backfill_stale_us_quotes(
         self,
         instruments: list,
@@ -382,6 +883,7 @@ class ContextBuilder:
         *,
         generated_at: str,
         assets: list[FinancialAsset],
+        positions: list[Position],
         instruments: list,
         quotes: dict[str, list[Quote]],
         degradation_log: list[dict],
@@ -397,13 +899,32 @@ class ContextBuilder:
         calendar_quality: Optional[dict] = None,
         rotation: Optional[dict] = None,
         action_signals: Optional[dict] = None,
+        asset_schema_version: int = 1,
+        asset_load_warning: Optional[str] = None,
+        asset_base_currency: str = "CNY",
+        auto_included_holdings: Optional[list[str]] = None,
+        position_valuations: Optional[list[dict]] = None,
+        exposure_summary: Optional[dict] = None,
+        liquidity_summary: Optional[dict] = None,
+        asset_data_boundaries: Optional[dict] = None,
+        advice_granularity: Optional[dict] = None,
     ) -> dict:
         """生成统一数据质量与溯源摘要。"""
         return {
-            "schema_version": 9,
+            "schema_version": 10,
             "generated_at": generated_at,
-            "asset_format": self._asset_format_quality(assets),
+            "asset_format": self._asset_format_quality(
+                assets,
+                positions=positions,
+                schema_version=asset_schema_version,
+                base_currency=asset_base_currency,
+                load_warning=asset_load_warning,
+            ),
             "currency_conversion": self._currency_conversion_quality(assets),
+            "asset_completeness": self._asset_completeness_quality(
+                position_valuations or [],
+                asset_data_boundaries or {},
+            ),
             "quotes": self._quote_quality(generated_at, instruments, quotes, degradation_log),
             "news": self._news_quality(
                 generated_at, news, news_requested, news_provider_errors
@@ -434,16 +955,74 @@ class ContextBuilder:
             },
             "rotation": self._rotation_quality(rotation),
             "action_signals": self._action_signal_quality(action_signals),
+            "auto_included_holdings": {
+                "count": len(auto_included_holdings or []),
+                "items": list(auto_included_holdings or []),
+            },
+            "exposure_summary": exposure_summary or {},
+            "liquidity_summary": liquidity_summary or {},
+            "advice_granularity": advice_granularity or {},
         }
 
     @staticmethod
-    def _asset_format_quality(assets: list[FinancialAsset]) -> dict:
-        """资产格式兼容提示；S2 期间 AnalysisContext 仍消费 v1 FinancialAsset。"""
+    def _asset_format_quality(
+        assets: list[FinancialAsset],
+        *,
+        positions: list[Position],
+        schema_version: int,
+        base_currency: str,
+        load_warning: Optional[str],
+    ) -> dict:
+        """资产格式兼容提示；v2 是权威入口，v1 只作为兼容层。"""
+        if schema_version == 2:
+            status = "ok"
+            message = "schema_version=2 Position/Account loaded"
+        elif assets:
+            status = "migration_recommended"
+            message = "v1 FinancialAsset compatibility layer loaded; migrate to schema_version=2 when ready"
+        else:
+            status = "no_assets"
+            message = "no financial assets loaded"
         return {
-            "status": "migration_recommended" if assets else "no_assets",
-            "schema_version": 1,
+            "status": status,
+            "schema_version": schema_version,
+            "base_currency": base_currency,
             "loaded_count": len(assets),
-            "message": "v1 FinancialAsset compatibility layer loaded; migrate to schema_version=2 when ready",
+            "position_count": len(positions),
+            "warning": load_warning,
+            "message": message,
+        }
+
+    @staticmethod
+    def _asset_completeness_quality(
+        position_valuations: list[dict],
+        asset_data_boundaries: dict,
+    ) -> dict:
+        issue_count = int(asset_data_boundaries.get("issue_count") or 0)
+        blocked = sum(
+            1
+            for issue in asset_data_boundaries.get("issues", [])
+            if issue.get("severity") == "blocked"
+        )
+        missing_by_position = {
+            item["position_id"]: item.get("missing_fields", [])
+            for item in position_valuations
+            if item.get("missing_fields")
+        }
+        if blocked:
+            status = "blocked"
+        elif issue_count:
+            status = "degraded"
+        elif position_valuations:
+            status = "ok"
+        else:
+            status = "no_assets"
+        return {
+            "status": status,
+            "issue_count": issue_count,
+            "blocked_count": blocked,
+            "missing_by_position": missing_by_position,
+            "issues": asset_data_boundaries.get("issues", []),
         }
 
     @staticmethod
@@ -1034,6 +1613,13 @@ class ContextBuilder:
         rotation: Optional[dict] = None,
         action_signals: Optional[dict] = None,
         forecast_summary: Optional[dict] = None,
+        asset_accounts: Optional[list[Account]] = None,
+        asset_positions: Optional[list[Position]] = None,
+        position_valuations: Optional[list[dict]] = None,
+        exposure_summary: Optional[dict] = None,
+        liquidity_summary: Optional[dict] = None,
+        asset_data_boundaries: Optional[dict] = None,
+        advice_granularity: Optional[dict] = None,
     ) -> str:
         """生成人类可读的原始输入文本，供 LLM 阅读"""
         lines: list[str] = []
@@ -1057,7 +1643,7 @@ class ContextBuilder:
             for asset in assets
             if asset.instrument_key
         }
-        lines.append(f" 总资产量级: {self._amount_band(total)}")
+        lines.append(f" 总资产: {self._money(total, 'CNY')}")
         lines.append(f" 资产数量: {len(assets)}")
         for asset in assets:
             value_cny = asset.valuation_cny
@@ -1065,7 +1651,7 @@ class ContextBuilder:
             pct = (numeric_value / total * 100) if total > 0 else 0
             status = "" if asset.confirmed else "?"
             value_text = (
-                f"占比 {pct:.1f}% | 量级 {self._amount_band(value_cny)}"
+                f"{self._money(value_cny, 'CNY')} | 占比 {pct:.1f}%"
                 if value_cny is not None
                 else "换算失败（未计入合计）"
             )
@@ -1077,6 +1663,20 @@ class ContextBuilder:
             if asset.notes:
                 lines.append(f" 备注: {asset.notes}")
         lines.append("")
+
+        self._append_asset_boundary_section(
+            lines,
+            asset_data_boundaries=asset_data_boundaries or {},
+        )
+        self._append_position_valuation_section(
+            lines,
+            accounts=asset_accounts or [],
+            positions=asset_positions or [],
+            valuations=position_valuations or [],
+        )
+        self._append_exposure_section(lines, exposure_summary or {})
+        self._append_liquidity_section(lines, liquidity_summary or {})
+        self._append_granularity_section(lines, advice_granularity or {})
 
         if recent_snapshots:
             lines.append("【上次快照】")
@@ -1422,6 +2022,149 @@ class ContextBuilder:
         self._append_review_forecasts(lines, forecast_summary)
         lines.append("")
 
+    def _append_asset_boundary_section(
+        self,
+        lines: list[str],
+        *,
+        asset_data_boundaries: dict,
+    ) -> None:
+        lines.append("【数据边界】")
+        issues = asset_data_boundaries.get("issues", [])
+        if not issues:
+            lines.append(" 资产事实完整性足够支撑当前估值、暴露和流动性分析。")
+            lines.append("")
+            return
+        for issue in issues[:12]:
+            lines.append(
+                f" [{issue.get('severity', 'degraded')}/{issue.get('capability', 'unknown')}] "
+                f"{issue.get('message', '')}"
+            )
+        if len(issues) > 12:
+            lines.append(f" 另有 {len(issues) - 12} 条数据边界见 data_quality.asset_completeness。")
+        lines.append("")
+
+    def _append_position_valuation_section(
+        self,
+        lines: list[str],
+        *,
+        accounts: list[Account],
+        positions: list[Position],
+        valuations: list[dict],
+    ) -> None:
+        if not valuations:
+            return
+        account_names = {account.account_id: account.display_name for account in accounts}
+        positions_by_id = {position.position_id: position for position in positions}
+        lines.append("【逐持仓估值】")
+        for item in valuations:
+            position = positions_by_id.get(item["position_id"])
+            account = account_names.get(item.get("account_id"), item.get("account_id"))
+            value = (
+                self._money(item.get("market_value"), item.get("currency", "CNY"))
+                if item.get("market_value") is not None
+                else "无法估值"
+            )
+            value_cny = (
+                self._money(item.get("market_value_cny"), "CNY")
+                if item.get("market_value_cny") is not None
+                else "CNY换算失败"
+            )
+            weight = item.get("portfolio_weight")
+            weight_text = f" | 组合权重 {weight * 100:.2f}%" if weight is not None else ""
+            pnl = ""
+            if item.get("pnl_pct") is not None:
+                pnl = (
+                    f" | 未实现盈亏 {self._money(item.get('unrealized_pnl'), item.get('currency', 'CNY'))}"
+                    f" ({item['pnl_pct']:+.2f}%)"
+                )
+            elif position and position.valuation_input.method == "market_quote":
+                pnl = " | 盈亏: 缺成本价不可计"
+            price = ""
+            if item.get("price") is not None:
+                price = f" | 最新价 {item['price']:.4f}"
+            flags = f" | flags: {', '.join(item['flags'])}" if item.get("flags") else ""
+            lines.append(
+                f" {item['display_name']} [{item['position_id']}] ({account})"
+                f"{price} | 市值 {value} / {value_cny}{weight_text}{pnl}"
+                f" | 粒度 {item.get('advice_granularity')}{flags}"
+            )
+            proxy = item.get("proxy")
+            if proxy:
+                signal_text = proxy.get("signal") or "no_signal"
+                action_hint = proxy.get("action_hint") or "无"
+                lines.append(
+                    f"  代理参考: {proxy.get('tag')} -> {proxy.get('instrument_key')} "
+                    f"| signal={signal_text} | hint={action_hint} "
+                    "(代理只用于板块信号,不得直接当作该持仓价格触发器)"
+                )
+        lines.append("")
+
+    def _append_exposure_section(self, lines: list[str], exposure_summary: dict) -> None:
+        lines.append("【暴露集中度】")
+        top = exposure_summary.get("top", [])
+        if not top:
+            lines.append(" 暴露标签不足或无可估值持仓。")
+            lines.append("")
+            return
+        for item in top[:8]:
+            ratio = item.get("ratio")
+            ratio_text = f"{ratio * 100:.1f}%" if ratio is not None else "n/a"
+            lines.append(
+                f" {item.get('tag')}: {self._money(item.get('value_cny'), 'CNY')} "
+                f"| 占净值 {ratio_text} | positions: {', '.join(item.get('positions', [])[:5])}"
+            )
+        lines.append("")
+
+    def _append_liquidity_section(self, lines: list[str], liquidity_summary: dict) -> None:
+        lines.append("【可动用资金】")
+        buckets = liquidity_summary.get("buckets", {})
+        if not buckets:
+            lines.append(" 缺少流动性分层。")
+            lines.append("")
+            return
+        labels = {
+            "cash_or_t0": "立即可动用(cash/t0)",
+            "t1_t2": "短期可交易(t1/t2+)",
+            "locked_or_ineligible": "锁定或不参与调仓",
+            "unknown": "未知流动性",
+        }
+        for key in ("cash_or_t0", "t1_t2", "locked_or_ineligible", "unknown"):
+            bucket = buckets.get(key, {})
+            lines.append(
+                f" {labels[key]}: {self._money(bucket.get('value_cny', 0.0), 'CNY')} "
+                f"| {len(bucket.get('positions', []))} 项"
+            )
+        lines.append(
+            f" 可动用合计: {self._money(liquidity_summary.get('deployable_value_cny', 0.0), 'CNY')}"
+        )
+        lines.append("")
+
+    @staticmethod
+    def _append_granularity_section(lines: list[str], advice_granularity: dict) -> None:
+        lines.append("【建议粒度】")
+        counts = advice_granularity.get("counts", {})
+        if not counts:
+            lines.append(" 暂无可判定持仓粒度。")
+            lines.append("")
+            return
+        parts = [f"{key}: {value}" for key, value in sorted(counts.items())]
+        lines.append(" " + " | ".join(parts))
+        sector_items = [
+            item
+            for item in advice_granularity.get("items", [])
+            if item.get("granularity") == "sector"
+        ]
+        for item in sector_items[:8]:
+            proxy = item.get("proxy") or {}
+            if proxy:
+                lines.append(
+                    f" sector {item.get('position_id')} 代理 {proxy.get('instrument_key')} "
+                    f"| signal={proxy.get('signal') or 'no_signal'}"
+                )
+            else:
+                lines.append(f" sector {item.get('position_id')} 缺代理配置")
+        lines.append("")
+
     def _append_review_actions(self, lines: list[str], recent_advice: list[dict]) -> None:
         lines.append("1. 上期建议 actions")
         if not recent_advice:
@@ -1475,6 +2218,13 @@ class ContextBuilder:
                     )
                     if observed.get("pct_change") is not None:
                         head += f" | 累计 {observed['pct_change']:+.2f}%"
+                    if observed.get("pnl_pct") is not None:
+                        head += f" | 当前浮盈 {observed['pnl_pct']:+.2f}%"
+                    if observed.get("max_pnl_pct") is not None:
+                        head += (
+                            f" | 期间浮盈区间 "
+                            f"{observed.get('min_pnl_pct'):+.2f}%~{observed.get('max_pnl_pct'):+.2f}%"
+                        )
                 elif status == "no_data":
                     head += f" ({item.get('reason', 'unknown')})"
                 lines.append(head)
@@ -1540,6 +2290,12 @@ class ContextBuilder:
             if item.get("resolution_note"):
                 line += f" | {item.get('resolution_note')}"
             lines.append(line)
+
+    @staticmethod
+    def _money(value: Optional[float], currency: str = "CNY") -> str:
+        if value is None:
+            return "N/A"
+        return f"{float(value):,.2f} {currency}"
 
     @staticmethod
     def _amount_band(value: float) -> str:

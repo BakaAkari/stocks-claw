@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -314,6 +315,7 @@ class StocksEngine:
         self._profile: dict = {}
         self._watchlist: list[Instrument] = []
         self._sector_scan: list[Instrument] = []
+        self._exposure_proxy: dict = {}
         self._load_configs()
 
     # ------------------------------------------------------------------
@@ -327,6 +329,7 @@ class StocksEngine:
         self._profile = self._load_profile()
         self._watchlist = self._load_watchlist()
         self._sector_scan = self._load_sector_scan()
+        self._exposure_proxy = self._load_exposure_proxy()
 
     def _load_openai_config(
         self,
@@ -473,7 +476,7 @@ class StocksEngine:
             self._asset_base_currency = (data.get("base_currency") or "CNY").upper()
             self._asset_accounts_v2 = [Account.from_dict(item) for item in accounts]
             self._asset_positions_v2 = [Position.from_dict(item) for item in positions]
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, AttributeError):
             self._asset_load_warning = "asset_file_invalid_v2_record"
             self._asset_schema_version = 1
             self._asset_accounts_v2 = []
@@ -556,6 +559,21 @@ class StocksEngine:
             except (ValueError, TypeError):
                 continue
         return instruments
+
+    def _load_exposure_proxy(self) -> dict:
+        """加载 sector 粒度持仓的代理标的配置。"""
+        data = self._load_json("exposure_proxy.json")
+        if not isinstance(data, dict):
+            return {}
+        result = {}
+        for tag, item in data.items():
+            if not isinstance(tag, str) or not isinstance(item, dict):
+                continue
+            instrument_key = item.get("instrument_key")
+            if not isinstance(instrument_key, str) or ":" not in instrument_key:
+                continue
+            result[tag.strip().lower()] = dict(item)
+        return result
 
     def _load_sector_scan(self) -> list[Instrument]:
         """从 ``sector_scan.json`` 加载板块扫描池（轮动脚手架专用）。
@@ -674,8 +692,9 @@ class StocksEngine:
                 }]) from exc
             raise
         action_errors = self._validate_advice_action_targets(record.actions)
-        if action_errors:
-            raise AdviceValidationError(action_errors)
+        trigger_errors = self._validate_advice_triggers(record.triggers)
+        if action_errors or trigger_errors:
+            raise AdviceValidationError(action_errors + trigger_errors)
         self.persistence.save_advice(record)
         return record.to_dict()
 
@@ -761,6 +780,15 @@ class StocksEngine:
         valid_targets.update(f"{item.market}:{item.code}" for item in self._sector_scan)
         valid_targets.update(str(bucket) for bucket in self._constraints)
 
+        positions_by_key: dict[str, list[Position]] = {}
+        positions_by_id: dict[str, Position] = {}
+        for position in self._current_asset_positions():
+            positions_by_id[position.position_id] = position
+            valid_targets.add(position.position_id)
+            if position.instrument_key:
+                valid_targets.add(position.instrument_key)
+                positions_by_key.setdefault(position.instrument_key, []).append(position)
+
         errors: list[dict] = []
         for index, action in enumerate(actions):
             target = action.get("target")
@@ -774,7 +802,86 @@ class StocksEngine:
                         "scan pool, or constraint buckets"
                     ),
                 })
+                continue
+            mutable_action = action.get("action") in {"add", "increase", "reduce", "exit"}
+            if not mutable_action:
+                continue
+            matched_positions: list[Position] = []
+            if target in positions_by_id:
+                matched_positions.append(positions_by_id[target])
+            matched_positions.extend(positions_by_key.get(target, []))
+            for position in matched_positions:
+                if position.liquidity.rebalance_eligible is False:
+                    errors.append({
+                        "index": index,
+                        "field": "target",
+                        "target": target,
+                        "message": (
+                            f"{position.display_name} is marked rebalance_eligible=false; "
+                            "mutable advice actions are not allowed"
+                        ),
+                    })
+                    break
+                if position.liquidity.tradable is False:
+                    errors.append({
+                        "index": index,
+                        "field": "target",
+                        "target": target,
+                        "message": (
+                            f"{position.display_name} is marked tradable=false; "
+                            "mutable advice actions are not allowed"
+                        ),
+                    })
+                    break
         return errors
+
+    def _validate_advice_triggers(self, triggers: list[dict]) -> list[dict]:
+        if not triggers:
+            return []
+        errors: list[dict] = []
+        for index, trigger in enumerate(triggers):
+            trigger_type = trigger.get("type")
+            if trigger_type not in {"pnl_pct_above", "pnl_pct_below"}:
+                continue
+            key = trigger.get("instrument")
+            matches = [
+                position
+                for position in self._current_asset_positions()
+                if position.instrument_key == key
+            ]
+            if not matches:
+                errors.append({
+                    "index": index,
+                    "field": "triggers",
+                    "target": key,
+                    "message": "pnl trigger requires a mapped detailed holding with cost_basis",
+                })
+                continue
+            if not any(
+                position.holding and position.holding.cost_basis
+                for position in matches
+            ):
+                errors.append({
+                    "index": index,
+                    "field": "triggers",
+                    "target": key,
+                    "message": "pnl trigger requires cost_basis; fill position.holding.cost_basis first",
+                })
+        return errors
+
+    def _current_asset_positions(self) -> list[Position]:
+        if self._asset_schema_version == 2:
+            return list(self._asset_positions_v2)
+        return [financial_asset_to_position_v2(asset) for asset in self._assets]
+
+    def _current_asset_accounts(self) -> list[Account]:
+        if self._asset_schema_version == 2:
+            return list(self._asset_accounts_v2)
+        accounts_by_id: dict[str, Account] = {}
+        for asset in self._assets:
+            account = account_from_v1_platform(asset.platform, asset.currency)
+            accounts_by_id.setdefault(account.account_id, account)
+        return list(accounts_by_id.values())
 
     def analyze_portfolio(self, assets: list[FinancialAsset]) -> PortfolioMapping:
         """分析投资组合结构。"""
@@ -825,6 +932,72 @@ class StocksEngine:
         """使用 LLM 生成投资分析报告。"""
         return await self.llm_analysis.generate_report(context)
 
+    def _with_runtime_holding_instruments(
+        self,
+        instruments: list[Instrument],
+    ) -> tuple[list[Instrument], list[str]]:
+        """把 detailed 持仓临时加入本次行情/历史请求，不写 watchlist。"""
+        result = list(instruments)
+        existing = {f"{item.market}:{item.code}" for item in result}
+        auto_included: list[str] = []
+        for position in self._current_asset_positions():
+            if (
+                position.valuation_input.method != "market_quote"
+                or not position.instrument_key
+                or not position.holding
+            ):
+                continue
+            key = position.instrument_key
+            if key in existing:
+                continue
+            instrument = self._instrument_from_position(position)
+            if instrument is None:
+                continue
+            result.append(instrument)
+            existing.add(key)
+            auto_included.append(key)
+        return result, auto_included
+
+    @staticmethod
+    def _instrument_from_position(position: Position) -> Optional[Instrument]:
+        if not position.instrument_key:
+            return None
+        instrument = position.instrument or {}
+        return StocksEngine._instrument_from_key(
+            position.instrument_key,
+            name=position.display_name,
+            exchange=instrument.get("exchange"),
+            category=(
+                position.classification.exposure_tags[0]
+                if position.classification.exposure_tags
+                else position.classification.asset_class
+            ),
+            pool="holding",
+        )
+
+    @staticmethod
+    def _instrument_from_key(
+        instrument_key: str,
+        *,
+        name: str,
+        exchange: Optional[str] = None,
+        category: Optional[str] = None,
+        pool: Optional[str] = None,
+    ) -> Optional[Instrument]:
+        market, sep, code = instrument_key.partition(":")
+        if not sep or not market or not code:
+            return None
+        if market not in {"a", "us", "crypto"}:
+            return None
+        return Instrument(
+            code=code,
+            name=name,
+            market=market,
+            exchange=exchange,
+            category=category,
+            pool=pool,
+        )
+
     async def build_context(
         self,
         include_news: bool = True,
@@ -837,8 +1010,13 @@ class StocksEngine:
         """
         # 0. 确定要获取行情的标的；扫描池只参与历史回填与轮动，不请求实时行情。
         # 轮动与动作信号基于历史缓存，--no-quotes 时仍可用（不触发新的历史回填）
-        instruments = self._watchlist if include_quotes else []
-        scan_instruments = self._sector_scan
+        instruments = list(self._watchlist) if include_quotes else []
+        scan_instruments = list(self._sector_scan)
+        auto_included_holdings: list[str] = []
+        if include_quotes:
+            instruments, auto_included_holdings = self._with_runtime_holding_instruments(
+                instruments,
+            )
 
         # 1. Warm history cache if not yet warmed (D0-3:结构化上报 + 冷却重试)
         cooldown_active = False
@@ -923,6 +1101,13 @@ class StocksEngine:
             history_backfill_report=self._history_backfill_report,
             scan_instruments=scan_instruments,
             forecast_summary=forecast_summary,
+            asset_schema_version=self._asset_schema_version,
+            asset_load_warning=self._asset_load_warning,
+            asset_base_currency=self._asset_base_currency,
+            asset_accounts_v2=self._current_asset_accounts(),
+            asset_positions_v2=self._current_asset_positions(),
+            auto_included_holdings=auto_included_holdings,
+            exposure_proxy=self._exposure_proxy,
         )
 
         # 保存最小快照，供下一次上下文进行前后对照。
@@ -951,6 +1136,101 @@ class StocksEngine:
             "event_calendar_enabled": self.event_calendar is not None,
             "sector_scan_loaded": len(self._sector_scan),
             "llm_analysis_enabled": self.llm_analysis.enabled,
+        }
+
+    def preview_asset_migration_v2(self) -> dict:
+        """生成 v1 -> v2 资产文件迁移预览，不写文件。"""
+        source_path = self._asset_file_path()
+        positions = [financial_asset_to_position_v2(asset) for asset in self._assets]
+        accounts_by_id: dict[str, Account] = {}
+        for asset in self._assets:
+            account = account_from_v1_platform(asset.platform, asset.currency)
+            accounts_by_id.setdefault(account.account_id, account)
+        payload = {
+            "schema_version": 2,
+            "base_currency": "CNY",
+            "accounts": [
+                account.to_dict()
+                for account in sorted(accounts_by_id.values(), key=lambda item: item.account_id)
+            ],
+            "positions": [position.to_storage_dict() for position in positions],
+        }
+        missing_summary: dict[str, int] = {}
+        for position in positions:
+            for field_name in position.data_completeness.get("missing_fields", []):
+                missing_summary[field_name] = missing_summary.get(field_name, 0) + 1
+        priority_order = [
+            ("cost_basis", "上市持仓成本价/成本金额，用于未实现盈亏与 pnl 触发器"),
+            ("instrument_key", "基金/证券代码，用于行情和净值接入"),
+            ("quantity", "份额/股数/克数，用于市值计算"),
+            ("valuation_as_of", "手工金额日期，用于判断时效"),
+            ("classification", "资产分类，用于约束与暴露聚合"),
+            ("supported_fx", "币种换算支持，用于 CNY 总值"),
+        ]
+        missing_priorities = [
+            {
+                "field": field_name,
+                "count": missing_summary[field_name],
+                "priority": index + 1,
+                "reason": reason,
+            }
+            for index, (field_name, reason) in enumerate(priority_order)
+            if missing_summary.get(field_name)
+        ]
+        return {
+            "source_path": str(source_path),
+            "write_path": str(self._local_data_dir / "financial_assets.json"),
+            "backup_path": (
+                str(source_path.with_name("financial_assets.v1.bak.json"))
+                if source_path == self._local_data_dir / "financial_assets.json"
+                else None
+            ),
+            "source_schema_version": self._asset_schema_version,
+            "target_schema_version": 2,
+            "base_currency": "CNY",
+            "already_v2": self._asset_schema_version == 2,
+            "position_count": len(positions),
+            "account_count": len(accounts_by_id),
+            "missing_fields_summary": missing_summary,
+            "missing_fields_priority": missing_priorities,
+            "positions": [position.to_dict() for position in positions],
+            "accounts": [account.to_dict() for account in accounts_by_id.values()],
+            "payload": payload,
+            "will_write": False,
+        }
+
+    def migrate_assets_v2(self, *, confirmed: bool = False) -> dict:
+        """确认式 v2 资产文件迁移。"""
+        preview = self.preview_asset_migration_v2()
+        if self._asset_schema_version == 2:
+            return {
+                **preview,
+                "success": False,
+                "error": "financial_assets.json is already schema_version=2",
+            }
+        if not confirmed:
+            return {**preview, "success": True, "will_write": False}
+
+        source_path = self._asset_file_path()
+        write_path = self._local_data_dir / "financial_assets.json"
+        self._local_data_dir.mkdir(parents=True, exist_ok=True)
+
+        backup_path = None
+        if source_path.exists() and source_path == write_path:
+            backup_path = source_path.with_name("financial_assets.v1.bak.json")
+            shutil.copy2(source_path, backup_path)
+
+        with open(write_path, "w", encoding="utf-8") as f:
+            json.dump(preview["payload"], f, ensure_ascii=False, indent=2)
+
+        self._assets = self._load_assets_from_file()
+        return {
+            **preview,
+            "success": True,
+            "will_write": True,
+            "written_path": str(write_path),
+            "backup_path": str(backup_path) if backup_path else None,
+            "action": "asset_migrated_v2",
         }
 
     # ------------------------------------------------------------------

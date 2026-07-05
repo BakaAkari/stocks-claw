@@ -13,7 +13,7 @@ from stocks.engine import StocksEngine
 from tests.engine.test_engine import MINIMAL_CONFIG
 
 
-async def test_confirmed_advice_loop_injects_review_and_keeps_prompt_desensitized(
+async def test_confirmed_advice_loop_injects_review_and_uses_real_prompt_amounts(
     tmp_path,
 ):
     config = deepcopy(MINIMAL_CONFIG)
@@ -93,6 +93,6 @@ async def test_confirmed_advice_loop_injects_review_and_keeps_prompt_desensitize
     assert performance["pct_change"] == 10.0
     assert "【复盘】" in second.raw_prompt_input
     assert "缺失: 上期建议未保存结构化 actions" in second.raw_prompt_input
-    assert "50,000.00" not in second.raw_prompt_input
-    assert "30,000.00" not in second.raw_prompt_input
+    assert "50,000.00 CNY" in second.raw_prompt_input
+    assert "30,000.00 CNY" in second.raw_prompt_input
     assert "占比" in second.raw_prompt_input

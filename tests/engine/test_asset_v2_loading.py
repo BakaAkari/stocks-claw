@@ -110,6 +110,28 @@ def test_invalid_top_level_is_structured_error(engine, tmp_path):
     assert engine._asset_load_warning == "asset_file_invalid_top_level"
 
 
+def test_invalid_v2_nested_record_is_structured_error(engine, tmp_path):
+    (tmp_path / "financial_assets.json").write_text(json.dumps({
+        "schema_version": 2,
+        "base_currency": "CNY",
+        "accounts": [],
+        "positions": [
+            {
+                "position_id": "bad",
+                "account_id": "manual",
+                "display_name": "坏记录",
+                "currency": "CNY",
+                "classification": [],
+                "valuation_input": {"method": "manual_amount", "manual_amount": 1},
+                "liquidity": {},
+            }
+        ],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert engine._load_assets_from_file() == []
+    assert engine._asset_load_warning == "asset_file_invalid_v2_record"
+
+
 def test_legacy_crud_refuses_to_overwrite_v2_file(engine, tmp_path):
     path = tmp_path / "financial_assets.json"
     original = json.dumps({
@@ -154,3 +176,54 @@ def test_v1_to_v2_mapping_covers_new_keywords_and_unknown() -> None:
     assert position.holding is not None
     assert position.holding.quantity == 1800.0
     assert "cost_basis" in position.data_completeness["missing_fields"]
+
+
+def test_asset_migration_preview_and_confirmed_write(engine, tmp_path):
+    path = tmp_path / "financial_assets.json"
+    original = json.dumps([
+        {
+            "name": "现金",
+            "platform": "银行",
+            "amount": 1000,
+            "asset_type": "现金",
+            "currency": "CNY",
+        },
+        {
+            "name": "科创50ETF",
+            "platform": "券商",
+            "amount": 3000,
+            "asset_type": "股票ETF",
+            "currency": "CNY",
+            "instrument_key": "a:588000",
+            "quantity": 1800,
+            "tradable": True,
+        },
+    ], ensure_ascii=False)
+    path.write_text(original, encoding="utf-8")
+    engine._assets = engine._load_assets_from_file()
+
+    preview = engine.migrate_assets_v2(confirmed=False)
+
+    assert preview["success"] is True
+    assert preview["will_write"] is False
+    assert json.loads(path.read_text(encoding="utf-8"))[0]["name"] == "现金"
+    assert preview["target_schema_version"] == 2
+    assert preview["missing_fields_summary"]["valuation_as_of"] == 1
+    assert preview["missing_fields_summary"]["cost_basis"] == 1
+    assert preview["missing_fields_priority"][0]["field"] == "cost_basis"
+    assert preview["positions"][0]["position_id"] != preview["positions"][1]["position_id"]
+
+    migrated = engine.migrate_assets_v2(confirmed=True)
+
+    assert migrated["success"] is True
+    assert migrated["will_write"] is True
+    assert (tmp_path / "financial_assets.v1.bak.json").read_text(encoding="utf-8") == original
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["schema_version"] == 2
+    assert len(stored["accounts"]) == 2
+    assert len(stored["positions"]) == 2
+    assert engine._asset_schema_version == 2
+
+    rejected = engine.migrate_assets_v2(confirmed=True)
+    assert rejected["success"] is False
+    assert rejected["error"] == "financial_assets.json is already schema_version=2"

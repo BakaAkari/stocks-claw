@@ -19,8 +19,9 @@ AnalysisContext；最终分析由调用它的 Agent 完成。系统不下单，�
 - `action_signals` 是引擎给出的规则化方向性候选动作（附 reasons），
   是分析的初始底稿：每条方向性信号必须采纳或给理由推翻，不许无视；
   它不是指令，最终动作仍需结合组合结构与用户偏好落定。
-- 默认使用 `AnalysisContext.raw_prompt_input` 做建议输入；其中只有金额区间，不含逐笔
-  精确金额。结构化 `assets` 仍含精确值，只在确有必要时使用。
+- 默认使用 `AnalysisContext.raw_prompt_input` 做建议输入；本地 Agent 上下文会包含真实
+  金额、逐持仓市值、盈亏、暴露集中度、可动用资金和数据边界。对外 HTTP 接口默认
+  隐藏精确金额是另一条远程安全边界。
 - 所有结论必须结合 `data_quality`；stale、降级、换算失败和单源风险不可省略。
 
 ## 2. 环境与入口
@@ -69,12 +70,15 @@ uv run python -m stocks.adapters.cli \
 
 uv run python -m stocks.adapters.cli --asset-remove '现金' --confirmed
 
+uv run python -m stocks.adapters.cli --asset-migrate-v2
+uv run python -m stocks.adapters.cli --asset-migrate-v2 --confirmed
+
 uv run python -m stocks.adapters.cli \
   --profile-update '{"risk_tolerance":"moderate","investment_horizon":"long_term"}' \
   --confirmed
 
 uv run python -m stocks.adapters.cli \
-  --advice-save '{"instruments":[{"market":"a","code":"000001","name":"平安银行"}],"direction":{"a:000001":"watch"},"rationale_summary":"现金占比较高，等待放量站回20日线。","based_on":["quotes","portfolio"],"boundary":[{"type":"fact","text":"现金占比较高"},{"type":"inference","text":"等待放量站回20日线"}],"triggers":[{"instrument":"a:000001","type":"price_above","level":12.5,"action":"收盘站上12.5则用现金层一成建仓","invalidation":"跌破11.8本条作废"}],"actions":[{"target":"权益","action":"increase","size_hint":"现金层一成","trigger":"收盘站上20日线","invalidation":"跌破11.8本条作废","horizon":"short"}]}' \
+  --advice-save '{"instruments":[{"market":"a","code":"000001","name":"平安银行"}],"direction":{"a:000001":"watch"},"rationale_summary":"现金占比较高，等待放量站回20日线。","based_on":["quotes","portfolio"],"boundary":[{"type":"fact","text":"现金占比较高"},{"type":"inference","text":"等待放量站回20日线"}],"triggers":[{"instrument":"a:000001","type":"price_above","level":12.5,"action":"收盘站上12.5则用现金层一成建仓","invalidation":"跌破11.8本条作废"},{"instrument":"a:588000","type":"pnl_pct_above","level":20,"action":"浮盈达到20%后减半卫星仓"}],"actions":[{"target":"权益","action":"increase","size_hint":"现金层一成","trigger":"收盘站上20日线","invalidation":"跌破11.8本条作废","horizon":"short"}]}' \
   --confirmed
 
 uv run python -m stocks.adapters.cli --advice-list
@@ -103,9 +107,14 @@ MCP 对应工具：
 - `assets_list`
 - `asset_add`、`asset_update`、`asset_remove`，参数必须含
   `"confirmed": true`
+- `asset_migrate_v2`，`confirmed=false` 只返回完整迁移预览和缺字段摘要；
+  `confirmed=true` 写入 `.local/financial_assets.json`，源文件若已是 `.local`
+  私有文件则备份为 `financial_assets.v1.bak.json`
 - `profile_get`、`profile_update`，写操作同样必须确认
 - `advice_list`、`advice_save`，保存建议必须确认；`advice.triggers` 可选，
-  保存"触发条件 → 动作"三元组供下次运行程序化核对；`advice.actions`
+  保存"触发条件 → 动作"三元组供下次运行程序化核对；触发器支持
+  `price_*`、`pct_change_*` 和基于用户成本的 `pnl_pct_above/pnl_pct_below`；
+  pnl 型触发器要求对应 v2 持仓有 `holding.cost_basis`。`advice.actions`
   用于保存结构化调仓动作，`size_hint` 只能写比例或自然语言，不写具体金额
 - `execution_list`、`execution_save`，保存建议执行记录必须确认；执行对照只按
   `advice_id + target` 精确匹配，匹配不到显示 `unknown`

@@ -1,0 +1,32 @@
+{
+  "nasdaq100": {
+    "instrument_key": "us:QQQ",
+    "name": "Invesco QQQ Trust",
+    "category": "tech",
+    "note": "纳指100暴露代理；用于板块信号，不等同于场外基金净值"
+  },
+  "us_equity": {
+    "instrument_key": "us:SPY",
+    "name": "SPDR S&P 500 ETF",
+    "category": "equity_us",
+    "note": "美股宽基代理；用于市场暴露参考"
+  },
+  "gold": {
+    "instrument_key": "a:518880",
+    "name": "华安黄金ETF",
+    "category": "gold",
+    "note": "黄金暴露代理；用于金价方向参考"
+  },
+  "fixed_income": {
+    "instrument_key": "a:159110",
+    "name": "科创债ETF万家",
+    "category": "bond",
+    "note": "短债/现金管理代理；用于利率与现金替代层参考"
+  },
+  "tech_growth": {
+    "instrument_key": "us:QQQ",
+    "name": "Invesco QQQ Trust",
+    "category": "tech",
+    "note": "科技成长暴露代理；用于板块信号"
+  }
+}

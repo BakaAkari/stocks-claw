@@ -12,7 +12,17 @@ import pytest
 
 from stocks.adapters.cli import CLIAdapter
 from stocks.adapters.mcp import MCPAdapter
-from stocks.domain.models import FinancialAsset, ForecastRecord, Instrument
+from stocks.domain.models import (
+    Classification,
+    CostBasis,
+    FinancialAsset,
+    ForecastRecord,
+    Holding,
+    Instrument,
+    Liquidity,
+    Position,
+    ValuationInput,
+)
 from stocks.engine import StocksEngine
 from tests.engine.test_engine import MINIMAL_CONFIG
 
@@ -98,6 +108,44 @@ def test_cli_asset_crud_round_trip(adapter_engine, tmp_path, capsys):
     adapter.run(["--asset-remove", "黄金", "--confirmed"])
     assert json.loads(capsys.readouterr().out)["success"] is True
     assert json.loads((tmp_path / "financial_assets.json").read_text()) == []
+
+
+def test_cli_and_mcp_asset_migration_v2(adapter_engine, tmp_path, capsys):
+    path = tmp_path / "financial_assets.json"
+    path.write_text(
+        json.dumps([
+            {
+                "name": "现金",
+                "platform": "银行",
+                "amount": 1000,
+                "asset_type": "现金",
+                "currency": "CNY",
+            }
+        ], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    adapter_engine._assets = adapter_engine._load_assets_from_file()
+    cli = CLIAdapter(adapter_engine)
+    mcp = MCPAdapter(adapter_engine)
+
+    cli.run(["--asset-migrate-v2"])
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["success"] is True
+    assert preview["will_write"] is False
+    assert json.loads(path.read_text(encoding="utf-8"))[0]["name"] == "现金"
+
+    mcp_preview = mcp.handle_request({
+        "method": "asset_migrate_v2",
+        "params": {"confirmed": False},
+    })
+    assert mcp_preview["success"] is True
+    assert mcp_preview["target_schema_version"] == 2
+
+    cli.run(["--asset-migrate-v2", "--confirmed"])
+    migrated = json.loads(capsys.readouterr().out)
+    assert migrated["success"] is True
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert (tmp_path / "financial_assets.v1.bak.json").exists()
 
 
 def test_asset_instrument_mapping_cli_and_mcp_validation(adapter_engine, capsys):
@@ -295,6 +343,113 @@ def test_mcp_advice_actions_validate_target_and_context_echo(adapter_engine):
     assert "【复盘】" in context_result["data"]["raw_prompt_input"]
     assert "1. 上期建议 actions" in context_result["data"]["raw_prompt_input"]
     assert "a:588000 | increase | 5%~8% | short" in context_result["data"]["raw_prompt_input"]
+
+
+def test_mcp_advice_rejects_mutable_actions_on_locked_positions(adapter_engine):
+    adapter_engine._asset_schema_version = 2
+    adapter_engine._asset_positions_v2 = [
+        Position(
+            position_id="policy_usd",
+            account_id="insurance",
+            display_name="保险",
+            currency="USD",
+            classification=Classification(
+                asset_class="insurance",
+                product_type="insurance_policy",
+            ),
+            valuation_input=ValuationInput(
+                method="insurance_value",
+                manual_amount=50000,
+                as_of="2026-07-04",
+            ),
+            liquidity=Liquidity(tradable=False, rebalance_eligible=False, tier="locked"),
+        )
+    ]
+    adapter = MCPAdapter(adapter_engine)
+
+    rejected = adapter.handle_request({
+        "method": "advice_save",
+        "params": {
+            "advice": _advice_payload() | {
+                "actions": [_advice_action("policy_usd", "一成")]
+            },
+            "confirmed": True,
+        },
+    })
+
+    assert rejected["success"] is False
+    assert rejected["errors"][0]["field"] == "target"
+    assert "rebalance_eligible=false" in rejected["errors"][0]["message"]
+
+
+def test_mcp_pnl_trigger_requires_cost_basis(adapter_engine):
+    adapter_engine._asset_schema_version = 2
+    adapter_engine._asset_positions_v2 = [
+        Position(
+            position_id="broker_588000",
+            account_id="broker",
+            display_name="科创50ETF",
+            currency="CNY",
+            classification=Classification(
+                asset_class="equity",
+                product_type="exchange_traded_fund",
+            ),
+            instrument={"instrument_key": "a:588000"},
+            holding=Holding(quantity=1800, unit="share"),
+            valuation_input=ValuationInput(method="market_quote"),
+            liquidity=Liquidity(tradable=True, rebalance_eligible=True, tier="t1"),
+        )
+    ]
+    adapter = MCPAdapter(adapter_engine)
+    trigger = {
+        "instrument": "a:588000",
+        "type": "pnl_pct_above",
+        "level": 20.0,
+        "action": "浮盈达到 20% 后减仓一半",
+    }
+
+    rejected = adapter.handle_request({
+        "method": "advice_save",
+        "params": {
+            "advice": _advice_payload() | {"triggers": [trigger]},
+            "confirmed": True,
+        },
+    })
+
+    assert rejected["success"] is False
+    assert rejected["errors"][0]["field"] == "triggers"
+    assert "cost_basis" in rejected["errors"][0]["message"]
+
+    adapter_engine._asset_positions_v2 = [
+        Position(
+            position_id="broker_588000",
+            account_id="broker",
+            display_name="科创50ETF",
+            currency="CNY",
+            classification=Classification(
+                asset_class="equity",
+                product_type="exchange_traded_fund",
+            ),
+            instrument={"instrument_key": "a:588000"},
+            holding=Holding(
+                quantity=1800,
+                unit="share",
+                cost_basis=CostBasis(unit_cost=1.0, currency="CNY"),
+            ),
+            valuation_input=ValuationInput(method="market_quote"),
+            liquidity=Liquidity(tradable=True, rebalance_eligible=True, tier="t1"),
+        )
+    ]
+
+    saved = adapter.handle_request({
+        "method": "advice_save",
+        "params": {
+            "advice": _advice_payload() | {"triggers": [trigger]},
+            "confirmed": True,
+        },
+    })
+    assert saved["success"] is True
+    assert saved["data"]["triggers"][0]["type"] == "pnl_pct_above"
 
 
 def test_cli_advice_save_requires_confirmation_and_lists(adapter_engine, capsys):
@@ -640,6 +795,6 @@ def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engin
     assert context["portfolio_profile"]["risk_tolerance"] == "conservative"
     assert "risk_tolerance: conservative" in context["raw_prompt_input"]
     assert "保留应急流动性" in context["raw_prompt_input"]
-    assert "12,345" not in context["raw_prompt_input"]
+    assert "12,345.00 CNY" in context["raw_prompt_input"]
     assert "按 personal_advice_prompt 的决策导向契约输出" in context["raw_prompt_input"]
     assert "带触发条件的调仓清单与下一个机会提名" in context["raw_prompt_input"]

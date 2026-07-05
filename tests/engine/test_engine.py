@@ -11,7 +11,16 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from stocks.domain.models import FinancialAsset
+from stocks.domain.models import (
+    Classification,
+    FinancialAsset,
+    Holding,
+    Instrument,
+    Liquidity,
+    Position,
+    Quote,
+    ValuationInput,
+)
 from stocks.engine import StocksEngine
 from stocks.engine.exchange_rate import ConversionResult
 
@@ -341,6 +350,53 @@ class TestAssetCRUD:
         assert reloaded.instrument_key == "a:588000"
         assert reloaded.quantity == 1800.0
         assert reloaded.tradable is True
+
+
+class TestAssetV2RuntimeContext:
+    async def test_detailed_holding_is_auto_included_in_quote_universe(
+        self,
+        minimal_engine,
+    ):
+        position = Position(
+            position_id="broker_588000",
+            account_id="broker",
+            display_name="科创50ETF",
+            currency="CNY",
+            classification=Classification(
+                asset_class="equity",
+                product_type="exchange_traded_fund",
+                exposure_tags=["star50"],
+            ),
+            instrument={"instrument_key": "a:588000"},
+            holding=Holding(quantity=1800, unit="share"),
+            valuation_input=ValuationInput(method="market_quote"),
+            liquidity=Liquidity(tradable=True, rebalance_eligible=True, tier="t1"),
+        )
+        minimal_engine._asset_schema_version = 2
+        minimal_engine._asset_positions_v2 = [position]
+        minimal_engine._assets = []
+        minimal_engine._watchlist = []
+        minimal_engine._history_warmed = True
+        minimal_engine.macro_provider = None
+        minimal_engine.context_builder.macro_provider = None
+        quote = Quote(
+            instrument=Instrument(code="588000", name="科创50ETF", market="a"),
+            price=2.0,
+            source="fixture",
+            as_of="2026-07-04T00:00:00+00:00",
+        )
+        minimal_engine.fetcher.fetch_quotes = AsyncMock(return_value={"a": [quote]})
+
+        context = await minimal_engine.build_context(
+            include_news=False,
+            include_quotes=True,
+            include_history=False,
+        )
+
+        requested = minimal_engine.fetcher.fetch_quotes.call_args.args[0]
+        assert [f"{item.market}:{item.code}" for item in requested] == ["a:588000"]
+        assert context.data_quality["auto_included_holdings"]["items"] == ["a:588000"]
+        assert context.position_valuations[0]["market_value_cny"] == 3600.0
 
     def test_portfolio_uses_cny_valuation(self, minimal_engine):
         assets = [
