@@ -41,6 +41,14 @@ uv run python -m stocks.adapters.cli --output json
 uv run python -m stocks.adapters.cli --output text --llm-analysis
 ```
 
+生成或读取给外部 Agent 的跨市场定时运行产物：
+
+```bash
+uv run python -m stocks.adapters.cli --scheduled-run-due
+uv run python -m stocks.adapters.cli --scheduled-run-session cn_pre_close --force
+uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
+```
+
 已删除的 `--llm-enhancer` 参数不再支持。
 
 ## 需确认的金融记忆写入
@@ -85,6 +93,7 @@ uv run python -m stocks.adapters.cli --asset-migrate-v2 --confirmed
 .local/advice/                        已确认建议摘要
 .local/executions/                    已确认执行记录
 .local/forecasts/                     已确认预测台账
+.local/scheduled_runs/                定时扫描给 Agent 的 JSON/Markdown 产物
 .secret/                              本地 API key 与 HTTP token
 stocks/config/engine.yaml             运行配置
 stocks/config/watchlist.json          关注标的
@@ -92,6 +101,7 @@ stocks/config/news_sources.json       RSS/Atom 新闻源
 stocks/config/portfolio_constraints.json
 stocks/config/event_calendar.json     静态官方事件日历
 stocks/config/sector_scan.json        轮动/信号扫描池
+stocks/config/scheduled_sessions.json A 股/美股定时 session 配置
 stocks/config/exposure_proxy.json     暴露标签代理映射
 ```
 

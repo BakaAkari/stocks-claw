@@ -1,6 +1,6 @@
 # stocks-claw 开发主线计划
 
-> 版本:v4.2(2026-07-06,S2-E 关闭与 S2.5 受控扫描池扩容完成)
+> 版本:v4.3(2026-07-06,S3 定时扫描与触发推送工程完成)
 > **现行准则只有两份:本文档(方向、规则与状态)+ `EXECUTION_PLAN.md`(任务与验收)。**
 > 北极星是 `stocks/VISION.md`(v2.0);现状描述文档为 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md`、`AGENT_GUIDE.md`(只描述现实,不含路线)。
 > `docs/archive/` 下的一切(含 2026-07-03 归档的 `PLAN_v3.0_20260703.md`、`EXECUTION_PLAN_20260703.md`)无现行效力,仅作历史与参考。
@@ -20,8 +20,8 @@
 > S1/S2 的完整完成记录见 `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;
 > 当前行动入口见 `EXECUTION_PLAN.md`。文档与代码冲突时仍以读码、grep 与测试结果为准。
 
-- **已完成(历史证据见归档件与 EXECUTION_PLAN 完成记录)**:P0 安全、P1 静默错误六项、P2 记忆回路、P3 删减、P4 数据底盘一期、P5 文档收口、M 建议闭环、F0、Phase D、Phase F 重新验收、G0 DecisionEnvelope 契约冻结、**切片 1 建议闭环**、**切片 2 资产数据结构 v2 与止盈止损基建(S2-0~S2-7+S2-E)**、**S2.5 受控扫描池扩容**。当前契约:**AnalysisContext v12、data_quality v10**。
-- **下一候选切片**:S3 定时扫描与触发推送(pull→push)。设计稿已归档,应复用 S2/S2.5 的真实资产、成本、轮动、触发器和扩扫池,第一版仍以轻量调度 + `.local/` 运行产物 + Agent 二次分析为边界。
+- **已完成(历史证据见归档件与 EXECUTION_PLAN 完成记录)**:P0 安全、P1 静默错误六项、P2 记忆回路、P3 删减、P4 数据底盘一期、P5 文档收口、M 建议闭环、F0、Phase D、Phase F 重新验收、G0 DecisionEnvelope 契约冻结、**切片 1 建议闭环**、**切片 2 资产数据结构 v2 与止盈止损基建(S2-0~S2-7+S2-E)**、**S2.5 受控扫描池扩容**、**切片 3 定时扫描与触发推送工程实现(S3-1~S3-5)**。当前契约:**AnalysisContext v12、data_quality v10、ScheduledAnalysisRun v1**。
+- **当前验收闸**:S3-E 真实试运行。目标是在 A 股与 IBKR 美股 session 中连续运行一段时间,检查产物是否准时、数据边界是否清楚、Agent 二次分析是否符合用户风格,再决定是否加厚通知渠道、反馈记录或估值层。
 - **未立项候选**:基金净值与贵金属报价 Provider、估值数据层、论点笔记本、组合归因、危机预案、分批执行计划、DecisionPlan 引擎化与内部 LLM 双路径。G0 契约保留为休眠资产,在 DecisionPlan 相关切片立项时接线,期间不得删除。
 - **两起必须记住的事故**:①执行 Agent 伪造带 commit hash 的完成记录并勾掉物理上不可能通过的验收;②文档维护方曾未比对内容整体覆盖完成态清单。§6、§7 的规则由此导出,永久有效。
 
@@ -44,7 +44,7 @@
 | 信息沉淀 | 论点笔记本 JSON(未立项) | 财报季工作流、宏观状态机 |
 | 机会窗口 | rotation/action_signals + 事件/公告日历(短中线,已具备) | 估值层(长线)、一致预期与预期差 |
 | 调仓操作 | 建议 actions 带幅度/触发/证伪(切片 1) | 分批计划、账户/费率约束、危机预案 |
-| 主动节奏 | NAS cron + 触发命中推送(未立项) | 早报/周报、事件临近提醒 |
+| 主动节奏 | 轻量定时 session + `.local/scheduled_runs/` 产物 + Agent handoff(S3 已具备) | 早报/周报、事件临近提醒、通知渠道与反馈台账 |
 
 ## 5. 现行路线
 
@@ -66,11 +66,22 @@
 
 状态:已完成。扫描池共 50 项,其中 A 股/港股代理 32 项、美股 18 项;不做全市场扫描,不新增 `hk` 市场。真实带行情 CLI smoke 证明历史回填 70/70 可用、rotation/action_signals 均为 ok、rotation missing=0。实现中发现 `515880` 通信 ETF 因 2026-07 份额拆分污染历史收益,已替换为 `159695` 并增加配置守门测试。
 
-### 下一候选:切片 3 定时扫描与触发推送(S3)
+### 已关闭:切片 3 定时扫描与触发推送(S3 工程实现)
 
 内容:按 A 股与 IBKR 美股交易时段生成结构化运行产物,由 Agent 读取最新产物并二次分析/推送。设计参考 `docs/archive/SCHEDULED_ANALYSIS_CROSS_MARKET_DESIGN_20260706_zh.md`。
 
-状态:尚未开工。第一版不得做自动交易、不得自动写长期建议/执行/预测,不得引入重型服务化依赖;优先实现 session 配置、时区日历、幂等运行产物和 CLI runner。
+状态:工程已完成。新增 `scheduled_sessions.json`、`scheduled_analysis.py`、CLI
+`--scheduled-run-due/--scheduled-run-session/--scheduled-run-latest`、幂等
+`ScheduledAnalysisRun v1` JSON/Markdown 产物、Agent 必答任务、通知建议策略与测试。
+第一版仍不做自动交易、不得自动写长期建议/执行/预测,不引入重型服务化依赖。
+
+### 当前闸门:S3-E 真实试运行
+
+内容:用真实 A 股与 IBKR 美股 session 运行一段时间,验证定时产物是否能稳定支撑
+"盘前/开盘后/收盘前/盘后"分析,并记录需要微调的文本、触发阈值、推送策略和候选池问题。
+
+状态:待用户试用。工程 smoke 证明功能可跑,但跨多天准时性、夜间打扰策略和 Agent
+二次分析风格必须由真实使用反馈关闭。
 
 ### 切片候选队列(未排期,禁止开工)
 
@@ -147,4 +158,5 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-06:登记"受控扫描池扩容"为 S2.5/S3 支撑候选:扩展 A 股宽基、成长、周期、消费、防御与港股主题 ETF 代理,每个方向先选高流动性代表 ETF;港股只用 A 股上市 ETF/QDII 代理,不引入 `hk` 市场;扩容目标是提高"下一个机会"覆盖面,不是全市场扫描。依据:用户盘中使用反馈显示 512480/512880 这类扫描池候选能产生有用建议,但当前 A 股覆盖偏窄。
 - 2026-07-06:S2-E 用户价值裁决关闭,并立项 S2.5 受控扫描池扩容。真实使用反馈显示,系统已能围绕用户 A 股/IBKR 持仓、实时行情、成本基准、浮盈浮亏与轮动候选输出基本符合需求的盘中建议;工程复核显示 `AnalysisContext v12/data_quality v10`、23 条资产持仓、23 条逐持仓估值、9/9 关键上市持仓均具备 `quantity + cost_basis`,暴露/流动性/建议粒度与资产边界均可输出。下一步先扩展扫描池,再进入 S3 定时推送。依据:用户明确表示"现在系统返回的内容比较满足我的需求",并要求更新文档后执行下一阶段开发。
 - 2026-07-06:S2.5 受控扫描池扩容完成。`sector_scan.json` 扩为 50 项,其中 A 股/港股代理 32 项、美股 18 项;覆盖宽基、成长、周期、消费、防御与恒生科技/恒生医疗/港股互联网代理;配置测试防止重复、unsupported market、watchlist 重复和 `hk` 市场混入。真实 smoke 发现 `515880` 通信 ETF 受份额拆分污染历史收益,因此替换为 `159695` 并写入排除测试。验收:`ruff` 通过、`pytest` 491 passed、`compileall` 通过、带行情 CLI smoke `history requested=70 failed=0,rotation items=61 missing=0,action_signals items=61`。下一候选切片转为 S3 定时扫描与触发推送。
+- 2026-07-06:S3 定时扫描与触发推送工程实现完成。新增 `scheduled_sessions.json`、`ScheduledAnalysisRun v1`、文件产物存储、A 股/美股时区 session 日历、CLI runner、Agent handoff 任务、通知建议策略与配置/CLI 测试;产物写入 `.local/scheduled_runs/`,不自动交易、不自动写 advice/execution/forecast。验收:`ruff` 通过、`pytest` 498 passed、`compileall` 通过、真实 scheduled smoke 生成 `cn_pre_close` status=ok,latest 读回 23 条持仓核对和 19 条 action signals,重复运行保护返回 `skipped_duplicate`。S3-E 转入真实试运行验收,需要跨 A 股与 IBKR 美股 session 收集实际效果反馈后关闭。依据:用户要求提交推送并按文档规划直接推进 S3 开发。
 - (追加格式:`日期:决定;依据`)

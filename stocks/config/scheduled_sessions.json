@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "user_timezone": "Asia/Shanghai",
+  "artifact_dir": ".local/scheduled_runs",
+  "default_duplicate_window_minutes": 90,
+  "quiet_hours": {
+    "enabled": true,
+    "start": "00:00",
+    "end": "07:30",
+    "timezone": "Asia/Shanghai",
+    "allow_critical": true
+  },
+  "markets": {
+    "cn": {
+      "enabled": true,
+      "exchange_timezone": "Asia/Shanghai",
+      "holidays": [],
+      "sessions": [
+        {
+          "id": "cn_pre_open",
+          "time": "08:50",
+          "intent": "pre_open_plan",
+          "push": "normal"
+        },
+        {
+          "id": "cn_open_watch",
+          "time": "09:45",
+          "intent": "open_watch",
+          "push": "normal"
+        },
+        {
+          "id": "cn_pre_close",
+          "time": "14:35",
+          "intent": "pre_close_decision",
+          "push": "normal"
+        },
+        {
+          "id": "cn_after_close",
+          "time": "15:20",
+          "intent": "after_close_review",
+          "push": "digest"
+        }
+      ]
+    },
+    "us": {
+      "enabled": true,
+      "exchange_timezone": "America/New_York",
+      "holidays": [],
+      "sessions": [
+        {
+          "id": "us_pre_open",
+          "time": "09:00",
+          "intent": "pre_open_plan",
+          "push": "normal"
+        },
+        {
+          "id": "us_open_watch",
+          "time": "10:00",
+          "intent": "open_watch",
+          "push": "normal"
+        },
+        {
+          "id": "us_mid_session",
+          "time": "12:30",
+          "intent": "mid_session_check",
+          "push": "disabled",
+          "enabled": false
+        },
+        {
+          "id": "us_pre_close",
+          "time": "15:30",
+          "intent": "pre_close_decision",
+          "push": "critical_only"
+        },
+        {
+          "id": "us_after_close",
+          "time": "16:20",
+          "intent": "after_close_review",
+          "push": "digest"
+        }
+      ]
+    }
+  }
+}

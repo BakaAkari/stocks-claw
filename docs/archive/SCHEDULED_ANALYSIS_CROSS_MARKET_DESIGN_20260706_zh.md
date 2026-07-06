@@ -1,14 +1,15 @@
 # 跨市场定时持仓分析与 Agent 推送设计
 
 > 日期:2026-07-06
-> 状态:S3 候选设计稿,不改变当前代码契约,不等同于已实现任务；S2.5 扩扫支撑已于 2026-07-06 完成
+> 状态:S3 设计归档；S2.5 扩扫支撑已于 2026-07-06 完成；S3-1~S3-5 工程实现已于 2026-07-06 完成,当前进入 S3-E 真实试运行
 > 范围:A 股持仓 + IBKR 美股持仓对应的美股交易时段
 > 约束:系统不自动交易,不擅自写长期金融记忆,最终自然语言判断仍由用户 Agent 完成
 
 ## 0. 总结结论
 
-这个功能方向与现有愿景不冲突。它正好对应 `VISION.md` 的"主动节奏"能力域,也对应
-`PLAN.md` 当前下一候选切片"定时扫描与触发推送(pull→push)"。
+这个功能方向与现有愿景不冲突。它正好对应 `VISION.md` 的"主动节奏"能力域。2026-07-06
+S3-1~S3-5 已按"定时扫描与触发推送(pull→push)"工程实现,后续状态以根目录
+`PLAN.md` 与 `EXECUTION_PLAN.md` 为准。
 
 真正需要避免的冲突有五个:
 
@@ -22,7 +23,7 @@
    触发器；S2-E 已在 2026-07-06 由真实试用关闭,S2.5 扩扫支撑也已完成。
 5. 不能做后台自动写入建议、执行或预测。任何长期记忆写入仍需要用户确认。
 
-建议的第一版不是常驻服务,而是"轻量调度 + 幂等运行产物 + Agent 读取最新产物":
+已实现的第一版不是常驻服务,而是"轻量调度 + 幂等运行产物 + Agent 读取最新产物":
 用 macOS launchd / NAS cron 每 5 到 15 分钟唤起一次 CLI,CLI 判断当前是否有到期 session,
 到期则构建上下文、核对触发、落 `.local/scheduled_runs/` 运行产物；Agent 再读取最新产物,
 按 session 类型生成推送文本。
@@ -325,20 +326,17 @@ macOS launchd / NAS cron
 stocks.adapters.cli --scheduled-run-due
         |
         v
-DueSessionPlanner
-        |
-        +--> MarketSessionCalendar
-        +--> IdempotencyStore
+MarketSessionCalendar
         |
         v
 ScheduledAnalysisRunner
         |
         +--> StocksEngine.build_context()
         +--> TriggerReview / position valuation / data_quality
-        +--> AgentTaskBuilder
+        +--> agent_task builder
         |
         v
-RunArtifactStore (.local/scheduled_runs)
+RunArtifactStore (.local/scheduled_runs + duplicate guard)
         |
         v
 Agent reads latest run -> final analysis -> notification
@@ -504,9 +502,8 @@ uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
 
 ### 8.2 需要显式规避的冲突
 
-1. **S3 仍未实现。** S2-E 已在 2026-07-06 由真实试用关闭,S2.5 受控扫描池
-   扩容也已完成。因此 S3 可以作为下一候选切片开工,但实现时仍必须遵守本文
-   的调度、产物、推送和写入边界。
+1. **S3-E 真实试运行仍未关闭。** S3-1~S3-5 工程实现已于 2026-07-06 完成,
+   但跨多个 A 股/美股 session 的准时性、夜间打扰策略和 Agent 文风仍需真实运行验证。
 2. **不能把"报告"当 source of truth。** 现有架构强调 `AnalysisContext` 和 data_quality；
    S3 必须输出 JSON 运行产物,不能只存一篇 Markdown。
 3. **不能硬编码北京时间美股 session。** 美国夏令时会改变北京时间展示。实现必须按
@@ -562,6 +559,8 @@ v12 相对 v11 新增字段。2026-07-06 文档清理已将标题同步为 v12�
 
 ## 10. 实施切片建议
 
+> 2026-07-06 更新:S3-1~S3-5 已工程实现；S3-E 仍待真实试运行关闭。
+
 ### S3-0 立项前置
 
 - 已完成 S2-E:真实资产迁移为 v2,关键上市持仓补齐 quantity + cost_basis。
@@ -586,11 +585,15 @@ A 股/港股代理 32 项、美股 18 项,并加配置守门测试。实现中�
 
 ### S3-1 session 配置与时区日历
 
+实现状态:已完成。
+
 - 新增 `scheduled_sessions.json`。
-- 新增 `MarketSessionCalendar` 和 `DueSessionPlanner`。
+- 新增 `MarketSessionCalendar` 负责 session 解析与到期判断。
 - 覆盖 A 股固定时段、美股 `America/New_York` 夏令时换算、休市跳过、重复运行跳过。
 
 ### S3-2 运行产物模型与存储
+
+实现状态:已完成。
 
 - 新增 `ScheduledAnalysisRun` dataclass 或等价 dict builder。
 - 新增 `RunArtifactStore`。
@@ -598,11 +601,15 @@ A 股/港股代理 32 项、美股 18 项,并加配置守门测试。实现中�
 
 ### S3-3 Runner 与 CLI
 
+实现状态:已完成。
+
 - 新增 `ScheduledAnalysisRunner`。
 - CLI 支持 `--scheduled-run-due`、`--scheduled-run-session`、`--scheduled-run-latest`。
 - 默认测试使用 fixture 时间和 mock engine,不访问真实网络。
 
 ### S3-4 Agent handoff
+
+实现状态:已完成。
 
 - 生成 `agent_task`。
 - 根据 session intent 给出不同 `must_answer` 和输出风格。
@@ -610,11 +617,15 @@ A 股/港股代理 32 项、美股 18 项,并加配置守门测试。实现中�
 
 ### S3-5 通知适配
 
+实现状态:已完成第一版 recommended push policy,真实通知渠道未接入。
+
 - 第一版可以只输出"recommended push policy"。
 - 后续按用户选择接入 Lark/本地通知/邮件。
 - 通知层只发消息,不写金融记忆。
 
 ### S3-E 试运行验收
+
+实现状态:待真实试运行关闭。
 
 - 至少 10 个 A 股 session 产物、6 个美股 session 产物。
 - 至少 1 次美股夏令时换算验证。

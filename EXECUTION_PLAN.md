@@ -9,8 +9,8 @@
 ## 使用说明(执行 Agent 必读)
 
 1. **读**:`PLAN.md`(尤其 §2 状态、§6 禁止事项、§7 执行协议)→ 本文 → 当前任务。
-2. S2.5 已完成。下一工程切片候选为 **S3 定时扫描与触发推送**;未经用户明确开工,
-   不得实现 S3/Backlog。
+2. S3 工程实现已完成。当前唯一现行闸门为 **S3-E 真实试运行验收**;未经用户明确开工,
+   不得实现 Backlog 或加厚通知/反馈/估值层。
 3. 每次改动前先用 grep/读码验证前提;文档与代码冲突时以代码和测试为准。
 4. 涉及资产、画像、建议、执行、预测的长期金融记忆写入仍必须用户确认。
 5. 需要新增 schema、引入重型依赖、删除用户数据或改动任务外文件时,先报告用户。
@@ -37,7 +37,7 @@
   还是其他。用户盘中试用后确认当前返回内容较满足需求;下一切片选择 S2.5
   受控扫描池扩容,为 S3 定时推送前提高"下一个机会"覆盖面。
 
-**说明**:S2-E 已关闭。S3 依赖的 S2/S2.5 基础能力已具备,但 S3 尚未实现。
+**说明**:S2-E 已关闭。S3 依赖的 S2/S2.5 基础能力已具备。
 
 ## 已关闭 — S2.5 受控扫描池扩容
 
@@ -63,15 +63,53 @@
 > 改用 `159695` 并增加排除测试。全局验收:`ruff` All checks passed,
 > `pytest` 491 passed,`compileall` 0,`git diff --check` 0。
 
-## 下一候选 — S3 定时扫描与触发推送(未开工)
+## 已关闭 — S3 定时扫描与触发推送(工程实现)
 
 - 切片目标:在 A 股盘前/盘中/收盘前/盘后与 IBKR 美股交易时段生成结构化运行产物,
   Agent 读取最新产物后二次分析并推送给用户。
 - 设计参考:`docs/archive/SCHEDULED_ANALYSIS_CROSS_MARKET_DESIGN_20260706_zh.md`。
 - 第一版边界:轻量调度、幂等 JSON 运行产物、CLI runner、Agent handoff;不自动交易、
   不自动写长期建议/执行/预测,不引入重型服务化依赖。
-- 开工顺序建议:S3-1 session 配置与时区日历 → S3-2 运行产物模型与存储 →
-  S3-3 runner/CLI → S3-4 Agent handoff → S3-5 通知适配 → S3-E 试运行。
+
+- [x] S3-1 session 配置与时区日历:`stocks/config/scheduled_sessions.json` 覆盖
+  A 股 4 个 session、美股 4 个启用 session 与 1 个禁用中盘检查;A 股使用
+  `Asia/Shanghai`,美股使用 `America/New_York`,测试覆盖夏令时/冬令时换算、周末跳过。
+- [x] S3-2 运行产物模型与存储:`ScheduledAnalysisRun v1` 写入
+  `.local/scheduled_runs/YYYY-MM-DD/{market}/{session}/`,同步 Markdown 与
+  `.local/scheduled_runs/latest/{session}.json`。
+- [x] S3-3 runner/CLI:`ScheduledAnalysisRunner` 支持到期运行、手动补跑、重复运行保护;
+  CLI 支持 `--scheduled-run-due`、`--scheduled-run-session`、`--scheduled-run-latest`。
+- [x] S3-4 Agent handoff:产物包含 `agent_task.must_answer`、`must_not_do`、
+  `write_policy`、持仓/PnL、触发器核对、action_signals、data_quality 与上下文摘要。
+- [x] S3-5 通知适配:产物生成 `notification` 建议,区分 `push_now`、`digest`、
+  `generate_only`、`defer_until_quiet_hours_end`;夜间 quiet hours 默认阻止非 critical 推送。
+- [x] 全局工程验收:`ruff`、默认 `pytest`、`compileall`、CLI scheduled smoke 通过。
+
+> 完成:2026-07-06 S3 工程实现完成。新增
+> `stocks/engine/scheduled_analysis.py`、`stocks/config/scheduled_sessions.json`、
+> `tests/engine/test_scheduled_analysis.py`;同步 `README`、`ARCHITECTURE`、
+> `DATA_MODEL`、`AGENT_GUIDE` 与计划文档。验收:`ruff` All checks passed,
+> `pytest` 498 passed,`compileall` 0,`git diff --check` 0;真实 CLI scheduled smoke
+> 生成 `cn_pre_close` run status=ok,latest 读回 schema_version=1、23 条
+> position_reviews、19 条 action_signal_reviews、write_policy 禁止后台写金融记忆;
+> `--scheduled-run-due` 同市场日重复运行返回 `skipped_duplicate`。S3-E 未关闭,
+> 因为真实定时效果需要跨多个 A 股/美股 session 运行观察。
+
+## 当前闸门 — S3-E 真实试运行验收
+
+**用户场景**:"系统每天按 A 股和 IBKR 美股关键时段自动生成持仓分析素材;Agent
+读取最新产物后能给我盘前计划、开盘观察、收盘前动作建议和盘后复盘,并且不会夜间无意义打扰。"
+
+- [ ] 准时性闸:至少覆盖 10 个 A 股 session 产物、6 个美股 session 产物;记录是否有漏跑、
+  重复跑、错时区或节假日误跑。
+- [ ] 数据闸:每次产物必须保留 `data_quality`;缺行情、stale quote、history/rotation
+  降级不得被 Agent 当成正常数据。
+- [ ] 决策闸:盘前/开盘/收盘前/盘后四类文本均能围绕已有持仓、成本、PnL、触发器和
+  扩扫候选给出可执行但不越权的分析。
+- [ ] 打扰闸:美股夜间 session 默认只生成或 digest;只有 critical 触发器/大额可动持仓亏损
+  才建议即时推送。
+- [ ] 价值裁决:用户在真实试用后决定下一步是调输出文风、加通知渠道、加反馈记录、
+  加估值数据层,还是暂停加厚。
 
 ## Backlog(未排期,禁止开工)
 
@@ -94,4 +132,5 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 不做自动交易/下单;不输出收益承诺。
 - 不做通用回测平台、因子库、多 Agent 辩论。
 - 不删除或跳过测试让其通过;不让默认测试访问真实网络。
-- S2.5 未接线 DecisionEnvelope、未实施双路径、未新增数据源、未改内部 LLM。
+- S3 未接线 DecisionEnvelope、未实施双路径、未新增数据源、未改内部 LLM、
+  未做真实通知渠道和自动交易。

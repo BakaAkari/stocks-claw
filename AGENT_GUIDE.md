@@ -40,6 +40,22 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 uv run python -m stocks.adapters.cli --output json
 ```
 
+定时扫描与 Agent handoff：
+
+```bash
+uv run python -m stocks.adapters.cli --scheduled-run-due
+uv run python -m stocks.adapters.cli --scheduled-run-due --now "2026-07-06T14:35:00+08:00"
+uv run python -m stocks.adapters.cli --scheduled-run-session cn_pre_close --force
+uv run python -m stocks.adapters.cli --scheduled-run-session us_pre_open --force
+uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
+```
+
+`--scheduled-run-due` 适合由 launchd/cron 高频调用；系统只在命中 session 时生成
+`.local/scheduled_runs/` 产物。同一市场日内同一 session 默认只跑一次，`--force` 仅用于补跑
+或调试。外部 Agent 应读取 `--scheduled-run-latest SESSION` 返回的 JSON，审查
+`data_quality`、`position_reviews`、`trigger_reviews`、`action_signal_reviews` 与
+`agent_task` 后再生成最终推送文本。
+
 可选内部 LLM 报告：
 
 ```bash
@@ -141,9 +157,11 @@ uv run python -m stocks.adapters.mcp
 - `markets.json`：市场元数据
 - `event_calendar.json`：官方已公布的未来事件日程（FOMC/CPI/非农等，
   日期用完的条目被窗口自动过滤；新一批官方日程公布后人工增补）
-- `sector_scan.json`：候选池扫描（26 标的，带 pool 分层:
+- `sector_scan.json`：候选池扫描（50 标的，带 pool 分层:
   broad/sector/defensive/rates/ai_chain），只参与历史回填、轮动排名与
   动作信号，不请求实时行情
+- `scheduled_sessions.json`：A 股与美股定时扫描 session、时区、重复运行窗口、
+  免打扰和默认推送策略
 
 配置优先级为环境变量 > YAML > 代码默认值。嵌套环境变量使用双下划线，例如：
 
@@ -156,6 +174,7 @@ STOCKS_FETCHER__MAX_RETRIES=3
 - `.local/history/`：行情历史缓存
 - `.local/event_cache/`：Finnhub 财报日历 12 小时缓存
 - `.local/snapshots/`：最多 30 份最小上下文快照
+- `.local/scheduled_runs/`：定时扫描 JSON/Markdown 产物与 latest 指针
 - `data/cache/`：非隐私运行缓存，例如汇率
 - `.secret/`：API key、HTTP token；禁止提交
 

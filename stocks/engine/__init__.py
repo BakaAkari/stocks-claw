@@ -62,6 +62,12 @@ from stocks.engine.macro_data import (
 from stocks.engine.news_sources import NewsAggregator, WatchlistGoogleNewsProvider
 from stocks.engine.persistence import DataPersistence
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
+from stocks.engine.scheduled_analysis import (
+    ScheduledAnalysisRunner,
+    load_scheduled_config,
+    parse_datetime,
+    resolve_artifact_dir,
+)
 from stocks.logging_utils import setup_logging
 from stocks.providers.binance_quote import BinanceQuoteProvider
 from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
@@ -316,6 +322,7 @@ class StocksEngine:
         self._watchlist: list[Instrument] = []
         self._sector_scan: list[Instrument] = []
         self._exposure_proxy: dict = {}
+        self._scheduled_runner: ScheduledAnalysisRunner | None = None
         self._load_configs()
 
     # ------------------------------------------------------------------
@@ -1137,6 +1144,46 @@ class StocksEngine:
             "sector_scan_loaded": len(self._sector_scan),
             "llm_analysis_enabled": self.llm_analysis.enabled,
         }
+
+    def _get_scheduled_runner(self) -> ScheduledAnalysisRunner:
+        if self._scheduled_runner is None:
+            config = load_scheduled_config(self.config_dir)
+            repo_root = Path(__file__).resolve().parents[2]
+            self._scheduled_runner = ScheduledAnalysisRunner(
+                self,
+                config=config,
+                artifact_dir=resolve_artifact_dir(config, repo_root=repo_root),
+            )
+        return self._scheduled_runner
+
+    async def scheduled_run_due(
+        self,
+        *,
+        now: Optional[str] = None,
+        force: bool = False,
+    ) -> dict:
+        """Run any configured session that is currently due."""
+        current = parse_datetime(now) if now else None
+        return await self._get_scheduled_runner().run_due(now=current, force=force)
+
+    async def scheduled_run_session(
+        self,
+        session_id: str,
+        *,
+        now: Optional[str] = None,
+        force: bool = False,
+    ) -> dict:
+        """Run one configured scheduled analysis session."""
+        current = parse_datetime(now) if now else None
+        return await self._get_scheduled_runner().run_session(
+            session_id,
+            now=current,
+            force=force,
+        )
+
+    def scheduled_run_latest(self, session_id: str) -> dict:
+        """Read the latest scheduled analysis artifact for a session."""
+        return self._get_scheduled_runner().latest(session_id)
 
     def preview_asset_migration_v2(self) -> dict:
         """生成 v1 -> v2 资产文件迁移预览，不写文件。"""

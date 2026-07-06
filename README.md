@@ -36,6 +36,14 @@ Fetch the configured quotes and news:
 uv run python -m stocks.adapters.cli --output json
 ```
 
+Generate or read scheduled cross-market run artifacts for an external Agent:
+
+```bash
+uv run python -m stocks.adapters.cli --scheduled-run-due
+uv run python -m stocks.adapters.cli --scheduled-run-session cn_pre_close --force
+uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
+```
+
 Generate the optional internal LLM report:
 
 ```bash
@@ -87,6 +95,7 @@ uv run python -m stocks.adapters.cli --asset-migrate-v2 --confirmed
 .local/advice/                        confirmed advice summaries
 .local/executions/                    confirmed execution records
 .local/forecasts/                     confirmed forecast ledger
+.local/scheduled_runs/                scheduled Agent handoff artifacts
 .secret/                              local API keys and HTTP token
 stocks/config/engine.yaml             runtime settings
 stocks/config/watchlist.json          tracked instruments
@@ -95,6 +104,7 @@ stocks/config/portfolio_constraints.json
 stocks/config/event_calendar.json     static official event calendar
 stocks/config/sector_scan.json        scan universe for rotation/signals
 stocks/config/exposure_proxy.json     exposure-tag proxy mapping
+stocks/config/scheduled_sessions.json scheduled A-share/US session config
 ```
 
 When no private holdings file exists, `stocks/data/financial_assets.json` is used as sample

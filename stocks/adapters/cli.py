@@ -126,10 +126,35 @@ class CLIAdapter:
             metavar="JSON",
             help="保存一条预测记录；值为 ForecastRecord 字段的 JSON 对象",
         )
+        asset_actions.add_argument(
+            "--scheduled-run-due",
+            action="store_true",
+            help="运行当前到期的定时分析 session",
+        )
+        asset_actions.add_argument(
+            "--scheduled-run-session",
+            metavar="SESSION",
+            help="手动运行指定定时分析 session",
+        )
+        asset_actions.add_argument(
+            "--scheduled-run-latest",
+            metavar="SESSION",
+            help="读取指定 session 的最新定时分析 JSON 产物",
+        )
         parser.add_argument(
             "--confirmed",
             action="store_true",
             help="确认执行资产或画像写操作",
+        )
+        parser.add_argument(
+            "--now",
+            default=None,
+            help="测试/补跑用 ISO 时间；用于 scheduled-run due/session",
+        )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="跳过 scheduled-run 重复运行保护",
         )
 
         parsed = parser.parse_args(args)
@@ -137,7 +162,7 @@ class CLIAdapter:
 
     async def _execute(self, args: argparse.Namespace):
         """执行命令。"""
-        asset_result = self._handle_asset_action(args)
+        asset_result = await self._handle_asset_action(args)
         if asset_result is not None:
             print(json.dumps(asset_result, ensure_ascii=False, indent=2))
             return
@@ -190,7 +215,17 @@ class CLIAdapter:
         else:
             print(output_text)
 
-    def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
+    async def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
+        if args.scheduled_run_due:
+            return await self.engine.scheduled_run_due(now=args.now, force=args.force)
+        if args.scheduled_run_session:
+            return await self.engine.scheduled_run_session(
+                args.scheduled_run_session,
+                now=args.now,
+                force=args.force,
+            )
+        if args.scheduled_run_latest:
+            return self.engine.scheduled_run_latest(args.scheduled_run_latest)
         if args.profile_get:
             return {"success": True, "data": self.engine.get_profile()}
         if args.advice_list:
@@ -216,6 +251,9 @@ class CLIAdapter:
                 args.advice_save,
                 args.execution_save,
                 args.forecast_save,
+                args.scheduled_run_due,
+                args.scheduled_run_session,
+                args.scheduled_run_latest,
             )
         )
         if not write_requested:

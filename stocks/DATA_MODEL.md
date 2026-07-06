@@ -117,6 +117,43 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `constraints`
 - `updated_at`：写入时由系统更新
 
+## ScheduledAnalysisRun v1
+
+`ScheduledAnalysisRun` 是 S3 定时扫描与 Agent handoff 的结构化运行产物。它不是
+长期金融记忆，不写入 advice / executions / forecasts，也不构成最终建议。默认存储位置：
+
+```text
+.local/scheduled_runs/YYYY-MM-DD/{market}/{session}/{run_id}.json
+.local/scheduled_runs/latest/{session}.json
+```
+
+顶层字段：
+
+- `schema_version == 1`
+- `run_id`：`{scheduled_utc}_{session}`，例如 `20260706T063500Z_cn_pre_close`
+- `generated_at`：实际生成时间，UTC ISO
+- `market ∈ {cn, us}`，第一版只覆盖 A 股与 IBKR 美股持仓相关 session
+- `session`：`scheduled_sessions.json` 中的稳定 id
+- `market_date`：交易所本地日期
+- `exchange_timezone`、`user_timezone`
+- `scheduled_for`：交易所本地时区下的计划触发时间
+- `status ∈ {ok, degraded, skipped_market_closed, skipped_duplicate, failed}`
+- `source_context`：来源 `AnalysisContext` 的 schema 与生成时间
+- `portfolio_scope`：本次报告涉及的账户、持仓、证券 key 和主市场
+- `session_summary`：面向 Agent 的 headline、priority 和 push_policy
+- `position_reviews`：逐持仓事实核对，来自 `position_valuations`
+- `trigger_reviews`：最近建议中的触发器核对结果
+- `action_signal_reviews`：本次 session 相关的非 neutral 动作信号
+- `data_quality`：原样保留 `AnalysisContext.data_quality`
+- `agent_task`：Agent 无需再读取 prompt 即可执行的任务说明
+- `write_policy`：固定声明后台运行不得写长期金融记忆，写入必须用户确认
+- `notification`：推荐推送策略，通知层只发消息不写金融记忆
+- `context_digest`：市场状态、组合结构、暴露、流动性、粒度与轮动 leader 摘要
+
+`agent_task.must_not_do` 固定包含：不得承诺收益、不得忽略 `data_quality`、不得建议动用
+`rebalance_eligible=false` 的资产、不得把代理 ETF 价格触发器套到场外基金、不得自动保存
+建议/执行/预测。
+
 ## AdviceRecord
 
 用户确认保存的建议摘要，位于 `.local/advice/`，最多保留 30 条。它只保存摘要，

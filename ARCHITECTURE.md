@@ -9,7 +9,8 @@
 
 - Engine 负责读取确认过的金融记忆、获取市场数据、计算轻量脚手架、记录质量与溯源，
   最终构建 `AnalysisContext v12`。
-- 外部 Agent 读取上下文并完成最终判断。
+- Engine 也能按配置生成 `ScheduledAnalysisRun v1` 文件产物，供外部 Agent 定时读取。
+- 外部 Agent 读取上下文或定时运行产物并完成最终判断。
 - 可选 `LLMAnalysis` 能生成兼容报告，但默认关闭，不改变主边界。
 - 系统没有券商连接和下单能力。
 
@@ -30,6 +31,9 @@ assets/profile         quotes/news      snapshots/cache
           AnalysisContext v12
                   |
                   v
+       ScheduledAnalysisRun v1
+                  |
+                  v
              external Agent
 ```
 
@@ -39,7 +43,8 @@ assets/profile         quotes/news      snapshots/cache
 
 `stocks/adapters/` 只负责协议转换：
 
-- `cli.py`：JSON/text 输出、资产/画像 CRUD、可选内部 LLM 报告。
+- `cli.py`：JSON/text 输出、资产/画像 CRUD、可选内部 LLM 报告、
+  定时运行产物生成与读取。
 - `mcp.py`：轻量 JSON-RPC 风格 stdio 工具，包括上下文、行情、新闻、组合和金融记忆。
 - `http.py`：标准库 `http.server` JSON API；默认回环监听。
 
@@ -73,6 +78,8 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - `exchange_rate.py`：外币估值与显式换算质量。
 - `persistence.py`：滚动最小上下文快照与确认建议摘要。
 - `advice_review.py`：建议表现回看与触发器核对（按收盘价，只列事实）。
+- `scheduled_analysis.py`：A 股/美股定时 session 日历、运行产物存储、
+  Agent handoff 任务和通知建议策略。
 - `llm_analysis.py`：默认关闭的兼容报告模块。
 
 ### domain
@@ -123,7 +130,36 @@ Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实�
 
 由于“先读后写”，同一次运行不会把自身当作历史；第二次运行可以引用第一次快照。
 
-## 4. 金融记忆
+## 4. 定时运行产物
+
+`stocks/config/scheduled_sessions.json` 定义 A 股与美股 session。A 股使用
+`Asia/Shanghai`，美股使用 `America/New_York`，由 `zoneinfo` 处理夏令时换算。
+第一版跳过周末，并支持静态 holiday 列表；不会连接券商日历服务。
+
+CLI 入口：
+
+```bash
+uv run python -m stocks.adapters.cli --scheduled-run-due
+uv run python -m stocks.adapters.cli --scheduled-run-session cn_pre_close --force
+uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
+```
+
+`--scheduled-run-due` 适合由 launchd/cron 高频调用，系统只在命中 session
+窗口时生成产物。同一 session 同一市场日默认只跑一次；`--force` 用于补跑和调试。
+
+产物写入：
+
+```text
+.local/scheduled_runs/YYYY-MM-DD/{market}/{session}/{run_id}.json
+.local/scheduled_runs/YYYY-MM-DD/{market}/{session}/{run_id}.md
+.local/scheduled_runs/latest/{session}.json
+```
+
+`ScheduledAnalysisRun v1` 包含 session 元数据、持仓估值/PnL、触发器核对、
+action_signals、data_quality、Agent 必答任务、写入策略和通知建议。定时运行只写
+`.local/scheduled_runs/`，不会自动保存 advice/execution/forecast，也不会修改资产或画像。
+
+## 5. 金融记忆
 
 ### 资产
 
@@ -146,7 +182,7 @@ Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实�
 CLI 写操作要求 `--confirmed`；MCP 写操作要求 `confirmed: true`。确认缺失时 Adapter
 返回失败，Engine 文件不会改变。
 
-## 5. 数据质量与失败语义
+## 6. 数据质量与失败语义
 
 `stocks/errors.py` 把 Provider 错误分为：
 
@@ -168,7 +204,7 @@ CLI 写操作要求 `--confirmed`；MCP 写操作要求 `confirmed: true`。确�
 缺数据必须表示为 `missing`、`not_requested`、`not_configured` 或 `no_data`，不能
 用空值伪装正常状态。
 
-## 6. Prompt 与金额边界
+## 7. Prompt 与金额边界
 
 `stocks/prompts/personal_advice_prompt.txt` 是内置 LLM 与外部 Agent 共用的分析约束。
 `raw_prompt_input` 是本地 Agent 证据包，当前包含真实资产金额、逐持仓市值、盈亏、
@@ -178,17 +214,18 @@ CLI 写操作要求 `--confirmed`；MCP 写操作要求 `confirmed: true`。确�
 HTTP 是远程接口边界，默认仍递归移除 `amount`、`amount_cny` 和 `total_value`；
 调用方只有显式使用 `?include_amounts=true` 才能请求精确金额。
 
-## 7. 本地持久化
+## 8. 本地持久化
 
 - `.local/history/`：按标的 JSON 历史缓存，默认保留 90 天；按市场交易日去重。
 - `.local/snapshots/`：最多 30 份最小快照。
+- `.local/scheduled_runs/`：定时扫描 JSON/Markdown 产物与 latest 入口。
 - `data/cache/`：非隐私缓存，例如汇率；不与密钥目录混用。
 - `.secret/`：API key 与 HTTP token。
 
 `.local/`、`.secret/`、`data/cache/` 和历史遗留的
 `stocks/data/history/` 均不得提交。
 
-## 8. HTTP 安全边界
+## 9. HTTP 安全边界
 
 HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 
@@ -198,7 +235,7 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 
 异常响应不回传内部堆栈。当前没有速率限制和 CORS 策略，因此不能视为公网 API。
 
-## 9. 配置
+## 10. 配置
 
 主要配置：
 
@@ -209,11 +246,12 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 - `stocks/config/markets.json`
 - `stocks/config/event_calendar.json`：官方已公布的未来事件日程
 - `stocks/config/sector_scan.json`：候选池扫描，带 pool 分层（不进入 watchlist）
+- `stocks/config/scheduled_sessions.json`：A 股/美股定时运行 session、时区与推送策略
 
 Engine 配置优先级：环境变量 > YAML > 代码默认值。嵌套键使用双下划线，例如
 `STOCKS_FETCHER__MAX_RETRIES=3`。
 
-## 10. 验证基线
+## 11. 验证基线
 
 ```bash
 uv run ruff check .
