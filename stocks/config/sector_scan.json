@@ -60,8 +60,200 @@
     "name": "创业板ETF",
     "market": "a",
     "exchange": "sz",
-    "category": "创业板",
+    "category": "宽基_创业板",
     "pool": "broad"
+  },
+  {
+    "code": "510050",
+    "name": "上证50ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "宽基_上证50",
+    "pool": "broad"
+  },
+  {
+    "code": "510500",
+    "name": "中证500ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "宽基_中证500",
+    "pool": "broad"
+  },
+  {
+    "code": "512100",
+    "name": "中证1000ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "宽基_中证1000",
+    "pool": "broad"
+  },
+  {
+    "code": "588120",
+    "name": "科创100ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "宽基_科创100",
+    "pool": "broad"
+  },
+  {
+    "code": "159949",
+    "name": "创业板50ETF",
+    "market": "a",
+    "exchange": "sz",
+    "category": "宽基_创业板50",
+    "pool": "broad"
+  },
+  {
+    "code": "159819",
+    "name": "人工智能ETF",
+    "market": "a",
+    "exchange": "sz",
+    "category": "人工智能",
+    "pool": "sector"
+  },
+  {
+    "code": "562500",
+    "name": "机器人ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "机器人",
+    "pool": "sector"
+  },
+  {
+    "code": "515230",
+    "name": "软件ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "软件",
+    "pool": "sector"
+  },
+  {
+    "code": "159695",
+    "name": "通信ETF嘉实",
+    "market": "a",
+    "exchange": "sz",
+    "category": "通信",
+    "pool": "sector"
+  },
+  {
+    "code": "512980",
+    "name": "传媒ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "传媒",
+    "pool": "sector"
+  },
+  {
+    "code": "512400",
+    "name": "有色ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "有色",
+    "pool": "sector"
+  },
+  {
+    "code": "515220",
+    "name": "煤炭ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "煤炭",
+    "pool": "sector"
+  },
+  {
+    "code": "515210",
+    "name": "钢铁ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "钢铁",
+    "pool": "sector"
+  },
+  {
+    "code": "516020",
+    "name": "化工ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "化工",
+    "pool": "sector"
+  },
+  {
+    "code": "516780",
+    "name": "稀土ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "稀土",
+    "pool": "sector"
+  },
+  {
+    "code": "512690",
+    "name": "酒ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "白酒",
+    "pool": "sector"
+  },
+  {
+    "code": "516900",
+    "name": "食品饮料ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "食品饮料",
+    "pool": "sector"
+  },
+  {
+    "code": "159996",
+    "name": "家电ETF",
+    "market": "a",
+    "exchange": "sz",
+    "category": "家电",
+    "pool": "sector"
+  },
+  {
+    "code": "562510",
+    "name": "旅游ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "旅游",
+    "pool": "sector"
+  },
+  {
+    "code": "561560",
+    "name": "电力ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "电力",
+    "pool": "defensive"
+  },
+  {
+    "code": "512070",
+    "name": "证券保险ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "保险",
+    "pool": "defensive"
+  },
+  {
+    "code": "513130",
+    "name": "恒生科技ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "港股_恒生科技",
+    "pool": "sector"
+  },
+  {
+    "code": "513060",
+    "name": "恒生医疗ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "港股_恒生医疗",
+    "pool": "sector"
+  },
+  {
+    "code": "513770",
+    "name": "港股互联网ETF",
+    "market": "a",
+    "exchange": "sh",
+    "category": "港股_互联网",
+    "pool": "sector"
   },
   {
     "code": "SPY",

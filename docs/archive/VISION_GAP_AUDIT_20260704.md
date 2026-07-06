@@ -1,5 +1,9 @@
 # 愿景对照审计:现有代码与文档 vs "专业个人金融投资分析师"需求
 
+> ARCHIVED / PARTIALLY SUPERSEDED:本文是 S2 立项前的差距审计。资产入口、成本基准触发器、
+> 暴露/流动性派生等缺口已由 S2 工程实现覆盖;S2-E 用户验收和主动推送仍以
+> `EXECUTION_PLAN.md`、`PLAN.md` 与 S3 候选设计稿为准。
+
 > 生成:2026-07-03。审计范围:models.py / context_builder.py / scaffolds.py /
 > action_signals.py / advice_review(经 DATA_MODEL 与 EXECUTION_PLAN 证据) /
 > exchange_rate.py / persistence.py / prompts / 全部现行文档(VISION/PLAN/

@@ -1,5 +1,9 @@
 # Asset Data Model Refactor Design - 2026-07-04
 
+> ARCHIVED / SUPERSEDED: this research draft led to S2. The active schema is
+> `stocks/DATA_MODEL.md`; the active task status is `EXECUTION_PLAN.md`.
+> Do not treat this document as a current contract.
+
 > Status: research/design artifact. This document is not an active contract.
 > Current contracts remain `stocks/DATA_MODEL.md`, `ARCHITECTURE.md`,
 > `AGENT_GUIDE.md`, and the code. The purpose here is to decide what personal

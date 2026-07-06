@@ -1,5 +1,9 @@
 # 个人持仓数据入口：细粒度分析与数据结构优化重构文档
 
+> ARCHIVED / SUPERSEDED:本文是 S2 立项前设计稿。S2 工程实现后,现行 schema 以
+> `stocks/DATA_MODEL.md` 为准,任务状态以根目录 `EXECUTION_PLAN.md` 为准。
+> 本文只作为设计来源和历史依据。
+
 > 生成日期：2026-07-03
 > 性质：调研/设计稿（对应 PLAN §6 规则，建议放入 `docs/archive/` 并在决策日志登记）
 > 关联文档：`docs/archive/ASSET_DATA_MODEL_REFACTOR_20260704.md`（已有英文初稿，本文是对它的中文化、核验与修订，二者结论大方向一致，差异点见 §8）

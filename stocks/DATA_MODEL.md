@@ -322,7 +322,7 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 Composite 按字段合并 FRED → Yahoo → static_config，上游部分成功不会阻止下游
 补齐缺失字段。官方月度统计使用 24 小时本地缓存。
 
-## AnalysisContext v11
+## AnalysisContext v12
 
 Agent 的统一入口：
 

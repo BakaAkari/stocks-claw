@@ -8,7 +8,7 @@
 `stocks-claw` 是 Agent 的个人金融上下文工具，不是自动交易系统。
 
 - Engine 负责读取确认过的金融记忆、获取市场数据、计算轻量脚手架、记录质量与溯源，
-  最终构建 `AnalysisContext v10`。
+  最终构建 `AnalysisContext v12`。
 - 外部 Agent 读取上下文并完成最终判断。
 - 可选 `LLMAnalysis` 能生成兼容报告，但默认关闭，不改变主边界。
 - 系统没有券商连接和下单能力。
@@ -27,7 +27,7 @@ assets/profile         quotes/news      snapshots/cache
   +-----------> ContextBuilder <------------+
                   |
                   v
-          AnalysisContext v10
+          AnalysisContext v12
                   |
                   v
              external Agent
@@ -69,7 +69,7 @@ Adapter 不实现组合算法或 Provider 逻辑。
   5/20 日相对强弱排名。
 - `action_signals.py`：规则化方向性候选动作（附 reasons 指标事实，
   2026-07-02 用户裁决启用，约束见 PLAN §4）。
-- `macro_data.py`：静态配置与 Yahoo Finance 宏观数据组合。
+- `macro_data.py`：FRED、Yahoo Finance 与 static_config 逐字段合并的宏观数据组合。
 - `exchange_rate.py`：外币估值与显式换算质量。
 - `persistence.py`：滚动最小上下文快照与确认建议摘要。
 - `advice_review.py`：建议表现回看与触发器核对（按收盘价，只列事实）。
@@ -80,9 +80,10 @@ Adapter 不实现组合算法或 Provider 逻辑。
 `stocks/domain/models.py` 定义不可变 dataclass：
 
 - `Instrument`、`Quote`、`NewsItem`、`MarketEvent`、`UpcomingEvent`
-- `FinancialAsset`
+- `FinancialAsset`、`Account`、`Position` 及 v1/v2 资产兼容映射
 - `PortfolioMapping`、`MarketState`、`DriftCheck`
-- `AdviceRecord`（含可选 `triggers`）
+- `AdviceRecord`（含可选 `triggers` / `actions`）、`ExecutionRecord`、`ForecastRecord`
+- `DecisionEnvelope`
 - `AnalysisContext`
 
 这些对象是 Engine、Adapter 和测试之间的接口契约。
@@ -118,7 +119,7 @@ Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实�
 8. 提取市场事件、拉取未来催化剂日历、计算轮动排名与动作信号、
    构建组合映射、偏离检查和市场状态；对最近建议做表现回看与触发器核对。
 9. 生成 `raw_prompt_input` 与 `data_quality`。
-10. 返回 `AnalysisContext v10`，随后保存本次最小快照。
+10. 返回 `AnalysisContext v12`，随后保存本次最小快照。
 
 由于“先读后写”，同一次运行不会把自身当作历史；第二次运行可以引用第一次快照。
 
@@ -131,8 +132,11 @@ Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实�
 1. `.local/financial_assets.json`
 2. `stocks/data/financial_assets.json` 示例
 
-持久化保留用户输入的 `amount` 和 `currency`。人民币估值是运行时派生字段，不写回
-资产文件。无法换算的资产保留事实，但不静默计入人民币组合总值。
+资产文件兼容 v1 `FinancialAsset` 列表与 v2 `{schema_version, accounts, positions}`
+格式。v1 只在内存中确定性映射到 `Account` / `Position`，不自动写回；迁移必须走
+用户确认的 `asset_migrate_v2` / `--asset-migrate-v2 --confirmed`。持久化保留用户输入的
+原始金额、币种、账户和持仓事实；人民币估值、逐持仓市值、浮动盈亏、暴露和流动性摘要均为
+运行时派生字段，不写回资产文件。无法换算的资产保留事实，但不静默计入人民币组合总值。
 
 ### 投资者画像
 
@@ -158,6 +162,8 @@ CLI 写操作要求 `--confirmed`；MCP 写操作要求 `confirmed: true`。确�
 - 宏观字段缺失和异常
 - 技术指标覆盖缺口
 - 事件提取覆盖
+- 资产文件格式、v2 持仓字段完备性、逐持仓估值降级、运行时自动纳入行情宇宙的持仓
+- 暴露聚合、流动性分层与建议粒度推导质量
 
 缺数据必须表示为 `missing`、`not_requested`、`not_configured` 或 `no_data`，不能
 用空值伪装正常状态。

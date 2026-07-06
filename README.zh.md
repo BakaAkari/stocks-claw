@@ -1,10 +1,11 @@
 # stocks-claw
 
-面向 Agent 的个人金融上下文工具包。系统把用户已确认的持仓和投资偏好，与行情、新闻、
-宏观数据、技术指标、组合映射及数据质量信息组装成 `AnalysisContext`，交给外部 Agent
-完成最终分析。
+服务单一用户的个人投资分析师工作台。系统把用户已确认的账户、持仓、投资偏好，与行情、
+新闻、宏观数据、技术指标、组合映射、持仓估值/PnL 脚手架及数据质量信息组装成
+`AnalysisContext` 证据包，交给外部 Agent 完成最终分析。
 
-系统不下单。Engine 只负责事实、降级处理和轻量信号，最终判断归 Agent。
+系统不下单。Engine 只负责事实、触发核对、降级处理和轻量信号，最终判断归 Agent，
+唯一决策人仍是用户。
 
 [English](README.md) · [Agent 指南](AGENT_GUIDE.md) ·
 [架构](ARCHITECTURE.md) · [计划](PLAN.md)
@@ -66,18 +67,32 @@ uv run python -m stocks.adapters.cli \
 更新和删除分别使用 `--asset-update`、`--asset-remove`。对应 MCP 写工具必须传
 `"confirmed": true`。
 
+私有持仓当前支持 v2 `Account` / `Position` 文件。旧 v1 资产列表迁移前应先预览：
+
+```bash
+uv run python -m stocks.adapters.cli --asset-migrate-v2
+uv run python -m stocks.adapters.cli --asset-migrate-v2 --confirmed
+```
+
 ## 数据与配置
 
 ```text
 .local/financial_assets.json          私有持仓
 .local/investor_profile.json          私有投资偏好
 .local/history/                       行情历史缓存
+.local/event_cache/                   Finnhub 财报日历缓存
 .local/snapshots/                     滚动最小快照
+.local/advice/                        已确认建议摘要
+.local/executions/                    已确认执行记录
+.local/forecasts/                     已确认预测台账
 .secret/                              本地 API key 与 HTTP token
 stocks/config/engine.yaml             运行配置
 stocks/config/watchlist.json          关注标的
 stocks/config/news_sources.json       RSS/Atom 新闻源
 stocks/config/portfolio_constraints.json
+stocks/config/event_calendar.json     静态官方事件日历
+stocks/config/sector_scan.json        轮动/信号扫描池
+stocks/config/exposure_proxy.json     暴露标签代理映射
 ```
 
 没有私有持仓文件时，系统使用 `stocks/data/financial_assets.json` 作为示例输入。画像

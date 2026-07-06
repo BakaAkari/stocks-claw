@@ -1,11 +1,12 @@
 # stocks-claw
 
-Agent-first personal finance context toolkit. It combines confirmed holdings and investor
-preferences with quotes, news, macro data, technical indicators, portfolio mapping, and data
-quality metadata, then returns an `AnalysisContext` for an external Agent.
+Personal investment analyst workbench for a single user. It combines confirmed accounts,
+positions, investor preferences, quotes, news, macro data, technical indicators, portfolio
+mapping, PnL/valuation scaffolds, and data-quality metadata, then returns an
+`AnalysisContext` evidence package for an external Agent.
 
-It does not place orders. The engine prepares facts and lightweight signals; the Agent owns the
-final reasoning.
+It does not place orders. The engine prepares facts, trigger checks, and lightweight signals;
+the Agent owns the final reasoning and the user remains the only decision-maker.
 
 [中文](README.zh.md) · [Agent guide](AGENT_GUIDE.md) ·
 [Architecture](ARCHITECTURE.md) · [Plan](PLAN.md)
@@ -67,18 +68,33 @@ uv run python -m stocks.adapters.cli \
 Update and remove are available through `--asset-update` and `--asset-remove`. Equivalent MCP
 tools require `"confirmed": true`.
 
+Private holdings now support v2 `Account` / `Position` files. Preview migration from the old
+v1 asset list before writing it:
+
+```bash
+uv run python -m stocks.adapters.cli --asset-migrate-v2
+uv run python -m stocks.adapters.cli --asset-migrate-v2 --confirmed
+```
+
 ## Data and configuration
 
 ```text
 .local/financial_assets.json          private holdings
 .local/investor_profile.json          private preferences
 .local/history/                       quote history cache
+.local/event_cache/                   Finnhub earnings-calendar cache
 .local/snapshots/                     minimal rolling snapshots
+.local/advice/                        confirmed advice summaries
+.local/executions/                    confirmed execution records
+.local/forecasts/                     confirmed forecast ledger
 .secret/                              local API keys and HTTP token
 stocks/config/engine.yaml             runtime settings
 stocks/config/watchlist.json          tracked instruments
 stocks/config/news_sources.json       RSS/Atom sources
 stocks/config/portfolio_constraints.json
+stocks/config/event_calendar.json     static official event calendar
+stocks/config/sector_scan.json        scan universe for rotation/signals
+stocks/config/exposure_proxy.json     exposure-tag proxy mapping
 ```
 
 When no private holdings file exists, `stocks/data/financial_assets.json` is used as sample
