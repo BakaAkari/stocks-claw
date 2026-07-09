@@ -1014,9 +1014,17 @@ def _build_action_signal_reviews(
                 "reasons": item.get("reasons") or [],
                 "scope": scope,
                 "as_of": item.get("as_of"),
+                "rank": item.get("rank"),
+                "score": item.get("_score"),
             }
         )
-    items.sort(key=lambda item: (item["scope"] != "primary", item["symbol"]))
+    # 排序：同 scope 内按 rank（越小越前）→ 无 rank 按 symbol
+    items.sort(key=lambda item: (
+        item["scope"] != "primary",
+        item.get("rank") is None,
+        item.get("rank") or 999,
+        item["symbol"],
+    ))
     primary = [item for item in items if item["scope"] == "primary"][:max_primary]
     cross = [item for item in items if item["scope"] == "cross_market"][:max_cross]
     return primary + cross
