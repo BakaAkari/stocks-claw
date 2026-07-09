@@ -574,31 +574,45 @@ def build_intelligence_run(
 
 
 def build_intelligence_agent_task(session: ScheduledSession) -> dict:
+    """构建自包含的情报巡逻 Agent 任务说明书。"""
     return {
-        "task_version": 2,
+        "task_version": 3,
         "language": "zh-CN",
         "audience": "single_user",
         "session_intent": session.intent,
         "primary_market": session.primary_market,
         "must_answer": [
-            "本小时最重要的 1-2 个事件是什么",
+            "本小时最重要的 1-2 个事件是什么（引用 intelligence_digest.top_clusters）",
             "它们对 VIX、油、金、美债、美元、中国资产的可能影响",
-            "哪些非持仓标的出现了可买入/卖出/观察的信号",
+            "哪些标的出现了可买入/卖出/观察的信号（引用 intelligence_digest.top_signals）",
             "数据质量是否有明显缺口",
         ],
         "must_not_do": [
             "不得承诺收益",
             "不得忽略 data_quality",
             "不得自动保存建议、执行或预测",
+            "事件描述必须引用 intelligence_digest.top_clusters 中的实际 summary，不得编造新闻",
+            "宏观数据引用 macro 快照的实际数值，不得猜测",
         ],
-        "output_style": {
-            "max_words": 1200,
-            "prefer_actionable_bullets": True,
-            "include_data_boundary": True,
-            "include_market_focus": True,
+        "data_reference": {
+            "事件": "intelligence_digest.top_clusters[] — theme, summary, sentiment, urgency, affected_markets",
+            "信号": "intelligence_digest.top_signals[] — direction, symbol, rationale",
+            "宏观": "macro — vix, us_10y_yield, dxy, usd_cny, gold, crude_oil",
+            "行情": "quotes — SPY, QQQ, VIXY, GLD, USO, UUP, NVDA 等 ETF/个股报价",
+        },
+        "output_structure": {
+            "max_words": 900,
+            "sections": [
+                {"name": "标题", "content": "全球情报小时巡逻 · {collected_at}"},
+                {"name": "核心事件", "content": "1-2 个最重要的事件，附来源和影响分析"},
+                {"name": "市场快照", "content": "VIX/美债/美元/油/金/比特币当前水平和方向"},
+                {"name": "操作信号", "content": "情报管道识别的买入/卖出/观察信号"},
+                {"name": "数据边界", "content": "数据时效、来源质量、缺失字段"},
+            ],
         },
         "final_analysis_instructions": (
-            "先给出本小时最重要的 1-2 个结论,再列出市场影响与操作信号,最后说明数据边界。"
+            "输出分为五节：标题 → 核心事件 → 市场快照 → 操作信号 → 数据边界。"
+            "严格遵守 must_not_do。事件和信号必须引用 intelligence_digest 中的实际数据。"
         ),
     }
 
@@ -653,6 +667,12 @@ def _signal_to_action_review(signal: dict) -> dict:
 
 
 def build_agent_task(session: ScheduledSession) -> dict:
+    """构建自包含的 Agent 任务说明书。
+
+    产出的 agent_task 对象包含 Agent 所需的全部指令，
+    不依赖任何外部 prompt。任何 Agent 读取 JSON 后，
+    严格按此任务说明书执行即可生成完整分析推送。
+    """
     must_answer_by_intent = {
         "pre_open_plan": [
             "今天重点盯哪些已有持仓和触发器",
@@ -687,30 +707,86 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "是否应保持只生成不推送",
         ],
     }
+
     return {
-        "task_version": 2,
+        "task_version": 3,
         "language": "zh-CN",
         "audience": "single_user",
         "session_intent": session.intent,
         "primary_market": session.primary_market,
+
+        # ── Agent 必须回答的问题 ──
         "must_answer": must_answer_by_intent.get(
             session.intent,
             ["已有持仓是否需要动", "数据质量是否足以支持动作"],
         ),
+
+        # ── 硬性禁止（违反 = 错误） ──
         "must_not_do": [
             "不得承诺收益",
             "不得忽略 data_quality",
             "不得建议动用 rebalance_eligible=false 的资产",
             "不得把代理 ETF 价格触发器套到场外基金",
             "不得自动保存建议、执行或预测",
+            # 数据忠实性
+            "market_state.risk_appetite 写什么报什么，严禁自编'避险情绪升温''风险偏好回升'",
+            "risk_appetite 缺失时写'系统未判断风险偏好'，不得填空",
+            "valuation_input.method=manual_amount 的持仓必须标注'手工估值（非实时）'，严禁说'无浮动'",
+            # 触发器完整性
+            "action_cards 中 signal=stop_loss 的持仓必须出现在推送最前，标注'硬止损触发'",
+            "loss_level=severe 的持仓必须标注'严重亏损阈值'",
+            "触发器必须按严重度从高到低列出，不得只报轻的漏重的",
         ],
-        "output_style": {
-            "max_words": 1200,
-            "prefer_actionable_bullets": True,
-            "include_data_boundary": True,
-            "include_market_focus": True,
+
+        # ── 数据字段引用指南 ──
+        "data_reference": {
+            "持仓动作": "action_cards[] — 逐持仓的止损/止盈/减仓/加仓信号及建议比例",
+            "方向信号": "action_signal_reviews[] — 有 rank 的按 rank 升序排列，rank#1 是最优候选",
+            "风险仪表盘": "portfolio_risk.scenario — global_risk_off / china_shock / inflation_commodity 三个多因子情景",
+            "持仓事实": "position_reviews[] — 逐持仓估值、盈亏、session_facts（含 severe_loss 标注）",
+            "情报": "intelligence_digest — top_clusters（事件聚类）、top_signals（方向信号）",
+            "轮动": "rotation_leaders — 轮动排名领涨的板块和标的",
+            "组合": "exposure_summary.top — 组合暴露分布和潜在缺口",
         },
-        "final_analysis_instructions": ("先给一句话执行结论,再按持仓列出动作,最后说明数据边界。"),
+
+        # ── 输出格式 ──
+        "output_structure": {
+            "max_words": 1200,
+            "sections": [
+                {
+                    "name": "标题",
+                    "content": "{session_display_name} · {market_date}",
+                },
+                {
+                    "name": "一句话执行结论",
+                    "content": "以 action_cards 的止损/止盈信号为最高优先级，给出当前最关键的 1 个动作判断",
+                },
+                {
+                    "name": "持仓动作",
+                    "content": "逐持仓列出关键动作：优先 stop_loss > severe_loss > take_profit > accumulate",
+                },
+                {
+                    "name": "前瞻展望",
+                    "content": "综合 intelligence_digest + rotation_leaders + exposure_summary，给出 3+ 个方向，每个方向附依据、标的、与组合的关系",
+                },
+                {
+                    "name": "风险与数据边界",
+                    "content": "引用 portfolio_risk.scenario 的多因子情景；标注 data_quality 的缺口（stale 行情、手工估值、单源风险）",
+                },
+                {
+                    "name": "尾部",
+                    "content": "以上仅为数据摘要，不构成投资建议",
+                },
+            ],
+        },
+
+        # ── 最终指令（一行总结，Agent 也可只读此字段快速理解任务） ──
+        "final_analysis_instructions": (
+            "输出分为六节：标题 → 一句话执行结论 → 持仓动作（按 action_cards 严重度排序）→ "
+            "前瞻展望（综合 intelligence_digest+rotation_leaders+exposure_summary，3+ 方向）→ "
+            "风险与数据边界（引用 portfolio_risk.scenario 多因子情景）→ 免责声明。"
+            "严格遵守 must_not_do 的每一条。数据引用以 data_reference 为准。"
+        ),
     }
 
 
