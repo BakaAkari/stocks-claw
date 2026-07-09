@@ -1426,6 +1426,9 @@ class AnalysisContext:
     market_events: list[MarketEvent] = field(default_factory=list)
     news_digest: dict = field(default_factory=dict)
 
+    # 全局情报巡逻聚合结果（事实源，来自 global_intelligence_watch）
+    intelligence_digest: dict = field(default_factory=dict)
+
     # 宏观数据快照
     macro_snapshot: Optional[dict] = None
 
@@ -1446,6 +1449,9 @@ class AnalysisContext:
 
     # 引擎动作信号（规则化方向性候选动作，2026-07-02 用户裁决启用）
     action_signals: dict = field(default_factory=dict)
+
+    # 规则回测记分卡
+    rule_scorecard: dict = field(default_factory=dict)
 
     # 预测台账摘要（S1-4）
     forecast_summary: dict = field(default_factory=dict)
@@ -1475,6 +1481,7 @@ class AnalysisContext:
             "news_count": self.news_count,
             "market_events": [e.to_dict() for e in self.market_events],
             "news_digest": self.news_digest,
+            "intelligence_digest": self.intelligence_digest,
             "market_state": self.market_state.to_dict(),
             "portfolio_mapping": self.portfolio_mapping.to_dict(),
             "drift_checks": [d.to_dict() for d in self.drift_checks],
@@ -1487,6 +1494,7 @@ class AnalysisContext:
             "upcoming_events": [e.to_dict() for e in self.upcoming_events],
             "rotation": self.rotation,
             "action_signals": self.action_signals,
+            "rule_scorecard": self.rule_scorecard,
             "forecast_summary": self.forecast_summary,
             "asset_accounts": self.asset_accounts,
             "asset_positions": self.asset_positions,

@@ -2,7 +2,10 @@
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+
+import pandas as pd
 
 from stocks.domain.models import (
     Account,
@@ -26,6 +29,7 @@ from stocks.engine.history_cache import HistoryCache
 from stocks.engine.indicators import TechnicalIndicators
 from stocks.engine.macro_data import MacroProvider
 from stocks.engine.market_events import MarketEventExtractor
+from stocks.engine.news_intelligence_store import NewsIntelligenceStore
 from stocks.engine.rotation import compute_rotation
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.logging_utils import get_logger
@@ -65,6 +69,7 @@ class ContextBuilder:
         macro_provider: Optional[MacroProvider] = None,
         market_event_extractor: Optional[MarketEventExtractor] = None,
         event_calendar: Optional[EventCalendar] = None,
+        config: Optional[dict] = None,
     ):
         self.fetcher = fetcher
         self.portfolio_scaffold = portfolio_scaffold
@@ -73,6 +78,7 @@ class ContextBuilder:
         self.macro_provider = macro_provider
         self.market_event_extractor = market_event_extractor or MarketEventExtractor()
         self.event_calendar = event_calendar
+        self._config = config or {}
 
     async def build(
         self,
@@ -218,6 +224,11 @@ class ContextBuilder:
             )
         )
 
+        # 7.65 加载全局情报巡逻聚合结果（时间事实源）
+        intelligence_digest = self._build_intelligence_digest(
+            repo_root=Path(__file__).resolve().parents[2],
+        )
+
         # 7.7 引擎动作信号（方向性候选动作，2026-07-02 用户裁决启用）
         action_signals = compute_action_signals(
             rotation_frames,
@@ -226,12 +237,16 @@ class ContextBuilder:
             upcoming_events=upcoming_events,
             scan_keys=scan_keys,
         )
+        rule_scorecard = self._build_rule_scorecard(
+            rotation_frames, action_signals
+        )
         position_valuations = self._build_position_valuations(
             positions=positions,
             quotes=quotes,
             generated_at=generated_at,
             exposure_proxy=exposure_proxy or {},
             action_signals=action_signals,
+            technical_indicators=technical_indicators,
         )
         valuation_assets = self._assets_from_position_valuations(
             positions,
@@ -271,6 +286,7 @@ class ContextBuilder:
             recent_snapshots=recent_snapshots,
             recent_advice=reviewed_advice,
             upcoming_events=upcoming_events,
+            intelligence_digest=intelligence_digest,
             rotation=rotation,
             action_signals=action_signals,
             forecast_summary=forecast_summary,
@@ -335,8 +351,10 @@ class ContextBuilder:
             data_quality=data_quality,
             recent_advice=reviewed_advice,
             upcoming_events=upcoming_events,
+            intelligence_digest=intelligence_digest,
             rotation=rotation,
             action_signals=action_signals,
+            rule_scorecard=rule_scorecard,
             forecast_summary=forecast_summary or {},
             asset_accounts=[account.to_dict() for account in (asset_accounts_v2 or [])],
             asset_positions=[position.to_dict() for position in positions],
@@ -393,6 +411,18 @@ class ContextBuilder:
                 logger.warning(f"Rotation history load failed for {key}: {e}")
         return compute_rotation(frames, universe, scan_keys), frames, universe, scan_keys
 
+    def _build_rule_scorecard(
+        self,
+        frames: dict[str, pd.DataFrame],
+        action_signals: dict,
+    ) -> dict:
+        """用历史数据回测 action signal 规则，计算记分卡。"""
+        from stocks.engine.quant_action import backtest_action_signals
+
+        items = action_signals.get("items", []) or []
+        result = backtest_action_signals(frames, items)
+        return result
+
     def _get_fetcher_degradation_log(self) -> list[dict]:
         """读取 DataFetcher 降级日志，兼容测试中的轻量 mock。"""
         if not hasattr(self.fetcher, "get_degradation_log"):
@@ -419,6 +449,7 @@ class ContextBuilder:
         generated_at: str,
         exposure_proxy: dict,
         action_signals: Optional[dict],
+        technical_indicators: Optional[dict[str, dict]] = None,
     ) -> list[dict]:
         """按 v2 position 生成运行时估值快照；只进入上下文，不持久化。"""
         if not positions:
@@ -435,12 +466,14 @@ class ContextBuilder:
         }
         items: list[dict] = []
         for position in positions:
+            indicators = (technical_indicators or {}).get(position.instrument_key or "", {})
             item = self._value_position(
                 position,
                 quotes_by_key=quotes_by_key,
                 generated_at=generated_at,
                 exposure_proxy=exposure_proxy,
                 signal_by_symbol=signal_by_symbol,
+                indicators=indicators,
             )
             items.append(item)
 
@@ -462,6 +495,7 @@ class ContextBuilder:
         generated_at: str,
         exposure_proxy: dict,
         signal_by_symbol: dict[str, dict],
+        indicators: Optional[dict] = None,
     ) -> dict:
         flags: list[str] = []
         method = position.valuation_input.method
@@ -570,6 +604,8 @@ class ContextBuilder:
             "unrealized_pnl": round(pnl, 4) if pnl is not None else None,
             "unrealized_pnl_cny": round(pnl_cny, 4) if pnl_cny is not None else None,
             "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
+            "one_day_change_pct": round(quote.pct_change, 4) if quote and quote.pct_change is not None else None,
+            "indicators": indicators or {},
             "portfolio_weight": None,
             "advice_granularity": granularity,
             "proxy": proxy,
@@ -1594,6 +1630,60 @@ class ContextBuilder:
                     }
         return indicators_by_symbol
 
+    def _build_intelligence_digest(
+        self,
+        *,
+        repo_root: Path,
+    ) -> dict:
+        """Load latest global_intelligence_watch aggregated facts for trading sessions."""
+        intelligence_dir = self._config.get("intelligence_dir")
+        if not intelligence_dir:
+            return {"status": "not_configured"}
+        path = Path(intelligence_dir)
+        if not path.is_absolute():
+            path = repo_root / path
+        if not path.exists():
+            return {"status": "not_found"}
+        try:
+            store = NewsIntelligenceStore(path)
+            snapshot = store.latest_snapshot()
+            clusters = store.latest_clusters()
+            signals = store.latest_signals()
+            if snapshot is None and clusters is None and signals is None:
+                return {"status": "empty"}
+            return {
+                "status": "ok",
+                "snapshot_at": snapshot.collected_at.isoformat() if snapshot else None,
+                "article_count": len(snapshot.articles) if snapshot else 0,
+                "cluster_count": len(clusters.get("clusters", [])) if clusters else 0,
+                "signal_count": len(signals.get("signals", [])) if signals else 0,
+                "top_clusters": [
+                    {
+                        "theme": c.get("theme"),
+                        "summary": c.get("summary"),
+                        "affected_markets": c.get("affected_markets", []),
+                        "affected_symbols": c.get("affected_symbols", []),
+                        "sentiment": c.get("sentiment"),
+                        "urgency": c.get("urgency"),
+                        "confidence": c.get("confidence"),
+                    }
+                    for c in (clusters.get("clusters", []) if clusters else [])[:5]
+                ],
+                "top_signals": [
+                    {
+                        "symbol": s.get("symbol"),
+                        "direction": s.get("direction"),
+                        "rationale": s.get("rationale"),
+                        "urgency": s.get("urgency"),
+                    }
+                    for s in (signals.get("signals", []) if signals else [])[:5]
+                ],
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger = get_logger("context_builder")
+            logger.warning(f"Intelligence digest load failed: {exc}")
+            return {"status": "error", "error": str(exc)}
+
     def _build_raw_prompt(
         self,
         assets: list[FinancialAsset],
@@ -1610,6 +1700,7 @@ class ContextBuilder:
         recent_snapshots: Optional[list[dict]] = None,
         recent_advice: Optional[list[dict]] = None,
         upcoming_events: Optional[list] = None,
+        intelligence_digest: Optional[dict] = None,
         rotation: Optional[dict] = None,
         action_signals: Optional[dict] = None,
         forecast_summary: Optional[dict] = None,
@@ -1958,6 +2049,24 @@ class ContextBuilder:
                 )
         else:
             lines.append(" 无可用动作信号(历史或指标不足,不给方向)")
+        lines.append("")
+
+        # 全局情报巡逻事实源
+        lines.append("【全局情报巡逻事实源】")
+        digest = intelligence_digest or {}
+        if digest.get("status") == "ok":
+            lines.append(f" 最新快照: {digest.get('snapshot_at')}")
+            lines.append(f" 文章数: {digest.get('article_count', 0)}, 事件簇: {digest.get('cluster_count', 0)}, 信号: {digest.get('signal_count', 0)}")
+            for cluster in digest.get("top_clusters", []):
+                lines.append(
+                    f" - [{cluster.get('urgency')}] {cluster.get('theme')}: {cluster.get('summary')[:100]}"
+                )
+            for signal in digest.get("top_signals", []):
+                lines.append(
+                    f" - [{signal.get('urgency')}] {signal.get('symbol')}: {signal.get('direction')} - {signal.get('rationale')[:80]}"
+                )
+        else:
+            lines.append(f" 状态: {digest.get('status', 'not_loaded')}")
         lines.append("")
 
         # 结构化新闻事件

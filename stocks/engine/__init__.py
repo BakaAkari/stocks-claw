@@ -137,11 +137,16 @@ class StocksEngine:
             else Path(self._config["paths"]["data_dir"]) if self._config["paths"]["data_dir"]
             else DEFAULT_DATA_DIR
         )
-        # 允许 YAML 覆盖 local/secret 路径
+        # 允许 YAML 覆盖 local/secret/intelligence 路径
         local_dir_cfg = self._config["paths"]["local_data_dir"]
         self._local_data_dir = Path(local_dir_cfg) if local_dir_cfg else LOCAL_DATA_DIR
         secret_dir_cfg = self._config["paths"]["secret_dir"]
         self._secret_dir = Path(secret_dir_cfg) if secret_dir_cfg else SECRET_DIR
+        intelligence_dir_cfg = self._config["paths"].get("intelligence_dir")
+        if intelligence_dir_cfg:
+            self._config["intelligence_dir"] = intelligence_dir_cfg
+        elif "intelligence_dir" not in self._config:
+            self._config["intelligence_dir"] = str(self._local_data_dir / "news_intelligence")
 
         # 自动加载 LLM 配置（传参 > 环境变量 > .secret 文件）
         api_key, base_url = self._load_openai_config(openai_api_key, openai_base_url)
@@ -284,6 +289,7 @@ class StocksEngine:
             history_cache=self.history_cache,
             macro_provider=self.macro_provider,
             event_calendar=self.event_calendar,
+            config=self._config,
         )
         self.persistence = DataPersistence(
             base_dir=str(self._local_data_dir / "snapshots"),
