@@ -1,8 +1,18 @@
 # Agent 使用指南
 
-本文是 Agent 操作 stocks-claw 的现行规则。系统负责金融记忆、市场数据和
-AnalysisContext；最终分析由调用它的 Agent 完成。系统不下单，也不把任何输出包装成
-确定收益承诺。
+**本文档供 AI Agent 和人类开发者共同使用。如果你是 AI Agent，本文是你操作
+stocks-claw 的唯一入口文档。**
+
+系统定位:个人投资分析师工作台。确定性引擎负责金融记忆、市场数据、定时产物；
+Agent 负责读取产物并生成最终分析。系统不下单、不承诺收益。
+
+**Agent 快速开始:**
+
+- 读取定时产物:`uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close`
+- JSON 中的 `agent_task` 字段是运行时自包含指令——严格按其执行即可，不需要外部 prompt
+- 生成自定义上下文:`uv run python -m stocks.adapters.cli --output json`
+- 所有路径基于项目根目录 `/mnt/user/code-project/stocks-claw`
+- 飞书输出仅用 `**加粗**`、`` `行内代码` ``、`- 列表`、`[链接](url)`，禁用 `#` `|` ` ``` ` `>` `---` HTML
 
 ## 1. 必须遵守的边界
 
