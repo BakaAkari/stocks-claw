@@ -164,7 +164,7 @@ system_prompt = (
 user_prompt = f"以下是本小时采集的事实数据:\n\n{data_block}\n\n请给出综合分析和前瞻判断。"
 
 payload = json.dumps({
-    "model": "kimi-k2.6",
+    "model": "deepseek-v4-pro",
     "messages": [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
