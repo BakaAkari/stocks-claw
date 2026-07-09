@@ -1,95 +1,105 @@
 #!/usr/bin/env python3
+"""全球情报小时巡逻 - 直接格式化输出，不经过 LLM。
+
+读取 global_intelligence_watch 产物的 context_digest，
+将事件聚类和操作信号直接以中文结构化展示。
+不做翻译、不编造、不调用 LLM。
+"""
 import json
-import os
-import textwrap
-import urllib.request
 from pathlib import Path
 
-BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
-API_KEY = os.environ.get("OPENAI_COMPATIBLE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+LATEST = Path("/mnt/user/code-project/stocks-claw/.local/scheduled_runs/latest/global_intelligence_watch.json")
 
-latest = Path("/mnt/user/code-project/stocks-claw/.local/scheduled_runs/latest/global_intelligence_watch.json")
-if not latest.exists():
+if not LATEST.exists():
     print("No latest artifact found")
     raise SystemExit(1)
 
-best = json.loads(latest.read_text())
-status = best.get("status", "unknown")
-run_id = best.get("run_id", "")
-scheduled_for = best.get("scheduled_for", "")
-priority = best.get("session_summary", {}).get("priority", "")
-ctx = best.get("context_digest", {})
-source = best.get("source_context", {})
-macro = ctx.get("macro", {}) or {}
-market_impact = ctx.get("market_impact", {}) or {}
-clusters = ctx.get("clusters", []) or []
-signals = ctx.get("signals", []) or []
-article_count = source.get("article_count", 0)
+data = json.loads(LATEST.read_text())
+status = data.get("status", "unknown")
+run_id = data.get("run_id", "")
+scheduled_for = data.get("scheduled_for", "")
+digest = data.get("context_digest", {})
 
-clusters_text = []
-for c in clusters[:6]:
-    clusters_text.append(f"theme={c.get('theme')} urgency={c.get('urgency')} sentiment={c.get('sentiment')} summary={c.get('summary', '')}")
+clusters = digest.get("clusters", []) or []
+signals_list = digest.get("signals", []) or []
+macro = digest.get("macro", {}) or {}
+quotes = digest.get("quotes", {}) or {}
+article_count = len(clusters) if clusters else 0
 
-signals_text = []
-for s in signals[:5]:
-    signals_text.append(f"symbol={s.get('symbol')} direction={s.get('direction')} urgency={s.get('urgency')} rationale={s.get('rationale', '')}")
+# Title
+ts = (scheduled_for or "")[:19]
+print(f"**全球情报 - {ts}**")
+print()
 
-raw_block = textwrap.dedent(f"""
-全球情报小时巡逻
-时间: {scheduled_for}
-状态: {status} 优先级: {priority}
-文章数: {article_count} 事件簇数: {len(clusters)} 信号数: {len(signals)}
+# Status summary
+if status == "ok":
+    cluster_themes = {c.get("theme", "?") for c in clusters}
+    crit = [c for c in clusters if c.get("urgency") == "critical"]
+    active_themes = ", ".join(sorted(cluster_themes)[:4]) if cluster_themes else "无"
+    if crit:
+        print(f"关键警报: {len(crit)} 个事件标为 critical - {', '.join(c.get('theme','') for c in crit)}")
+    else:
+        print(f"本小时 {len(clusters)} 个事件主题: {active_themes}")
+print()
 
-宏观快照:
-VIX={macro.get('vix', 'N/A')}, 美债10Y={macro.get('us_10y_yield', 'N/A')}, USD/CNY={macro.get('usd_cny', 'N/A')}, 油={macro.get('crude_oil', 'N/A')}, 金={macro.get('gold', 'N/A')}
+# Macro snapshot
+if macro:
+    print("**宏观**")
+    items = []
+    for key, label in [("vix", "VIX"), ("us_10y_yield", "美债10Y"), ("dxy", "DXY"),
+                        ("usd_cny", "USD/CNY"), ("crude_oil", "原油"), ("gold", "黄金")]:
+        val = macro.get(key)
+        if val is not None:
+            if isinstance(val, float):
+                items.append(f"{label} {val:.2f}")
+            else:
+                items.append(f"{label} {val}")
+    print(" | ".join(items))
+    print()
 
-重点事件簇:
-""")
-raw_block += "\n".join(clusters_text)
-raw_block += "\n\n操作信号:\n"
-raw_block += "\n".join(signals_text)
+# Quotes snapshot
+if quotes:
+    print("**行情**")
+    q_items = []
+    for sym, q in quotes.items():
+        if isinstance(q, dict):
+            pct = q.get("pct_change")
+            if pct is not None:
+                q_items.append(f"{sym} {pct:+.2f}%")
+            elif q.get("price") is not None:
+                q_items.append(f"{sym} {q['price']:.2f}")
+    if q_items:
+        print(" | ".join(q_items[:12]))
+    print()
 
-if API_KEY:
-    prompt = f"""你是中文金融分析助手。请将以下全球宏观情报数据整理成一份简洁的中文分析报告，不超过 900 字。
-要求:
-1. 先给出一句核心结论（风险偏好、主要市场影响）。
-2. 结合宏观数据简述当前市场状态。
-3. 对每个事件簇，翻译标题/摘要为中文，并说明市场影响。
-4. 对每个操作信号，翻译理由为中文，给出买入/卖出/观察建议。
-5. 最后列出数据边界（缺失或异常数据）。
-6. 禁止承诺收益，禁止给出具体价格目标。
+# Event clusters
+if clusters:
+    print("**事件**")
+    for c in clusters[:6]:
+        theme = c.get("theme", "?")
+        urgency = c.get("urgency", "medium")
+        summary = c.get("summary", "")[:200]
+        urgency_mark = "[CRITICAL] " if urgency == "critical" else ""
+        print(f"- {urgency_mark}[{theme}] {summary}")
+    print()
 
-数据如下:
-{raw_block}
+# Signals
+if signals_list:
+    print("**信号**")
+    for s in signals_list[:6]:
+        direction = s.get("direction", "?")
+        symbol = s.get("symbol", "?")
+        rationale = s.get("rationale", "")[:120]
+        if direction == "buy":
+            dir_label = "买入"
+        elif direction == "sell":
+            dir_label = "卖出"
+        else:
+            dir_label = direction
+        print(f"- {dir_label} `{symbol}` - {rationale}")
+    print()
 
-请输出中文报告，使用 Markdown 简洁格式。"""
-    payload = json.dumps({
-        "model": "kimi-k2.6",
-        "messages": [
-            {"role": "system", "content": "你是中文金融分析助手，专门将英文宏观情报翻译为中文分析报告。"},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 1,
-        "max_tokens": 1600,
-    }, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        f"{BASE_URL}/chat/completions",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-    analysis = result["choices"][0]["message"]["content"]
-    print("**\u5168\u7403\u60c5\u62a5\u5c0f\u65f6\u5de1\u903b\u5206\u6790**")
-    print(f"\u65f6\u95f4: {scheduled_for}")
-    print(f"\u72b6\u6001: {status} | \u4f18\u5149级: {priority}")
-    print("")
-    print(analysis)
-    print(f"\nrun_id: `{run_id}`")
-else:
-    print("ERROR: no API key found for LLM translation")
-    raise SystemExit(1)
+# Data boundary
+print(f"采集: {ts} | {len(clusters)} 簇 | {len(signals_list)} 信号")
+print()
+print(f"`{run_id[:24]}...`")
