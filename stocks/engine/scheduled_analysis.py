@@ -592,7 +592,7 @@ def build_intelligence_agent_task(session: ScheduledSession) -> dict:
             "不得自动保存建议、执行或预测",
         ],
         "output_style": {
-            "max_words": 900,
+            "max_words": 1200,
             "prefer_actionable_bullets": True,
             "include_data_boundary": True,
             "include_market_focus": True,
@@ -656,6 +656,12 @@ def build_agent_task(session: ScheduledSession) -> dict:
     must_answer_by_intent = {
         "pre_open_plan": [
             "今天重点盯哪些已有持仓和触发器",
+            "【前瞻展望】综合分析以下四层信息，给出未来1-2周最值得关注的板块和方向（不少于3个）：",
+            "  (a) intelligence_digest.top_clusters — 情报管道识别到的事件主题和影响",
+            "  (b) intelligence_digest.top_signals — 情报管道给出的方向性信号",
+            "  (c) rotation_leaders — 轮动排名领涨的板块和标的",
+            "  (d) exposure_summary.top — 组合当前暴露分布和潜在缺口",
+            "每个方向写明：依据（引用具体数据）→ 对应标的 → 与现有组合的关系",
             "哪些候选方向只适合观察,不能追",
             "数据质量是否足以形成盘前计划",
         ],
@@ -667,6 +673,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
         "pre_close_decision": [
             "收盘前已有持仓是否需要动",
             "哪些触发器已经触发或接近触发",
+            "【前瞻展望】综合分析 intelligence_digest + rotation_leaders + exposure_summary，给出未来1-2周最值得关注的板块和方向（不少于3个），每个方向写明依据和对应标的",
             "是否有不应追高或不应补弱的标的",
         ],
         "after_close_review": [
@@ -698,7 +705,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "不得自动保存建议、执行或预测",
         ],
         "output_style": {
-            "max_words": 900,
+            "max_words": 1200,
             "prefer_actionable_bullets": True,
             "include_data_boundary": True,
             "include_market_focus": True,
