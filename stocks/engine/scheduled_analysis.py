@@ -955,7 +955,7 @@ def _build_portfolio_risk_summary(position_valuations: list[dict]) -> dict:
             quantity=(item.get("holding") or {}).get("quantity") if item.get("holding") else None,
         )
         reviews.append(review)
-    return compute_portfolio_risk(reviews, total_value)
+    return compute_portfolio_risk(reviews, total_value, position_valuations=position_valuations)
 
 
 def _position_facts(item: dict) -> list[str]:

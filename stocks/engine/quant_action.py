@@ -4,8 +4,9 @@
 
 规则设计：
 - 单笔最大亏损：-12% 硬止损（趋势证伪）
+- -10% 中间减仓：降低暴露 30%，避免 -8% 到 -12% 之间裸奔
 - -8% 提前预警：建议审视趋势
-- 20 日低点：跌破时执行清仓（趋势破坏）
+- 20 日低点：跌破时执行减仓 50%（趋势破坏）
 - 止盈：+10% 减仓 25%、+20% 减仓 25%、+30% 减仓 50%
 - 单日浮盈回撤 ≥2% 且仍浮盈：触发减仓 25%
 - 趋势保护：跌破 MA20 + MACD 柱为负 → 减仓 50%
@@ -19,6 +20,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import pandas as pd
+
+from stocks.engine.exchange_rate import get_usd_cny_rate
 
 
 @dataclass
@@ -52,6 +55,8 @@ class QuantActionEngine:
 
     # 止损
     STOP_LOSS_PCT = -12.0
+    MID_STOP_PCT = -10.0
+    MID_STOP_RATIO = 0.3
     WARNING_LOSS_PCT = -8.0
     # 止盈减仓
     TAKE_PROFIT_LEVELS = [(10.0, 0.25), (20.0, 0.25), (30.0, 0.50)]
@@ -101,11 +106,24 @@ class QuantActionEngine:
                 current_weight_pct, price, quantity,
             )
 
-        # 2. 止损预警
+        # 2. 中间减仓：-10% 触发降低暴露，避免 -8% 到 -12% 之间裸奔
+        if isinstance(pnl_pct, (int, float)) and pnl_pct <= self.MID_STOP_PCT:
+            signal = "reduce"
+            ratio = self.MID_STOP_RATIO
+            action = f"浮亏超出中间阈值 {self.MID_STOP_PCT}%，减仓 {int(ratio * 100)}%"
+            if cost is not None:
+                stop_price = round(cost * (1 + self.MID_STOP_PCT / 100), 4)
+            facts.append(f"浮亏 {pnl_pct:.2f}% 触发中间减仓阈值 {self.MID_STOP_PCT}%")
+            return self._build(
+                position_id, signal, action, ratio, facts, stop_price, target_prices,
+                current_weight_pct, price, quantity,
+            )
+
+        # 3. 止损预警
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= self.WARNING_LOSS_PCT:
             facts.append(f"浮亏 {pnl_pct:.2f}% 触发警示阈值 {self.WARNING_LOSS_PCT}%")
 
-        # 3. 20 日低点 / 趋势跌破
+        # 4. 20 日低点 / 趋势跌破
         ma20 = self.indicators.get("ma_20")
         macd_hist = (self.indicators.get("macd") or {}).get("hist")
         if isinstance(price, (int, float)) and ma20 is not None:
@@ -120,7 +138,7 @@ class QuantActionEngine:
                     current_weight_pct, price, quantity,
                 )
 
-        # 4. 止盈阶梯
+        # 5. 止盈阶梯
         if isinstance(pnl_pct, (int, float)) and pnl_pct > 0 and cost is not None:
             for level, reduce_ratio in self.TAKE_PROFIT_LEVELS:
                 if pnl_pct >= level:
@@ -142,7 +160,7 @@ class QuantActionEngine:
                         current_weight_pct, price, quantity,
                     )
 
-        # 5. 单日浮盈回撤
+        # 6. 单日浮盈回撤
         if (
             isinstance(one_day_change_pct, (int, float))
             and one_day_change_pct <= self.PROFIT_PULLBACK_PCT
@@ -158,7 +176,7 @@ class QuantActionEngine:
                 current_weight_pct, price, quantity,
             )
 
-        # 6. 左侧加仓
+        # 7. 左侧加仓
         if isinstance(price, (int, float)) and ma20 is not None and cost is not None:
             rsi = self.indicators.get("rsi_14")
             near_ma20 = 0.97 <= price / ma20 <= 1.03
@@ -212,13 +230,14 @@ class QuantActionEngine:
             position_limit = self.TREND_CONFIRMED_LIMIT_PCT
             facts.append("趋势确认，单标上限可拓展至 10%")
 
-        # 止损风险
+        # 止损风险 — 使用实时 USD/CNY 汇率，而非硬编码值
         risk_amount_cny = None
         risk_to_stop_pct = None
         if price is not None and stop_price is not None and quantity is not None and current_weight_pct is not None:
             risk_amount = max(0.0, (price - stop_price) * quantity)
-            # 简化：将美元风险按大约 7.2 转 CNY，后续 ContextBuilder 会给出精确值
-            risk_amount_cny = risk_amount * 7.2
+            fx_rate = get_usd_cny_rate()
+            risk_amount_cny = risk_amount * fx_rate.rate
+            facts.append(f"止损风险按 USD/CNY {fx_rate.rate:.4f} ({fx_rate.source}) 折算")
             risk_to_stop_pct = current_weight_pct * (price - stop_price) / price if price > 0 else None
 
         return QuantReview(
@@ -239,8 +258,17 @@ class QuantActionEngine:
 def compute_portfolio_risk(
     reviews: list[QuantReview],
     total_value_cny: float,
+    *,
+    position_valuations: Optional[list[dict]] = None,
 ) -> dict:
-    """组合风险仪表盘。"""
+    """组合风险仪表盘。
+
+    Args:
+        reviews: QuantReview 列表
+        total_value_cny: 组合总市值 (CNY)
+        position_valuations: 可选，包含 classification/exposure_tags 的持仓估值列表，
+            用于多因子压力测试。未提供时回退到简单 ±5%/±10% 情景。
+    """
     if not reviews or total_value_cny <= 0:
         return {
             "total_value_cny": total_value_cny,
@@ -272,18 +300,104 @@ def compute_portfolio_risk(
             "risk_to_stop_pct": r.risk_to_stop_pct,
         })
 
+    scenario = _build_scenarios(total_value_cny, position_valuations)
+
     return {
         "total_value_cny": round(total_value_cny, 2),
         "top3_concentration_pct": round(top3, 2),
         "stop_loss_risk_pct": round(stop_risk_pct, 4),
         "stop_loss_risk_cny": round(stop_risk_cny, 2),
-        "scenario": {
-            "market_down_5_pct": round(total_value_cny * -0.05, 2),
-            "market_down_10_pct": round(total_value_cny * -0.10, 2),
-            "market_up_5_pct": round(total_value_cny * 0.05, 2),
-        },
+        "scenario": scenario,
         "items": items,
     }
+
+
+def _build_scenarios(
+    total_value_cny: float,
+    position_valuations: Optional[list[dict]] = None,
+) -> dict:
+    """构建多因子压力测试情景。
+
+    当提供持仓分类数据时，按 exposure_tags 对各资产分配情景冲击系数；
+    未提供时回退到简单完美相关假设。
+    """
+    base_scenarios = {
+        "market_down_5_pct": round(total_value_cny * -0.05, 2),
+        "market_down_10_pct": round(total_value_cny * -0.10, 2),
+        "market_up_5_pct": round(total_value_cny * 0.05, 2),
+    }
+
+    if not position_valuations:
+        return base_scenarios
+
+    # 多因子冲击系数：按 exposure_tags 分配不同 beta
+    # 基于历史相关性的方向性估算，非精确协方差
+    factor_shocks = {
+        "global_risk_off": {
+            "description": "VIX > 30 全球避险",
+            "tags": {
+                "us_equity": -0.15, "us_tech": -0.18, "a_equity": -0.10,
+                "gold": 0.03, "treasury": 0.02, "crypto": -0.30,
+                "energy": -0.12, "cash": 0.00, "fixed_income": 0.01,
+            },
+            "default": -0.10,
+        },
+        "china_shock": {
+            "description": "中国特定政策冲击",
+            "tags": {
+                "a_equity": -0.20, "a_broad": -0.18, "a_sector": -0.22,
+                "hk_proxy": -0.22, "us_equity": -0.05, "us_tech": -0.05,
+                "gold": 0.00, "treasury": -0.01, "crypto": -0.05,
+                "cash": 0.00, "fixed_income": 0.00,
+            },
+            "default": -0.08,
+        },
+        "inflation_commodity": {
+            "description": "通胀/大宗商品冲击",
+            "tags": {
+                "energy": 0.10, "gold": 0.08, "us_equity": -0.08,
+                "us_tech": -0.12, "a_equity": -0.07, "treasury": -0.05,
+                "a_sector": -0.06, "crypto": -0.10,
+                "cash": 0.00, "fixed_income": -0.02,
+            },
+            "default": -0.05,
+        },
+    }
+
+    # 为每个持仓匹配最相关的冲击系数（每笔持仓只用一次，避免多标签重复计算）
+    scenarios = {}
+    for scenario_name, config in factor_shocks.items():
+        impact = 0.0
+        tags = config["tags"]
+        default_shock = config["default"]
+        mapped = 0.0
+        for pv in position_valuations:
+            value = pv.get("market_value_cny")
+            if value is None:
+                continue
+            classification = pv.get("classification") or {}
+            exposure_tags = classification.get("exposure_tags") or [classification.get("asset_class", "unknown")]
+            # 取第一个匹配该情景的标签，按列表中顺序（越靠前越具体）
+            shock = default_shock
+            for tag in exposure_tags:
+                if tag in tags:
+                    shock = tags[tag]
+                    break
+            impact += value * shock
+            mapped += value
+        scenarios[scenario_name] = {
+            "description": config["description"],
+            "impact_cny": round(impact, 2),
+            "impact_pct": round(impact / total_value_cny * 100, 4) if total_value_cny > 0 else 0.0,
+            "details": {
+                "method": "exposure_tag_weighted",
+                "total_mapped_cny": round(mapped, 2),
+                "unmapped_cny": round(total_value_cny - mapped, 2),
+            },
+        }
+
+    # 保留简单情景供快速参考
+    return {**base_scenarios, **scenarios}
 
 
 def backtest_action_signals(

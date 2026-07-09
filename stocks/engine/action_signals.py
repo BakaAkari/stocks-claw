@@ -19,6 +19,10 @@ action signal。约束条件：
 
 叠加层（与主信号并存）：
 - event_watch                T+3 内有已公布催化剂，动作宜等事件落地
+
+横截面排序（2026-07-09 新增）：
+- accumulate_candidate 和 rotation_candidate 信号内部按综合得分排名
+- 让 Agent 在面对多个同类型候选时能区分优先级
 """
 
 from __future__ import annotations
@@ -41,6 +45,12 @@ _PULLBACK_POSITION = 85.0  # 布林带位置百分比
 _ACCUMULATE_R20 = 2.0      # 排除仅略高于 0 的横盘噪声
 _ACCUMULATE_RSI_LOW = 40.0
 _ACCUMULATE_RSI_HIGH = 65.0
+
+# 横截面排序权重
+_RANK_WEIGHT_R20 = 0.40        # 中期趋势强度
+_RANK_WEIGHT_RSI_ZONE = 0.30   # RSI 区间得分
+_RANK_WEIGHT_PRICE_POS = 0.20  # 布林带位置惩罚
+_RANK_WEIGHT_VOLUME = 0.10     # 量比加成
 
 _SIGNAL_ACTION_HINTS = {
     "accumulate_candidate": "趋势与动能配合，可分批布局；回踩短均线附近优先于追高",
@@ -137,6 +147,110 @@ def _signal_for_item(
         return "accumulate_candidate", reasons
 
     return "neutral_hold", ["未命中任何方向性规则"]
+
+
+def _rank_signals(items: list[dict]) -> list[dict]:
+    """对 accumulate_candidate 和 rotation_candidate 信号做横截面排序。
+
+    综合得分 = r20 强度 × 0.40 + RSI 区间得分 × 0.30
+             + 布林带位置惩罚 × 0.20 + 量比加成 × 0.10
+
+    RSI 区间得分：40-65 为满分 1.0，越接近 50 越优
+    位置惩罚：布林带位置越低越好（越接近下轨加仓成本越低）
+    量比加成：量比 > 1 有正面加成
+
+    Args:
+        items: compute_action_signals 输出的 items 列表（含 indicators_raw）
+
+    Returns:
+        带 rank 和 score 的 items，同信号组内按得分降序排列
+    """
+    ranked_items = []
+    for item in items:
+        signal = item.get("signal")
+        # 只对方向性买入信号做排名
+        if signal not in ("accumulate_candidate", "rotation_candidate"):
+            ranked_items.append(item)
+            continue
+
+        raw = item.get("_indicators_raw") or {}
+        rotation_item = item.get("_rotation_item") or {}
+
+        r20 = rotation_item.get("r20") or 0.0
+        rsi = raw.get("rsi_14")
+        price_pos = raw.get("price_position")
+        vol_ratio = raw.get("volume_ratio")
+
+        # RSI 区间得分：40-65 为最优区间，50 最高，偏离则扣分
+        rsi_score = 1.0
+        if rsi is not None:
+            if 40 <= rsi <= 65:
+                # 以 50 为中心，越接近 50 越高
+                rsi_score = 1.0 - abs(rsi - 50) / 15
+            elif rsi < 40:
+                rsi_score = max(0.0, rsi / 40 * 0.7)
+            else:
+                rsi_score = max(0.0, (80 - rsi) / 15 * 0.6)
+
+        # 布林带位置惩罚：越低越好（更接近下轨）
+        pos_penalty = 0.0
+        if price_pos is not None:
+            if price_pos > 80:
+                pos_penalty = (price_pos - 80) / 20 * 0.5  # 0~0.5 惩罚
+            elif price_pos < 20:
+                pos_penalty = -(20 - price_pos) / 20 * 0.3  # 负值=加分
+
+        # 量比加成
+        vol_bonus = 0.0
+        if vol_ratio is not None and vol_ratio > 1.0:
+            vol_bonus = min((vol_ratio - 1.0) / 5.0, 0.3)
+
+        # r20 归一化：假设 ±20% 为极端值范围
+        r20_norm = max(-1.0, min(r20 / 20.0, 1.0))
+
+        score = (
+            r20_norm * _RANK_WEIGHT_R20
+            + rsi_score * _RANK_WEIGHT_RSI_ZONE
+            + pos_penalty * _RANK_WEIGHT_PRICE_POS
+            + vol_bonus * _RANK_WEIGHT_VOLUME
+        )
+
+        item["_score"] = round(score, 4)
+        ranked_items.append(item)
+
+    # 排序：非 ranked 信号保持原有顺序，ranked 信号按得分降序
+    order_priority = [
+        "avoid_catching_falling_knife",
+        "reduce_risk",
+        "wait_for_pullback",
+        "accumulate_candidate",
+        "rotation_candidate",
+        "neutral_hold",
+        "no_data",
+    ]
+    ranked_items.sort(
+        key=lambda item: (
+            order_priority.index(item["signal"])
+            if item["signal"] in order_priority
+            else 99,
+            -(item.get("_score") or 0),
+            item["symbol"],
+        )
+    )
+
+    # 为有序信号分配 rank
+    rank_counter: dict[str, int] = {}
+    for item in ranked_items:
+        if item["signal"] in ("accumulate_candidate", "rotation_candidate"):
+            rank_counter.setdefault(item["signal"], 0)
+            rank_counter[item["signal"]] += 1
+            item["rank"] = rank_counter[item["signal"]]
+            score_str = f"，综合得分 {item['_score']:.3f}"
+            item["action_hint"] = item.get("action_hint", "") + score_str
+        else:
+            item["rank"] = None
+
+    return ranked_items
 
 
 def compute_action_signals(
@@ -243,6 +357,8 @@ def compute_action_signals(
             "reasons": reasons,
             "action_hint": _SIGNAL_ACTION_HINTS[signal],
             "as_of": rotation_item.get("as_of"),
+            "_indicators_raw": indicators,
+            "_rotation_item": rotation_item,
         }
         if key in event_overlay:
             entry["event_watch"] = event_overlay[key]
@@ -262,22 +378,21 @@ def compute_action_signals(
     else:
         status = "ok"
 
-    # 输出按信号优先级分组排序，便于阅读
-    order = [
-        "avoid_catching_falling_knife",
-        "reduce_risk",
-        "wait_for_pullback",
-        "accumulate_candidate",
-        "rotation_candidate",
-        "neutral_hold",
-        "no_data",
-    ]
-    items.sort(key=lambda item: (order.index(item["signal"]), item["symbol"]))
+    # 横截面排序
+    items = _rank_signals(items)
+
+    # 清理内部字段，不暴露给下游
+    for item in items:
+        item.pop("_indicators_raw", None)
+        item.pop("_rotation_item", None)
+    # 仅保留有 rank 的信号
+    has_ranks = any(item.get("rank") is not None for item in items)
 
     return {
         "schema_version": ACTION_SIGNALS_SCHEMA_VERSION,
         "status": status,
         "items": items,
         "counts": counts,
-        "disclaimer": "规则化候选动作，非指令；reasons 为触发事实，最终判断归用户与 Agent",
+        "ranked": has_ranks,
+        "disclaimer": "规则化候选动作，非指令；reasons 为触发事实，同信号按综合得分排序，最终判断归用户与 Agent",
     }

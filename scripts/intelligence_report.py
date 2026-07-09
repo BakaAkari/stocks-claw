@@ -84,7 +84,7 @@ if API_KEY:
     with urllib.request.urlopen(req, timeout=120) as resp:
         result = json.loads(resp.read().decode("utf-8"))
     analysis = result["choices"][0]["message"]["content"]
-    print(f"**\u5168\u7403\u60c5\u62a5\u5c0f\u65f6\u5de1\u903b\u5206\u6790**")
+    print("**\u5168\u7403\u60c5\u62a5\u5c0f\u65f6\u5de1\u903b\u5206\u6790**")
     print(f"\u65f6\u95f4: {scheduled_for}")
     print(f"\u72b6\u6001: {status} | \u4f18\u5149级: {priority}")
     print("")
