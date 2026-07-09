@@ -170,7 +170,7 @@ payload = json.dumps({
         {"role": "user", "content": user_prompt},
     ],
     "temperature": 1,
-    "max_tokens": 400,
+    "max_tokens": 2000,
 }, ensure_ascii=False).encode("utf-8")
 
 try:
