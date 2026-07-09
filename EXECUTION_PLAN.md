@@ -100,16 +100,65 @@
 **用户场景**:"系统每天按 A 股和 IBKR 美股关键时段自动生成持仓分析素材;Agent
 读取最新产物后能给我盘前计划、开盘观察、收盘前动作建议和盘后复盘,并且不会夜间无意义打扰。"
 
-- [ ] 准时性闸:至少覆盖 10 个 A 股 session 产物、6 个美股 session 产物;记录是否有漏跑、
+**状态**:已试用(2026-07-06~07),用户给出 5 项调整点,已调整完成,S3-E 关闭。
+
+- [x] 准时性闸:至少覆盖 10 个 A 股 session 产物、6 个美股 session 产物;记录是否有漏跑、
   重复跑、错时区或节假日误跑。
-- [ ] 数据闸:每次产物必须保留 `data_quality`;缺行情、stale quote、history/rotation
+- [x] 数据闸:每次产物必须保留 `data_quality`;缺行情、stale quote、history/rotation
   降级不得被 Agent 当成正常数据。
-- [ ] 决策闸:盘前/开盘/收盘前/盘后四类文本均能围绕已有持仓、成本、PnL、触发器和
+- [x] 决策闸:盘前/开盘/收盘前/盘后四类文本均能围绕已有持仓、成本、PnL、触发器和
   扩扫候选给出可执行但不越权的分析。
-- [ ] 打扰闸:美股夜间 session 默认只生成或 digest;只有 critical 触发器/大额可动持仓亏损
+- [x] 打扰闸:美股夜间 session 默认只生成或 digest;只有 critical 触发器/大额可动持仓亏损
   才建议即时推送。
-- [ ] 价值裁决:用户在真实试用后决定下一步是调输出文风、加通知渠道、加反馈记录、
+- [x] 价值裁决:用户在真实试用后决定下一步是调输出文风、加通知渠道、加反馈记录、
   加估值数据层,还是暂停加厚。
+
+### S3-E 试用反馈与调整记录
+
+1. **A 股/美股时段穿插混淆**
+   - 问题:A 股 session 里出现美股扫描池建议,美股 session 里出现 A 股扫描池建议。
+   - 调整:`scheduled_sessions.json` 每个 session 增加 `primary_market`;
+     `ScheduledSession` 增加 `primary_market` 字段;
+     `_build_action_signal_reviews` 按 `primary_market` 过滤,本市场最多 8 条,跨市场最多 2 条。
+
+2. **需要扫描池但持仓要重点显示**
+   - 问题:用户希望扫描池存在,但持仓应优先展示。
+   - 调整:保留 `position_reviews` 优先排序(高亏损/严重亏损置顶);
+     `action_signal_reviews` 按 `scope=primary` 优先排序。
+
+3. **触发器缺失**
+   - 问题:产物没有显式列出触发器核对结果。
+   - 调整:`_collect_position_triggers` 按 instrument 汇总 `recent_advice` 中的 `trigger_review`;
+     每个 position_review 增加 `trigger_reviews`;Markdown 增加 `## Trigger Reviews` 章节;
+     `agent_task.must_answer` 强化触发器相关必答。
+
+4. **高亏损需要特别标注**
+   - 问题:电力 ETF -27% 等深度亏损持仓没有特殊标记。
+   - 调整:`_build_position_reviews` 增加 `high_loss`(-10%) 和 `severe_loss`(-20%) 标记;
+     高亏损项在 `session_facts` 中追加文字说明;Markdown 增加 `[HIGH_LOSS]` 标签;
+     position reviews 按 severe_loss > high_loss > name 排序。
+
+5. **宏观和新闻信息非常弱**
+   - 问题:产物缺乏市场状态摘要。
+   - 调整:`_market_state_summary` 从 `market_state` 抽取风险偏好、VIX、龙头动作;
+     写入 `session_summary.market_state_summary` 和 `context_digest.market_state_summary`;
+     Markdown 增加 `## Market State Summary` 章节。
+   - 说明:更深度的新闻/宏观整合由 `global_intelligence_watch` 切片负责,
+     其每小时产物可被后续持仓 session 读取。
+
+6. **其他修复**
+   - `us_after_close` 的 headline 改为"复盘今日盈亏与触发器事实,不做新建议";
+   - 增加 `_session_intent_props`,`after_close` 等复盘 intent 的 `can_recommend_new=false`,
+     避免 after_close 与 pre_close 给出完全相同的 action signals。
+
+> 完成:2026-07-08 S3-E 调整完成。`ruff` All checks passed, `pytest` 498 passed,
+> `compileall` 0, CLI smoke (`--output json --no-news --no-quotes`) 通过。
+> 依据:用户真实试用反馈与全局验收。
+
+## 当前候选 — global_intelligence_watch 切片
+
+状态:已立项,设计稿见 `docs/archive/GLOBAL_INTELLIGENCE_WATCH_DESIGN_20260708.md`。
+下一步进入工程实现。
 
 ## Backlog(未排期,禁止开工)
 
