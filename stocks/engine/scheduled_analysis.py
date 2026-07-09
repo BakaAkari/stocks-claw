@@ -593,6 +593,8 @@ def build_intelligence_agent_task(session: ScheduledSession) -> dict:
             "不得自动保存建议、执行或预测",
             "事件描述必须引用 intelligence_digest.top_clusters 中的实际 summary，不得编造新闻",
             "宏观数据引用 macro 快照的实际数值，不得猜测",
+            "严禁使用 # | ``` > --- -[ ] HTML 等飞书不兼容的 Markdown 语法",
+            "标题用**加粗**，代码用`行内代码`，分隔用空行",
         ],
         "data_reference": {
             "事件": "intelligence_digest.top_clusters[] — theme, summary, sentiment, urgency, affected_markets",
@@ -602,6 +604,8 @@ def build_intelligence_agent_task(session: ScheduledSession) -> dict:
         },
         "output_structure": {
             "max_words": 900,
+            "platform": "feishu",
+            "format_rules": "仅使用**加粗**、`行内代码`、- 列表、[链接](url) 四种格式。用空行分隔段落。禁用 # | ``` > --- -[ ] HTML。",
             "sections": [
                 {"name": "标题", "content": "全球情报小时巡逻 · {collected_at}"},
                 {"name": "核心事件", "content": "1-2 个最重要的事件，附来源和影响分析"},
@@ -750,6 +754,14 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "action_cards 中 signal=stop_loss 的持仓必须出现在推送最前，标注'硬止损触发'",
             "loss_level=severe 的持仓必须标注'严重亏损阈值'",
             "触发器必须按严重度从高到低列出，不得只报轻的漏重的",
+            # 飞书格式（违反会导致整条消息变成纯文本）"
+            "严禁使用 # 号标题（用**加粗**代替）",
+            "严禁使用 | 表格",
+            "严禁使用 ``` 代码块（用`行内代码`代替）",
+            "严禁使用 > 引用",
+            "严禁使用 --- 分隔线",
+            "严禁使用 - [ ] 任务列表",
+            "严禁使用任何 HTML 标签",
         ],
 
         # ── 数据字段引用指南 ──
@@ -766,6 +778,8 @@ def build_agent_task(session: ScheduledSession) -> dict:
         # ── 输出格式 ──
         "output_structure": {
             "max_words": 1200,
+            "platform": "feishu",
+            "format_rules": "仅使用**加粗**、`行内代码`、- 列表、[链接](url) 四种格式。用空行分隔段落。禁用 # | ``` > --- -[ ] HTML。",
             "sections": [
                 {
                     "name": "标题",
