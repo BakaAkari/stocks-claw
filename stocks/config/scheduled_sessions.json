@@ -4,7 +4,7 @@
   "artifact_dir": ".local/scheduled_runs",
   "default_duplicate_window_minutes": 90,
   "quiet_hours": {
-    "enabled": true,
+    "enabled": false,
     "start": "00:00",
     "end": "07:30",
     "timezone": "Asia/Shanghai",
@@ -20,25 +20,29 @@
           "id": "cn_pre_open",
           "time": "08:50",
           "intent": "pre_open_plan",
-          "push": "normal"
+          "push": "normal",
+          "primary_market": "cn"
         },
         {
           "id": "cn_open_watch",
           "time": "09:45",
           "intent": "open_watch",
-          "push": "normal"
+          "push": "normal",
+          "primary_market": "cn"
         },
         {
           "id": "cn_pre_close",
           "time": "14:35",
           "intent": "pre_close_decision",
-          "push": "normal"
+          "push": "normal",
+          "primary_market": "cn"
         },
         {
           "id": "cn_after_close",
           "time": "15:20",
           "intent": "after_close_review",
-          "push": "digest"
+          "push": "digest",
+          "primary_market": "cn"
         }
       ]
     },
@@ -51,13 +55,15 @@
           "id": "us_pre_open",
           "time": "09:00",
           "intent": "pre_open_plan",
-          "push": "normal"
+          "push": "normal",
+          "primary_market": "us"
         },
         {
           "id": "us_open_watch",
           "time": "10:00",
           "intent": "open_watch",
-          "push": "normal"
+          "push": "normal",
+          "primary_market": "us"
         },
         {
           "id": "us_mid_session",
@@ -70,15 +76,34 @@
           "id": "us_pre_close",
           "time": "15:30",
           "intent": "pre_close_decision",
-          "push": "critical_only"
+          "push": "critical_only",
+          "primary_market": "us"
         },
         {
           "id": "us_after_close",
           "time": "16:20",
           "intent": "after_close_review",
-          "push": "digest"
+          "push": "digest",
+          "primary_market": "us"
+        }
+      ]
+    },
+    "intelligence": {
+      "enabled": true,
+      "exchange_timezone": "Asia/Shanghai",
+      "holidays": [],
+      "sessions": [
+        {
+          "id": "global_intelligence_watch",
+          "time": "00:00",
+          "intent": "intelligence_patrol",
+          "push": "normal",
+          "primary_market": "global",
+          "run_every_minutes": 60,
+          "enabled": true
         }
       ]
     }
-  }
+  },
+  "intelligence_dir": ".local/news_intelligence"
 }
