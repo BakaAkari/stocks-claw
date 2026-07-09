@@ -1,6 +1,6 @@
 # EXECUTION_PLAN.md — 现行任务与验收
 
-> 生成:2026-07-03;收缩:2026-07-06(已完成 S0~S2-7 归档)
+> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-09(审查日修复+文档清理)
 > 本文是**唯一的行动清单**,与 `PLAN.md`(方向、规则与状态)互补。
 > 已完成 S0~S2-7 的完整任务卡和证据归档于
 > `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;2026-07-03 以前历史证据归档于
@@ -159,6 +159,20 @@
 
 状态:已立项,设计稿见 `docs/archive/GLOBAL_INTELLIGENCE_WATCH_DESIGN_20260708.md`。
 下一步进入工程实现。
+
+## 已关闭 — 2026-07-09 审查日 P0 修复
+
+- [x] 硬编码汇率 `* 7.2` → `get_usd_cny_rate()` 实时汇率+6h缓存
+- [x] -8% 到 -12% 止损空隙 → 新增 -10% 中间档(MID_STOP_PCT=-10.0, ratio=0.3)
+- [x] 信号无区分度 → `_rank_signals()` 横截面排序(accumulate_candidate 按综合得分排名)
+- [x] 完美相关压力测试 → `_build_scenarios()` 三因子情景(global_risk_off/china_shock/inflation_commodity)
+- [x] agent_task v4 自包含指令集(persona/adaptability/data_reference/output_structure/飞书格式)
+- [x] intelligence_report.py 重写:从 LLM 翻译改为结构化数据+受控 LLM 总结
+- [x] 8 个 cron prompt 精简为一行(指令全部迁入 agent_task JSON)
+- [x] 全局验收:ruff 全绿、pytest 509 passed、compileall 0、CLI smoke 通过
+
+> 完成:2026-07-09。详细证据见 `docs/archive/DEVELOPMENT_DIRECTION_20260709.md` 附录 B。
+> 下一步候选见该文档 §2 第一层(系统健壮性)和第二层(分析深度)。
 
 ## Backlog(未排期,禁止开工)
 

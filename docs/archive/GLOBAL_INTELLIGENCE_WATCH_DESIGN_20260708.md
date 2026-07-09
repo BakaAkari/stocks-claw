@@ -1,3 +1,8 @@
+> **状态:已被实现取代(SUPERSEDED)**
+> 本文档为历史设计稿,其中描述的功能已实现并上线。
+> 现行架构和契约以 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md` 和代码为准。
+> 保留本文仅作设计决策追溯。
+
 # global_intelligence_watch 设计
 
 > 状态:设计稿,待 S3-E 真实试运行结束后立项

@@ -1,3 +1,8 @@
+> **状态:已被实现取代(SUPERSEDED)**
+> 本文档为历史设计稿,其中描述的功能已实现并上线。
+> 现行架构和契约以 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md` 和代码为准。
+> 保留本文仅作设计决策追溯。
+
 # EXECUTION_PLAN S0-S2 完成记录归档
 
 > ARCHIVED SNAPSHOT 2026-07-06:本文保存 S0~S2-7 的完整完成记录和证据,

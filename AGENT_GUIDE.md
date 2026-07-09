@@ -52,9 +52,11 @@ uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
 
 `--scheduled-run-due` 适合由 launchd/cron 高频调用；系统只在命中 session 时生成
 `.local/scheduled_runs/` 产物。同一市场日内同一 session 默认只跑一次，`--force` 仅用于补跑
-或调试。外部 Agent 应读取 `--scheduled-run-latest SESSION` 返回的 JSON，审查
-`data_quality`、`position_reviews`、`trigger_reviews`、`action_signal_reviews` 与
-`agent_task` 后再生成最终推送文本。
+或调试。外部 Agent 应读取 `--scheduled-run-latest SESSION` 返回的 JSON，严格按
+`agent_task` 字段的全部指令执行——`agent_task` 是自包含的任务说明书，包含
+must_answer(必答问题)、must_not_do(硬性约束,含飞书格式)、persona(分析师人格)、
+adaptability(自适应输出)、data_reference(数据字段定位)和 output_structure(分节模板)。
+Agent 不需要任何外部 prompt。
 
 可选内部 LLM 报告：
 
@@ -200,7 +202,21 @@ curl http://127.0.0.1:8687/api/v1/health
 `.secret/http-token`；请求使用 `Authorization: Bearer <token>`。当前实现没有限速和
 CORS，不应直接暴露公网。
 
-## 6. 每次修改的验收
+## 6. 飞书格式约束
+
+所有推送到飞书的输出必须仅使用以下格式:
+- `**加粗**` 代替标题层级
+- `` `行内代码` `` 代替代码块
+- `- 列表`
+- `[链接](url)`
+- 空行分隔段落
+
+**禁止**(会导致整条消息降级为纯文本):`#` 标题、`|` 表格、` ``` ` 代码块、`>` 引用、
+`---` 分隔线、`- [ ]` 任务列表、HTML 标签。
+
+此约束已编码在 `agent_task.must_not_do` 和 `output_structure.format_rules` 中。
+
+## 7. 每次修改的验收
 
 ```bash
 uv run ruff check .

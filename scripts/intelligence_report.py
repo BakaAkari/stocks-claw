@@ -186,7 +186,7 @@ try:
     with urllib.request.urlopen(req, timeout=60) as resp:
         result = json.loads(resp.read().decode("utf-8"))
     analysis = result["choices"][0]["message"]["content"]
-except Exception as e:
+except Exception:
     analysis = "综合分析暂时不可用（LLM 接口未响应），数据事实部分已完整展示。"
 
 print("**综合分析**")

@@ -1,3 +1,8 @@
+> **状态:已被实现取代(SUPERSEDED)**
+> 本文档为历史设计稿,其中描述的功能已实现并上线。
+> 现行架构和契约以 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md` 和代码为准。
+> 保留本文仅作设计决策追溯。
+
 # 数据可靠性审计(2026-07-02)— 证据留存
 
 > ARCHIVED 2026-07-02:审计产物,结论已吸收进 `PLAN.md` v2.8 与 `EXECUTION_PLAN.md` Phase D 任务卡;本文**无准则效力**,仅作证据留存与追溯依据。执行 Agent 以 EXECUTION_PLAN D 组为准,勿按本文行事。

@@ -79,7 +79,7 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - `persistence.py`：滚动最小上下文快照与确认建议摘要。
 - `advice_review.py`：建议表现回看与触发器核对（按收盘价，只列事实）。
 - `scheduled_analysis.py`：A 股/美股定时 session 日历、运行产物存储、
-  Agent handoff 任务和通知建议策略。
+  自包含 agent_task v4 指令集(persona/adaptability/data_reference/飞书格式)和通知建议策略。
 - `llm_analysis.py`：默认关闭的兼容报告模块。
 
 ### domain
@@ -156,7 +156,9 @@ uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
 ```
 
 `ScheduledAnalysisRun v1` 包含 session 元数据、持仓估值/PnL、触发器核对、
-action_signals、data_quality、Agent 必答任务、写入策略和通知建议。定时运行只写
+action_signals(含 rank/score)、portfolio_risk(含多因子情景)、data_quality、
+agent_task v4(自包含指令集:persona/adaptability/data_reference/output_structure/
+飞书格式约束)、写入策略和通知建议。定时运行只写
 `.local/scheduled_runs/`，不会自动保存 advice/execution/forecast，也不会修改资产或画像。
 
 ## 5. 金融记忆
@@ -218,7 +220,8 @@ HTTP 是远程接口边界，默认仍递归移除 `amount`、`amount_cny` 和 `
 
 - `.local/history/`：按标的 JSON 历史缓存，默认保留 90 天；按市场交易日去重。
 - `.local/snapshots/`：最多 30 份最小快照。
-- `.local/scheduled_runs/`：定时扫描 JSON/Markdown 产物与 latest 入口。
+- `.local/scheduled_runs/`：定时扫描 JSON 产物与 latest 入口。
+- `.local/news_intelligence/`：每小时情报采集快照、事件聚类和信号(7天在线/30天归档)。
 - `data/cache/`：非隐私缓存，例如汇率；不与密钥目录混用。
 - `.secret/`：API key 与 HTTP token。
 
@@ -246,7 +249,8 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 - `stocks/config/markets.json`
 - `stocks/config/event_calendar.json`：官方已公布的未来事件日程
 - `stocks/config/sector_scan.json`：候选池扫描，带 pool 分层（不进入 watchlist）
-- `stocks/config/scheduled_sessions.json`：A 股/美股定时运行 session、时区与推送策略
+- `stocks/config/scheduled_sessions.json`：A 股/美股/情报定时运行 session、时区与推送策略
+- `scripts/`：定时任务脚本(intelligence_report.py 直接格式化+受控LLM总结、cron 触发脚本)
 
 Engine 配置优先级：环境变量 > YAML > 代码默认值。嵌套键使用双下划线，例如
 `STOCKS_FETCHER__MAX_RETRIES=3`。

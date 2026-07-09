@@ -1,6 +1,6 @@
 # stocks-claw 开发主线计划
 
-> 版本:v4.3(2026-07-06,S3 定时扫描与触发推送工程完成)
+> 版本:v4.4(2026-07-09,多角度专业审查+P0修复+agent_task v4+文档清理)
 > **现行准则只有两份:本文档(方向、规则与状态)+ `EXECUTION_PLAN.md`(任务与验收)。**
 > 北极星是 `stocks/VISION.md`(v2.0);现状描述文档为 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md`、`AGENT_GUIDE.md`(只描述现实,不含路线)。
 > `docs/archive/` 下的一切(含 2026-07-03 归档的 `PLAN_v3.0_20260703.md`、`EXECUTION_PLAN_20260703.md`)无现行效力,仅作历史与参考。
@@ -20,9 +20,9 @@
 > S1/S2 的完整完成记录见 `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;
 > 当前行动入口见 `EXECUTION_PLAN.md`。文档与代码冲突时仍以读码、grep 与测试结果为准。
 
-- **已完成(历史证据见归档件与 EXECUTION_PLAN 完成记录)**:P0 安全、P1 静默错误六项、P2 记忆回路、P3 删减、P4 数据底盘一期、P5 文档收口、M 建议闭环、F0、Phase D、Phase F 重新验收、G0 DecisionEnvelope 契约冻结、**切片 1 建议闭环**、**切片 2 资产数据结构 v2 与止盈止损基建(S2-0~S2-7+S2-E)**、**S2.5 受控扫描池扩容**、**切片 3 定时扫描与触发推送工程实现(S3-1~S3-5)**。当前契约:**AnalysisContext v12、data_quality v10、ScheduledAnalysisRun v1**。
-- **当前验收闸**:S3-E 真实试运行。目标是在 A 股与 IBKR 美股 session 中连续运行一段时间,检查产物是否准时、数据边界是否清楚、Agent 二次分析是否符合用户风格,再决定是否加厚通知渠道、反馈记录或估值层。
-- **未立项候选**:基金净值与贵金属报价 Provider、估值数据层、论点笔记本、组合归因、危机预案、分批执行计划、DecisionPlan 引擎化与内部 LLM 双路径。G0 契约保留为休眠资产,在 DecisionPlan 相关切片立项时接线,期间不得删除。
+- **已完成**:P0 安全、P1 静默错误六项、P2 记忆回路、P3 删减、P4 数据底盘一期、P5 文档收口、M 建议闭环、F0、Phase D、Phase F 重新验收、G0 DecisionEnvelope 契约冻结、**切片 1 建议闭环**、**切片 2 资产数据结构 v2(S2-0~S2-7+S2-E)**、**S2.5 扫描池扩容**、**切片 3 定时扫描与触发推送(S3-1~S3-5+S3-E 真实试运行关闭)**、**global_intelligence_watch 情报管道**、**P0 四项修复(实时汇率、-10%中间止损、信号排名、多因子压力测试)**、**agent_task v4 自包含指令集(persona+adaptability+飞书格式)**、**intelligence_report.py 重写(结构化数据+受控LLM总结)**。当前契约:**AnalysisContext v12、data_quality v10、ScheduledAnalysisRun v1、agent_task v4**。
+- **当前开发方向**:参见 `docs/archive/DEVELOPMENT_DIRECTION_20260709.md`(六角度审查,三层12方向项)。下一步候选:美股第二行情源(Polygon)、组合级资金分配提示。
+- **未立项候选**:基金净值与贵金属报价 Provider、估值数据层、论点笔记本、组合归因、危机预案、分批执行计划。G0 契约保留为休眠资产。
 - **两起必须记住的事故**:①执行 Agent 伪造带 commit hash 的完成记录并勾掉物理上不可能通过的验收;②文档维护方曾未比对内容整体覆盖完成态清单。§6、§7 的规则由此导出,永久有效。
 
 ## 3. 路线原则:价值拉动的切片开发
@@ -80,8 +80,13 @@
 内容:用真实 A 股与 IBKR 美股 session 运行一段时间,验证定时产物是否能稳定支撑
 "盘前/开盘后/收盘前/盘后"分析,并记录需要微调的文本、触发阈值、推送策略和候选池问题。
 
-状态:待用户试用。工程 smoke 证明功能可跑,但跨多天准时性、夜间打扰策略和 Agent
-二次分析风格必须由真实使用反馈关闭。
+状态:S3-E 已关闭。用户试用反馈驱动 5 项调整,工程复核通过。详见决策日志 2026-07-08。
+
+### 已关闭:2026-07-09 审查日 P0 修复
+
+内容:硬编码汇率→实时汇率、-10%中间止损档、信号横截面排序、多因子压力测试;agent_task v4 自包含指令集(persona/adaptability/飞书格式);intelligence_report.py 重写(结构化数据+受控LLM总结,消除 LLM 编造问题);8 个 cron prompt 精简为一行。
+
+状态:已完成。ruff 全绿、pytest 509 passed、compileall 0、CLI smoke 通过。产出 `docs/archive/DEVELOPMENT_DIRECTION_20260709.md` 开发方向建议书。详见决策日志 2026-07-09。
 
 ### 切片候选队列(未排期,禁止开工)
 

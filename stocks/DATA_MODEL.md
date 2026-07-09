@@ -145,7 +145,15 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `trigger_reviews`：最近建议中的触发器核对结果
 - `action_signal_reviews`：本次 session 相关的非 neutral 动作信号
 - `data_quality`：原样保留 `AnalysisContext.data_quality`
-- `agent_task`：Agent 无需再读取 prompt 即可执行的任务说明
+- `agent_task`(v4)：自包含的 Agent 任务说明书,含以下子字段:
+  - `task_version`：4
+  - `must_answer`：session 特定的必答问题(含前瞻展望指令)
+  - `must_not_do`：11+ 条硬性约束(数据忠实性、触发器完整性、飞书格式)
+  - `persona`：分析师人格定义(角色、原则)
+  - `adaptability`：自适应输出规则(silent_when_nothing/loud_when_critical)
+  - `data_reference`：逐字段数据定位指南
+  - `output_structure`：分节输出模板(含飞书格式规则)
+  - `final_analysis_instructions`：一行总结
 - `write_policy`：固定声明后台运行不得写长期金融记忆，写入必须用户确认
 - `notification`：推荐推送策略，通知层只发消息不写金融记忆
 - `context_digest`：市场状态、组合结构、暴露、流动性、粒度与轮动 leader 摘要
@@ -284,6 +292,17 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 静态日程维护在 `stocks/config/event_calendar.json`；财报日来自 Finnhub
 财报日历（只查询 watchlist 美股标的）。窗口由 `calendar.lookahead_days`
 控制（默认 14 天）。
+
+## portfolio_risk 多因子情景
+
+`portfolio_risk.scenario` 在 v4 中扩展为多因子压力测试(2026-07-09):
+
+- 保留简单情景:`market_down_5_pct`、`market_down_10_pct`、`market_up_5_pct`(CNY)
+- 新增多因子情景(每个含 `description`、`impact_cny`、`impact_pct`、`details`):
+  - `global_risk_off`：VIX>30 全球避险,按 exposure_tags 分配冲击系数
+  - `china_shock`：中国特定政策冲击
+  - `inflation_commodity`：通胀/大宗商品冲击
+- 计算方法:`exposure_tag_weighted`——每笔持仓取第一个匹配标签的冲击系数,不重复计算
 
 ## rotation（板块轮动脚手架）
 
