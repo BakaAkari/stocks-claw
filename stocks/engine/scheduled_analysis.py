@@ -576,7 +576,7 @@ def build_intelligence_run(
 def build_intelligence_agent_task(session: ScheduledSession) -> dict:
     """构建自包含的情报巡逻 Agent 任务说明书。"""
     return {
-        "task_version": 3,
+        "task_version": 4,
         "language": "zh-CN",
         "audience": "single_user",
         "session_intent": session.intent,
@@ -610,9 +610,23 @@ def build_intelligence_agent_task(session: ScheduledSession) -> dict:
                 {"name": "数据边界", "content": "数据时效、来源质量、缺失字段"},
             ],
         },
+        "persona": {
+            "role": "你是用户的全球市场情报分析师。你的工作是扫描全球新闻和宏观数据，发现可能影响用户组合的事件和趋势。",
+            "principles": [
+                "只报真正重要的事件，不报噪音",
+                "每个事件必须说明'为什么重要'和'可能影响什么'",
+                "引用具体数字，不泛泛而谈",
+                "没有重要事件时诚实说'本小时无重大事件'，不编造",
+            ],
+        },
+        "adaptability": {
+            "silent_when_quiet": "如果无 urgency=critical 的事件且无新信号 → 输出缩至 3-5 句话",
+            "detail_when_active": "如果有 critical 事件或多个新信号 → 展开至 900 字",
+        },
         "final_analysis_instructions": (
-            "输出分为五节：标题 → 核心事件 → 市场快照 → 操作信号 → 数据边界。"
-            "严格遵守 must_not_do。事件和信号必须引用 intelligence_digest 中的实际数据。"
+            "阅读 persona 理解你的角色。根据 adaptability 决定输出篇幅。"
+            "输出通常含五节（标题→核心事件→市场快照→操作信号→数据边界），"
+            "但无重要事件时可大幅压缩。严格遵守 must_not_do。事件和信号必须引用实际数据。"
         ),
     }
 
@@ -709,7 +723,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
     }
 
     return {
-        "task_version": 3,
+        "task_version": 4,
         "language": "zh-CN",
         "audience": "single_user",
         "session_intent": session.intent,
@@ -780,12 +794,32 @@ def build_agent_task(session: ScheduledSession) -> dict:
             ],
         },
 
+        # ── 分析师人格（塑造输出风格） ──
+        "persona": {
+            "role": "你是用户的私人投资分析师，不是市场播报员。你了解用户的每一笔持仓、成本和偏好。",
+            "principles": [
+                "用第一人称对用户说话：'你的电力ETF'，不是'电力ETF'",
+                "决策给选项，不给命令：'有三个选择：A)… B)… C)… 我倾向A，因为…'",
+                "没变化就直说：'今天没有触发新动作，继续持有'——不要为了凑字数编内容",
+                "有新信息才展开：情报管道发现了值得关注的变化？展开。什么都没变？缩到三句话",
+                "引用具体数字：'科创100ETF rank#1，20日涨了8.2%，RSI 53——这意味着…'",
+                "主动提醒风险：'你的组合里A股中小盘+美股科技占比X%，这两个在VIX飙升时会同时挨打'",
+                "引用上次建议（如果 relevant）：'上次你说等电力反弹到X再动，现在又跌了Y%，原来的计划还成立吗？'",
+            ],
+        },
+
+        # ── 自适应输出（根据内容调整篇幅） ──
+        "adaptability": {
+            "silent_when_nothing": "如果 action_cards 全部是 hold + 无触发器 fired + 无情报变化 → 输出可缩至 3-5 句话，不强制展开所有六节",
+            "loud_when_critical": "如果有 stop_loss 或 loss_level=severe 或 intelligence urgency=critical → 把这些放在最前面，篇幅可扩展到 1500 字",
+            "forward_outlook_minimum": "即使当日无持仓动作，前瞻展望段仍必须给出至少 1-2 个方向（基于 intelligence_digest + rotation_leaders）",
+        },
+
         # ── 最终指令（一行总结，Agent 也可只读此字段快速理解任务） ──
         "final_analysis_instructions": (
-            "输出分为六节：标题 → 一句话执行结论 → 持仓动作（按 action_cards 严重度排序）→ "
-            "前瞻展望（综合 intelligence_digest+rotation_leaders+exposure_summary，3+ 方向）→ "
-            "风险与数据边界（引用 portfolio_risk.scenario 多因子情景）→ 免责声明。"
-            "严格遵守 must_not_do 的每一条。数据引用以 data_reference 为准。"
+            "阅读 persona 理解你的角色。根据 adaptability 决定输出篇幅。"
+            "输出通常含六节（标题→执行结论→持仓动作→前瞻展望→风险边界→免责），"
+            "但当无变化时可大幅压缩。严格遵守 must_not_do。数据引用以 data_reference 为准。"
         ),
     }
 
