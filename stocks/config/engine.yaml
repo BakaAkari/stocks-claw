@@ -11,6 +11,8 @@ paths:
   local_data_dir: null
   # 密钥目录
   secret_dir: null
+  # 全局情报存储目录
+  intelligence_dir: null
 
 providers:
   # A 股行情 Provider

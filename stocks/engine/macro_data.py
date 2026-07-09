@@ -240,12 +240,9 @@ class FredMacroProvider:
     ) -> dict[str, list[tuple[str, float]]]:
         start = (datetime.now(timezone.utc).date() - timedelta(days=800)).isoformat()
         query = urllib.parse.urlencode({"id": ",".join(series_ids), "cosd": start})
-        request = urllib.request.Request(
-            f"https://fred.stlouisfed.org/graph/fredgraph.csv?{query}",
-            headers={"User-Agent": "stocks-claw/1.0"},
-        )
-        with urllib.request.urlopen(request, timeout=self._timeout) as response:
-            text = response.read().decode("utf-8-sig")
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?{query}"
+        raw = self._fetch_url_with_fallback(url)
+        text = self._decode_csv_response(raw)
         reader = csv.DictReader(io.StringIO(text))
         observations: dict[str, list[tuple[str, float]]] = {
             series_id: [] for series_id in series_ids
@@ -263,6 +260,62 @@ class FredMacroProvider:
                 except ValueError:
                     continue
         return observations
+
+    def _fetch_url_with_fallback(self, url: str) -> bytes:
+        """Fetch URL; fallback to curl if urllib times out or is blocked."""
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "stocks-claw/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                return response.read()
+        except Exception as urllib_exc:  # noqa: BLE001
+            logger = get_logger("fred_macro")
+            logger.warning(f"urllib fetch failed, trying curl: {urllib_exc}")
+            import subprocess as sp
+            result = sp.run(
+                ["curl", "-sS", "-L", "-m", "30", url],
+                capture_output=True,
+                timeout=35,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"curl failed: {result.stderr.decode('utf-8', errors='ignore')}") from urllib_exc
+            return result.stdout
+
+    def _decode_csv_response(self, raw: bytes) -> str:
+        """Decode FRED response, handling both plain CSV and ZIP archives."""
+        if raw.startswith(b"PK\x03\x04"):
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                csv_files = [n for n in zf.namelist() if n.endswith(".csv")]
+                if not csv_files:
+                    raise ValueError("ZIP archive contains no CSV files")
+                # Merge all CSV files into a single observation table keyed by date.
+                merged: dict[str, dict[str, str]] = {}
+                for csv_name in csv_files:
+                    with zf.open(csv_name) as f:
+                        csv_text = f.read().decode("utf-8-sig")
+                    reader = csv.DictReader(io.StringIO(csv_text))
+                    for row in reader:
+                        date = row.get("DATE") or row.get("observation_date")
+                        if not date:
+                            continue
+                        merged.setdefault(date, {}).update(row)
+                output = io.StringIO()
+                # Use union of all keys from merged rows; ensure observation_date first.
+                fieldnames = {"observation_date"}
+                for row in merged.values():
+                    fieldnames.update(row.keys())
+                fieldnames = ["observation_date"] + [k for k in fieldnames if k != "observation_date"]
+                writer = csv.DictWriter(output, fieldnames=fieldnames)
+                writer.writeheader()
+                for date in sorted(merged.keys()):
+                    row = merged[date]
+                    row["observation_date"] = date
+                    writer.writerow(row)
+                return output.getvalue()
+        return raw.decode("utf-8-sig")
 
     async def _fetch_series(self, series_id: str) -> list[tuple[str, float]]:
         return await asyncio.to_thread(self._fetch_series_sync, series_id)
