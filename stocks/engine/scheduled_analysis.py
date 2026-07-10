@@ -468,9 +468,25 @@ def build_scheduled_run(
         for s in (intel_digest.get("top_signals") or [])
         if s.get("symbol")
     }
+    # 提取多维度交叉分析上下文
+    market_state = context.get("market_state") or {}
+    intel_digest_full = context.get("intelligence_digest") or {}
+    event_clusters = intel_digest_full.get("top_clusters") or []
+    data_freshness = (context.get("data_quality") or {}).get("quotes", {}).get("freshness", "fresh")
+    rotation_data = context.get("rotation") or {}
+    rotation_ranks = {
+        item["symbol"]: item.get("rank")
+        for item in rotation_data.get("items", [])
+        if item.get("rank")
+    }
+
     action_cards = _build_action_cards(
         context.get("position_valuations") or [],
         intelligence_signals=intel_signals if intel_signals else None,
+        market_state=market_state,
+        event_clusters=event_clusters,
+        data_freshness=data_freshness,
+        rotation_ranks=rotation_ranks if rotation_ranks else None,
     )
     portfolio_risk = _build_portfolio_risk_summary(context.get("position_valuations") or [])
     session_intent_props = _session_intent_props(session.id)
@@ -1131,6 +1147,11 @@ _INTEL_PROXY_MAP: dict[str, str] = {
 def _build_action_cards(
     position_valuations: list[dict],
     intelligence_signals: Optional[dict[str, dict]] = None,
+    *,
+    market_state: Optional[dict] = None,
+    event_clusters: Optional[list[dict]] = None,
+    data_freshness: str = "fresh",
+    rotation_ranks: Optional[dict[str, int]] = None,
 ) -> list[dict]:
     """为每个持仓计算量化行动卡。
 
@@ -1197,6 +1218,17 @@ def _build_action_cards(
             one_day_change_pct=item.get("one_day_change_pct"),
             current_weight_pct=item.get("portfolio_weight"),
             quantity=(item.get("holding") or {}).get("quantity") if item.get("holding") else None,
+        )
+
+        # 多维度交叉分析叠加：宏观 + 事件 + 数据新鲜度 + 轮动
+        from stocks.engine.quant_action import MacroOverlay
+        MacroOverlay.apply(
+            review,
+            market_state=market_state,
+            event_clusters=event_clusters,
+            data_freshness=data_freshness,
+            rotation_ranks=rotation_ranks,
+            position_id=pid,
         )
 
         # 非 rebalance_eligible 资产降低仓位上限并加注谨慎标记

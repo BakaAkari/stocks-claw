@@ -51,6 +51,121 @@ class QuantReview:
     intelligence_conflict: str = "none"  # none, caution, override
 
 
+# ── 持仓 → 事件主题映射 ──
+_POSITION_EVENT_THEMES: dict[str, list[str]] = {
+    "us_xle": ["energy", "geopolitics"],
+    "us_nvda": ["technology", "earnings", "monetary_policy"],
+    "us_ita": ["geopolitics", "defense"],
+    "us_nem": ["gold", "geopolitics", "monetary_policy"],
+    "us_sgov": ["monetary_policy"],
+    "a_512480": ["technology", "earnings"],
+    "a_588000": ["technology", "china_policy"],
+    "a_561560": ["china_policy", "energy"],
+    "a_512890": ["defensive", "monetary_policy", "china_policy"],
+    "a_510300": ["china_policy", "monetary_policy"],
+    "alipay_gold": ["gold"],
+    "ccb_gold": ["gold"],
+    "alipay_gf_nasdaq": ["technology", "earnings"],
+    "alipay_dc_nasdaq": ["technology", "earnings"],
+}
+
+
+class MacroOverlay:
+    """多维度交叉分析覆盖层。
+
+    在 QuantActionEngine 的技术面分析之后，叠加：
+    1. 市场风险状态 → 全局降权
+    2. 事件聚类 → 主题匹配降权/确认
+    3. 数据新鲜度 → 信号可信度降权
+    4. 轮动排名 → 加仓信号验证
+    """
+
+    @staticmethod
+    def apply(
+        review,  # QuantReview (mutated in place)
+        *,
+        market_state: dict | None = None,
+        event_clusters: list[dict] | None = None,
+        data_freshness: str = "fresh",
+        rotation_ranks: dict[str, int] | None = None,
+        position_id: str = "",
+    ) -> None:
+        """对单个持仓的 QuantReview 应用所有维度叠加。"""
+        ms = market_state or {}
+        clusters = event_clusters or []
+        ranks = rotation_ranks or {}
+
+        # ── 1. 市场风险状态 ──
+        risk = ms.get("risk_appetite", "unknown")
+        if risk in ("risk_off", "panic"):
+            if review.signal in ("add", "accumulate"):
+                review.ratio *= 0.5
+                review.facts.append(f"市场风险状态={risk}，加仓信号降权 50%")
+        if risk == "panic" and review.signal in ("add", "accumulate"):
+            review.ratio = 0.0
+            review.facts.append("市场恐慌，暂停加仓")
+
+        # ── 2. 事件聚类覆盖 ──
+        themes = _POSITION_EVENT_THEMES.get(position_id, [])
+        for c in clusters:
+            c_theme = c.get("theme", "")
+            c_urgency = c.get("urgency", "medium")
+            c_sentiment = c.get("sentiment", "neutral")
+
+            if c_theme not in themes:
+                continue
+
+            # critical 负面事件 → 暂停非止损动作
+            if c_urgency == "critical" and c_sentiment == "negative":
+                if review.signal in ("add", "accumulate"):
+                    review.ratio = 0.0
+                    review.facts.append(
+                        f"情报 CRITICAL: [{c_theme}] {c.get('summary', '')[:80]} → 暂停加仓"
+                    )
+                elif review.signal in ("reduce", "reduce_risk", "take_profit"):
+                    review.facts.append(
+                        f"情报 CRITICAL: [{c_theme}] {c.get('summary', '')[:80]} → 确认减仓方向"
+                    )
+
+            # 正面事件 → 确认加仓
+            if c_sentiment == "positive" and review.signal == "add":
+                review.facts.append(
+                    f"情报确认: [{c_theme}] {c.get('summary', '')[:80]}"
+                )
+
+        # ── 3. 数据新鲜度 ──
+        if data_freshness == "stale":
+            if review.signal not in ("hold", "wait"):
+                review.ratio *= 0.5
+                review.facts.append("行情延迟（非实时），信号降权 50%")
+        elif data_freshness in ("very_stale", "unknown"):
+            if review.signal not in ("hold", "wait", "stop_loss"):
+                review.ratio = 0.0
+                review.facts.append("行情严重延迟，仅止损信号保留")
+
+        # ── 4. 轮动排名验证 ──
+        # 使用 symbol（而非 position_id）查轮动数据
+        intel_symbol = _POSITION_INTEL_SYMBOL_MAP_FOR_OVERLAY.get(position_id)
+        if intel_symbol and intel_symbol in ranks:
+            rank = ranks[intel_symbol]
+            if rank and rank <= 3 and review.signal == "add":
+                review.facts.append(f"轮动排名 #{rank}，加仓信号获动量确认")
+
+
+# ── 持仓 → 轮动 symbol 映射（复用 intel 映射逻辑）──
+_POSITION_INTEL_SYMBOL_MAP_FOR_OVERLAY: dict[str, str] = {
+    "us_xle": "us:XLE",
+    "us_nvda": "us:NVDA",
+    "us_ita": "us:ITA",
+    "us_nem": "us:NEM",
+    "a_512480": "a:512480",
+    "a_588000": "a:588000",
+    "a_561560": "a:561560",
+    "a_512890": "a:512890",
+    "a_510300": "a:510300",
+}
+
+
 class QuantActionEngine:
     """把规则偏好翻译成具体行动。"""
 
