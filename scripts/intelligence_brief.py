@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""全球情报小时巡逻 — 纯数据采集+事件聚类，不调 LLM。
+"""全球情报小时巡逻 — 结构化数据 + 轻量 LLM 总结。
 
 产出两样东西：
-1. stdout — 结构化数据文本，供 hourly cron 直接推送飞书
-2. .local/intelligence/latest_brief.json — 紧凑情报摘要，供推送 Agent 读取
+1. stdout — 结构化数据 + 3-5 句中文总结，供 hourly cron 直接推送飞书
+2. .local/intelligence/latest_brief.json — 紧凑情报摘要，供推送 Agent 读取（不含 LLM）
 
-推送 Agent 在构造推送时读取 brief JSON，自己做综合分析。
-不再有独立的 LLM 情报分析调用。
+推送 Agent 读 brief JSON 做完整分析；hourly 推送只需快速扫描总结。
 """
 import json
-import time
+import os
+import urllib.request
 from pathlib import Path
-from collections import defaultdict
 
 PROJECT_ROOT = Path("/mnt/user/code-project/stocks-claw")
 LATEST = PROJECT_ROOT / ".local/scheduled_runs/latest/global_intelligence_watch.json"
@@ -35,7 +34,6 @@ THEME_EXPOSURE_MAP = {
 
 
 def _clean_title(title: str) -> str:
-    """Strip HTML entities and RSS cruft from titles."""
     title = title.replace("&nbsp;&nbsp;", " — ")
     title = title.replace("&amp;", "&")
     title = title.replace("&#39;", "'")
@@ -43,7 +41,6 @@ def _clean_title(title: str) -> str:
 
 
 def _dedup_articles(articles: list) -> list:
-    """Dedup articles by title prefix (first 80 chars)."""
     seen = set()
     result = []
     for a in articles:
@@ -55,14 +52,12 @@ def _dedup_articles(articles: list) -> list:
 
 
 def build_brief(data: dict) -> dict:
-    """Build compact intelligence brief from raw watch data."""
     digest = data.get("context_digest", {})
     clusters = digest.get("clusters", []) or []
     signals = digest.get("signals", []) or []
     macro = digest.get("macro", {}) or {}
     quotes = digest.get("quotes", {}) or {}
 
-    # ── Macro ──
     macro_compact = {}
     for key, label in [
         ("vix", "VIX"), ("us_10y_yield", "US10Y"),
@@ -73,7 +68,6 @@ def build_brief(data: dict) -> dict:
         if val is not None:
             macro_compact[label] = round(val, 2) if isinstance(val, float) else val
 
-    # ── Key movers ──
     movers = []
     for sym, q in quotes.items():
         if isinstance(q, dict) and q.get("pct_change") is not None:
@@ -84,7 +78,6 @@ def build_brief(data: dict) -> dict:
             })
     movers.sort(key=lambda x: abs(x["pct"]), reverse=True)
 
-    # ── Clusters (deduped, compact) ──
     cluster_briefs = []
     for c in clusters:
         articles = _dedup_articles(c.get("articles", []))
@@ -105,7 +98,6 @@ def build_brief(data: dict) -> dict:
             "cluster_id": c.get("cluster_id", ""),
         })
 
-    # ── Signals ──
     signal_briefs = []
     for s in signals:
         signal_briefs.append({
@@ -127,7 +119,6 @@ def build_brief(data: dict) -> dict:
 
 
 def format_stdout(brief: dict) -> str:
-    """Format structured data for hourly Feishu delivery."""
     lines = []
     ts = brief["collected_at"]
     cluster_count = brief["cluster_count"]
@@ -144,19 +135,16 @@ def format_stdout(brief: dict) -> str:
         lines.append(f"本小时 {cluster_count} 个事件主题: {', '.join(themes[:5])}")
     lines.append("")
 
-    # Macro
     if brief["macro"]:
         items = [f"{k} {v}" for k, v in brief["macro"].items()]
         lines.append(f"**宏观** {' | '.join(items)}")
         lines.append("")
 
-    # Key movers
     if brief["key_movers"]:
         m = [f"{qm['symbol']} {qm['pct']:+.2f}%" for qm in brief["key_movers"][:10]]
         lines.append(f"**行情** {' | '.join(m)}")
         lines.append("")
 
-    # Clusters
     if brief["clusters"]:
         lines.append("**事件**")
         for c in brief["clusters"][:8]:
@@ -167,12 +155,18 @@ def format_stdout(brief: dict) -> str:
             )
         lines.append("")
 
-    # Signals
     if brief["signals"]:
         lines.append("**信号**")
         for s in brief["signals"]:
             d = {"buy": "买入", "sell": "卖出"}.get(s["direction"], s["direction"])
             lines.append(f"- {d} `{s['symbol']}` — {s['rationale'][:120]}")
+        lines.append("")
+
+    # LLM 快速总结
+    summary = _llm_summary(brief)
+    if summary:
+        lines.append("**快速总结**")
+        lines.append(summary)
         lines.append("")
 
     lines.append(
@@ -183,6 +177,71 @@ def format_stdout(brief: dict) -> str:
     return "\n".join(lines)
 
 
+def _llm_summary(brief: dict) -> str:
+    """调用 LLM 生成 3-5 句中文市场总结。仅引用已展示的数据。"""
+    api_key = os.environ.get("OPENAI_COMPATIBLE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return ""
+
+    base_url = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
+
+    # 构建紧凑数据块
+    parts = []
+    if brief["macro"]:
+        parts.append("宏观: " + ", ".join(f"{k}={v}" for k, v in brief["macro"].items()))
+    if brief["key_movers"]:
+        m = [f"{qm['symbol']} {qm['pct']:+.2f}%" for qm in brief["key_movers"][:6]]
+        parts.append("显著波动: " + ", ".join(m))
+    if brief["clusters"]:
+        c_parts = []
+        for c in brief["clusters"][:4]:
+            c_parts.append(f"[{c['theme']}] urgency={c['urgency']} {c['title'][:100]}")
+        parts.append("事件: " + " | ".join(c_parts))
+    if brief["signals"]:
+        s_parts = []
+        for s in brief["signals"]:
+            s_parts.append(f"{s['direction']} {s['symbol']}: {s['rationale'][:60]}")
+        parts.append("信号: " + " | ".join(s_parts))
+
+    data_block = "\n".join(parts)
+
+    system = (
+        "你是全球市场快讯编辑。基于已列出的事实数据，用中文写 3-5 句话总结。\n"
+        "硬性约束:\n"
+        "- 只能引用上面已列出的数据，不得编造\n"
+        "- 格式: 飞书纯文本，用**加粗**标关键变化\n"
+        "- 内容: 一句话宏观 + 最值得关注的 1-2 个事件 + 对用户组合的提醒\n"
+        "- 不超过 150 字\n"
+        "- 不承诺收益"
+    )
+
+    payload = json.dumps({
+        "model": "deepseek-v4-pro",
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"本小时数据:\n\n{data_block}\n\n请总结。"},
+        ],
+        "temperature": 1,
+        "max_tokens": 300,
+    }, ensure_ascii=False).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        return result["choices"][0]["message"]["content"].strip()
+    except Exception:
+        return ""
+
+
 def main():
     if not LATEST.exists():
         print("No latest artifact found")
@@ -191,13 +250,11 @@ def main():
     data = json.loads(LATEST.read_text())
     brief = build_brief(data)
 
-    # Write brief for push agents
     BRIEF_PATH.mkdir(parents=True, exist_ok=True)
     BRIEF_FILE.write_text(
         json.dumps(brief, ensure_ascii=False, indent=2)
     )
 
-    # Print for hourly delivery
     print(format_stdout(brief))
 
 
