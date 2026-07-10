@@ -691,9 +691,17 @@ def build_agent_task(session: ScheduledSession) -> dict:
     不依赖任何外部 prompt。任何 Agent 读取 JSON 后，
     严格按此任务说明书执行即可生成完整分析推送。
     """
+    # ── 情报 brief 读取指令（所有 session 类型共用） ──
+    _intel_brief_task = (
+        "【情报要点】读取 .local/intelligence/latest_brief.json"
+        " — 提取 2-3 条与用户持仓最相关的事件，每条标注来源标题和发布时间。"
+        "结合 clusters.portfolio_relevance 字段判断哪些事件影响用户组合"
+    )
+
     must_answer_by_intent = {
         "pre_open_plan": [
             "今天重点盯哪些已有持仓和触发器",
+            _intel_brief_task,
             "【前瞻展望】综合分析以下四层信息，给出未来1-2周最值得关注的板块和方向（不少于3个）：",
             "  (a) intelligence_digest.top_clusters — 情报管道识别到的事件主题和影响",
             "  (b) intelligence_digest.top_signals — 情报管道给出的方向性信号",
@@ -705,22 +713,26 @@ def build_agent_task(session: ScheduledSession) -> dict:
         ],
         "open_watch": [
             "开盘后已有持仓是否出现异常跳空、破位或过热",
+            _intel_brief_task,
             "是否需要等待收盘确认",
             "数据质量是否足以支持盘中判断",
         ],
         "pre_close_decision": [
             "收盘前已有持仓是否需要动",
             "哪些触发器已经触发或接近触发",
+            _intel_brief_task,
             "【前瞻展望】综合分析 intelligence_digest + rotation_leaders + exposure_summary，给出未来1-2周最值得关注的板块和方向（不少于3个），每个方向写明依据和对应标的",
             "是否有不应追高或不应补弱的标的",
         ],
         "after_close_review": [
             "今天触发器和持仓事实如何复盘",
+            _intel_brief_task,
             "明天开盘前重点看什么",
             "是否需要让用户补录数据或确认长期记录",
         ],
         "mid_session_check": [
             "盘中波动是否改变已有计划",
+            _intel_brief_task,
             "是否存在 critical 风险",
             "是否应保持只生成不推送",
         ],
@@ -762,6 +774,12 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "严禁使用 --- 分隔线",
             "严禁使用 - [ ] 任务列表",
             "严禁使用任何 HTML 标签",
+            # 情报来源约束
+            "情报引用必须标注来源标题和发布时间，严禁自编'市场传闻''据悉''有消息称'",
+            "情报分析只能基于 intelligence_digest 和 .local/intelligence/latest_brief.json 中已有的事实数据",
+            # 数据缺口时效
+            "数据缺口首次出现时标注'新增'；连续出现时注明'持续N次'；超过7天的缺口降级为脚注，超过30天不再显示",
+            "场外基金手工估值、宏观数据滞后等结构性缺口只在一处集中说明，不在每笔持仓下重复标注",
         ],
 
         # ── 数据字段引用指南 ──
@@ -771,6 +789,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "风险仪表盘": "portfolio_risk.scenario — global_risk_off / china_shock / inflation_commodity 三个多因子情景",
             "持仓事实": "position_reviews[] — 逐持仓估值、盈亏、session_facts（含 severe_loss 标注）",
             "情报": "intelligence_digest — top_clusters（事件聚类）、top_signals（方向信号）",
+            "情报brief": ".local/intelligence/latest_brief.json — clusters（含portfolio_relevance）、signals、macro（每小时更新）",
             "轮动": "rotation_leaders — 轮动排名领涨的板块和标的",
             "组合": "exposure_summary.top — 组合暴露分布和潜在缺口",
         },
@@ -792,6 +811,10 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 {
                     "name": "持仓动作",
                     "content": "逐持仓列出关键动作：优先 stop_loss > severe_loss > take_profit > accumulate",
+                },
+                {
+                    "name": "情报要点",
+                    "content": "引用 .local/intelligence/latest_brief.json 中 2-3 条与用户持仓最相关的事件，每条标注来源和发布时间",
                 },
                 {
                     "name": "前瞻展望",
