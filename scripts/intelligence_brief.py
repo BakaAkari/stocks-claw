@@ -16,6 +16,7 @@ PROJECT_ROOT = Path("/mnt/user/code-project/stocks-claw")
 LATEST = PROJECT_ROOT / ".local/scheduled_runs/latest/global_intelligence_watch.json"
 BRIEF_PATH = PROJECT_ROOT / ".local/intelligence"
 BRIEF_FILE = BRIEF_PATH / "latest_brief.json"
+ENV_FILE = Path("/opt/data/.env")
 
 # ── Theme → portfolio exposure tags ──
 THEME_EXPOSURE_MAP = {
@@ -31,6 +32,18 @@ THEME_EXPOSURE_MAP = {
     "financials": "无直接持仓",
     "real_estate": "无直接持仓",
 }
+
+
+def _load_api_key() -> str:
+    """从 .env 加载 LLM API key（不依赖 shell export）。"""
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("OPENAI_COMPATIBLE_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+            if line.startswith("OPENAI_API_KEY=") and "COMPATIBLE" not in line:
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return os.environ.get("OPENAI_COMPATIBLE_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
 
 
 def _clean_title(title: str) -> str:
@@ -179,13 +192,12 @@ def format_stdout(brief: dict) -> str:
 
 def _llm_summary(brief: dict) -> str:
     """调用 LLM 生成 3-5 句中文市场总结。仅引用已展示的数据。"""
-    api_key = os.environ.get("OPENAI_COMPATIBLE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    api_key = _load_api_key()
     if not api_key:
         return ""
 
     base_url = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
 
-    # 构建紧凑数据块
     parts = []
     if brief["macro"]:
         parts.append("宏观: " + ", ".join(f"{k}={v}" for k, v in brief["macro"].items()))
