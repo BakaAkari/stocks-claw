@@ -48,6 +48,7 @@ class QuantReview:
     current_weight_pct: Optional[float]
     risk_to_stop_pct: Optional[float]
     risk_amount_cny: Optional[float]
+    intelligence_conflict: str = "none"  # none, caution, override
 
 
 class QuantActionEngine:
@@ -200,6 +201,48 @@ class QuantActionEngine:
             current_weight_pct, price, quantity,
         )
 
+    def resolve_intelligence_conflict(
+        self,
+        signal: str,
+        intelligence_signals: Optional[dict[str, dict]] = None,
+        position_symbol: Optional[str] = None,
+    ) -> str:
+        """对比技术面信号与情报面信号，返回冲突级别。
+
+        Returns:
+            "none" — 无冲突或情报缺失
+            "caution" — 情报反向但非 critical，建议减半执行
+            "override" — critical 情报反向，暂停等待确认
+        """
+        if not intelligence_signals or not position_symbol:
+            return "none"
+        intel = intelligence_signals.get(position_symbol)
+        if not intel:
+            return "none"
+
+        intel_dir = intel.get("direction", "")
+        intel_urgency = intel.get("urgency", "medium")
+
+        # 判断技术面方向
+        tech_bullish = signal in ("add", "accumulate", "take_profit")
+        tech_bearish = signal in ("reduce", "stop_loss", "reduce_risk")
+        intel_bullish = intel_dir == "buy"
+        intel_bearish = intel_dir == "sell"
+
+        if not (tech_bullish or tech_bearish):
+            return "none"
+        if not (intel_bullish or intel_bearish):
+            return "none"
+
+        # 同向 = 无冲突
+        if (tech_bullish and intel_bullish) or (tech_bearish and intel_bearish):
+            return "none"
+
+        # 反向冲突
+        if intel_urgency == "critical":
+            return "override"
+        return "caution"
+
     def _build(
         self,
         position_id: str,
@@ -252,6 +295,7 @@ class QuantActionEngine:
             current_weight_pct=current_weight_pct,
             risk_to_stop_pct=risk_to_stop_pct,
             risk_amount_cny=risk_amount_cny,
+            intelligence_conflict="none",
         )
 
 

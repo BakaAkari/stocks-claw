@@ -5,6 +5,7 @@ cron/launchd and to hand a structured JSON artifact to the user-facing Agent.
 """
 
 from __future__ import annotations
+from typing import Optional
 
 import json
 from dataclasses import dataclass
@@ -430,7 +431,21 @@ def build_scheduled_run(
         context.get("position_valuations") or [],
         recent_advice=context.get("recent_advice") or [],
     )
-    action_cards = _build_action_cards(context.get("position_valuations") or [])
+    # 提取情报信号供 action_card 冲突检测
+    intel_digest = context.get("intelligence_digest") or {}
+    intel_signals: dict[str, dict] = {
+        s.get("symbol", ""): {
+            "direction": s.get("direction", ""),
+            "urgency": s.get("urgency", "medium"),
+            "rationale": s.get("rationale", ""),
+        }
+        for s in (intel_digest.get("top_signals") or [])
+        if s.get("symbol")
+    }
+    action_cards = _build_action_cards(
+        context.get("position_valuations") or [],
+        intelligence_signals=intel_signals if intel_signals else None,
+    )
     portfolio_risk = _build_portfolio_risk_summary(context.get("position_valuations") or [])
     session_intent_props = _session_intent_props(session.id)
     action_signal_reviews = _build_action_signal_reviews(
@@ -1059,15 +1074,71 @@ def _collect_position_triggers(recent_advice: list[dict]) -> dict[str, list[dict
     return result
 
 
-def _build_action_cards(position_valuations: list[dict]) -> list[dict]:
-    """为每个持仓计算量化行动卡。"""
+# position_id → intelligence signal symbol mapping
+_POSITION_INTEL_SYMBOL_MAP = {
+    "us_xle": "XLE",
+    "us_nvda": "NVDA",
+    "us_ita": "ITA",
+    "us_nem": "NEM",
+    "a_512480": "512480",
+    "a_588000": "588000",
+    "a_561560": "561560",
+    "a_512890": "512890",
+    "a_510300": "510300",
+}
+
+# 情报代理映射：情报信号的 symbol 可能不等于持仓ID的 symbol
+# 例如 USO 情报信号影响 XLE 能源持仓
+_INTEL_PROXY_MAP: dict[str, str] = {
+    "USO": "us_xle",   # USO 原油ETF → XLE 能源持仓
+    "XLE": "us_xle",
+    "NVDA": "us_nvda",
+    "ITA": "us_ita",
+    "NEM": "us_nem",
+    "512480": "a_512480",
+    "588000": "a_588000",
+}
+
+
+def _build_action_cards(
+    position_valuations: list[dict],
+    intelligence_signals: Optional[dict[str, dict]] = None,
+) -> list[dict]:
+    """为每个持仓计算量化行动卡。
+
+    Args:
+        position_valuations: 持仓估值列表
+        intelligence_signals: {symbol: {direction, urgency, rationale}} 情报信号
+    """
 
     cards = []
     for item in position_valuations:
+        pid = item.get("position_id", "")
+        mv = item.get("market_value_cny")
+
+        # 跳过已清仓或估值为 0 的持仓
+        if mv is None or mv <= 0:
+            qty = (item.get("holding") or {}).get("quantity", 0) if item.get("holding") else 0
+            cards.append({
+                "position_id": pid,
+                "signal": "hold",
+                "action": "已清仓，无持仓" if qty == 0 else "持仓为零，无需操作",
+                "ratio": 0.0,
+                "facts": [],
+                "stop_price": None,
+                "target_prices": [],
+                "position_limit_pct": 5.0,
+                "current_weight_pct": 0.0,
+                "risk_to_stop_pct": None,
+                "risk_amount_cny": None,
+                "intelligence_conflict": "none",
+            })
+            continue
+
         indicators = item.get("indicators") or {}
         engine = QuantActionEngine(indicators)
         review = engine.review_position(
-            position_id=item.get("position_id", ""),
+            position_id=pid,
             price=item.get("price"),
             cost=item.get("cost_amount"),
             pnl_pct=item.get("pnl_pct"),
@@ -1075,11 +1146,41 @@ def _build_action_cards(position_valuations: list[dict]) -> list[dict]:
             current_weight_pct=item.get("portfolio_weight"),
             quantity=(item.get("holding") or {}).get("quantity") if item.get("holding") else None,
         )
+
+        # 情报面冲突检测：先查代理映射（intel symbol → position_id），再查直接映射
+        intel_symbol = None
+        for intel_sym, mapped_pid in _INTEL_PROXY_MAP.items():
+            if mapped_pid == pid and intel_sym in (intelligence_signals or {}):
+                intel_symbol = intel_sym
+                break
+        if not intel_symbol:
+            intel_symbol = _POSITION_INTEL_SYMBOL_MAP.get(pid)
+        conflict = engine.resolve_intelligence_conflict(
+            review.signal, intelligence_signals, intel_symbol
+        )
+
+        # 根据冲突级别调权
+        adjusted_ratio = review.ratio
+        if conflict == "caution" and review.ratio != 0:
+            adjusted_ratio = review.ratio * 0.5
+        elif conflict == "override" and review.signal not in ("hold", "wait"):
+            review.facts.append(
+                f"情报冲突（{intel_symbol} {intelligence_signals.get(intel_symbol, {}).get('direction', '?')}），"
+                f"暂停执行等待情报确认"
+            )
+            adjusted_ratio = 0.0
+
+        if conflict != "none" and intel_symbol:
+            intel = intelligence_signals.get(intel_symbol, {}) if intelligence_signals else {}
+            review.facts.append(
+                f"情报面: {intel.get('direction', '?')} {intel_symbol} — {intel.get('rationale', '')[:80]}"
+            )
+
         cards.append({
             "position_id": review.position_id,
             "signal": review.signal,
             "action": review.action,
-            "ratio": review.ratio,
+            "ratio": adjusted_ratio,
             "facts": review.facts,
             "stop_price": review.stop_price,
             "target_prices": review.target_prices,
@@ -1087,6 +1188,7 @@ def _build_action_cards(position_valuations: list[dict]) -> list[dict]:
             "current_weight_pct": review.current_weight_pct,
             "risk_to_stop_pct": review.risk_to_stop_pct,
             "risk_amount_cny": review.risk_amount_cny,
+            "intelligence_conflict": conflict,
         })
     return cards
 
