@@ -1146,10 +1146,12 @@ def _build_action_cards(
         liq = item.get("liquidity") or {}
         rebalance_ok = liq.get("rebalance_eligible", True)
         granularity = item.get("advice_granularity") or "per_instrument"
+        klass = item.get("classification") or {}
+        exposure_tags = klass.get("exposure_tags") or []
 
-        # 固定/锁定资产（仅保险/年金保单），不生成调仓建议
+        # 锁定资产（tier=locked 或含 insurance 标签），不生成调仓建议
         # 其他 rebalance_eligible=False 的资产（场外基金/贵金属等）可调，后续降上限处理
-        if pid == "boc_life_policy":
+        if liq.get("tier") == "locked" or "insurance" in exposure_tags:
             cards.append({
                 "position_id": pid,
                 "signal": "hold",
@@ -1199,8 +1201,6 @@ def _build_action_cards(
 
         # 多维度交叉分析叠加：宏观 + 事件 + 数据新鲜度 + 轮动
         from stocks.engine.quant_action import MacroOverlay
-        klass = item.get("classification") or {}
-        exposure_tags = klass.get("exposure_tags") or []
         # rotation_symbol: "us:XLE" 格式，与 rotation_ranks 的 key 一致
         rotation_symbol = item.get("instrument_key") or ""
         MacroOverlay.apply(
