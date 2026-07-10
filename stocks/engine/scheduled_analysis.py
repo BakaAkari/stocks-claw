@@ -416,6 +416,32 @@ class ScheduledAnalysisRunner:
         return {"success": True, "data": latest}
 
 
+def _build_rotation_leaders(rotation: dict, max_items: int = 8) -> list[dict]:
+    """从轮动数据构建结构化排行榜，供 Agent 做量化选股。
+
+    rotation 来自 ContextBuilder.build_context() 的 rotation 字段，
+    其中 items 是已排名的结构化 dict（symbol, name, r5, r20, above_ma20, rank）。
+    """
+    items = rotation.get("items", [])
+    if not items:
+        # 回退：用 leaders/laggards 字符串列表
+        leaders = rotation.get("leaders", [])
+        return [{"symbol": s, "rank": None} for s in leaders[:max_items]]
+
+    result = []
+    for item in items[:max_items]:
+        result.append({
+            "symbol": item.get("symbol"),
+            "name": item.get("name"),
+            "category": item.get("category"),
+            "rank": item.get("rank"),
+            "r5": item.get("r5"),
+            "r20": item.get("r20"),
+            "above_ma20": item.get("above_ma20"),
+        })
+    return result
+
+
 def build_scheduled_run(
     context: dict,
     *,
@@ -508,7 +534,9 @@ def build_scheduled_run(
             "exposure_summary": context.get("exposure_summary") or {},
             "liquidity_summary": context.get("liquidity_summary") or {},
             "advice_granularity": context.get("advice_granularity") or {},
-            "rotation_leaders": (context.get("rotation") or {}).get("leaders", [])[:8],
+            "rotation_leaders": _build_rotation_leaders(
+                context.get("rotation") or {}, max_items=8
+            ),
             "intelligence_digest": context.get("intelligence_digest") or {},
         },
     }
@@ -1116,6 +1144,30 @@ def _build_action_cards(
         pid = item.get("position_id", "")
         mv = item.get("market_value_cny")
 
+        # 获取流动性/调仓约束
+        liq = item.get("liquidity") or {}
+        rebalance_ok = liq.get("rebalance_eligible", True)
+        granularity = item.get("advice_granularity") or "per_instrument"
+
+        # 固定/锁定资产（仅保险/年金保单），不生成调仓建议
+        # 其他 rebalance_eligible=False 的资产（场外基金/贵金属等）可调，后续降上限处理
+        if pid == "boc_life_policy":
+            cards.append({
+                "position_id": pid,
+                "signal": "hold",
+                "action": "锁定资产，不可调仓",
+                "ratio": 0.0,
+                "facts": [],
+                "stop_price": None,
+                "target_prices": [],
+                "position_limit_pct": 0.0,
+                "current_weight_pct": 0.0,
+                "risk_to_stop_pct": None,
+                "risk_amount_cny": None,
+                "intelligence_conflict": "none",
+            })
+            continue
+
         # 跳过已清仓或估值为 0 的持仓
         if mv is None or mv <= 0:
             qty = (item.get("holding") or {}).get("quantity", 0) if item.get("holding") else 0
@@ -1146,6 +1198,11 @@ def _build_action_cards(
             current_weight_pct=item.get("portfolio_weight"),
             quantity=(item.get("holding") or {}).get("quantity") if item.get("holding") else None,
         )
+
+        # 非 rebalance_eligible 资产降低仓位上限并加注谨慎标记
+        if not rebalance_ok:
+            review.position_limit_pct = min(review.position_limit_pct, 2.0)
+            review.facts.append("可调仓但需谨慎（场外基金/贵金属），仓位上限 2%")
 
         # 情报面冲突检测：先查代理映射（intel symbol → position_id），再查直接映射
         intel_symbol = None
