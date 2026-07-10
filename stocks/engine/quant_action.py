@@ -51,22 +51,28 @@ class QuantReview:
     intelligence_conflict: str = "none"  # none, caution, override
 
 
-# ── 持仓 → 事件主题映射 ──
-_POSITION_EVENT_THEMES: dict[str, list[str]] = {
-    "us_xle": ["energy", "geopolitics"],
-    "us_nvda": ["technology", "earnings", "monetary_policy"],
-    "us_ita": ["geopolitics", "defense"],
-    "us_nem": ["gold", "geopolitics", "monetary_policy"],
-    "us_sgov": ["monetary_policy"],
-    "a_512480": ["technology", "earnings"],
-    "a_588000": ["technology", "china_policy"],
-    "a_561560": ["china_policy", "energy"],
-    "a_512890": ["defensive", "monetary_policy", "china_policy"],
-    "a_510300": ["china_policy", "monetary_policy"],
-    "alipay_gold": ["gold"],
-    "ccb_gold": ["gold"],
-    "alipay_gf_nasdaq": ["technology", "earnings"],
-    "alipay_dc_nasdaq": ["technology", "earnings"],
+# ── 事件主题 → 持仓暴露标签（通用映射，不绑定具体 position_id）──
+THEME_TO_EXPOSURE: dict[str, list[str]] = {
+    # 主题 → 持仓 exposure_tags（按 financial_assets.json 实际标签）
+    "geopolitics": ["energy", "defense", "gold", "oil_gas", "aerospace", "mining"],
+    "energy": ["energy", "oil_gas"],
+    "technology": ["tech", "semiconductor", "ai", "star_board", "nasdaq100"],
+    "earnings": ["tech", "ai", "semiconductor", "nasdaq100"],
+    "monetary_policy": ["gold", "fixed_income", "us_rates", "cash_like",
+                         "money_market", "bank_wmp", "credit_plus"],
+    "crypto": ["crypto"],
+    "healthcare": ["healthcare", "bio"],
+    "financials": ["financials"],
+    "china_policy": ["a_share", "broad_index", "blue_chip", "dividend_low_vol",
+                     "high_dividend", "active_equity", "star_board", "utilities", "power"],
+    # general 不自动匹配任何标签，只作为兜底
+    "general": [],
+}
+
+# ── 情报信号 symbol → 持仓关联（仅跨品种代理关系）──
+# 例: USO（原油ETF）信号影响 XLE（能源板块ETF）
+_INTEL_SIGNAL_PROXY: dict[str, str] = {
+    "USO": "XLE",
 }
 
 
@@ -88,12 +94,20 @@ class MacroOverlay:
         event_clusters: list[dict] | None = None,
         data_freshness: str = "fresh",
         rotation_ranks: dict[str, int] | None = None,
-        position_id: str = "",
+        rotation_symbol: str = "",
+        exposure_tags: list[str] | None = None,
     ) -> None:
-        """对单个持仓的 QuantReview 应用所有维度叠加。"""
+        """对单个持仓的 QuantReview 应用所有维度叠加。
+
+        Args:
+            rotation_symbol: 持仓在轮动数据中的 symbol（如 "us:XLE"）
+            exposure_tags: 持仓的分类标签（如 ["energy", "us_equity"]），
+                          用于事件主题匹配。从 classification.exposure_tags 提取。
+        """
         ms = market_state or {}
         clusters = event_clusters or []
         ranks = rotation_ranks or {}
+        exp_tags = exposure_tags or []
 
         # ── 1. 市场风险状态 ──
         risk = ms.get("risk_appetite", "unknown")
@@ -106,13 +120,16 @@ class MacroOverlay:
             review.facts.append("市场恐慌，暂停加仓")
 
         # ── 2. 事件聚类覆盖 ──
-        themes = _POSITION_EVENT_THEMES.get(position_id, [])
+        # 通过 exposure_tags 做主题匹配（数据驱动，不绑定 position_id）
+        exp_tags = set(exposure_tags or [])
         for c in clusters:
             c_theme = c.get("theme", "")
             c_urgency = c.get("urgency", "medium")
             c_sentiment = c.get("sentiment", "neutral")
 
-            if c_theme not in themes:
+            # 匹配：事件主题映射到的暴露标签 ∩ 持仓暴露标签
+            theme_tags = set(THEME_TO_EXPOSURE.get(c_theme, []))
+            if not (exp_tags & theme_tags) and c_theme != "general":
                 continue
 
             # critical 负面事件 → 暂停非止损动作
@@ -144,26 +161,12 @@ class MacroOverlay:
                 review.facts.append("行情严重延迟，仅止损信号保留")
 
         # ── 4. 轮动排名验证 ──
-        # 使用 symbol（而非 position_id）查轮动数据
-        intel_symbol = _POSITION_INTEL_SYMBOL_MAP_FOR_OVERLAY.get(position_id)
-        if intel_symbol and intel_symbol in ranks:
-            rank = ranks[intel_symbol]
+        # 使用 rotation_symbol 直接查轮动排名（数据驱动）
+        if rotation_symbol and rotation_symbol in ranks:
+            rank = ranks[rotation_symbol]
             if rank and rank <= 3 and review.signal == "add":
                 review.facts.append(f"轮动排名 #{rank}，加仓信号获动量确认")
 
-
-# ── 持仓 → 轮动 symbol 映射（复用 intel 映射逻辑）──
-_POSITION_INTEL_SYMBOL_MAP_FOR_OVERLAY: dict[str, str] = {
-    "us_xle": "us:XLE",
-    "us_nvda": "us:NVDA",
-    "us_ita": "us:ITA",
-    "us_nem": "us:NEM",
-    "a_512480": "a:512480",
-    "a_588000": "a:588000",
-    "a_561560": "a:561560",
-    "a_512890": "a:512890",
-    "a_510300": "a:510300",
-}
 
 
 class QuantActionEngine:

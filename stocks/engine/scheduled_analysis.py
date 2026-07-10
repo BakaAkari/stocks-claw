@@ -1118,30 +1118,7 @@ def _collect_position_triggers(recent_advice: list[dict]) -> dict[str, list[dict
     return result
 
 
-# position_id → intelligence signal symbol mapping
-_POSITION_INTEL_SYMBOL_MAP = {
-    "us_xle": "XLE",
-    "us_nvda": "NVDA",
-    "us_ita": "ITA",
-    "us_nem": "NEM",
-    "a_512480": "512480",
-    "a_588000": "588000",
-    "a_561560": "561560",
-    "a_512890": "512890",
-    "a_510300": "510300",
-}
 
-# 情报代理映射：情报信号的 symbol 可能不等于持仓ID的 symbol
-# 例如 USO 情报信号影响 XLE 能源持仓
-_INTEL_PROXY_MAP: dict[str, str] = {
-    "USO": "us_xle",   # USO 原油ETF → XLE 能源持仓
-    "XLE": "us_xle",
-    "NVDA": "us_nvda",
-    "ITA": "us_ita",
-    "NEM": "us_nem",
-    "512480": "a_512480",
-    "588000": "a_588000",
-}
 
 
 def _build_action_cards(
@@ -1222,13 +1199,18 @@ def _build_action_cards(
 
         # 多维度交叉分析叠加：宏观 + 事件 + 数据新鲜度 + 轮动
         from stocks.engine.quant_action import MacroOverlay
+        klass = item.get("classification") or {}
+        exposure_tags = klass.get("exposure_tags") or []
+        # rotation_symbol: "us:XLE" 格式，与 rotation_ranks 的 key 一致
+        rotation_symbol = item.get("instrument_key") or ""
         MacroOverlay.apply(
             review,
             market_state=market_state,
             event_clusters=event_clusters,
             data_freshness=data_freshness,
             rotation_ranks=rotation_ranks,
-            position_id=pid,
+            rotation_symbol=rotation_symbol,
+            exposure_tags=exposure_tags,
         )
 
         # 非 rebalance_eligible 资产降低仓位上限并加注谨慎标记
@@ -1236,14 +1218,18 @@ def _build_action_cards(
             review.position_limit_pct = min(review.position_limit_pct, 2.0)
             review.facts.append("可调仓但需谨慎（场外基金/贵金属），仓位上限 2%")
 
-        # 情报面冲突检测：先查代理映射（intel symbol → position_id），再查直接映射
-        intel_symbol = None
-        for intel_sym, mapped_pid in _INTEL_PROXY_MAP.items():
-            if mapped_pid == pid and intel_sym in (intelligence_signals or {}):
-                intel_symbol = intel_sym
-                break
+        # 情报面冲突检测：从 instrument_key 提取 symbol，匹配情报信号
+        inst_key = item.get("instrument_key") or ""
+        # "us:XLE" → "XLE", "a:588000" → "588000"
+        raw_symbol = inst_key.split(":")[-1] if ":" in inst_key else ""
+        intel_symbol = raw_symbol if raw_symbol and raw_symbol in (intelligence_signals or {}) else None
+        # 跨品种代理: USO 信号影响 XLE 持仓 (USO 是原油ETF代理)
+        from stocks.engine.quant_action import _INTEL_SIGNAL_PROXY
         if not intel_symbol:
-            intel_symbol = _POSITION_INTEL_SYMBOL_MAP.get(pid)
+            for proxy_sym, target_sym in _INTEL_SIGNAL_PROXY.items():
+                if target_sym == raw_symbol and proxy_sym in (intelligence_signals or {}):
+                    intel_symbol = proxy_sym
+                    break
         conflict = engine.resolve_intelligence_conflict(
             review.signal, intelligence_signals, intel_symbol
         )
