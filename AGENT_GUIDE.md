@@ -191,6 +191,7 @@ uv run python -m stocks.adapters.mcp
 - `market_quote`：通过 watchlist 获取实时/近实时行情 → 适用于场内 ETF 和美股
 - `manual_amount`：手工录入金额，非实时 → 适用于场外基金、银行理财、积存金
 - `insurance_value`：保险现金价值 → 仅用于组合统计，不参与交易信号
+- `fund_nav`：通过天天基金 API 拉取 T-1 确认净值（公募基金），自动计算逐笔盈亏。需在 `instrument.fund_code` 填写 6 位基金代码
 
 Agent 读取 `action_cards[].facts` 时，带有"手工估值"标注的持仓不可按 ratio 执行，
 需登录对应平台确认实时净值后再手动操作。

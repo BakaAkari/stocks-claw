@@ -70,6 +70,7 @@ class ContextBuilder:
         market_event_extractor: Optional[MarketEventExtractor] = None,
         event_calendar: Optional[EventCalendar] = None,
         config: Optional[dict] = None,
+        fund_nav_provider = None,
     ):
         self.fetcher = fetcher
         self.portfolio_scaffold = portfolio_scaffold
@@ -79,6 +80,7 @@ class ContextBuilder:
         self.market_event_extractor = market_event_extractor or MarketEventExtractor()
         self.event_calendar = event_calendar
         self._config = config or {}
+        self.fund_nav_provider = fund_nav_provider
 
     async def build(
         self,
@@ -526,10 +528,31 @@ class ContextBuilder:
                     flags.extend(["missing_quote", "cost_basis_fallback"])
                 else:
                     flags.append("missing_quote")
+        elif method == "fund_nav":
+            # 从天天基金拉取实时净值（同步调用，Provider 内部做了缓存和节流）
+            fund_code = (position.instrument or {}).get("fund_code")
+            if fund_code and self.fund_nav_provider:
+                try:
+                    nav = self.fund_nav_provider._fetch_sync(str(fund_code))
+                except Exception:
+                    nav = None
+                if nav and nav.confirmed_nav > 0 and position.holding and position.holding.quantity:
+                    price = nav.confirmed_nav
+                    market_value = price * position.holding.quantity
+                    price_source = f"fund_nav:{nav.source}"
+                    as_of = nav.confirmed_date
+                    if nav.estimated_nav:
+                        flags.append(f"est_nav={nav.estimated_nav}")
+                else:
+                    market_value = position.valuation_input.manual_amount
+                    price_source = "fund_nav_fallback"
+                    flags.append("fund_nav_unavailable")
+            else:
+                market_value = position.valuation_input.manual_amount
+                price_source = method
         elif method in {
             "manual_amount",
             "insurance_value",
-            "fund_nav",
             "precious_metal_quote",
         }:
             market_value = position.valuation_input.manual_amount

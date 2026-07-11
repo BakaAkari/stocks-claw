@@ -1,6 +1,6 @@
 # EXECUTION_PLAN.md — 现行任务与验收
 
-> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-11(产品类型路由v8+文档新鲜度+Polygon v9)
+> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-11(产品类型路由v8+Polygon v9+基金净值 v10)
 > 本文是**唯一的行动清单**,与 `PLAN.md`(方向、规则与状态)互补。
 > 已完成 S0~S2-7 的完整任务卡和证据归档于
 > `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;2026-07-03 以前历史证据归档于
@@ -192,6 +192,15 @@
 - [x] `markets.json` us.providers 增加 `"polygon"` 为备用源
 - [x] API key 路径：`.secret/polygon-key.md` → 环境变量 `POLYGON_API_KEY` → `/opt/data/.secret/polygon-key.md`
 - [x] 实测：AAPL 315.32 / NVDA 210.96 / SPY 754.95 / XLE 55.08（07-10 收盘），3/3 batch fetch 成功
+- [x] 全局验收：ruff 全绿、pytest 498 passed、compileall 0
+
+## 已关闭 — v10 基金净值 Provider (2026-07-11)
+
+- [x] 新增 `stocks/providers/fund_nav.py`：FundNavProvider，使用天天基金 JSONP 接口
+- [x] `context_builder._value_position()` fund_nav 分支：自动拉取净值 × 份额 = 市值
+- [x] 5 只公募基金已接入：270042 广发纳指 / 000834 大成纳指 / 000217 华安黄金 / 019018 易方达信息产业 / 011193 广发恒荣
+- [x] fund_nav 持仓不应用代理标的 MA20/RSI 做趋势判断
+- [x] 标注从"手工估值"升级为"净值来源：天天基金（T-1 确认净值）"
 - [x] 全局验收：ruff 全绿、pytest 498 passed、compileall 0
 
 ## Backlog(未排期,禁止开工)

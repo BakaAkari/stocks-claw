@@ -73,6 +73,7 @@ from stocks.providers.binance_quote import BinanceQuoteProvider
 from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
 from stocks.providers.filings import CninfoFilingsProvider, SecEdgarFilingsProvider
 from stocks.providers.finnhub_quote import FinnhubQuoteProvider
+from stocks.providers.fund_nav import FundNavProvider
 from stocks.providers.polygon_quote import PolygonQuoteProvider
 from stocks.providers.registry import ProviderRegistry
 from stocks.providers.rss_news import RSSNewsProvider
@@ -163,6 +164,9 @@ class StocksEngine:
             self.registry.register(FinnhubQuoteProvider())
         if prov_cfg.get("polygon", {}).get("enabled", True):
             self.registry.register(PolygonQuoteProvider())
+
+        # 基金净值 Provider（非行情注册表，独立管理）
+        self.fund_nav_provider = FundNavProvider()
         if prov_cfg.get("binance", {}).get("enabled", False):
             self.registry.register(BinanceQuoteProvider())
 
@@ -286,6 +290,7 @@ class StocksEngine:
                 )
 
         self.context_builder = ContextBuilder(
+            fund_nav_provider=self.fund_nav_provider,
             fetcher=self.fetcher,
             portfolio_scaffold=self.portfolio_scaffold,
             market_scaffold=self.market_scaffold,

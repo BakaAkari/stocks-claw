@@ -1147,6 +1147,7 @@ def _build_action_cards(
         klass = item.get("classification") or {}
         exposure_tags = klass.get("exposure_tags") or []
         product_type = klass.get("product_type", "")
+        valuation_method = item.get("valuation_method", "")
 
         # 锁定资产（tier=locked 或含 insurance 标签），不生成调仓建议
         # 其他 rebalance_eligible=False 的资产（场外基金/贵金属等）可调，后续降上限处理
@@ -1245,6 +1246,9 @@ def _build_action_cards(
         # config_only 和 full 都通过引擎计算，config_only 后续降权
 
         indicators = item.get("indicators") or {}
+        # fund_nav 持仓不应用代理标的的 MA20/RSI 做趋势判断（代理价格≠基金净值）
+        if valuation_method == "fund_nav":
+            indicators = {}
         engine = QuantActionEngine(indicators)
         review = engine.review_position(
             position_id=pid,
@@ -1276,17 +1280,19 @@ def _build_action_cards(
             ctx = rule.get("context", "")
             if ctx:
                 review.facts.insert(0, ctx)
+            # fund_nav 已获取实时净值，不标手工估值
+            nav_label = "手工估值（非实时净值），建议确认后手动执行" if valuation_method != "fund_nav" else "净值来源：天天基金（T-1 确认净值）"
             if review.signal == "stop_loss":
                 review.action = "止损预警（配置型资产，建议登录平台确认）"
-                review.facts.append("手工估值（非实时净值），建议确认后手动执行")
+                review.facts.append(nav_label)
             elif review.signal == "take_profit":
                 review.action = "止盈提醒（配置型资产，无明确替代方向时建议持有）"
-                review.facts.append("手工估值（非实时净值），建议确认后手动执行")
+                review.facts.append(nav_label)
             elif review.signal in ("reduce", "add"):
                 review.action = review.action + "（配置型资产，建议审慎评估）"
-                review.facts.append("手工估值（非实时净值），建议确认后手动执行")
+                review.facts.append(nav_label)
             elif review.signal not in ("hold", "wait"):
-                review.facts.append("手工估值（非实时净值），建议登录平台确认后手动执行")
+                review.facts.append(nav_label)
 
         # 非 rebalance_eligible 资产降低仓位上限并加注谨慎标记
         if not rebalance_ok:
@@ -1349,7 +1355,11 @@ def _build_portfolio_risk_summary(position_valuations: list[dict]) -> dict:
     total_value = sum(item.get("market_value_cny") or 0.0 for item in position_valuations)
     reviews = []
     for item in position_valuations:
+        valuation_method = item.get("valuation_method", "")
         indicators = item.get("indicators") or {}
+        # fund_nav 持仓不应用代理标的的 MA20/RSI 做趋势判断（代理价格≠基金净值）
+        if valuation_method == "fund_nav":
+            indicators = {}
         engine = QuantActionEngine(indicators)
         review = engine.review_position(
             position_id=item.get("position_id", ""),
