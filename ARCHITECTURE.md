@@ -103,6 +103,7 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - 腾讯、东方财富：A 股行情，互为降级来源。
 - Finnhub：美股行情（主源）；认证、限流、超时、网络和数据错误使用不同异常类型。
 - Polygon.io：美股行情（备用源）；使用 `/v2/aggs/ticker/{symbol}/prev`，免费档约 5 次/分钟。
+- 天天基金：公募基金净值（FundNavProvider）；使用 JSONP 接口获取 T-1 确认净值，支持 5 只场外公募基金自动估值。
 - Binance：加密货币实时备用源与历史日 K 主源。
 - 历史 K 线：A 股为东方财富→腾讯，美股为 Nasdaq→Yahoo，crypto 为
   Binance→Yahoo；每次回填保留逐源降级记录。
