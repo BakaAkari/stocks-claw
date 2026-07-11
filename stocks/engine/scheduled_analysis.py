@@ -488,6 +488,7 @@ def build_scheduled_run(
         rotation_ranks=rotation_ranks if rotation_ranks else None,
     )
     portfolio_risk = _build_portfolio_risk_summary(context.get("position_valuations") or [])
+    rotation_leaders_data = context.get("rotation", {}).get("items", [])
     capital_allocation = _build_capital_allocation(
         action_cards,
         context.get("position_valuations") or [],
@@ -495,6 +496,7 @@ def build_scheduled_run(
         context.get("liquidity_summary") or {},
         constraints=context.get("portfolio_constraints"),
         rotation_ranks=rotation_ranks if rotation_ranks else None,
+        rotation_leaders=rotation_leaders_data,
     )
     session_intent_props = _session_intent_props(session.id)
     action_signal_reviews = _build_action_signal_reviews(
@@ -1374,27 +1376,44 @@ def _build_capital_allocation(
     *,
     constraints: Optional[dict] = None,
     rotation_ranks: Optional[dict[str, int]] = None,
+    rotation_leaders: Optional[list[dict]] = None,
 ) -> dict:
-    """组合级资金分配提示。"""
+    """组合级资金分配提示 — 交易分析师视角。
+
+    输出：约束告警 → 冲突检测 → 减仓回收 → 加仓排序(含约束惩罚) →
+    闲置资金建议(轮动候选) → 净可动用 → 优先摘要。
+    """
     total_value = sum(
         item.get("market_value_cny") or 0.0 for item in position_valuations
     )
     if total_value <= 0:
         return {
-            "total_value_cny": 0,
-            "constraint_alerts": [],
-            "reduce_proceeds_cny": 0,
-            "add_candidates": [],
-            "net_deployable_cny": 0,
-            "summary": "无有效持仓数据",
+            "total_value_cny": 0, "constraint_alerts": [], "conflicts": [],
+            "reduce_proceeds_cny": 0, "add_candidates": [],
+            "idle_cash_suggestions": [], "net_deployable_cny": 0,
+            "priority_summary": "无有效持仓数据",
         }
 
     constraints = constraints or {}
     rotation_ranks = rotation_ranks or {}
+    rotation_leaders = rotation_leaders or []
 
-    # ── 1. 约束检查（使用 portfolio_mapping 的 buckets/ratios） ──
+    # ── 曝光标签 → 约束大类映射 ──
+    _TAG_TO_BUCKET = {
+        "gold": "黄金", "mining": "黄金",
+        "a_share": "权益", "us_equity": "权益", "tech": "权益",
+        "nasdaq100": "权益", "qdii": "权益", "semiconductor": "权益",
+        "star_board": "权益", "blue_chip": "权益", "dividend_low_vol": "权益",
+        "high_dividend": "权益", "active_equity": "权益",
+        "energy": "权益", "oil_gas": "权益", "defense": "权益",
+        "aerospace": "权益", "ai": "权益",
+        "fixed_income": "固收", "credit_plus": "固收", "us_rates": "固收",
+        "bank_wmp": "固收", "short_treasury": "固收",
+        "cash_like": "现金", "money_market": "现金",
+    }
+
+    # ── 1. 约束检查 ──
     constraint_alerts = []
-    buckets = portfolio_mapping.get("buckets", {})
     ratios = portfolio_mapping.get("ratios", {})
     for bucket_name, rule in constraints.items():
         if not isinstance(rule, dict):
@@ -1407,8 +1426,7 @@ def _build_capital_allocation(
         actual_pct = actual * 100
         if max_pct is not None and actual_pct > max_pct * 100:
             constraint_alerts.append({
-                "bucket": bucket_name,
-                "severity": "breach",
+                "bucket": bucket_name, "severity": "breach",
                 "actual_pct": round(actual_pct, 1),
                 "limit_pct": round(max_pct * 100, 1),
                 "direction": "reduce",
@@ -1416,8 +1434,7 @@ def _build_capital_allocation(
             })
         elif max_pct is not None and actual_pct > max_pct * 100 * 0.85:
             constraint_alerts.append({
-                "bucket": bucket_name,
-                "severity": "near",
+                "bucket": bucket_name, "severity": "near",
                 "actual_pct": round(actual_pct, 1),
                 "limit_pct": round(max_pct * 100, 1),
                 "direction": "caution",
@@ -1425,20 +1442,56 @@ def _build_capital_allocation(
             })
         elif min_pct is not None and actual_pct < min_pct * 100:
             constraint_alerts.append({
-                "bucket": bucket_name,
-                "severity": "breach",
+                "bucket": bucket_name, "severity": "breach",
                 "actual_pct": round(actual_pct, 1),
                 "limit_pct": round(min_pct * 100, 1),
                 "direction": "increase",
                 "message": f"{bucket_name} 占比 {actual_pct:.1f}%，低于下限 {min_pct*100:.0f}%",
             })
 
-    # ── 2. 减仓/止盈/止损 回收资金估算 ──
+    # ── 约束方向 → 超限大类集合 ──
+    over_limit_buckets = {a["bucket"] for a in constraint_alerts if a["direction"] == "reduce"}
+    under_limit_buckets = {a["bucket"] for a in constraint_alerts if a["direction"] == "increase"}
+
+    # ── 2. 冲突检测：约束方向 vs 持仓信号方向 ──
+    conflicts = []
+    for card in action_cards:
+        sig = card.get("signal", "hold")
+        if sig in ("hold", "wait"):
+            continue
+        card_dir = "reduce" if sig in ("reduce", "stop_loss", "take_profit") else "add"
+        # 找到持仓的曝光标签
+        pv = next((p for p in position_valuations if p.get("position_id") == card["position_id"]), {})
+        klass = pv.get("classification", {})
+        tags = klass.get("exposure_tags", [])
+        # 找到标签对应的约束大类
+        matched_buckets = set()
+        for tag in tags:
+            b = _TAG_TO_BUCKET.get(tag)
+            if b:
+                matched_buckets.add(b)
+        # 检测冲突
+        for b in matched_buckets:
+            if b in under_limit_buckets and card_dir == "reduce":
+                conflicts.append({
+                    "position_id": card["position_id"],
+                    "signal": sig,
+                    "bucket": b,
+                    "conflict": f"{b}不足应加仓，但该持仓信号为{sig}（减仓）",
+                })
+            if b in over_limit_buckets and card_dir == "add":
+                conflicts.append({
+                    "position_id": card["position_id"],
+                    "signal": sig,
+                    "bucket": b,
+                    "conflict": f"{b}超限应减仓，但该持仓信号为{sig}（加仓）",
+                })
+
+    # ── 3. 减仓回收 ──
     reduce_proceeds = 0.0
     reduce_items = []
     for card in action_cards:
         if card["signal"] in ("reduce", "stop_loss", "take_profit") and card.get("ratio", 0) > 0:
-            # 找到对应持仓的市值
             mv = 0.0
             for pv in position_valuations:
                 if pv.get("position_id") == card["position_id"]:
@@ -1454,34 +1507,46 @@ def _build_capital_allocation(
                 "proceeds_cny": round(proceeds, 2),
             })
 
-    # ── 3. 可动用资金 ──
-    buckets = liquidity_summary.get("buckets", {})
+    # ── 4. 可动用资金 ──
+    liq_buckets = liquidity_summary.get("buckets", {})
     available_cash = (
-        buckets.get("cash_or_t0", {}).get("value_cny", 0)
-        + buckets.get("t1_t2", {}).get("value_cny", 0)
+        liq_buckets.get("cash_or_t0", {}).get("value_cny", 0)
+        + liq_buckets.get("t1_t2", {}).get("value_cny", 0)
     )
-    # 保留 5% 作为安全垫
     safety_buffer = total_value * 0.05
     net_deployable = max(0, available_cash + reduce_proceeds - safety_buffer)
 
-    # ── 4. 加仓候选优先级排序 ──
-    # 构建 position_id → instrument_key 映射
+    # ── 5. 加仓候选：约束感知排序 ──
     pid_to_inst = {}
+    pid_to_tags = {}
     for pv in position_valuations:
+        pid = pv.get("position_id", "")
         ik = pv.get("instrument_key", "")
         if ik:
-            pid_to_inst[pv.get("position_id", "")] = ik
+            pid_to_inst[pid] = ik
+        pid_to_tags[pid] = (pv.get("classification", {}).get("exposure_tags") or [])
 
     add_candidates = []
     for card in action_cards:
         if card["signal"] != "add":
             continue
         strength = abs(card.get("ratio", 0))
-        headroom = 1.0
-        for alert in constraint_alerts:
-            if alert["direction"] == "reduce":
-                headroom *= 0.5
-        # 轮动排名加分: rank 1-3 → ×2.0, rank 4-5 → ×1.5
+        tags = pid_to_tags.get(card["position_id"], [])
+        # 约束惩罚/奖励：每个匹配的约束大类只生效一次（去重）
+        constraint_penalty = 1.0
+        penalty_reasons = []
+        matched_buckets = set()
+        for tag in tags:
+            b = _TAG_TO_BUCKET.get(tag)
+            if b and b not in matched_buckets:
+                matched_buckets.add(b)
+                if b in over_limit_buckets:
+                    constraint_penalty *= 0.2
+                    penalty_reasons.append(f"{b}超限")
+                elif b in under_limit_buckets:
+                    constraint_penalty *= 1.5
+                    penalty_reasons.append(f"{b}不足")
+        # 轮动加分
         ik = pid_to_inst.get(card["position_id"], "")
         rank = rotation_ranks.get(ik)
         rotation_bonus = 1.0
@@ -1490,7 +1555,7 @@ def _build_capital_allocation(
                 rotation_bonus = 2.0
             elif rank <= 5:
                 rotation_bonus = 1.5
-        score = strength * headroom * rotation_bonus
+        score = strength * constraint_penalty * rotation_bonus
         add_candidates.append({
             "position_id": card["position_id"],
             "action": card["action"],
@@ -1498,32 +1563,58 @@ def _build_capital_allocation(
             "position_limit_pct": card.get("position_limit_pct", 5.0),
             "current_weight_pct": card.get("current_weight_pct") or 0,
             "priority_score": round(score, 4),
+            "constraint_note": "；".join(penalty_reasons) if penalty_reasons else "无约束冲突",
             "facts": card.get("facts", [])[:2],
         })
 
     add_candidates.sort(key=lambda x: x["priority_score"], reverse=True)
 
-    # ── 5. 生成摘要 ──
-    parts = []
+    # ── 6. 闲置资金建议：轮动领涨候选 ──
+    idle_cash_suggestions = []
+    add_total_need = sum(
+        abs(c["ratio"]) * total_value for c in add_candidates
+    )
+    idle_cash = net_deployable - add_total_need
+    if idle_cash > total_value * 0.05 and rotation_leaders:
+        for leader in rotation_leaders[:5]:
+            sym = leader.get("symbol", "")
+            rank_val = leader.get("rank")
+            if rank_val and rank_val <= 5:
+                idle_cash_suggestions.append({
+                    "symbol": sym,
+                    "name": leader.get("name", ""),
+                    "rank": rank_val,
+                    "r20": leader.get("r20"),
+                    "category": leader.get("category", ""),
+                    "rationale": f"轮动排名 #{rank_val}，20日收益 {leader.get('r20', '?')}%，可作为{under_limit_buckets or '权益'}配置候补",
+                })
+
+    # ── 7. 优先级摘要 ──
+    priority_summary = []
     if constraint_alerts:
         breaches = [a for a in constraint_alerts if a["severity"] == "breach"]
         if breaches:
-            parts.append(f'{len(breaches)} 个大类超限或不足')
-    if reduce_proceeds > 0:
-        parts.append(f'预期回收约 {reduce_proceeds:,.0f} CNY')
+            priority_summary.append(f"首要：解决 {', '.join(a['bucket'] for a in breaches)} 约束偏离")
+    if conflicts:
+        priority_summary.append(f"注意：{len(conflicts)} 个持仓信号与约束方向冲突")
     if add_candidates:
-        parts.append(f'{len(add_candidates)} 个加仓候选')
-    parts.append(f'净可动用约 {net_deployable:,.0f} CNY')
+        top = add_candidates[0]
+        penalty = "（约束受限）" if top["constraint_note"] != "无约束冲突" else ""
+        priority_summary.append(f"优先加仓：{top['position_id']}{penalty}")
+    if idle_cash_suggestions:
+        priority_summary.append(f"闲置资金({idle_cash:,.0f}CNY)：关注轮动领涨 {idle_cash_suggestions[0]['symbol']}")
 
     return {
         "total_value_cny": round(total_value, 2),
         "constraint_alerts": constraint_alerts,
+        "conflicts": conflicts,
         "reduce_items": reduce_items,
         "available_cash_cny": round(available_cash, 2),
         "reduce_proceeds_cny": round(reduce_proceeds, 2),
         "net_deployable_cny": round(net_deployable, 2),
         "add_candidates": add_candidates[:5],
-        "summary": "；".join(parts),
+        "idle_cash_suggestions": idle_cash_suggestions[:3],
+        "priority_summary": "；".join(priority_summary) if priority_summary else "无优先动作",
     }
 
 
