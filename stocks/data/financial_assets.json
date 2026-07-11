@@ -1,34 +1,50 @@
 [
   {
-    "name": "示例：货币基金",
-    "platform": "支付宝/银行/券商",
-    "amount": 100000,
-    "asset_type": "现金管理",
-    "notes": "活期/货币基金，流动性储备",
+    "name": "广发纳指100联接A",
+    "platform": "支付宝",
+    "amount": 83997.14,
+    "asset_type": "equity",
+    "notes": "场外联接基金 270042，成本价 6.2570",
     "confirmed": true
   },
   {
-    "name": "示例：理财产品",
-    "platform": "银行/支付宝",
-    "amount": 200000,
-    "asset_type": "理财",
-    "notes": "稳健理财，R2风险等级",
+    "name": "大成纳指100联接A",
+    "platform": "支付宝",
+    "amount": 49448.51,
+    "asset_type": "equity",
+    "notes": "场外联接基金 000834，成本价 4.9128",
     "confirmed": true
   },
   {
-    "name": "示例：指数基金",
-    "platform": "券商/支付宝",
-    "amount": 50000,
-    "asset_type": "股票ETF",
-    "notes": "沪深300ETF/纳指ETF等",
+    "name": "华安黄金ETF联接C",
+    "platform": "支付宝",
+    "amount": 97895.3,
+    "asset_type": "commodity",
+    "notes": "场外联接基金 000217，成本价 3.1457，持有 32,380.28 份，浮亏 -3.89%",
     "confirmed": true
   },
   {
-    "name": "示例：黄金ETF",
-    "platform": "支付宝/券商",
-    "amount": 30000,
-    "asset_type": "黄金ETF",
-    "notes": "华安黄金ETF等",
+    "name": "易方达信息产业混合C",
+    "platform": "支付宝",
+    "amount": 16870.09,
+    "asset_type": "equity",
+    "notes": "混合基金 019018，成本价 5.6870，持有 1,758.40 份，浮盈 +68.70%",
+    "confirmed": true
+  },
+  {
+    "name": "广发恒荣三个月持有期混合C",
+    "platform": "支付宝",
+    "amount": 100000.0,
+    "asset_type": "fixed_income",
+    "notes": "固收+ 011193，三个月持有期，成本价 1.0228，持有 97,770.83 份，收益率 +0.00%",
+    "confirmed": true
+  },
+  {
+    "name": "余额宝",
+    "platform": "支付宝",
+    "amount": 71859.84,
+    "asset_type": "cash_equivalent",
+    "notes": "余额宝/余利宝活期",
     "confirmed": true
   }
 ]

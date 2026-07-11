@@ -168,6 +168,7 @@ class TestEngineInitProviderDisabled:
             "eastmoney_a": {"enabled": False},
             "finnhub": {"enabled": False},
             "binance": {"enabled": False},
+            "polygon": {"enabled": False},
         }
         with patch("stocks.engine.load_engine_config", return_value=config):
             engine = StocksEngine()
@@ -198,7 +199,7 @@ class TestHealthCheck:
     def test_health_check_ok(self, minimal_engine):
         health = minimal_engine.health_check()
         assert health["status"] == "ok"
-        assert len(health["providers"]) == 4
+        assert len(health["providers"]) == 5
         assert health["assets_loaded"] == 0
         assert health["watchlist_loaded"] == 0
         assert health["llm_analysis_enabled"] is False

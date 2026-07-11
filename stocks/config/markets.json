@@ -1,17 +1,26 @@
 {
   "a": {
     "label": "A股",
-    "providers": ["tencent_a", "eastmoney_a"],
+    "providers": [
+      "tencent_a",
+      "eastmoney_a"
+    ],
     "default_provider": "tencent_a"
   },
   "us": {
     "label": "美股",
-    "providers": ["finnhub"],
+    "providers": [
+      "finnhub",
+      "polygon"
+    ],
     "default_provider": "finnhub"
   },
   "crypto": {
     "label": "加密货币",
-    "providers": ["finnhub", "binance"],
+    "providers": [
+      "finnhub",
+      "binance"
+    ],
     "default_provider": "finnhub"
   }
 }

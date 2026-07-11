@@ -1,6 +1,6 @@
 # EXECUTION_PLAN.md — 现行任务与验收
 
-> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-09(审查日修复+文档清理)
+> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-11(产品类型路由v8+文档新鲜度+Polygon v9)
 > 本文是**唯一的行动清单**,与 `PLAN.md`(方向、规则与状态)互补。
 > 已完成 S0~S2-7 的完整任务卡和证据归档于
 > `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;2026-07-03 以前历史证据归档于
@@ -155,10 +155,10 @@
 > `compileall` 0, CLI smoke (`--output json --no-news --no-quotes`) 通过。
 > 依据:用户真实试用反馈与全局验收。
 
-## 当前候选 — global_intelligence_watch 切片
+## 已关闭 — global_intelligence_watch 切片
 
-状态:已立项,设计稿见 `docs/archive/GLOBAL_INTELLIGENCE_WATCH_DESIGN_20260708.md`。
-下一步进入工程实现。
+状态:已实现并上线。`intelligence_brief.py` 每小时采集情报并推送 Feishu。
+详见 `references/global-intelligence-deployment.md`。
 
 ## 已关闭 — 2026-07-09 审查日 P0 修复
 
@@ -174,9 +174,29 @@
 > 完成:2026-07-09。详细证据见 `docs/archive/DEVELOPMENT_DIRECTION_20260709.md` 附录 B。
 > 下一步候选见该文档 §2 第一层(系统健壮性)和第二层(分析深度)。
 
+## 已关闭 — v8 产品类型路由与资产明细补全 (2026-07-11)
+
+- [x] 支付宝 6 项资产补全:票号/份额/成本价 + 代理 instrument(纳指→QQQ、黄金→518880)
+- [x] 建行 4 项资产补全:活期/嘉鑫稳利/建信现金添利/黄金积存(克数+均价)
+- [x] `_build_action_cards()` 新增 `_PRODUCT_TYPE_RULES` 四档路由:
+  `full`(场内ETF/股票,完整止损止盈)、`config_only`(QDII/混合/固收+/积存金,ratio=0,信号降级为提醒)、
+  `info_only`(银行理财,纯状态说明)、`skip`(货基/现金/保险,直接跳过)
+- [x] `AGENT_GUIDE.md` 新增 §4 资产分类与产品类型路由
+- [x] skill `stocks-claw-portfolio-advisory` 更新 Product-Type Routing 段
+- [x] 全局验收:ruff 全绿、pytest 46 passed、compileall 0
+
+## 已关闭 — v9 Polygon 美股第二行情源 (2026-07-11)
+
+- [x] 新增 `stocks/providers/polygon_quote.py`：PolygonQuoteProvider，使用 Polygon.io REST API (`/v2/aggs/ticker/{symbol}/prev`)
+- [x] 注册到 `StocksEngine`：import + registry.register，默认启用
+- [x] `markets.json` us.providers 增加 `"polygon"` 为备用源
+- [x] API key 路径：`.secret/polygon-key.md` → 环境变量 `POLYGON_API_KEY` → `/opt/data/.secret/polygon-key.md`
+- [x] 实测：AAPL 315.32 / NVDA 210.96 / SPY 754.95 / XLE 55.08（07-10 收盘），3/3 batch fetch 成功
+- [x] 全局验收：ruff 全绿、pytest 498 passed、compileall 0
+
 ## Backlog(未排期,禁止开工)
 
-- 基金净值与贵金属报价 Provider:依赖用户补录基金代码/份额/克数。
+- 基金净值与贵金属报价 Provider:用户已补录票号/份额/克数,手工估值已可计算逐笔盈亏。自动净值拉取待后续 provider 开发。
 - 估值数据层:A 股/美股指数 PE/PB 百分位,用于长线判断。
 - 论点笔记本、组合归因、危机预案、分批执行计划。
 - DecisionPlan 引擎化与内部 LLM 双路径:原 G1~G7 方向;G0 契约已落盘休眠。

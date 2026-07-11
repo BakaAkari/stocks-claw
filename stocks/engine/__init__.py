@@ -73,6 +73,7 @@ from stocks.providers.binance_quote import BinanceQuoteProvider
 from stocks.providers.eastmoney_a import EastmoneyAQuoteProvider
 from stocks.providers.filings import CninfoFilingsProvider, SecEdgarFilingsProvider
 from stocks.providers.finnhub_quote import FinnhubQuoteProvider
+from stocks.providers.polygon_quote import PolygonQuoteProvider
 from stocks.providers.registry import ProviderRegistry
 from stocks.providers.rss_news import RSSNewsProvider
 from stocks.providers.tencent_a import TencentAQuoteProvider
@@ -160,6 +161,8 @@ class StocksEngine:
             self.registry.register(EastmoneyAQuoteProvider())
         if prov_cfg.get("finnhub", {}).get("enabled", True):
             self.registry.register(FinnhubQuoteProvider())
+        if prov_cfg.get("polygon", {}).get("enabled", True):
+            self.registry.register(PolygonQuoteProvider())
         if prov_cfg.get("binance", {}).get("enabled", False):
             self.registry.register(BinanceQuoteProvider())
 

@@ -5,7 +5,6 @@ cron/launchd and to hand a structured JSON artifact to the user-facing Agent.
 """
 
 from __future__ import annotations
-from typing import Optional
 
 import json
 from dataclasses import dataclass
@@ -1145,9 +1144,9 @@ def _build_action_cards(
         # 获取流动性/调仓约束
         liq = item.get("liquidity") or {}
         rebalance_ok = liq.get("rebalance_eligible", True)
-        granularity = item.get("advice_granularity") or "per_instrument"
         klass = item.get("classification") or {}
         exposure_tags = klass.get("exposure_tags") or []
+        product_type = klass.get("product_type", "")
 
         # 锁定资产（tier=locked 或含 insurance 标签），不生成调仓建议
         # 其他 rebalance_eligible=False 的资产（场外基金/贵金属等）可调，后续降上限处理
@@ -1187,6 +1186,64 @@ def _build_action_cards(
             })
             continue
 
+        # ── 产品类型路由：每种资产类型有独立规则 ──
+        _PRODUCT_TYPE_RULES = {
+            # 全规则：tech 面 + 基本面全部适用
+            "exchange_traded_fund": {"mode": "full"},
+            "stock": {"mode": "full"},
+            "short_treasury_etf": {"mode": "full"},
+            # 配置型：信号为建议参考，不生成自动调仓比例
+            "qdii_fund": {"mode": "config_only", "context": "场外 QDII，申赎 T+2，适合长期配置。无明确替代方向时不宜频繁止盈"},
+            "feeder_fund": {"mode": "config_only", "context": "场外联接基金，申赎 T+2，适合长期配置"},
+            "mixed_fund": {"mode": "config_only", "context": "主动管理混合基金，高浮盈后需关注基金经理风格漂移风险"},
+            "fixed_income_plus_fund": {"mode": "config_only", "context": "固收+产品，波动率低，MA20/RSI 技术信号不适用"},
+            "precious_metal_account": {"mode": "config_only", "context": "积存金，买卖有价差，短线操作成本高"},
+            # 不可交易型
+            "bank_wealth_management": {"mode": "info_only", "context": "银行理财，有开放期限制，非开放期不可操作"},
+            "money_market_fund": {"mode": "skip"},
+            "cash": {"mode": "skip"},
+            "cash_equivalent": {"mode": "skip"},
+            "insurance_policy": {"mode": "skip"},
+        }
+        rule = _PRODUCT_TYPE_RULES.get(product_type, {"mode": "full"})
+        routing_mode = rule["mode"]
+
+        if routing_mode == "skip":
+            cards.append({
+                "position_id": pid,
+                "signal": "hold",
+                "action": "现金/货基/保险类资产，无需操作",
+                "ratio": 0.0,
+                "facts": [],
+                "stop_price": None,
+                "target_prices": [],
+                "position_limit_pct": 0.0,
+                "current_weight_pct": item.get("portfolio_weight") or 0.0,
+                "risk_to_stop_pct": None,
+                "risk_amount_cny": None,
+                "intelligence_conflict": "none",
+            })
+            continue
+
+        if routing_mode == "info_only":
+            cards.append({
+                "position_id": pid,
+                "signal": "hold",
+                "action": "持有（" + rule.get("context", "非交易型资产") + "）",
+                "ratio": 0.0,
+                "facts": [rule.get("context", "")],
+                "stop_price": None,
+                "target_prices": [],
+                "position_limit_pct": 0.0,
+                "current_weight_pct": item.get("portfolio_weight") or 0.0,
+                "risk_to_stop_pct": None,
+                "risk_amount_cny": None,
+                "intelligence_conflict": "none",
+            })
+            continue
+
+        # config_only 和 full 都通过引擎计算，config_only 后续降权
+
         indicators = item.get("indicators") or {}
         engine = QuantActionEngine(indicators)
         review = engine.review_position(
@@ -1212,6 +1269,24 @@ def _build_action_cards(
             rotation_symbol=rotation_symbol,
             exposure_tags=exposure_tags,
         )
+
+        # 按产品类型路由：config_only / info_only 降权为建议参考
+        if routing_mode == "config_only":
+            review.ratio = 0.0
+            ctx = rule.get("context", "")
+            if ctx:
+                review.facts.insert(0, ctx)
+            if review.signal == "stop_loss":
+                review.action = "止损预警（配置型资产，建议登录平台确认）"
+                review.facts.append("手工估值（非实时净值），建议确认后手动执行")
+            elif review.signal == "take_profit":
+                review.action = "止盈提醒（配置型资产，无明确替代方向时建议持有）"
+                review.facts.append("手工估值（非实时净值），建议确认后手动执行")
+            elif review.signal in ("reduce", "add"):
+                review.action = review.action + "（配置型资产，建议审慎评估）"
+                review.facts.append("手工估值（非实时净值），建议确认后手动执行")
+            elif review.signal not in ("hold", "wait"):
+                review.facts.append("手工估值（非实时净值），建议登录平台确认后手动执行")
 
         # 非 rebalance_eligible 资产降低仓位上限并加注谨慎标记
         if not rebalance_ok:

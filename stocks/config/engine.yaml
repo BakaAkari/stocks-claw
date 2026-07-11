@@ -30,8 +30,8 @@ providers:
     a:
       - eastmoney_a
       - tencent_a
-    # 当前无独立第二源；接入任务见 EXECUTION_PLAN D1-2。
-    us: []
+    us:
+      - polygon
     crypto:
       - binance
 

@@ -79,7 +79,8 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - `persistence.py`：滚动最小上下文快照与确认建议摘要。
 - `advice_review.py`：建议表现回看与触发器核对（按收盘价，只列事实）。
 - `scheduled_analysis.py`：A 股/美股定时 session 日历、运行产物存储、
-  自包含 agent_task v4 指令集(persona/adaptability/data_reference/飞书格式)和通知建议策略。
+  产品类型路由(`_PRODUCT_TYPE_RULES` 四档分流:full/config_only/info_only/skip)、
+  自包含 agent_task v5 指令集(persona/adaptability/data_reference/飞书格式/情报要点)和通知建议策略。
 - `llm_analysis.py`：默认关闭的兼容报告模块。
 
 ### domain
@@ -100,7 +101,8 @@ Adapter 不实现组合算法或 Provider 逻辑。
 `stocks/providers/` 中的当前 Provider：
 
 - 腾讯、东方财富：A 股行情，互为降级来源。
-- Finnhub：美股行情；认证、限流、超时、网络和数据错误使用不同异常类型。
+- Finnhub：美股行情（主源）；认证、限流、超时、网络和数据错误使用不同异常类型。
+- Polygon.io：美股行情（备用源）；使用 `/v2/aggs/ticker/{symbol}/prev`，免费档约 5 次/分钟。
 - Binance：加密货币实时备用源与历史日 K 主源。
 - 历史 K 线：A 股为东方财富→腾讯，美股为 Nasdaq→Yahoo，crypto 为
   Binance→Yahoo；每次回填保留逐源降级记录。
@@ -108,7 +110,7 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - SEC EDGAR / 巨潮：仅查询 watchlist 的一手公告；Google News 模板按
   watchlist 动态生成 holding-scope RSS。
 
-Provider Registry 按市场查找可用实现。美股当前只有 Finnhub 实时源；失败时质量信息标记
+Provider Registry 按市场查找可用实现。美股当前主源 Finnhub + 备用 Polygon；双源均失败时质量信息标记
 `single_source_failed`，并在历史存在时返回 `stale: true` 的最近收盘价。
 
 ## 3. build_context 数据流
@@ -157,8 +159,8 @@ uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
 
 `ScheduledAnalysisRun v1` 包含 session 元数据、持仓估值/PnL、触发器核对、
 action_signals(含 rank/score)、portfolio_risk(含多因子情景)、data_quality、
-agent_task v4(自包含指令集:persona/adaptability/data_reference/output_structure/
-飞书格式约束)、写入策略和通知建议。定时运行只写
+agent_task v5(自包含指令集:persona/adaptability/data_reference/output_structure/
+飞书格式约束/情报要点)、写入策略和通知建议。定时运行只写
 `.local/scheduled_runs/`，不会自动保存 advice/execution/forecast，也不会修改资产或画像。
 
 ## 5. 金融记忆
@@ -242,7 +244,7 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 
 主要配置：
 
-- `stocks/config/engine.yaml`
+- `stocks/config/engine.yaml`（含 `fallback.us: [polygon]` 降级链）
 - `stocks/config/watchlist.json`
 - `stocks/config/portfolio_constraints.json`
 - `stocks/config/news_sources.json`

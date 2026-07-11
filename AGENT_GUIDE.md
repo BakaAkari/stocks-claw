@@ -158,7 +158,74 @@ MCP 对应工具：
 uv run python -m stocks.adapters.mcp
 ```
 
-## 4. 配置与本地数据
+## 4. 资产分类与产品类型路由
+
+`.local/financial_assets.json` (schema v2) 中每个持仓都有 `classification` 字段，
+包含三个维度：
+
+- `asset_class`: 大类（equity / fixed_income / commodity / cash_equivalent / insurance）
+- `product_type`: 产品形态（exchange_traded_fund / stock / qdii_fund / mixed_fund / fixed_income_plus_fund / bank_wealth_management / precious_metal_account / money_market_fund / cash / insurance_policy / short_treasury_etf）
+- `exposure_tags`: 暴露标签（nasdaq100 / gold / tech / us_equity / a_share 等）
+
+### 4.1 产品类型路由规则
+
+`_build_action_cards()` 在生成持仓动作卡时，按 `product_type` 分流：
+
+| 模式 | product_type | 行为 |
+|---|---|---|
+| **full** (全规则) | `exchange_traded_fund`, `stock`, `short_treasury_etf` | 完整止损/止盈/MA20趋势/左侧加仓，ratio 非零 |
+| **config_only** (配置型) | `qdii_fund`, `feeder_fund`, `mixed_fund`, `fixed_income_plus_fund`, `precious_metal_account` | 引擎仍计算信号，但 ratio=0，信号降级为建议提醒，附资产特性上下文 |
+| **info_only** (信息型) | `bank_wealth_management` | 不跑引擎，输出持有状态 + 产品说明 |
+| **skip** (跳过) | `money_market_fund`, `cash`, `cash_equivalent`, `insurance_policy` | 不生成任何信号 |
+
+**配置型资产的上下文示例**：
+- qdii_fund → "场外 QDII，申赎 T+2，适合长期配置。无明确替代方向时不宜频繁止盈"
+- mixed_fund → "主动管理混合基金，高浮盈后需关注基金经理风格漂移风险"
+- fixed_income_plus_fund → "固收+产品，波动率低，MA20/RSI 技术信号不适用"
+- precious_metal_account → "积存金，买卖有价差，短线操作成本高"
+
+### 4.2 估值方法
+
+每笔持仓有 `valuation_input.method`：
+
+- `market_quote`：通过 watchlist 获取实时/近实时行情 → 适用于场内 ETF 和美股
+- `manual_amount`：手工录入金额，非实时 → 适用于场外基金、银行理财、积存金
+- `insurance_value`：保险现金价值 → 仅用于组合统计，不参与交易信号
+
+Agent 读取 `action_cards[].facts` 时，带有"手工估值"标注的持仓不可按 ratio 执行，
+需登录对应平台确认实时净值后再手动操作。
+
+### 4.3 新增持仓规范
+
+新增手工估值持仓时，必须填写 `classification.product_type` 和 `exposure_tags`，
+否则系统回退到 `full` 模式（会对场外基金发出自动止损/止盈比例）。
+
+```json
+{
+  "position_id": "alipay_example",
+  "account_id": "alipay",
+  "classification": {
+    "asset_class": "equity",
+    "product_type": "qdii_fund",
+    "exposure_tags": ["qdii", "nasdaq100", "tech", "us_equity"]
+  },
+  "valuation_input": {
+    "method": "manual_amount",
+    "manual_amount": 100000,
+    "as_of": "2026-07-11"
+  },
+  "liquidity": {
+    "tradable": true,
+    "rebalance_eligible": true,
+    "tier": "t2_plus"
+  }
+}
+```
+
+exposure_tags 决定情报事件匹配和压力测试冲击系数。标签需具体（如 `nasdaq100`、`gold`），
+避免使用过于宽泛的标签（如 `us_equity` 会导致与不相关的事件主题误匹配）。
+
+## 5. 配置与本地数据
 
 受版本控制的配置位于 `stocks/config/`：
 
