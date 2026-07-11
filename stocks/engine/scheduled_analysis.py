@@ -488,6 +488,14 @@ def build_scheduled_run(
         rotation_ranks=rotation_ranks if rotation_ranks else None,
     )
     portfolio_risk = _build_portfolio_risk_summary(context.get("position_valuations") or [])
+    capital_allocation = _build_capital_allocation(
+        action_cards,
+        context.get("position_valuations") or [],
+        context.get("portfolio_mapping") or {},
+        context.get("liquidity_summary") or {},
+        constraints=context.get("portfolio_constraints"),
+        rotation_ranks=rotation_ranks if rotation_ranks else None,
+    )
     session_intent_props = _session_intent_props(session.id)
     action_signal_reviews = _build_action_signal_reviews(
         context.get("action_signals") or {},
@@ -531,6 +539,7 @@ def build_scheduled_run(
         "position_reviews": position_reviews,
         "action_cards": action_cards,
         "portfolio_risk": portfolio_risk,
+        "capital_allocation": capital_allocation,
         "trigger_reviews": trigger_reviews,
         "action_signal_reviews": action_signal_reviews,
         "action_signals": context.get("action_signals") or {},
@@ -768,6 +777,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "每个方向写明：依据（引用具体数据）→ 对应标的 → 与现有组合的关系",
             "哪些候选方向只适合观察,不能追",
             "数据质量是否足以形成盘前计划",
+            "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
         ],
         "open_watch": [
             "开盘后已有持仓是否出现异常跳空、破位或过热",
@@ -781,6 +791,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             _intel_brief_task,
             "【前瞻展望】综合分析 intelligence_digest + rotation_leaders + exposure_summary，给出未来1-2周最值得关注的板块和方向（不少于3个），每个方向写明依据和对应标的",
             "是否有不应追高或不应补弱的标的",
+            "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
         ],
         "after_close_review": [
             "今天触发器和持仓事实如何复盘",
@@ -850,6 +861,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "情报brief": ".local/intelligence/latest_brief.json — clusters（含portfolio_relevance）、signals、macro（每小时更新）",
             "轮动": "rotation_leaders — 轮动排名领涨的板块和标的",
             "组合": "exposure_summary.top — 组合暴露分布和潜在缺口",
+            "资金分配": "capital_allocation — constraint_alerts(大类超限)、reduce_items(减仓回收预估)、add_candidates(加仓优先级排序)、net_deployable_cny(净可动用资金)",
         },
 
         # ── 输出格式 ──
@@ -869,6 +881,10 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 {
                     "name": "持仓动作",
                     "content": "逐持仓列出关键动作：优先 stop_loss > severe_loss > take_profit > accumulate",
+                },
+                {
+                    "name": "资金分配",
+                    "content": "读取 capital_allocation.summary；如有约束告警先列超限大类；按 add_candidates 优先级给出加仓方向；标注净可动用资金",
                 },
                 {
                     "name": "情报要点",
@@ -1347,6 +1363,167 @@ def _build_action_cards(
             "intelligence_conflict": conflict,
         })
     return cards
+
+
+def _build_capital_allocation(
+    action_cards: list[dict],
+    position_valuations: list[dict],
+    portfolio_mapping: dict,
+    liquidity_summary: dict,
+    *,
+    constraints: Optional[dict] = None,
+    rotation_ranks: Optional[dict[str, int]] = None,
+) -> dict:
+    """组合级资金分配提示。"""
+    total_value = sum(
+        item.get("market_value_cny") or 0.0 for item in position_valuations
+    )
+    if total_value <= 0:
+        return {
+            "total_value_cny": 0,
+            "constraint_alerts": [],
+            "reduce_proceeds_cny": 0,
+            "add_candidates": [],
+            "net_deployable_cny": 0,
+            "summary": "无有效持仓数据",
+        }
+
+    constraints = constraints or {}
+    rotation_ranks = rotation_ranks or {}
+
+    # ── 1. 约束检查（使用 portfolio_mapping 的 buckets/ratios） ──
+    constraint_alerts = []
+    buckets = portfolio_mapping.get("buckets", {})
+    ratios = portfolio_mapping.get("ratios", {})
+    for bucket_name, rule in constraints.items():
+        if not isinstance(rule, dict):
+            continue
+        min_pct = rule.get("min")
+        max_pct = rule.get("max")
+        actual = ratios.get(bucket_name)
+        if actual is None:
+            continue
+        actual_pct = actual * 100
+        if max_pct is not None and actual_pct > max_pct * 100:
+            constraint_alerts.append({
+                "bucket": bucket_name,
+                "severity": "breach",
+                "actual_pct": round(actual_pct, 1),
+                "limit_pct": round(max_pct * 100, 1),
+                "direction": "reduce",
+                "message": f"{bucket_name} 占比 {actual_pct:.1f}%，超出上限 {max_pct*100:.0f}%",
+            })
+        elif max_pct is not None and actual_pct > max_pct * 100 * 0.85:
+            constraint_alerts.append({
+                "bucket": bucket_name,
+                "severity": "near",
+                "actual_pct": round(actual_pct, 1),
+                "limit_pct": round(max_pct * 100, 1),
+                "direction": "caution",
+                "message": f"{bucket_name} 占比 {actual_pct:.1f}%，逼近上限 {max_pct*100:.0f}%",
+            })
+        elif min_pct is not None and actual_pct < min_pct * 100:
+            constraint_alerts.append({
+                "bucket": bucket_name,
+                "severity": "breach",
+                "actual_pct": round(actual_pct, 1),
+                "limit_pct": round(min_pct * 100, 1),
+                "direction": "increase",
+                "message": f"{bucket_name} 占比 {actual_pct:.1f}%，低于下限 {min_pct*100:.0f}%",
+            })
+
+    # ── 2. 减仓/止盈/止损 回收资金估算 ──
+    reduce_proceeds = 0.0
+    reduce_items = []
+    for card in action_cards:
+        if card["signal"] in ("reduce", "stop_loss", "take_profit") and card.get("ratio", 0) > 0:
+            # 找到对应持仓的市值
+            mv = 0.0
+            for pv in position_valuations:
+                if pv.get("position_id") == card["position_id"]:
+                    mv = pv.get("market_value_cny") or 0.0
+                    break
+            proceeds = mv * abs(card["ratio"])
+            reduce_proceeds += proceeds
+            reduce_items.append({
+                "position_id": card["position_id"],
+                "signal": card["signal"],
+                "ratio": card["ratio"],
+                "market_value_cny": round(mv, 2),
+                "proceeds_cny": round(proceeds, 2),
+            })
+
+    # ── 3. 可动用资金 ──
+    buckets = liquidity_summary.get("buckets", {})
+    available_cash = (
+        buckets.get("cash_or_t0", {}).get("value_cny", 0)
+        + buckets.get("t1_t2", {}).get("value_cny", 0)
+    )
+    # 保留 5% 作为安全垫
+    safety_buffer = total_value * 0.05
+    net_deployable = max(0, available_cash + reduce_proceeds - safety_buffer)
+
+    # ── 4. 加仓候选优先级排序 ──
+    # 构建 position_id → instrument_key 映射
+    pid_to_inst = {}
+    for pv in position_valuations:
+        ik = pv.get("instrument_key", "")
+        if ik:
+            pid_to_inst[pv.get("position_id", "")] = ik
+
+    add_candidates = []
+    for card in action_cards:
+        if card["signal"] != "add":
+            continue
+        strength = abs(card.get("ratio", 0))
+        headroom = 1.0
+        for alert in constraint_alerts:
+            if alert["direction"] == "reduce":
+                headroom *= 0.5
+        # 轮动排名加分: rank 1-3 → ×2.0, rank 4-5 → ×1.5
+        ik = pid_to_inst.get(card["position_id"], "")
+        rank = rotation_ranks.get(ik)
+        rotation_bonus = 1.0
+        if rank is not None:
+            if rank <= 3:
+                rotation_bonus = 2.0
+            elif rank <= 5:
+                rotation_bonus = 1.5
+        score = strength * headroom * rotation_bonus
+        add_candidates.append({
+            "position_id": card["position_id"],
+            "action": card["action"],
+            "ratio": card["ratio"],
+            "position_limit_pct": card.get("position_limit_pct", 5.0),
+            "current_weight_pct": card.get("current_weight_pct") or 0,
+            "priority_score": round(score, 4),
+            "facts": card.get("facts", [])[:2],
+        })
+
+    add_candidates.sort(key=lambda x: x["priority_score"], reverse=True)
+
+    # ── 5. 生成摘要 ──
+    parts = []
+    if constraint_alerts:
+        breaches = [a for a in constraint_alerts if a["severity"] == "breach"]
+        if breaches:
+            parts.append(f'{len(breaches)} 个大类超限或不足')
+    if reduce_proceeds > 0:
+        parts.append(f'预期回收约 {reduce_proceeds:,.0f} CNY')
+    if add_candidates:
+        parts.append(f'{len(add_candidates)} 个加仓候选')
+    parts.append(f'净可动用约 {net_deployable:,.0f} CNY')
+
+    return {
+        "total_value_cny": round(total_value, 2),
+        "constraint_alerts": constraint_alerts,
+        "reduce_items": reduce_items,
+        "available_cash_cny": round(available_cash, 2),
+        "reduce_proceeds_cny": round(reduce_proceeds, 2),
+        "net_deployable_cny": round(net_deployable, 2),
+        "add_candidates": add_candidates[:5],
+        "summary": "；".join(parts),
+    }
 
 
 def _build_portfolio_risk_summary(position_valuations: list[dict]) -> dict:
