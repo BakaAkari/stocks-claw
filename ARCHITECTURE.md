@@ -80,6 +80,7 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - `advice_review.py`：建议表现回看与触发器核对（按收盘价，只列事实）。
 - `scheduled_analysis.py`：A 股/美股定时 session 日历、运行产物存储、
   产品类型路由(`_PRODUCT_TYPE_RULES` 四档分流:full/config_only/info_only/skip)、
+  组合资金分配(`_build_capital_allocation` 约束检测+冲突标注+优先级排序)、
   自包含 agent_task v5 指令集(persona/adaptability/data_reference/飞书格式/情报要点)和通知建议策略。
 - `llm_analysis.py`：默认关闭的兼容报告模块。
 
@@ -159,7 +160,7 @@ uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
 ```
 
 `ScheduledAnalysisRun v1` 包含 session 元数据、持仓估值/PnL、触发器核对、
-action_signals(含 rank/score)、portfolio_risk(含多因子情景)、data_quality、
+action_signals(含 rank/score)、portfolio_risk(含多因子情景)、capital_allocation(约束+冲突+资金分配)、data_quality、
 agent_task v5(自包含指令集:persona/adaptability/data_reference/output_structure/
 飞书格式约束/情报要点)、写入策略和通知建议。定时运行只写
 `.local/scheduled_runs/`，不会自动保存 advice/execution/forecast，也不会修改资产或画像。

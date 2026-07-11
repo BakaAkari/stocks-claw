@@ -1,6 +1,6 @@
 # EXECUTION_PLAN.md — 现行任务与验收
 
-> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-11(产品类型路由v8+Polygon v9+基金净值 v10)
+> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-11(v8产品类型路由+v9 Polygon+v10基金净值+v11资金分配)
 > 本文是**唯一的行动清单**,与 `PLAN.md`(方向、规则与状态)互补。
 > 已完成 S0~S2-7 的完整任务卡和证据归档于
 > `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;2026-07-03 以前历史证据归档于
@@ -202,6 +202,15 @@
 - [x] fund_nav 持仓不应用代理标的 MA20/RSI 做趋势判断
 - [x] 标注从"手工估值"升级为"净值来源：天天基金（T-1 确认净值）"
 - [x] 全局验收：ruff 全绿、pytest 498 passed、compileall 0
+
+## 已关闭 — v11 组合级资金分配提示 (2026-07-11)
+
+- [x] `_build_capital_allocation()`: 约束检测 → 冲突标注 → 减仓回收 → 约束感知排序 → 闲置资金建议 → 优先级摘要
+- [x] 曝光标签→约束大类映射(_TAG_TO_BUCKET): gold/mining→黄金, a_share/us_equity/tech→权益, fixed_income→固收, cash_like→现金
+- [x] 冲突检测: 权益不足 + 减仓信号 / 黄金超限 + 加仓信号 → 标注 conflicts[]
+- [x] 约束感知排序: 超限大类加仓信号降权(×0.2), 不足大类加仓信号升权(×1.5), bucket去重
+- [x] 闲置资金建议: 加仓候选需求 << 净可动用时, 从 rotation_leaders top-5 推荐配置候补
+- [x] 全局验收: ruff 全绿、pytest 498 passed、compileall 0
 
 ## Backlog(未排期,禁止开工)
 
