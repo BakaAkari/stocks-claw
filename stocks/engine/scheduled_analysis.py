@@ -797,6 +797,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "今天触发器和持仓事实如何复盘",
             _intel_brief_task,
             "明天开盘前重点看什么",
+            "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
             "是否需要让用户补录数据或确认长期记录",
         ],
         "mid_session_check": [
