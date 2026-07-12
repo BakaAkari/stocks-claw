@@ -48,6 +48,10 @@ DEFAULT_KEYWORDS = [
     "Federal Reserve",
 ]
 
+# GNews free tier: 100 req/day. At hourly frequency, 4 keywords = 96/day.
+# The first 4 are highest signal for portfolio impact (VIX/Fed/oil/gold).
+_GNEWS_KEYWORD_COUNT = 4
+
 _ETF_SYMBOLS = [
     ("SPY", "SPDR S&P 500 ETF", "us"),
     ("QQQ", "Invesco QQQ ETF", "us"),
@@ -190,7 +194,9 @@ class IntelligenceHarvester:
         if not self._gnews_api_key:
             return []
         per_keyword = max(1, min(self._max_items_per_source, 15))
-        tasks = [self._fetch_gnews_keyword(keyword, per_keyword) for keyword in self._keywords]
+        gnews_keywords = self._keywords[:_GNEWS_KEYWORD_COUNT]
+        logger.debug(f"GNews fetching {len(gnews_keywords)}/{len(self._keywords)} keywords: {gnews_keywords}")
+        tasks = [self._fetch_gnews_keyword(keyword, per_keyword) for keyword in gnews_keywords]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         items: list[dict] = []
         for result in results:
