@@ -1,487 +1,509 @@
-# 新闻情报模块重构方案
+# 新闻情报与交易分析统一推送系统 — 重构设计
 
-**状态**: 草案 v1.0 — 待多角度迭代评审
+**版本**: v2.0（全新重写）
 **日期**: 2026-07-13
-**范围**: `IntelligenceHarvester` → `IntelligenceAnalyzer` → `intelligence_brief.py` → 飞书推送
+**状态**: 设计阶段，待审批后实施
+**前置评审**: 四角色共识评审 (量化/个人投资/金融预测/资产规划) — 见归档 v1.1
 
 ---
 
-## 1. 现状诊断
+## 1. 设计目标
 
-### 1.1 数据流
+将当前独立运行的两套推送系统（24次/天情报巡逻 + 8次/天盘面会话）重构为统一的**事件驱动+时间驱动双轨**交易分析师报告系统。
 
-```
-数据采集层 (IntelligenceHarvester)
-  ├─ GNews API      (4 关键词, 96次/天, 免费限 100)
-  ├─ Google RSS     (8 关键词, 无限)
-  ├─ Finnhub News   (3 类目: general/commodity/crypto, 60次/分钟限)
-  └─ 宏观/行情       (FRED/Yahoo/Binance/Finnhub)
-
-分析层 (IntelligenceAnalyzer)
-  ├─ 关键词主题聚类 → 6 个主题
-  ├─ 字典式情感判断 → positive/negative/neutral
-  ├─ 市场影响评估   → 6 个市场方向
-  └─ 硬编码信号生成 → buy/sell/hold/watch
-
-输出层 (intelligence_brief.py)
-  ├─ LLM 翻译 (新增) → cluster titles + signal rationales
-  ├─ LLM 快速总结     → 3-5 句中文综述
-  └─ 格式化为飞书文本  → stdout → cron 推送
-```
-
-### 1.2 关键缺陷
-
-| 层级 | 问题 | 严重度 |
-|---|---|---|
-| 采集 | 关键词 8 个，漏 CPI/ECB/tariffs/copper/credit 等大板块 | 高 |
-| 采集 | GNews 只有前 4 个关键词，"Federal Reserve" 排在第 7 位没被 GNews 覆盖 | 高 |
-| 分析 | 聚类单标签，一条新闻只能归一个主题 | 中 |
-| 分析 | 主题只有 6 个，缺 inflation/credit/currencies/industrial_commodities 等 | 高 |
-| 分析 | 情感判断查字典不看上下文，"fear of missing out" 被判 negative | 中 |
-| 分析 | 信号生成硬编码阈值，不交叉验证，不做持续性判断 | 中 |
-| 分析 | 同一主题内不做子聚类，多件不同的事被揉成一个 cluster | 低 |
-| 输出 | 已解决：翻译 + 诊断日志 (2026-07-13) | — |
+**核心原则**：
+- 推送频率 = 事件密度，不是时间均匀分布
+- 情报和盘面是同一份报告的左右两栏，不是两份独立推送
+- 无事件时段系统持续采存但不打扰用户
+- 重大事件发生后 5 分钟内产出可执行的完整报告
 
 ---
 
-## 2. 市场覆盖面设计
+## 2. 当前架构问题诊断
 
-### 2.1 目标覆盖矩阵
-
-一个完整的宏观/跨资产情报系统应覆盖以下领域：
+### 2.1 推送碎片化
 
 ```
-═══════════════════════════════════════════════════════════
-大类                细项                        当前  目标
-───────────────────────────────────────────────────────
-央行/货币政策        Fed, ECB, BOJ, BOE, PBOC    △    ✓
-通胀/就业            CPI, PPI, PCE, 非农, 失业    ✗    ✓
-利率/固收            美债收益率, 信用利差, TIPS     △    ✓
-外汇                DXY, EURUSD, USDJPY, USDCNY   △    ✓
-权益                美股, 欧股, 日股, 中国, EM     △    ✓
-波动率              VIX, VSTOXX, MOVE             ✓    ✓
-商品/能源           原油, 天然气, 铜, 黄金          △    ✓
-加密货币            BTC, ETH                      ✓    ✓
-地缘政治            关税, 制裁, 冲突, 选举          ✗    ✓
-市场结构            资金流向, 情绪, 期权定位         ✗    △
-───────────────────────────────────────────────────────
-✓=已覆盖  △=部分覆盖  ✗=缺失
+当前一天 32 次推送（典型交易日）:
+  24 次情报巡逻 → 其中 18-20 次是"无重大事件"
+   8 次盘面会话 → 情报引用的是 stale 快照（时差 30-90 分钟）
+
+真实 actionable 信号: ~4-6 次/天
+推送/信号比: 32:5 ≈ 6:1 噪声率
 ```
 
-### 2.2 建议关键词 (8 → 16)
+### 2.2 两类推送相互隔离
 
-```
-GNews 层 (前 4 个, 96次/天):
-  0. "Federal Reserve interest rate"    货币政策核心
-  1. "CPI inflation PPI data"           通胀数据发布
-  2. "crude oil price supply OPEC"      能源
-  3. "gold price"                       黄金
-
-Google RSS 层 (全部 16 个):
-  4. "VIX volatility stock market"      波动率/风险
-  5. "US Treasury yield bond market"    利率/固收
-  6. "ECB BOJ central bank policy"      全球央行
-  7. "US Dollar Index currency forex"   外汇
-  8. "copper industrial metals"         工业金属 (经济晴雨表)
-  9. "Bitcoin crypto"                   加密货币
- 10. "China stock market economy"       中国权益
- 11. "tariffs trade war sanctions"      地缘政治/贸易
- 12. "stock market sell-off correction" 风险事件
- 13. "NVIDIA AI semiconductor tech"     科技板块
- 14. "defense aerospace spending"       国防板块
- 15. "credit spread high yield corporate" 信用市场
-```
-
-### 2.3 关键词设计原则
-
-- **不做持仓映射** — 覆盖面由市场结构决定，不由当前持仓决定
-- **互斥性优先** — 每个关键词覆盖一个独立的市场维度
-- **优先级分层** — 前 4 个给 GNews（有 API 限额），剩余给无限源
-
----
-
-## 3. 分析层改进
-
-### 3.1 主题聚类 (6 → 12)
-
-```python
-THEME_KEYWORDS = {
-    "monetary_policy":  ["fed", "federal reserve", "ecb", "boj", "boe", "pboc",
-                         "interest rate", "rate hike", "rate cut", "fomc", "central bank"],
-    "inflation":        ["cpi", "ppi", "pce", "inflation", "deflation", "disinflation",
-                         "price index", "core inflation"],
-    "employment":       ["nonfarm", "unemployment", "jobs report", "payroll",
-                         "jobless claims", "wage growth", "labor market"],
-    "fixed_income":     ["treasury", "yield", "bond", "credit spread", "high yield",
-                         "investment grade", "tips", "yield curve"],
-    "currencies":       ["dollar index", "dxy", "usdcny", "eurusd", "usdjpy",
-                         "forex", "currency", "exchange rate"],
-    "commodities_energy": ["oil", "crude", "opec", "natural gas", "energy", "petroleum"],
-    "commodities_metals": ["gold", "silver", "copper", "industrial metal", "precious metal"],
-    "equities":         ["stock market", "s&p 500", "nasdaq", "equity", "sell-off",
-                         "rally", "correction", "bear market", "bull market"],
-    "tech":             ["ai", "artificial intelligence", "semiconductor", "nvidia",
-                         "chip", "big tech", "cloud computing"],
-    "geopolitics":      ["war", "conflict", "sanction", "tariff", "trade war",
-                         "military", "attack", "tension", "election"],
-    "china_macro":      ["china", "chinese", "pboc", "csi 300", "a-share",
-                         "shanghai", "shenzhen", "stimulus"],
-    "crypto":           ["bitcoin", "btc", "ethereum", "crypto", "defi", "blockchain"],
-}
-```
-
-### 3.2 多标签聚类
-
-当前一条新闻只取第一个匹配的主题。改为所有匹配的主题都分配：
-
-```
-旧: "Fed cuts rates, oil rallies" → monetary_policy (第一个命中)
-新: "Fed cuts rates, oil rallies" → monetary_policy AND commodities_energy
-```
-
-实现：`_cluster_articles` 中改为 `_detect_themes()` 返回 list 而非单个 str，按最高置信度主题归入 primary cluster，同时在 cluster metadata 中标记交叉主题。
-
-### 3.3 情感判断 → LLM 驱动
-
-当前字典匹配的问题：不知道主语、看不了否定、分不清 asset 和 risk。
-
-方案：复用翻译管道模式，在聚类完成后批量调 LLM 判情感：
-
-```
-输入: [cluster theme] + 全部 article titles
-输出: {sentiment: bullish/bearish/neutral/mixed, confidence: 0-1,
-       rationale: "一句中文理由"}
-```
-
-保留字典匹配作为 LLM 不可用时的降级。低温度 (0.1)，批量调用。
-
-### 3.4 信号生成改进
-
-当前硬编码阈值 + 孤立信号。改进：
-
-- **交叉验证** — VIX↑ 时检查 gold/oil/bond 方向是否一致
-- **持续性** — 读最近 N 小时 snapshots，判断是趋势还是 spike
-- **宏观叙事** — 组合多个 cluster 的情感方向，尝试归纳宏观主题
-  - 例: inflation↑ + fed hawkish + yield↑ + gold↓ → "紧缩叙事"
-  - 例: vix↓ + equity↑ + crypto↑ + gold↓ → "风险偏好"
-
----
-
-## 4. 数据质量与健壮性
-
-### 4.1 API 用量追踪
-
-每次 harvest 写一行 JSONL 到 `.local/usage/`：
-
-```jsonl
-{"ts":"...","source":"gnews","calls":4,"errors":0,"quota_daily":100}
-{"ts":"...","source":"google_rss","calls":16,"errors":0}
-{"ts":"...","source":"finnhub","calls":3,"errors":0,"throttled":0}
-{"ts":"...","source":"binance","calls":1,"errors":0}
-{"ts":"...","source":"yahoo","calls":3,"errors":0}
-{"ts":"...","source":"fred","calls":1,"errors":0}
-```
-
-聚合脚本读取 → 日报表 → 决策扩容/缩量。
-
-### 4.2 降级链
-
-| 场景 | 当前行为 | 目标行为 |
-|---|---|---|
-| GNews 429 | 抛异常，source_status=error | 退到 Google RSS 填补，不抛异常 |
-| Finnhub 429 | ProviderRateLimitError | 等待 retry-after，超时则退 |
-| LLM 翻译失败 | 静默返回原文 | 已有 stderr 日志 (2026-07-13) ✓ |
-| LLM 情感判断失败 | N/A | 降级到字典匹配 |
-| 全部新闻源失败 | data_quality=degraded | 推送中显式标注"无新闻数据" |
-
-### 4.3 去重增强
-
-当前仅 URL 去重。增加标题相似度去重（同一事件不同 URL）：
-
-```python
-# 在 URL 去重后，对剩余文章做标题相似度去重
-# 使用 LLM 或简单 Jaccard 相似度
-if title_similarity(a, b) > 0.7:
-    keep the one with earlier published_at
-```
-
----
-
-## 5. 实施路线
-
-### Phase 1 — 覆盖面 (低风险, 今天可做)
-
-- [ ] 关键词 8→16 个
-- [ ] GNews 关键词重排序（Fed/CPI/oil/gold 在前 4）
-- [ ] Google RSS 每词条数 10→12
-- [ ] API 用量追踪 (JSONL)
-
-### Phase 2 — 分析质量 (中风险, 需测试)
-
-- [ ] 主题 6→12 个
-- [ ] 多标签聚类
-- [ ] LLM 情感判断 + 字典降级
-- [ ] 子聚类（同主题内按标题相似度分组）
-
-### Phase 3 — 信号深化 (高风险, 需大量测试)
-
-- [ ] 跨资产交叉验证
-- [ ] 持续性判断 (读历史 snapshots)
-- [ ] 宏观叙事归纳
-- [ ] 标题相似度去重
-- [ ] 降级链补全
-
----
-
-## 6. 风险与权衡
-
-| 决策 | 收益 | 风险 |
-|---|---|---|
-| 16 个关键词 | 覆盖面大幅提升 | 噪声增加，analyzer 截断 80 条可能漏信号 |
-| 多标签聚类 | 不丢交叉主题 | 一条新闻出现在多个 cluster，可能重复推送 |
-| LLM 情感判断 | 准确度大幅提升 | 增加 LLM 调用 (~12 次/小时)，依赖 API 可用性 |
-| 子聚类 | 区分同主题不同事件 | 增加复杂度，边界情况多 |
-| API 用量追踪 | 透明化，可决策 | 维护成本，JSONL 文件会增长 |
-
----
-
-## 7. 未决问题（待讨论）
-
-1. **LLM 调用的成本和延迟** — 翻译 + 总结 + 情感判断 = 每小时 3 次 LLM 调用，内部代理撑得住吗？
-2. **新闻时效性窗口** — 目前 lookback 6 小时。非农/CPI 发布后 5 分钟内就应有反应，6 小时窗口是否太大？
-3. **去重粒度** — URL 去重 + 标题相似度够吗？同一事件从不同角度报道是否应该保留多条？
-4. **飞书输出长度** — 目前 ~900 字上限，16 个关键词 + 12 个主题后可能撑爆。是否分"摘要推送"和"完整报告"两个版本？
-
----
-
-*本文档将在后续迭代中从 Agent 视角、用户视角、运维视角分别评审。*
-
----
-
-## 8. 多角色评审共识 (v1.1)
-
-**评审日期**: 2026-07-13
-**评审角色**: 量化交易分析师 | 个人投资分析师 | 金融报告师/市场预测师 | 资产规划师/风险管理师
-
-### 8.1 四角色一致认定的缺陷
-
-| # | 缺陷 | 认同度 | 严重度 |
-|---|---|---|---|
-| 1 | CPI/通胀/就业数据完全缺失 — 当前市场第一性变量无覆盖 | 4/4 | 🔴 致命 |
-| 2 | 来源可信度为零 — 匿名博客和Reuters权重相同 | 4/4 | 🔴 致命 |
-| 3 | 事件驱动触发器缺失 — 固定每小时轮询错过CPI/FOMC交易窗口 | 3/4 | 🔴 高 |
-| 4 | 叙事构建完全不存在 — 碎片情报，无整合判断 | 3/4 | 🔴 高 |
-| 5 | 信号→行动桥梁断裂 — 知道发生了什么，不知道该做什么 | 4/4 | 🟡 高 |
-| 6 | 组合级防御模式缺失 — 最需要保护的时候反而无能力 | 2/4 显式 | 🔴 高 |
-| 7 | LLM情感 > 字典情感，且需三维映射（情感×资产×传导） | 3/4 | 🟡 中 |
-| 8 | 时间视域标注缺失 — 不知事件影响是1天还是1个月 | 2/4 | 🟡 中 |
-| 9 | 信号不可回测 — 无法验证改进ROI | 1/4 显式 | 🟡 中 |
-
-### 8.2 各角色独特贡献
-
-| 角色 | 贡献的核心概念 |
+| 问题 | 表现 |
 |---|---|
-| 量化分析师 | 新闻量异常检测、传播速度/加速度、来源分散度、多因素预警评分框架、信号回测管道 |
-| 个人投资分析师 | 分层推送（信号简报 vs 完整报告）、场景化行动建议、时延容忍度矩阵、持仓加权关键词优先 |
-| 金融报告师/预测师 | 情感向量(SentimentVector)、叙事模板库+竞争叙事概率、拐点检测、Scorecard前瞻模块 |
-| 资产规划师/风险管理师 | 三级风险预警(关注/减仓/对冲)、跨资产传导路径模板、新闻指纹→场景匹配引擎、组合级对冲触发 |
+| 数据重复采集 | harvest() 和 build_context() 各自调 Finnhub/Yahoo，同一时刻两次 API 调用 |
+| 情报时效断开 | 盘面 agent 读的 intelligence_digest 是上次整点的快照，CPI 发布后盘面分析要等到下个整点 |
+| 叙事无法传递 | 情报产出"紧缩叙事 ↑70%"，盘面 agent 看不到这个结论，只能自己猜 |
+| 分析各自为政 | 两个 LLM agent（情报 Agent + 盘面 Agent）各写各的，风格、深度、结论不保证一致 |
 
-### 8.3 重构后的实施路线
+### 2.3 缺乏事件响应能力
 
-原路线偏重数据和分析层。结合评审共识，重新分层：
+当前所有触发都是固定时间：
+- 情报：每小时整点
+- 盘面：cron 每 5 分钟检查 session 窗口
 
-#### Phase 0 — 防御性补全 (P0, 本周必做)
-
-- [ ] 关键词 8→16，补 CPI/就业/地缘/中国宏观/信用
-- [ ] GNews 关键词重排序（Fed 移位到第1）
-- [ ] 来源可信度权重表 (Reuters/Bloomberg=0.9, aggregator=0.4, anonymous=0.1)
-- [ ] 三级风险预警框架 (关注/减仓/对冲 触发条件 + 系统行为)
-- [ ] 事件驱动触发器 — 经济日历集成，CPI/FOMC/非农发布后5分钟强制采集
-- [ ] API 用量追踪 (JSONL)
-
-#### Phase 1 — 分析质量 (P1, 两周内)
-
-- [ ] 主题 6→12 个
-- [ ] 多标签聚类
-- [ ] LLM 情感判断 + SentimentVector（情感×资产×传导三维映射）
-- [ ] 置信度标签 (fact/inference/rumor) + 时间视域 (transient/tactical/structural)
-- [ ] 新闻量异常检测 + 传播速度/加速度
-- [ ] 来源分散度指标
-
-#### Phase 2 — 决策桥梁 (P1-P2, 一个月内)
-
-- [ ] 主题→配置动作映射表
-- [ ] 叙事模板库 + NarrativeBuilder（5-8个常见叙事模板）
-- [ ] 信号→行动结构化桥梁（对象+力度+置信度+时间视域）
-- [ ] 分层推送（信号简报 <600字 + 完整报告 <3000字）
-- [ ] 跨资产传导路径模板（至少4类：油价冲击/地缘危机/通胀冲击/流动性危机）
-
-#### Phase 3 — 组合级防御 (P2, 两个月内)
-
-- [ ] 组合级对冲触发机制 (portfolio_protection 模块)
-- [ ] 新闻指纹→压力场景匹配引擎
-- [ ] 动态约束调整（基于 regime 自动修改配置上限）
-- [ ] 风险预算 (Risk Budgeting)
-- [ ] 情景概率动态更新
-
-#### Phase 4 — 预测与回溯 (P3, 长期)
-
-- [ ] 信号回测管道 + 阈值统计驱动化
-- [ ] 拐点检测 (情感斜率变化 + 多资产背离)
-- [ ] 历史相似事件回溯 (事件记忆表)
-- [ ] Scorecard 前瞻模块 (24h预测 + 趋势动量 + 尾部风险)
-- [ ] 多因素预警评分框架 + 权重回测优化
+CPI 20:30 发布 → 下次情报在 21:00 → 30 分钟窗口 = 价格发现已完成。FOMC 02:00 决议 → 下次情报在 03:00 → 1 小时滞后。
 
 ---
 
-## 9. 新增设计细节
+## 3. 目标架构
 
-### 9.1 事件驱动触发器
-
-```python
-# 经济日历驱动 — CPI/FOMC/非农发布后强制刷新
-ECONOMIC_EVENTS = {
-    "CPI":       {"time": "08:30 ET", "frequency": "monthly", "refresh_after_s": 300},
-    "FOMC":      {"time": "14:00 ET", "frequency": "6-weekly", "refresh_after_s": 300},
-    "NFP":       {"time": "08:30 ET", "frequency": "monthly", "refresh_after_s": 300},
-    "PPI":       {"time": "08:30 ET", "frequency": "monthly", "refresh_after_s": 300},
-    "GDP":       {"time": "08:30 ET", "frequency": "quarterly", "refresh_after_s": 600},
-    "PCE":       {"time": "08:30 ET", "frequency": "monthly", "refresh_after_s": 300},
-}
+```
+                            ┌──────────────────────┐
+                            │   Financial Calendar │
+                            │   CPI/FOMC/NFP/PPI/  │
+                            │   GDP/PCE + 财报     │
+                            └──────────┬───────────┘
+                                       │
+              ┌────────────────────────┼────────────────────────┐
+              ▼                        ▼                        ▼
+     ┌────────────────┐    ┌────────────────────┐    ┌────────────────┐
+     │ 事件驱动触发器   │    │ 时间驱动触发器       │    │ 异常波动触发器   │
+     │                │    │                    │    │                │
+     │ CPI/FOMC/NFP   │    │ CN 盘前 08:50      │    │ VIX 急升 >20%  │
+     │ 数据发布后5分钟  │    │ CN 盘后 15:20      │    │ 金/油 >2%异动  │
+     │ 地缘重大事件    │    │ US 盘前 21:00      │    │ 信用利差异常    │
+     │ 央行紧急声明    │    │ US 盘后 04:20      │    │ 多资产同步异动  │
+     └───────┬────────┘    └─────────┬──────────┘    └───────┬────────┘
+             │                       │                       │
+             └───────────────────────┼───────────────────────┘
+                                     ▼
+                         ┌──────────────────────┐
+                         │   Unified Harvester  │
+                         │                      │
+                         │ 1. 新闻采集 (一次)     │
+                         │ 2. 行情+宏观 (一次)    │
+                         │ 3. 组合估值+轮动 (一次) │
+                         │ 4. 情报分析+叙事       │
+                         │ 5. 跨资产交叉验证      │
+                         │ 6. 组合防御评估        │
+                         └──────────┬───────────┘
+                                    │
+                         ┌──────────▼───────────┐
+                         │    Report Builder    │
+                         │                      │
+                         │ ┌──────────────────┐ │
+                         │ │ 情报栏 (左)       │ │
+                         │ │ · 宏观叙事+概率   │ │
+                         │ │ · 事件聚类+情感   │ │
+                         │ │ · 来源可信度标注   │ │
+                         │ │ · 跨资产传导评估   │ │
+                         │ ├──────────────────┤ │
+                         │ │ 盘面栏 (右)       │ │
+                         │ │ · 组合状态+盈亏   │ │
+                         │ │ · 动作信号+轮动   │ │
+                         │ │ · 资金配置建议    │ │
+                         │ │ · 风险预警级别    │ │
+                         │ ├──────────────────┤ │
+                         │ │ 决策栏 (底)       │ │
+                         │ │ · 叙事→调仓映射   │ │
+                         │ │ · 时间视域+置信度  │ │
+                         │ │ · 情景概率分布    │ │
+                         │ │ · 防御模式建议    │ │
+                         │ └──────────────────┘ │
+                         └──────────┬───────────┘
+                                    │
+                         ┌──────────▼───────────┐
+                         │    Report Router     │
+                         │                      │
+                         │ 🚨 红色 → 紧急推送    │
+                         │ 📊 橙色 → 完整推送    │
+                         │ 📋 蓝色 → 精简推送    │
+                         │ 📁 灰色 → 仅存档      │
+                         └──────────────────────┘
 ```
 
-### 9.2 来源可信度权重表
+---
 
-```python
-SOURCE_CREDIBILITY = {
-    # Tier 1: 一手数据源 / 顶级通讯社 (weight=0.9-1.0)
-    "Reuters": 0.95, "Bloomberg": 0.95, "WSJ": 0.9, "FT": 0.9,
-    "Federal Reserve": 1.0, "Bureau of Labor Statistics": 1.0,
-    # Tier 2: 可靠聚合器 / 正规财经媒体 (weight=0.6-0.8)
-    "CNBC": 0.75, "MarketWatch": 0.7, "Investing.com": 0.65,
-    "Yahoo Finance": 0.65, "GNews": 0.6,
-    # Tier 3: 分析型 / 观点型来源 (weight=0.3-0.5)
-    "Seeking Alpha": 0.4, "Benzinga": 0.35, "FXStreet": 0.45,
-    "The Motley Fool": 0.35, "ZeroHedge": 0.3,
-    # Fallback: 未知来源
-    "_default": 0.5,
-}
+## 4. 推送等级与触发规则
+
+### 4.1 四级推送
+
+| 等级 | 触发条件 | 内容 | 目标延迟 | 日均次数 |
+|---|---|---|---|---|
+| 🚨 **紧急** | VIX>35 / 地缘危机 / 流动性危机 / -12%止损 | 完整报告 + 组合防御建议 | <5 min | 0-1 |
+| 📊 **完整** | CPI/FOMC/非农 发布 / 盘前 / 盘后 | 完整报告（三栏） | <10 min | 4-6 |
+| 📋 **精简** | 盘中检查 / 单一数据偏离 / 无事件盘前 | 关键变化 + 异常预警 | <5 min | 2-4 |
+| 📁 **存档** | 无事件时段 | 完整采存，不推送 | N/A | 14-18 |
+
+**日均推送从 32 次降到 8-12 次，每次都可执行。**
+
+### 4.2 完整触发规则表
+
+```
+═══════════════════════════════════════════════════════════════════════
+触发类型         触发条件                        等级     推送时机
+───────────────────────────────────────────────────────────────────
+事件驱动
+  CPI 发布       发布日 08:30 ET                  📊 完整   发布+5min
+  非农 发布      发布日 08:30 ET                  📊 完整   发布+5min
+  FOMC 决议      决议日 14:00 ET                  📊 完整   发布+5min
+  PPI/PCE/GDP    发布日 08:30 ET                  📋 精简   发布+5min
+  央行紧急声明   非预定 Fed/ECB/BOJ 重大声明       🚨 紧急   检测+2min
+时间驱动
+  CN 盘前        工作日 08:50 CST                  📊 完整   定时
+  CN 盘后        工作日 15:20 CST                  📊 完整   定时
+  US 盘前        工作日 21:00 CST                  📊 完整   定时
+  US 盘后        工作日 04:20 CST (次日)           📊 完整   定时
+  CN 开盘观察    工作日 09:45 CST                  📋 精简   定时
+  US 开盘观察    工作日 22:00 CST                  📋 精简   定时
+  CN 收盘前检查  工作日 14:35 CST                  📋 精简   定时
+  US 收盘前检查  工作日 03:35 CST (次日)           📋 精简   定时
+异常驱动
+  VIX 急升      15分钟内 VIX 升 >20%              🚨 紧急   检测+2min
+  金/油异动      15分钟内 gold/oil >2%             📋 精简   检测+5min
+  多资产同步     3+ 资产同向 >1.5% + 信用利差走阔  🚨 紧急   检测+2min
+  流动性信号     信用利差 >200bp / VIX>35          🚨 紧急   检测+2min
+无事件
+  非以上任何时段 情报持续采存，不推送               📁 存档   —
+───────────────────────────────────────────────────────────────────
 ```
 
-信号级别区分：
-- `fact` (来源 ∈ Tier 1 + 硬数据/政策公告) → 可触发调仓
-- `inference` (来源 ∈ Tier 2-3 + 分析师解读) → 仅触发关注
-- `rumor` (单一来源 + 低可信度) → 仅记录，不推送
+---
 
-### 9.3 三级风险预警触发
+## 5. 统一报告结构
 
-| 级别 | 触发条件 | 系统行为 |
+### 5.1 完整报告 (📊 级别)
+
+```markdown
+**交易分析师报告 · 2026-07-15 08:35 CST**
+触发: CPI 发布 (3.3% vs 预期 3.1%) | 来源: BLS (Tier 1)
+
+**━━━ 宏观环境 ━━━**
+当前叙事: **紧缩恐惧** (概率 78%) | 竞争叙事: 软着陆 (22%)
+VIX 24.2 ↑3.1 | 10Y 4.45% ↑8bp | DXY 105.1 ↑0.3%
+Gold 2410 ↑0.8% | Crude 78.5 ↓1.2% | BTC 62.4k ↓2.1%
+
+**━━━ 关键事件 ━━━**
+🔴 [monetary_policy] CPI 连续第三个月超预期，市场重新定价 Fed 路径
+   来源: Reuters(可信度0.95) + Bloomberg(0.95) + 3个聚合器 |
+   影响: 美股↓ 美债↓ 美元↑ 黄金短期承压 | 持续: tactical(1-4周)
+
+🟡 [geopolitics] 美国扩大对华芯片出口限制范围
+   来源: WSJ(0.90) + Reuters(0.95) | 持续: structural(>1月)
+
+**━━━ 组合影响 ━━━**
+纳指 QDII  142,000 → 建议减仓 5-10%
+  → 紧缩叙事下，高估值成长股首当其冲
+  → 相似事件 (2024-04 CPI) 后 2 周纳指 -3.2%
+A股 ETF   76,000 → 维持，等待中国刺激信号
+黄金       161,000 → 维持，短期承压但结构性看多
+
+**━━━ 风险预警 ━━━**
+当前风险级别: 🟠 减仓 (Level 2)
+触发: 连续 3 次 CPI 超预期 + VIX 25-35 + 交叉验证确认
+防御模式: cautious
+建议: 暂停权益加仓 | 现金目标 +5% | 关注黄金对冲机会
+情景概率: 紧缩 45% | 软着陆 30% | 滞胀 15% | 危机 10%
+
+**━━━ 数据边界 ━━━**
+情报采集: 2026-07-15 08:30 CST, 14/16 关键词命中, 去重后 72 条
+来源质量: Tier1 6条 Tier2 48条 Tier3 18条 | 可信度加权平均 0.68
+API 用量: GNews 4次(累计 12/100) Finnhub 3次 Yahoo 3次
+数据缺口: 信用利差数据未接入, 中国 A 股实时行情仅腾讯源
+```
+
+### 5.2 精简报告 (📋 级别)
+
+只含：宏观快照 (1行) + 异常变化 (如有) + 风险级别 + 数据边界。~300字。
+
+### 5.3 紧急报告 (🚨 级别)
+
+完整报告 + 组合防御建议（具体对冲工具、建议现金比例、暂停信号清单）。立即推送，独立于正常周期。
+
+---
+
+## 6. 数据管道重构
+
+### 6.1 UnifiedHarvester（统一采集层）
+
+```python
+class UnifiedHarvester:
+    """一次调用完成所有数据采集，消除 API 重复请求。"""
+
+    async def harvest(self, *, trigger_type: str) -> UnifiedSnapshot:
+        # Phase 1: 并行采集 (所有 API 调用同时进行)
+        news_task = self._fetch_news_all()       # 新闻 (GNews + RSS + Finnhub)
+        quotes_task = self._fetch_quotes_all()    # 行情 (Finnhub + Binance)
+        macro_task = self._fetch_macro_all()      # 宏观 (FRED + Yahoo)
+
+        news, quotes, macro = await asyncio.gather(
+            news_task, quotes_task, macro_task
+        )
+
+        # Phase 2: 分析层
+        clusters = self._analyze_news(news)       # 聚类 + 情感 + 来源权重
+        narrative = self._build_narrative(clusters, macro, quotes)
+        cross_validation = self._cross_validate(clusters, macro, quotes)
+        defense_signal = self._assess_defense(clusters, narrative, quotes)
+
+        # Phase 3: 组合层
+        portfolio = await self._build_portfolio_context(quotes, macro)
+
+        return UnifiedSnapshot(
+            news=news, clusters=clusters, narrative=narrative,
+            macro=macro, quotes=quotes, portfolio=portfolio,
+            cross_validation=cross_validation, defense=defense_signal,
+            trigger_type=trigger_type,
+        )
+```
+
+### 6.2 消除的数据重复
+
+| 重复项 | 当前 | 统一后 |
 |---|---|---|
-| 🟡 关注 | 单数据点偏离 / VIX 15-25 / cluster内 2+负面 / 持仓近 -8% | 简报标注，不独立推送 |
-| 🟠 减仓 | 连续3+同向数据 / VIX 25-35 / 交叉验证确认 / 止损 -10% | action_cards 生成 reduce，暂停 accumulate |
-| 🔴 对冲 | VIX>35 + 多市场同步 / 地缘危机 / 流动性危机 / -12% | 紧急推送，组合级对冲建议，暂停所有加仓 |
+| Finnhub 行情 | harvest() 调 1 次 + build_context() 调 1 次 | 1 次 |
+| Yahoo 宏观 | harvest() 调 1 次 + 不调 | 1 次 |
+| FRED 数据 | harvest() 调 1 次 + 不调 | 1 次 |
+| Binance BTC | harvest() 调 1 次 + 不调 | 1 次 |
+| 新闻聚合 | harvest() 调 N 次 + build_context() 调 M 次 | N 次 (M=0) |
 
-### 9.4 主题→配置动作映射
+### 6.3 情报快照连续化
+
+当前 `NewsIntelligenceStore` 存离散 snapshot。统一后改为连续时间线：
 
 ```python
-THEME_ALLOCATION_MAP = {
-    "monetary_policy_dovish": {
-        "increase": ["equity_growth", "gold", "long_duration_bonds"],
-        "reduce": ["cash", "short_term_bonds"],
-        "severity_factor": 0.8,
-        "horizon": "tactical"
-    },
-    "monetary_policy_hawkish": {
-        "increase": ["cash", "short_term_bonds", "defensive_equity"],
-        "reduce": ["equity_growth", "gold", "long_duration_bonds"],
-        "severity_factor": 1.2,
-        "horizon": "tactical"
-    },
-    "inflation_above_target": {
-        "increase": ["gold", "commodities", "tips"],
-        "reduce": ["long_duration_bonds", "equity_high_beta"],
-        "severity_factor": 1.0,
-        "horizon": "structural"
-    },
-    "geopolitical_crisis": {
-        "increase": ["gold", "defensive_equity", "cash"],
-        "reduce": ["equity_high_beta", "emerging_markets", "crypto"],
-        "severity_factor": 1.5,
-        "horizon": "transient"
-    },
-    "recession_risk": {
-        "increase": ["long_duration_bonds", "gold", "defensive_equity", "cash"],
-        "reduce": ["equity_cyclical", "commodities", "high_yield_credit"],
-        "severity_factor": 1.3,
-        "horizon": "structural"
-    },
+# 每个 UnifiedSnapshot 存储时携带前序叙事状态
+snapshot.narrative_continuity = {
+    "previous_narrative": "紧缩恐惧 65%",
+    "current_narrative": "紧缩恐惧 78%",
+    "narrative_shift": "strengthening",
+    "shift_drivers": ["CPI连续第三月超预期"],
+    "hours_since_last_shift": 3.5,
 }
 ```
 
-### 9.5 组合级防御模式
+---
+
+## 7. 新增核心能力
+
+### 7.1 金融日历集成
 
 ```python
 @dataclass
-class PortfolioDefenseSignal:
-    mode: str  # normal / cautious / defensive / panic
-    triggers: list[str]  # 触发条件
-    recommended_hedges: list[dict]  # [{instrument, size_pct, rationale}]
-    suspend_accumulation: bool
-    raise_cash_target: float  # 0-1
-    temporary_constraint_overrides: dict  # {asset_class: {max: new_max}}
-
-# 触发规则
-DEFENSE_RULES = [
-    {"condition": "VIX > 25 AND credit_spread_widen > 50bp", "mode": "cautious"},
-    {"condition": "VIX > 30 AND 3+ negative clusters", "mode": "defensive"},
-    {"condition": "VIX > 35 AND geopolitical_crisis_detected", "mode": "panic"},
-    {"condition": "liquidity_crisis_signal_detected", "mode": "panic"},
-]
+class EconomicEvent:
+    id: str
+    name: str                    # "CPI", "FOMC", "Nonfarm Payrolls"
+    scheduled_time: datetime     # 发布时间 (美东)
+    importance: str              # "critical" / "high" / "medium"
+    refresh_after_s: int         # 发布后强制采集窗口 (秒)
+    affected_assets: list[str]   # ["equity", "bond", "dxy", "gold"]
+    keywords_boost: list[str]    # 发布前后加权的关键词
 ```
 
-### 9.6 叙事模板库（NarrativeBuilder）
+`EconomicCalendarWatcher` 在每个 harvester 周期检查未来 1 小时内是否有预定事件，有则提前预加载关键词权重，发布时刻到期立即触发采集。
+
+### 7.2 来源可信度
+
+| Tier | 权重 | 典型来源 | 信号可行动性 |
+|---|---|---|---|
+| Tier 1 | 0.90-1.00 | Reuters, Bloomberg, BLS, Federal Reserve | fact → 可触发调仓 |
+| Tier 2 | 0.60-0.85 | CNBC, MarketWatch, WSJ, FT | inference → 触发关注 |
+| Tier 3 | 0.30-0.55 | Seeking Alpha, Benzinga, FXStreet | rumor → 仅记录 |
+
+### 7.3 叙事构建 (NarrativeBuilder)
 
 ```python
 NARRATIVE_TEMPLATES = {
     "tightening_fear": {
-        "signal": ["inflation↑", "fed_hawkish↑", "yield↑", "equity↓", "dxy→"],
-        "counter_narrative": "soft_landing",
-        "allocation_bias": "defensive",
+        "conditions": ["inflation↑", "fed_hawkish↑", "yield↑", "equity↓"],
+        "counter": "soft_landing",
+        "allocation": "defensive",
         "lead_assets": ["short_duration", "value_equity", "cash"],
+        "risk_level": "reduce",
     },
     "risk_on": {
-        "signal": ["vix↓", "equity↑", "crypto↑", "yield→", "gold↓"],
-        "counter_narrative": "risk_off",
-        "allocation_bias": "growth",
+        "conditions": ["vix↓", "equity↑", "crypto↑", "gold↓"],
+        "counter": "risk_off",
+        "allocation": "growth",
         "lead_assets": ["tech_equity", "high_beta", "crypto"],
+        "risk_level": "watch",
     },
     "reflation": {
-        "signal": ["inflation↑", "commodity↑", "yield↑", "equity→", "dxy↓"],
-        "counter_narrative": "stagflation",
-        "allocation_bias": "cyclical",
+        "conditions": ["inflation↑", "commodity↑", "yield↑", "dxy↓"],
+        "counter": "stagflation",
+        "allocation": "cyclical",
         "lead_assets": ["commodities", "value_equity", "tips"],
+        "risk_level": "watch",
     },
     "stagflation": {
-        "signal": ["inflation↑", "employment↓", "equity↓", "gold↑", "yield→"],
-        "counter_narrative": "soft_landing",
-        "allocation_bias": "defensive",
-        "lead_assets": ["gold", "commodities", "cash", "defensive_equity"],
+        "conditions": ["inflation↑", "employment↓", "equity↓", "gold↑"],
+        "counter": "soft_landing",
+        "allocation": "defensive",
+        "lead_assets": ["gold", "commodities", "cash"],
+        "risk_level": "hedge",
     },
     "geopolitical_crisis": {
-        "signal": ["geopolitics↑", "oil↑", "gold↑", "equity↓", "vix↑"],
-        "counter_narrative": "contained_conflict",
-        "allocation_bias": "panic",
+        "conditions": ["geopolitics↑", "oil↑", "gold↑", "vix↑", "equity↓"],
+        "counter": "contained_conflict",
+        "allocation": "panic",
         "lead_assets": ["gold", "oil", "defensive_equity", "cash"],
+        "risk_level": "hedge",
     },
-    "china_stimulus": {
-        "signal": ["china_macro↑", "commodity↑", "emerging_market↑", "dxy↓"],
-        "counter_narrative": "china_slowdown",
-        "allocation_bias": "cyclical",
-        "lead_assets": ["china_equity", "commodities", "emerging_market"],
+    "china_reflation": {
+        "conditions": ["china_macro↑", "commodity↑", "emerging_market↑"],
+        "counter": "china_slowdown",
+        "allocation": "cyclical",
+        "lead_assets": ["china_equity", "commodities"],
+        "risk_level": "watch",
     },
+}
+```
+
+### 7.4 三级风险预警
+
+| 级别 | 触发条件 | 系统行为 |
+|---|---|---|
+| 🟡 **关注** | 单一数据偏离 / VIX 15-25 | 报告中标注，不独立推送 |
+| 🟠 **减仓** | 连续 3+ 同向 / VIX 25-35 / 交叉验证确认 | 生成 reduce 建议，暂停 accumulate |
+| 🔴 **对冲** | VIX>35 / 地缘危机 / 流动性危机 | 紧急推送 + 组合防御 + 暂停全部加仓 |
+
+### 7.5 组合防御模式
+
+```python
+@dataclass
+class PortfolioDefenseSignal:
+    mode: str              # normal / cautious / defensive / panic
+    triggers: list[str]
+    hedges: list[dict]     # [{instrument, size_pct, rationale}]
+    suspend_accumulation: bool
+    cash_target: float
+
+DEFENSE_RULES = [
+    {"conditions": "vix>25 AND credit_widen>50bp", "mode": "cautious"},
+    {"conditions": "vix>30 AND 3+ negative_clusters", "mode": "defensive"},
+    {"conditions": "vix>35 OR geopolitical_crisis OR liquidity_crisis",
+     "mode": "panic",
+     "hedges": [
+         {"instrument": "VIX calls", "size_pct": 2},
+         {"instrument": "TLT", "size_pct": 5},
+     ]},
+]
+```
+
+### 7.6 信号量化跟踪
+
+每条信号记录生成时价格 + 事后方向验证 + 胜率统计。
+
+```python
+@dataclass
+class TrackedSignal:
+    signal_id: str
+    generated_at: datetime
+    symbol: str
+    direction: str
+    generation_price: float
+    regime: str
+    confidence: float
+    # 事后填充
+    price_24h: Optional[float] = None
+    price_1w: Optional[float] = None
+    correct: Optional[bool] = None
+```
+
+---
+
+## 8. 关键词与主题覆盖
+
+### 8.1 关键词 (8 → 16)
+
+```
+GNews 层 (前 4 个, 96 次/天):
+  0. "Federal Reserve interest rate policy"
+  1. "CPI inflation PPI data"
+  2. "crude oil price supply OPEC"
+  3. "gold price safe haven"
+
+Google RSS 层 (全部 16 个):
+  4. "VIX volatility stock market fear"
+  5. "US Treasury yield bond market"
+  6. "ECB BOJ central bank monetary policy"
+  7. "US Dollar Index DXY currency forex"
+  8. "copper industrial metals commodity"
+  9. "Bitcoin BTC cryptocurrency"
+ 10. "China stock market economy stimulus"
+ 11. "tariffs trade war sanctions geopolitics"
+ 12. "stock market sell-off correction crash"
+ 13. "NVIDIA AI semiconductor chip tech"
+ 14. "defense aerospace military spending"
+ 15. "credit spread high yield corporate bond"
+```
+
+### 8.2 主题聚类 (6 → 12)
+
+```python
+THEME_KEYWORDS = {
+    "monetary_policy":       [fed, ecb, boj, boe, pboc, rate hike, rate cut, fomc, central bank],
+    "inflation":             [cpi, ppi, pce, inflation, deflation, price index, core inflation],
+    "employment":            [nonfarm, unemployment, jobs, payroll, jobless claims, wage growth],
+    "fixed_income_credit":   [treasury, yield, bond, credit spread, high yield, tips, yield curve],
+    "currencies_fx":         [dollar index, dxy, usdcny, eurusd, usdjpy, forex, exchange rate],
+    "commodities_energy":    [oil, crude, opec, natural gas, energy, petroleum],
+    "commodities_metals":    [gold, silver, copper, industrial metal, precious metal],
+    "equities":              [stock market, s&p 500, nasdaq, equity, sell-off, rally, correction],
+    "technology":            [ai, semiconductor, nvidia, chip, big tech, cloud],
+    "geopolitics":           [war, conflict, sanction, tariff, trade war, military, tension, election],
+    "china_macro":           [china, pboc, csi 300, a-share, shanghai, shenzhen, stimulus],
+    "crypto":                [bitcoin, btc, ethereum, crypto, defi, blockchain],
 }
 ```
 
 ---
 
-*本文档 v1.1 整合了四角色评审。后续迭代将细化各 Phase 的实现细节。*
+## 9. 实施计划
+
+### Phase 0 — 防御性补全 (一周内)
+
+- [ ] 关键词 8→16，GNews 重排序
+- [ ] 来源可信度权重表 + 信号可行动性标签
+- [ ] 金融日历数据结构 + EconomicCalendarWatcher
+- [ ] 三级风险预警触发框架
+- [ ] API 用量追踪 (JSONL)
+- [ ] 事件驱动触发器 (CPI/FOMC/非农 基础版)
+- [ ] 取消无事件时段的"无重大事件 推送 → 仅存档
+
+### Phase 1 — 统一采集层 (两周内)
+
+- [ ] UnifiedHarvester 实现
+- [ ] 消除 API 重复调用
+- [ ] 主题 6→12 + 多标签聚类
+- [ ] LLM 情感判断 + 字典降级
+- [ ] 情报快照连续化 (narrative_continuity)
+
+### Phase 2 — 统一报告 (一月内)
+
+- [ ] ReportBuilder 三栏结构
+- [ ] 叙事模板库 + NarrativeBuilder
+- [ ] 主题→配置动作映射表
+- [ ] ReportRouter (四级推送)
+- [ ] cron jobs 合并 (10→3: 事件触发器 + 时间触发器 + 异常监控)
+
+### Phase 3 — 防御与预测 (两月内)
+
+- [ ] 组合防御模式 + PortfolioDefenseSignal
+- [ ] 新闻指纹→压力场景匹配
+- [ ] 信号量化跟踪 + 回测管道
+- [ ] 拐点检测 + 情感斜率变化
+- [ ] 历史相似事件回溯
+- [ ] 多因素预警评分框架
+
+---
+
+## 10. 风险与回退
+
+| 风险 | 缓释措施 |
+|---|---|
+| 统一采集层成为单点 | 保持每个源的独立异常处理；统一失败时降级到旧管道 |
+| LLM 调用增加（叙事构建新增） | 叙事模板匹配基于规则，LLM 仅用于情感和最终总结 |
+| 金融日历数据维护成本 | 初期只覆盖 CPI/FOMC/非农 3 个事件，后续渐进 |
+| 推送减少后用户感知信息缺失 | Phase 0 先做"安静模式"（采存不推送），保持用户可手动查询 |
+| 旧 cron jobs 与新系统并存时的冲突 | 统一管道上线后，旧 cron jobs 先 pause 而非 remove，观察 2 周 |
+
+---
+
+*本文档为 v2.0 全新设计。实施从 Phase 0 开始。*
