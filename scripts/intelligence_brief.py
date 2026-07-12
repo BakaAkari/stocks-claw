@@ -194,6 +194,8 @@ def _llm_summary(brief: dict) -> str:
     """调用 LLM 生成 3-5 句中文市场总结。仅引用已展示的数据。"""
     api_key = _load_api_key()
     if not api_key:
+        import sys as _sys
+        print("[intelligence_brief] _llm_summary: API key not found in .env or env vars", file=_sys.stderr)
         return ""
 
     base_url = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
@@ -250,8 +252,100 @@ def _llm_summary(brief: dict) -> str:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode("utf-8"))
         return result["choices"][0]["message"]["content"].strip()
-    except Exception:
+    except Exception as _exc:
+        import sys as _sys
+        print(f"[intelligence_brief] _llm_summary: LLM call failed: {_exc}", file=_sys.stderr)
         return ""
+
+
+def _translate_texts(texts):
+    """将英文文本批量翻译为中文，保留专有名词和数字。"""
+    if not texts:
+        return texts
+
+    api_key = _load_api_key()
+    if not api_key:
+        return texts
+
+    base_url = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
+    indexed = "\n".join(f"[{i}] {t}" for i, t in enumerate(texts))
+
+    system = (
+        "你是财经新闻翻译。将以下英文文本翻译为简洁中文。\n"
+        "规则:\n"
+        "- 保留所有专有名词原文(如 VIX、FOMC、SPY、NVIDIA)\n"
+        "- 保留所有数字和百分比\n"
+        "- 每行翻译独立，不添加上下文\n"
+        "- 输出格式: [序号] 中文翻译，一行一条\n"
+        "- 不添加任何解释"
+    )
+
+    payload = json.dumps(
+        {
+            "model": "deepseek-v4-pro",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"翻译以下文本:\n\n{indexed}"},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2000,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    import re as _re
+    try:
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        raw = result["choices"][0]["message"]["content"].strip()
+
+        translated = {}
+        for line in raw.split("\n"):
+            line = line.strip()
+            match = _re.match(r"\[(\d+)\]\s*(.+)", line)
+            if match:
+                idx = int(match.group(1))
+                text = match.group(2).strip()
+                translated[idx] = text
+
+        return [translated.get(i, texts[i]) for i in range(len(texts))]
+    except Exception:
+        return texts
+
+
+def _translate_brief(brief):
+    """翻译 brief 中的英文字段为中文。"""
+    texts = []
+    for c in brief.get("clusters", []):
+        if c.get("title"):
+            texts.append(c["title"])
+    for s in brief.get("signals", []):
+        if s.get("rationale"):
+            texts.append(s["rationale"])
+
+    if not texts:
+        return brief
+
+    translated = _translate_texts(texts)
+    idx = 0
+    for c in brief.get("clusters", []):
+        if c.get("title"):
+            c["title"] = translated[idx]
+            idx += 1
+    for s in brief.get("signals", []):
+        if s.get("rationale"):
+            s["rationale"] = translated[idx]
+            idx += 1
+    return brief
 
 
 def main():
@@ -261,6 +355,7 @@ def main():
 
     data = json.loads(LATEST.read_text())
     brief = build_brief(data)
+    brief = _translate_brief(brief)
 
     BRIEF_PATH.mkdir(parents=True, exist_ok=True)
     BRIEF_FILE.write_text(
