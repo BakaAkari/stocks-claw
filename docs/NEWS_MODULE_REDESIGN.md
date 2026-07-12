@@ -255,3 +255,233 @@ if title_similarity(a, b) > 0.7:
 ---
 
 *本文档将在后续迭代中从 Agent 视角、用户视角、运维视角分别评审。*
+
+---
+
+## 8. 多角色评审共识 (v1.1)
+
+**评审日期**: 2026-07-13
+**评审角色**: 量化交易分析师 | 个人投资分析师 | 金融报告师/市场预测师 | 资产规划师/风险管理师
+
+### 8.1 四角色一致认定的缺陷
+
+| # | 缺陷 | 认同度 | 严重度 |
+|---|---|---|---|
+| 1 | CPI/通胀/就业数据完全缺失 — 当前市场第一性变量无覆盖 | 4/4 | 🔴 致命 |
+| 2 | 来源可信度为零 — 匿名博客和Reuters权重相同 | 4/4 | 🔴 致命 |
+| 3 | 事件驱动触发器缺失 — 固定每小时轮询错过CPI/FOMC交易窗口 | 3/4 | 🔴 高 |
+| 4 | 叙事构建完全不存在 — 碎片情报，无整合判断 | 3/4 | 🔴 高 |
+| 5 | 信号→行动桥梁断裂 — 知道发生了什么，不知道该做什么 | 4/4 | 🟡 高 |
+| 6 | 组合级防御模式缺失 — 最需要保护的时候反而无能力 | 2/4 显式 | 🔴 高 |
+| 7 | LLM情感 > 字典情感，且需三维映射（情感×资产×传导） | 3/4 | 🟡 中 |
+| 8 | 时间视域标注缺失 — 不知事件影响是1天还是1个月 | 2/4 | 🟡 中 |
+| 9 | 信号不可回测 — 无法验证改进ROI | 1/4 显式 | 🟡 中 |
+
+### 8.2 各角色独特贡献
+
+| 角色 | 贡献的核心概念 |
+|---|---|
+| 量化分析师 | 新闻量异常检测、传播速度/加速度、来源分散度、多因素预警评分框架、信号回测管道 |
+| 个人投资分析师 | 分层推送（信号简报 vs 完整报告）、场景化行动建议、时延容忍度矩阵、持仓加权关键词优先 |
+| 金融报告师/预测师 | 情感向量(SentimentVector)、叙事模板库+竞争叙事概率、拐点检测、Scorecard前瞻模块 |
+| 资产规划师/风险管理师 | 三级风险预警(关注/减仓/对冲)、跨资产传导路径模板、新闻指纹→场景匹配引擎、组合级对冲触发 |
+
+### 8.3 重构后的实施路线
+
+原路线偏重数据和分析层。结合评审共识，重新分层：
+
+#### Phase 0 — 防御性补全 (P0, 本周必做)
+
+- [ ] 关键词 8→16，补 CPI/就业/地缘/中国宏观/信用
+- [ ] GNews 关键词重排序（Fed 移位到第1）
+- [ ] 来源可信度权重表 (Reuters/Bloomberg=0.9, aggregator=0.4, anonymous=0.1)
+- [ ] 三级风险预警框架 (关注/减仓/对冲 触发条件 + 系统行为)
+- [ ] 事件驱动触发器 — 经济日历集成，CPI/FOMC/非农发布后5分钟强制采集
+- [ ] API 用量追踪 (JSONL)
+
+#### Phase 1 — 分析质量 (P1, 两周内)
+
+- [ ] 主题 6→12 个
+- [ ] 多标签聚类
+- [ ] LLM 情感判断 + SentimentVector（情感×资产×传导三维映射）
+- [ ] 置信度标签 (fact/inference/rumor) + 时间视域 (transient/tactical/structural)
+- [ ] 新闻量异常检测 + 传播速度/加速度
+- [ ] 来源分散度指标
+
+#### Phase 2 — 决策桥梁 (P1-P2, 一个月内)
+
+- [ ] 主题→配置动作映射表
+- [ ] 叙事模板库 + NarrativeBuilder（5-8个常见叙事模板）
+- [ ] 信号→行动结构化桥梁（对象+力度+置信度+时间视域）
+- [ ] 分层推送（信号简报 <600字 + 完整报告 <3000字）
+- [ ] 跨资产传导路径模板（至少4类：油价冲击/地缘危机/通胀冲击/流动性危机）
+
+#### Phase 3 — 组合级防御 (P2, 两个月内)
+
+- [ ] 组合级对冲触发机制 (portfolio_protection 模块)
+- [ ] 新闻指纹→压力场景匹配引擎
+- [ ] 动态约束调整（基于 regime 自动修改配置上限）
+- [ ] 风险预算 (Risk Budgeting)
+- [ ] 情景概率动态更新
+
+#### Phase 4 — 预测与回溯 (P3, 长期)
+
+- [ ] 信号回测管道 + 阈值统计驱动化
+- [ ] 拐点检测 (情感斜率变化 + 多资产背离)
+- [ ] 历史相似事件回溯 (事件记忆表)
+- [ ] Scorecard 前瞻模块 (24h预测 + 趋势动量 + 尾部风险)
+- [ ] 多因素预警评分框架 + 权重回测优化
+
+---
+
+## 9. 新增设计细节
+
+### 9.1 事件驱动触发器
+
+```python
+# 经济日历驱动 — CPI/FOMC/非农发布后强制刷新
+ECONOMIC_EVENTS = {
+    "CPI":       {"time": "08:30 ET", "frequency": "monthly", "refresh_after_s": 300},
+    "FOMC":      {"time": "14:00 ET", "frequency": "6-weekly", "refresh_after_s": 300},
+    "NFP":       {"time": "08:30 ET", "frequency": "monthly", "refresh_after_s": 300},
+    "PPI":       {"time": "08:30 ET", "frequency": "monthly", "refresh_after_s": 300},
+    "GDP":       {"time": "08:30 ET", "frequency": "quarterly", "refresh_after_s": 600},
+    "PCE":       {"time": "08:30 ET", "frequency": "monthly", "refresh_after_s": 300},
+}
+```
+
+### 9.2 来源可信度权重表
+
+```python
+SOURCE_CREDIBILITY = {
+    # Tier 1: 一手数据源 / 顶级通讯社 (weight=0.9-1.0)
+    "Reuters": 0.95, "Bloomberg": 0.95, "WSJ": 0.9, "FT": 0.9,
+    "Federal Reserve": 1.0, "Bureau of Labor Statistics": 1.0,
+    # Tier 2: 可靠聚合器 / 正规财经媒体 (weight=0.6-0.8)
+    "CNBC": 0.75, "MarketWatch": 0.7, "Investing.com": 0.65,
+    "Yahoo Finance": 0.65, "GNews": 0.6,
+    # Tier 3: 分析型 / 观点型来源 (weight=0.3-0.5)
+    "Seeking Alpha": 0.4, "Benzinga": 0.35, "FXStreet": 0.45,
+    "The Motley Fool": 0.35, "ZeroHedge": 0.3,
+    # Fallback: 未知来源
+    "_default": 0.5,
+}
+```
+
+信号级别区分：
+- `fact` (来源 ∈ Tier 1 + 硬数据/政策公告) → 可触发调仓
+- `inference` (来源 ∈ Tier 2-3 + 分析师解读) → 仅触发关注
+- `rumor` (单一来源 + 低可信度) → 仅记录，不推送
+
+### 9.3 三级风险预警触发
+
+| 级别 | 触发条件 | 系统行为 |
+|---|---|---|
+| 🟡 关注 | 单数据点偏离 / VIX 15-25 / cluster内 2+负面 / 持仓近 -8% | 简报标注，不独立推送 |
+| 🟠 减仓 | 连续3+同向数据 / VIX 25-35 / 交叉验证确认 / 止损 -10% | action_cards 生成 reduce，暂停 accumulate |
+| 🔴 对冲 | VIX>35 + 多市场同步 / 地缘危机 / 流动性危机 / -12% | 紧急推送，组合级对冲建议，暂停所有加仓 |
+
+### 9.4 主题→配置动作映射
+
+```python
+THEME_ALLOCATION_MAP = {
+    "monetary_policy_dovish": {
+        "increase": ["equity_growth", "gold", "long_duration_bonds"],
+        "reduce": ["cash", "short_term_bonds"],
+        "severity_factor": 0.8,
+        "horizon": "tactical"
+    },
+    "monetary_policy_hawkish": {
+        "increase": ["cash", "short_term_bonds", "defensive_equity"],
+        "reduce": ["equity_growth", "gold", "long_duration_bonds"],
+        "severity_factor": 1.2,
+        "horizon": "tactical"
+    },
+    "inflation_above_target": {
+        "increase": ["gold", "commodities", "tips"],
+        "reduce": ["long_duration_bonds", "equity_high_beta"],
+        "severity_factor": 1.0,
+        "horizon": "structural"
+    },
+    "geopolitical_crisis": {
+        "increase": ["gold", "defensive_equity", "cash"],
+        "reduce": ["equity_high_beta", "emerging_markets", "crypto"],
+        "severity_factor": 1.5,
+        "horizon": "transient"
+    },
+    "recession_risk": {
+        "increase": ["long_duration_bonds", "gold", "defensive_equity", "cash"],
+        "reduce": ["equity_cyclical", "commodities", "high_yield_credit"],
+        "severity_factor": 1.3,
+        "horizon": "structural"
+    },
+}
+```
+
+### 9.5 组合级防御模式
+
+```python
+@dataclass
+class PortfolioDefenseSignal:
+    mode: str  # normal / cautious / defensive / panic
+    triggers: list[str]  # 触发条件
+    recommended_hedges: list[dict]  # [{instrument, size_pct, rationale}]
+    suspend_accumulation: bool
+    raise_cash_target: float  # 0-1
+    temporary_constraint_overrides: dict  # {asset_class: {max: new_max}}
+
+# 触发规则
+DEFENSE_RULES = [
+    {"condition": "VIX > 25 AND credit_spread_widen > 50bp", "mode": "cautious"},
+    {"condition": "VIX > 30 AND 3+ negative clusters", "mode": "defensive"},
+    {"condition": "VIX > 35 AND geopolitical_crisis_detected", "mode": "panic"},
+    {"condition": "liquidity_crisis_signal_detected", "mode": "panic"},
+]
+```
+
+### 9.6 叙事模板库（NarrativeBuilder）
+
+```python
+NARRATIVE_TEMPLATES = {
+    "tightening_fear": {
+        "signal": ["inflation↑", "fed_hawkish↑", "yield↑", "equity↓", "dxy→"],
+        "counter_narrative": "soft_landing",
+        "allocation_bias": "defensive",
+        "lead_assets": ["short_duration", "value_equity", "cash"],
+    },
+    "risk_on": {
+        "signal": ["vix↓", "equity↑", "crypto↑", "yield→", "gold↓"],
+        "counter_narrative": "risk_off",
+        "allocation_bias": "growth",
+        "lead_assets": ["tech_equity", "high_beta", "crypto"],
+    },
+    "reflation": {
+        "signal": ["inflation↑", "commodity↑", "yield↑", "equity→", "dxy↓"],
+        "counter_narrative": "stagflation",
+        "allocation_bias": "cyclical",
+        "lead_assets": ["commodities", "value_equity", "tips"],
+    },
+    "stagflation": {
+        "signal": ["inflation↑", "employment↓", "equity↓", "gold↑", "yield→"],
+        "counter_narrative": "soft_landing",
+        "allocation_bias": "defensive",
+        "lead_assets": ["gold", "commodities", "cash", "defensive_equity"],
+    },
+    "geopolitical_crisis": {
+        "signal": ["geopolitics↑", "oil↑", "gold↑", "equity↓", "vix↑"],
+        "counter_narrative": "contained_conflict",
+        "allocation_bias": "panic",
+        "lead_assets": ["gold", "oil", "defensive_equity", "cash"],
+    },
+    "china_stimulus": {
+        "signal": ["china_macro↑", "commodity↑", "emerging_market↑", "dxy↓"],
+        "counter_narrative": "china_slowdown",
+        "allocation_bias": "cyclical",
+        "lead_assets": ["china_equity", "commodities", "emerging_market"],
+    },
+}
+```
+
+---
+
+*本文档 v1.1 整合了四角色评审。后续迭代将细化各 Phase 的实现细节。*
