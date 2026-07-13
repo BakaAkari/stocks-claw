@@ -179,6 +179,9 @@ class StocksEngine:
             retry_delay=fetcher_cfg.get("retry_delay", 1.0),
             fallback_order=prov_cfg.get("fallback", {}),
         )
+        # 惰性注入 fallback 追踪器
+        from stocks.engine.fallback_tracker import FallbackTracker
+        self.fetcher.set_fallback_tracker(FallbackTracker())
         self.portfolio_scaffold = PortfolioScaffold()
         self.market_scaffold = MarketScaffold()
 

@@ -20,6 +20,7 @@ from typing import Optional
 import pandas as pd
 
 from stocks.engine.exchange_rate import get_usd_cny_rate
+from stocks.engine.factor_rules import collect_votes, adjudicate
 
 # ── 事件主题 → 持仓暴露标签 ──
 THEME_TO_EXPOSURE: dict[str, list[str]] = {
@@ -373,117 +374,39 @@ def finalize_decision(
             intelligence_conflict="none", constraint_conflict="none",
         )
 
-    # ── 2. 约束互查（最高覆盖优先级，仅次于 stop_loss）──
-    over_limit_buckets: set[str] = set()
-    if constraints and portfolio_ratios:
-        for bucket_name, rule_c in constraints.items():
-            if not isinstance(rule_c, dict):
-                continue
-            max_pct = rule_c.get("max")
-            actual = portfolio_ratios.get(bucket_name)
-            if max_pct is not None and actual is not None and actual > max_pct:
-                over_limit_buckets.add(bucket_name)
+    # ── 2-7. 因子覆盖层（替代原顺序 mutation 管道）──
+    # 收集所有因子的投票，按优先级裁决
+    votes = collect_votes(
+        position,
+        current_signal=signal,
+        current_ratio=ratio,
+        market_state=market_state,
+        event_clusters=event_clusters,
+        intelligence_signals=intelligence_signals,
+        rotation_ranks=rotation_ranks,
+        constraints=constraints,
+        portfolio_ratios=portfolio_ratios,
+        data_freshness=data_freshness,
+        rotation_symbol=rotation_symbol,
+    )
+    result = adjudicate(signal, action, ratio, votes)
+    signal = result["signal"]
+    action = result["action"]
+    ratio = result["ratio"]
+    facts.extend(result["facts"])
+    # 提取冲突类型
+    for c in result["conflicts"]:
+        if c.startswith("constraint_check"):
+            constraint_conflict = c.split(":", 1)[-1] if ":" in c else "suppression"
+        elif c.startswith("intel_conflict"):
+            intel_conflict = c.split(":", 1)[-1] if ":" in c else "caution"
 
-    matched_buckets = {_TAG_TO_BUCKET.get(t, "") for t in exposure_tags} - {""}
-    if signal == "add" and (matched_buckets & over_limit_buckets):
-        over_b = (matched_buckets & over_limit_buckets).pop()
-        constraint_conflict = "over_limit_suppressed"
-        ratio = 0.0
-        signal = "hold"
-        action = f"暂停加仓（{over_b} 大类超限，等待减仓后重新评估）"
-        facts.append(f"约束互查：{over_b} 大类已超限，加仓信号暂停")
-
-    # ── 3. 市场状态叠加 ──
-    risk = ms.get("risk_appetite", "unknown")
-    if risk in ("risk_off", "panic") and signal == "add":
-        ratio *= 0.5
-        facts.append(f"市场风险状态={risk}，加仓信号降权 50%")
-    if risk == "panic" and signal == "add":
-        ratio = 0.0
-        signal = "hold"
-        action = "市场恐慌，暂停加仓"
-        facts.append("市场恐慌，暂停加仓")
-
-    # ── 4. 事件聚类覆盖 ──
-    exp_tags_set = set(exposure_tags)
-    for c in clusters:
-        c_theme = c.get("theme", "")
-        c_urgency = c.get("urgency", "medium")
-        c_sentiment = c.get("sentiment", "neutral")
-        theme_tags = set(THEME_TO_EXPOSURE.get(c_theme, []))
-        if not (exp_tags_set & theme_tags) and c_theme != "general":
-            continue
-        if c_urgency == "critical" and c_sentiment == "negative":
-            if signal == "add":
-                ratio = 0.0
-                signal = "hold"
-                action = f"情报 CRITICAL: [{c_theme}] → 暂停加仓"
-                facts.append(f"情报 CRITICAL: [{c_theme}] {c.get('summary', '')[:80]} → 暂停加仓")
-            elif signal in ("reduce", "take_profit"):
-                facts.append(f"情报 CRITICAL: [{c_theme}] {c.get('summary', '')[:80]} → 确认减仓方向")
-        if c_sentiment == "positive":
-            if signal == "add":
-                facts.append(f"情报确认: [{c_theme}] {c.get('summary', '')[:80]}")
-            elif signal in ("reduce", "reduce_risk"):
-                facts.append(f"情报利好: [{c_theme}] {c.get('summary', '')[:80]} → "
-                             "与减仓信号矛盾，技术面若未恶化可考虑减仓后等回踩补回")
-
-    # ── 5. 数据新鲜度 ──
-    if data_freshness == "stale" and signal not in ("hold", "wait"):
-        ratio *= 0.5
-        facts.append("行情延迟（非实时），信号降权 50%")
-    elif data_freshness in ("very_stale", "unknown") and signal not in ("hold", "wait", "stop_loss"):
-        ratio = 0.0
-        signal = "hold"
-        action = "行情严重延迟，仅止损信号保留"
-        facts.append("行情严重延迟，仅止损信号保留")
-
-    # ── 6. 轮动排名 ──
+    # ── 6. 轮动排名（纯事实追加，不改变决策）──
+    ranks = rotation_ranks or {}
     if rotation_symbol and rotation_symbol in ranks:
         rank = ranks[rotation_symbol]
         if rank and rank <= 3 and signal == "add":
             facts.append(f"轮动排名 #{rank}，加仓信号获动量确认")
-
-    # ── 7. 情报信号冲突检查 ──
-    inst_key = position.get("instrument_key") or ""
-    raw_symbol = inst_key.split(":")[-1] if ":" in inst_key else ""
-    intel_sym = raw_symbol if raw_symbol and raw_symbol in (intelligence_signals or {}) else None
-    if not intel_sym:
-        for proxy_sym, target_sym in _INTEL_SIGNAL_PROXY.items():
-            if target_sym == raw_symbol and proxy_sym in (intelligence_signals or {}):
-                intel_sym = proxy_sym
-                break
-
-    if intel_sym and intelligence_signals:
-        intel = intelligence_signals.get(intel_sym, {})
-        intel_dir = intel.get("direction", "")
-        intel_urgency = intel.get("urgency", "medium")
-        tech_bullish = signal in ("add", "accumulate", "take_profit")
-        tech_bearish = signal in ("reduce", "stop_loss", "reduce_risk")
-        intel_bullish = intel_dir == "buy"
-        intel_bearish = intel_dir == "sell"
-
-        if (tech_bullish and intel_bearish) or (tech_bearish and intel_bullish):
-            if intel_urgency == "critical":
-                intel_conflict = "override"
-                if signal not in ("hold", "wait"):
-                    ratio = 0.0
-                    signal = "hold"
-                    action = f"暂停执行：技术面{tech.signal}，情报面反向（{intel_sym}），等待确认"
-                    facts.append(f"情报冲突（{intel_sym} {intel_dir}），暂停执行等待情报确认")
-            else:
-                intel_conflict = "caution"
-                if ratio != 0:
-                    ratio *= 0.5
-                    if signal == "reduce":
-                        action = (f"趋势走弱，情报反向（{intel_sym} {intel_dir}），"
-                                  f"减仓降为 {int(abs(ratio)*100):.0f}%")
-                    elif signal == "add":
-                        action = (f"左侧加仓，情报反向（{intel_sym}），"
-                                  f"加仓降为 {int(abs(ratio)*100):.0f}%")
-
-        if intel_conflict != "none":
-            facts.append(f"情报面: {intel_dir} {intel_sym} — {intel.get('rationale', '')[:80]}")
 
     # ── 8. config_only 路由降权 ──
     if mode == "config_only":

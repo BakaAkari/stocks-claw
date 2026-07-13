@@ -10,11 +10,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from stocks.engine.quant_action import (
-    _INTEL_SIGNAL_PROXY,
-    _TAG_TO_BUCKET,
-    THEME_TO_EXPOSURE,
-)
 
 
 @dataclass
@@ -50,6 +45,7 @@ class ConstraintCheckRule(FactorRule):
                  portfolio_ratios=None, **kwargs):
         if not constraints or not portfolio_ratios:
             return FactorVote("constraint_check", current_signal)
+        from stocks.engine.quant_action import _TAG_TO_BUCKET
         exposure_tags = (position.get("classification") or {}).get("exposure_tags") or []
         over_limit = set()
         for bucket_name, rule in constraints.items():
@@ -66,7 +62,7 @@ class ConstraintCheckRule(FactorRule):
                               signal_override="hold",
                               action_text=f"暂停加仓（{ob} 大类超限）",
                               facts=[f"约束互查：{ob} 大类已超限，加仓信号暂停"],
-                              priority=self.priority, conflict_type="suppression")
+                              priority=self.priority, conflict_type="over_limit_suppressed")
         return FactorVote("constraint_check", current_signal)
 
 
@@ -95,6 +91,7 @@ class EventClusterRule(FactorRule):
     priority = 75
 
     def evaluate(self, position, *, current_signal, current_ratio, event_clusters=None, **kwargs):
+        from stocks.engine.quant_action import THEME_TO_EXPOSURE
         clusters = event_clusters or []
         exposure_tags = set((position.get("classification") or {}).get("exposure_tags") or [])
         facts = []
@@ -142,6 +139,7 @@ class IntelConflictRule(FactorRule):
 
     def evaluate(self, position, *, current_signal, current_ratio,
                  intelligence_signals=None, **kwargs):
+        from stocks.engine.quant_action import _INTEL_SIGNAL_PROXY
         intel_sigs = intelligence_signals or {}
         inst_key = position.get("instrument_key") or ""
         raw = inst_key.split(":")[-1] if ":" in inst_key else ""

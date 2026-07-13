@@ -42,6 +42,11 @@ class DataFetcher:
         self.retry_delay = retry_delay
         self.fallback_order = fallback_order or {}
         self._degradation_log: list[DegradationRecord] = []
+        self._tracker = None  # set via set_fallback_tracker()
+
+    def set_fallback_tracker(self, tracker) -> None:
+        """注入 FallbackTracker 实例（惰性，避免启动时依赖）。"""
+        self._tracker = tracker
 
     def get_degradation_log(self) -> list[DegradationRecord]:
         """获取最近一次 fetch 的降级记录"""
@@ -121,6 +126,11 @@ class DataFetcher:
         for attempt in range(self.max_retries + 1):
             try:
                 quotes = await self._call_provider(primary, instruments)
+                if self._tracker:
+                    self._tracker.record(
+                        symbol=market, market=market, data_type="quote",
+                        requested_sources=[primary_name], used_source=primary_name,
+                    )
                 return quotes, DegradationRecord(
                     market=market,
                     primary_provider=primary_name,
@@ -148,6 +158,14 @@ class DataFetcher:
             fallback_name = getattr(fallback, "name", type(fallback).__name__)
             try:
                 quotes = await self._call_provider(fallback, instruments)
+                if self._tracker:
+                    self._tracker.record(
+                        symbol=market, market=market, data_type="quote",
+                        requested_sources=[primary_name, fallback_name],
+                        used_source=fallback_name,
+                        failed_sources=[primary_name],
+                        failure_reasons={primary_name: str(last_error) if last_error else "retry exhausted"},
+                    )
                 return quotes, DegradationRecord(
                     market=market,
                     primary_provider=primary_name,
