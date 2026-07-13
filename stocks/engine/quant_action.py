@@ -60,21 +60,26 @@ _TAG_TO_BUCKET: dict[str, str] = {
 
 # ── 产品类型路由规则 ──
 _PRODUCT_TYPE_RULES: dict[str, dict] = {
+    # ── 全执行：场内证券 ──
     "exchange_traded_fund": {"mode": "full"},
     "stock": {"mode": "full"},
     "short_treasury_etf": {"mode": "full"},
-    "qdii_fund": {"mode": "config_only",
-                  "context": "场外 QDII，申赎 T+2，适合长期配置。无明确替代方向时不宜频繁止盈"},
-    "feeder_fund": {"mode": "config_only",
-                    "context": "场外联接基金，申赎 T+2，适合长期配置"},
-    "mixed_fund": {"mode": "config_only",
-                   "context": "主动管理混合基金，高浮盈后需关注基金经理风格漂移风险"},
-    "fixed_income_plus_fund": {"mode": "config_only",
-                               "context": "固收+产品，波动率低，MA20/RSI 技术信号不适用"},
-    "precious_metal_account": {"mode": "config_only",
-                               "context": "积存金，买卖有价差，短线操作成本高"},
+    # ── 高门槛执行：场外基金（T+2，更高止盈/止损阈值，单次操作）──
+    "qdii_fund": {"mode": "fund",
+                  "context": "场外 QDII，申赎 T+2，以收盘净值为准。止盈阈值 40%，止损阈值 -20%"},
+    "feeder_fund": {"mode": "fund",
+                    "context": "场外联接基金，申赎 T+2，以收盘净值为准。止盈阈值 40%，止损阈值 -20%"},
+    "mixed_fund": {"mode": "fund",
+                   "context": "主动管理混合基金，高浮盈后需关注基金经理风格漂移。止盈阈值 40%"},
+    "fixed_income_plus_fund": {"mode": "fund",
+                               "context": "固收+产品，波动率低。技术信号仅供参考，以资产配置逻辑为准"},
+    # ── 价差产品：贵金属（正常阈值，但有买卖价差）──
+    "precious_metal_account": {"mode": "precious",
+                               "context": "积存金/贵金属账户，买卖有价差，短线操作成本高"},
+    # ── 只读：银行理财 ──
     "bank_wealth_management": {"mode": "info_only",
                               "context": "银行理财，有开放期限制，非开放期不可操作"},
+    # ── 跳过：现金等价物 ──
     "money_market_fund": {"mode": "skip"},
     "cash": {"mode": "skip"},
     "cash_equivalent": {"mode": "skip"},
@@ -406,23 +411,30 @@ def finalize_decision(
         if rank and rank <= 3 and signal == "add":
             facts.append(f"轮动排名 #{rank}，加仓信号获动量确认")
 
-    # ── 8. config_only 路由降权 ──
-    if mode == "config_only":
-        ratio = 0.0
+    # ── 8. 分层路由降权 ──
+    # fund: 场外基金 — 保留比例，标注 T+2/净值约束
+    # precious: 贵金属 — 保留比例，标注价差
+    # info_only: 银行理财 — ratio=0, 只读
+    if mode in ("fund", "precious"):
         ctx = rule.get("context", "")
         if ctx:
             facts.insert(0, ctx)
-        nav_label = ("手工估值（非实时净值），建议确认后手动执行"
+        nav_label = ("手工估值（非实时净值），建议确认后手动操作"
                      if valuation_method != "fund_nav"
                      else "净值来源：天天基金（T-1 确认净值）")
+        if mode == "fund":
+            settlement = "场外基金 T+2 到账，以收盘净值为准 — 登录平台操作"
+        else:
+            settlement = "贵金属账户有买卖价差 — 登录平台确认后操作"
         if signal == "stop_loss":
-            action = "止损预警（配置型资产，建议登录平台确认）"
+            action = f"止损触发 — {settlement}"
             facts.append(nav_label)
         elif signal == "take_profit":
-            action = "止盈提醒（配置型资产，无明确替代方向时建议持有）"
+            pct = round(ratio * 100)
+            action = f"止盈触发 — 建议减仓 {pct}%。{settlement}"
             facts.append(nav_label)
         elif signal in ("reduce", "add"):
-            action = action + "（配置型资产，建议审慎评估）"
+            action = f"{action}（{settlement}）"
             facts.append(nav_label)
         elif signal not in ("hold", "wait"):
             facts.append(nav_label)
@@ -432,6 +444,19 @@ def finalize_decision(
             lag_dir = "上涨" if lag_pct > 0 else "下跌"
             facts.append(f"T-1净值滞后：当日标的ETF {lag_dir} {abs(odc):.2f}%，"
                          f"估算真实净值偏差 {abs(lag_pct):.2f}%，止盈建议以基金公司确认为准")
+    elif mode == "info_only":
+        ratio = 0.0
+        ctx = rule.get("context", "")
+        if ctx:
+            facts.insert(0, ctx)
+        if signal == "stop_loss":
+            action = "止损预警（银行理财，有开放期限制，仅提醒）"
+        elif signal == "take_profit":
+            action = "止盈提醒（银行理财，有开放期限制，仅提醒）"
+        elif signal in ("reduce", "add"):
+            action = action + "（银行理财，有开放期限制）"
+        elif signal not in ("hold", "wait"):
+            pass
 
     # ── 9. 非 rebalance_eligible 降权 ──
     if not rebalance_ok:

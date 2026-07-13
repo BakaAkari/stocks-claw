@@ -1241,17 +1241,18 @@ def build_agent_task(session: ScheduledSession) -> dict:
             # 数据缺口时效
             "数据缺口首次出现时标注'新增'；连续出现时注明'持续N次'；超过7天的缺口降级为脚注，超过30天不再显示",
             "场外基金手工估值、宏观数据滞后等结构性缺口只在一处集中说明，不在每笔持仓下重复标注",
-            # 资金类型隔离（硬性）—— 违反即错误
-            "不得对 routing=config_only 或 routing=info_only 的持仓建议'减仓/加仓/止盈/止损'——它们是配置型资产，只能报告状态",
-            "config_only 持仓（QDII 联接基金/混合基金/固收+/积存金）的唯一合法操作是 '持有' 或 '止盈提醒（登录平台确认）'",
-            "info_only 持仓（银行理财）的唯一合法操作是 '持有，有开放期限制'",
-            "场外基金的止盈/止损建议必须以'提醒'而非'建议'开头，标注'T+2 到账'和'以收盘净值为准'",
-            "不得把 action_cards 中 routing!=full 的持仓混入'持仓动作'段——它们应出现在'配置型资产状态'或'非可操作持仓'段",
+            # 资产分层报告（硬性）
+            "action_cards 的 routing 字段决定报告层级: full→可操作, fund→高门槛(T+2/更高阈值), precious→有价差, info_only→只读, skip→跳过",
+            "routing=fund 的资产可以报告止盈/止损建议，但必须标注'T+2到账'、'以收盘净值为准'、'登录平台操作'，不得用'一键操作'语气",
+            "routing=precious 的资产可以报告止盈/止损建议，但必须标注'有买卖价差'、'登录平台确认后操作'",
+            "routing=info_only 的资产的唯一合法操作是'持有，有开放期限制'，不得建议减仓/加仓",
+            "routing=full 的资产正常报告操作建议",
+            "routing=skip 的资产不在报告中出现",
         ],
 
         # ── 数据字段引用指南 ──
         "data_reference": {
-            "持仓动作": "action_cards[] — 逐持仓的动作信号。每个 card 有 routing 字段（full=可操作, config_only=配置型只提醒, info_only=只读, skip=跳过）。routing!=full 的持仓不得写入'持仓动作'段",
+            "持仓动作": "action_cards[] — 逐持仓的动作信号。routing: full=可操作, fund=场外基金(T+2/高阈值), precious=贵金属(有价差), info_only=银行理财(只读), skip=跳过。所有非full持仓标注操作约束",
             "方向信号": "action_signal_reviews[] — 有 rank 的按 rank 升序排列，rank#1 是最优候选",
             "风险仪表盘": "portfolio_risk.scenario — global_risk_off / china_shock / inflation_commodity 三个多因子情景",
             "持仓事实": "position_reviews[] — 逐持仓估值、盈亏、session_facts（含 severe_loss 标注）",
@@ -1285,11 +1286,11 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 },
                 {
                     "name": "持仓动作",
-                    "content": "仅列出 routing=full 的持仓（场内 ETF/股票）。按 stop_loss > severe_loss > take_profit > accumulate 排列。routing!=full 的持仓不得写入此段。",
+                    "content": "列出所有触发动作的持仓，按优先级: stop_loss > take_profit > reduce > add。routing=full 的资产正常写操作建议；routing=fund 的资产标注'T+2到账，以收盘净值为准，登录平台操作'；routing=precious 的资产标注'有买卖价差，登录平台确认后操作'。routing=info_only/skip 不写入此段。",
                 },
                 {
-                    "name": "配置型资产状态",
-                    "content": "列出所有 routing=config_only 或 routing=info_only 的持仓：只报告当前状态（浮盈/浮亏/触发条件），不给出'建议减仓/加仓'等操作指令。场外基金标注 'T+2 到账，以收盘净值为准'。银行理财标注开放期限制。",
+                    "name": "非可操作持仓",
+                    "content": "列出 routing=info_only 的持仓（仅有银行理财等），只报告状态不输出操作。routing=skip 的不出现。",
                 },
                 {
                     "name": "资金分配",
@@ -1641,22 +1642,32 @@ def _build_action_cards(
         product_type = classification.get("product_type", "")
         account_type = (item.get("account") or {}).get("type", "")
         # 路由推导（与 _PRODUCT_TYPE_RULES 同步）
+        # full / fund / precious / info_only / skip
         _routing_map = {
-            "qdii_fund": "config_only", "feeder_fund": "config_only",
-            "mixed_fund": "config_only", "fixed_income_plus_fund": "config_only",
-            "precious_metal_account": "config_only",
+            "qdii_fund": "fund", "feeder_fund": "fund",
+            "mixed_fund": "fund", "fixed_income_plus_fund": "fund",
+            "precious_metal_account": "precious",
             "bank_wealth_management": "info_only",
             "money_market_fund": "skip", "cash": "skip", "cash_equivalent": "skip",
             "insurance_policy": "skip",
         }
         routing = _routing_map.get(product_type, "")
         if not routing:
-            # ── 回退：produt_type 未标注时，从 account_id 推导 ──
+            # ── 回退：product_type 未标注时，从 account_id 推导 ──
             aid = (item.get("account") or {}).get("account_id", "") or account_type or ""
             if "alipay" in aid:
-                routing = "config_only"  # 支付宝持仓默认配置型
+                routing = "fund"         # 支付宝持仓默认场外基金
             elif "ccb" in aid:
-                routing = "config_only"  # 建行持仓默认配置型
+                # 建行持仓：按 position_id 精修
+                pid_lower = (item.get("position_id") or "").lower()
+                if "gold" in pid_lower or "precious" in pid_lower:
+                    routing = "precious"     # 贵金属
+                elif "wmp" in pid_lower or "wealth" in pid_lower:
+                    routing = "info_only"    # 银行理财
+                elif "mm" in pid_lower or "cash" in pid_lower:
+                    routing = "skip"         # 货基/现金
+                else:
+                    routing = "fund"
             elif "boc" in aid:
                 routing = "info_only"    # 中银保险默认只读
             else:
