@@ -14,16 +14,25 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from stocks.engine.economic_event_watcher import EconomicEventWatcher
+from stocks.engine.hypothesis_tracker import (
+    HypothesisStore,
+    auto_check_hypotheses,
+    format_hypothesis_report,
+)
 from stocks.engine.intelligence_analyzer import LLMIntelligenceAnalyzer
 from stocks.engine.intelligence_harvester import IntelligenceHarvester
 from stocks.engine.news_intelligence_store import (
     IntelligenceSnapshot,
     NewsIntelligenceStore,
 )
-from stocks.engine.quant_action import QuantActionEngine, _TAG_TO_BUCKET, compute_portfolio_risk, finalize_decision
-from stocks.engine.shadow_account import save_snapshot, build_shadow_block
-from stocks.engine.hypothesis_tracker import HypothesisStore, auto_check_hypotheses, format_hypothesis_report
+from stocks.engine.quant_action import (
+    _TAG_TO_BUCKET,
+    QuantActionEngine,
+    compute_portfolio_risk,
+    finalize_decision,
+)
 from stocks.engine.risk_warning import assess_risk
+from stocks.engine.shadow_account import build_shadow_block, save_snapshot
 from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
 from stocks.logging_utils import get_logger
 
@@ -1557,7 +1566,7 @@ def _build_action_cards(
     优先级链：stop_loss → constraint_override → intel_override →
               macro/event overlay → routing_downgrade → data_freshness
     """
-    from stocks.engine.quant_action import QuantActionEngine, finalize_decision
+    from stocks.engine.quant_action import QuantActionEngine
 
     ratios = (portfolio_mapping or {}).get("ratios", {}) if portfolio_mapping else {}
     cards = []

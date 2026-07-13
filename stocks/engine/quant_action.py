@@ -20,7 +20,7 @@ from typing import Optional
 import pandas as pd
 
 from stocks.engine.exchange_rate import get_usd_cny_rate
-from stocks.engine.factor_rules import collect_votes, adjudicate
+from stocks.engine.factor_rules import adjudicate, collect_votes
 
 # ── 事件主题 → 持仓暴露标签 ──
 THEME_TO_EXPOSURE: dict[str, list[str]] = {
@@ -326,9 +326,7 @@ def finalize_decision(
     one_day_change_pct = position.get("one_day_change_pct")
     mv = position.get("market_value_cny") or 0.0
 
-    clusters = event_clusters or []
     ranks = rotation_ranks or {}
-    ms = market_state or {}
 
     # ── 0. 锁定/已清仓资产 ──
     liq = position.get("liquidity") or {}

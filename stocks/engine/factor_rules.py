@@ -3,13 +3,32 @@ Factor Rules — 决策因子接口与规则库
 
 把 finalize_decision 中的覆盖规则提取为独立、可测试、可回测的因子。
 每个因子实现 evaluate() → FactorVote，finalize_decision 收集所有投票后裁决。
+
+## 因子化边界（当前策略）
+
+**走因子管道的规则（finalize_decision 步骤 2-7，已迁移）：**
+- ConstraintCheckRule: 组合超限互查
+- MarketStateRule: 市场状态影响
+- EventClusterRule: 事件聚类
+- IntelConflictRule: 情报面冲突
+- DataFreshnessRule: 数据新鲜度
+
+**不走因子管道，留在 finalize_decision 内的规则：**
+- 产品类型路由（skip/info_only/config_only）：静态路由表，不涉及决策信号
+- 非 rebalance 信号降权：临时/止损信号的 ratio 调整属于信号后处理
+- config_only 路由降权：QDII/联接基金的特殊处理属于产品合规
+
+**未来候选迁移的规则：**
+- 数据新鲜度在 config_only 路由中的特殊降权
+- ratio 归一化逻辑
+
+新增因子规则应优先添加到此处，而非直接写入 finalize_decision。
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-
 
 
 @dataclass

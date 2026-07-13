@@ -49,10 +49,6 @@ class DataFetcher:
         """注入 FallbackTracker 实例（惰性，避免启动时依赖）。"""
         self._tracker = tracker
 
-    def set_fallback_tracker(self, tracker) -> None:
-        """注入 FallbackTracker（惰性，避免测试环境依赖目录结构）。"""
-        self._tracker = tracker
-
     def get_degradation_log(self) -> list[DegradationRecord]:
         """获取最近一次 fetch 的降级记录"""
         return self._degradation_log.copy()

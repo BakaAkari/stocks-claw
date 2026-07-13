@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+
 def main():
     # 解析简单参数
     lookback = 60
@@ -34,8 +35,9 @@ def main():
         print("错误: .local/history/ 中无历史数据，请先运行一次 scheduled run 以填充数据。")
         sys.exit(1)
 
-    from stocks.engine.rule_backtest import backtest_from_history, BacktestResult
     from datetime import datetime, timezone
+
+    from stocks.engine.rule_backtest import backtest_from_history
 
     print(f"正在分析 {lookback} 天历史数据...")
     results = backtest_from_history(history_dir, lookback_days=lookback)
