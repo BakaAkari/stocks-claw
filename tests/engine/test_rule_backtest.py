@@ -1,5 +1,6 @@
 """测试规则回测引擎。"""
-import json, tempfile
+import json
+import tempfile
 from pathlib import Path
 
 from stocks.engine.rule_backtest import backtest_from_history, run_backtest

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from stocks.engine.fallback_tracker import FallbackTracker
 
+
 def test_record_creates_dir_lazily():
     """惰性初始化：record 时才创建目录。"""
     with tempfile.TemporaryDirectory() as td:
@@ -30,7 +31,7 @@ def test_health_report_after_record():
                   requested_sources=["akshare"], used_source="akshare")
         h = ft.health_report(days=999)
         assert h["status"] == "ok"
-        
+
 
 def test_record_with_fallback():
     """记录 fallback 路径。"""

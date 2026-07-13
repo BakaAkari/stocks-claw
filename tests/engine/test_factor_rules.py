@@ -1,7 +1,9 @@
 """测试因子规则引擎。"""
 from stocks.engine.factor_rules import (
-    ConstraintCheckRule, FactorVote,
-    collect_votes, adjudicate,
+    ConstraintCheckRule,
+    FactorVote,
+    adjudicate,
+    collect_votes,
 )
 
 # 使用实际的 tag→bucket 映射

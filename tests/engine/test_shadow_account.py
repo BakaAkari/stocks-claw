@@ -1,12 +1,15 @@
 
 """测试 Shadow Account 快照保存和诊断生成。"""
-import json, tempfile
+import tempfile
 from pathlib import Path
 
 from stocks.engine.shadow_account import (
-    save_snapshot, load_all_snapshots,
-    analyze_snapshots, build_shadow_block,
+    analyze_snapshots,
+    build_shadow_block,
+    load_all_snapshots,
+    save_snapshot,
 )
+
 
 def test_save_and_load():
     """保存快照后能正确加载。"""

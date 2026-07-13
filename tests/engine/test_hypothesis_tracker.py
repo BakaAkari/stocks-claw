@@ -4,8 +4,11 @@ import tempfile
 from pathlib import Path
 
 from stocks.engine.hypothesis_tracker import (
-    HypothesisStore, Hypothesis, auto_check_hypotheses, format_hypothesis_report,
+    HypothesisStore,
+    auto_check_hypotheses,
+    format_hypothesis_report,
 )
+
 
 def test_create_and_list():
     """创建论点后能被 list_all 找到。"""
@@ -28,7 +31,7 @@ def test_add_evidence():
         store.add_evidence(h.id, "run-1")
         h2 = store.list_all()[0]
         assert len(h2.evidence_links) == 1
-        
+
 
 def test_auto_check_matches():
     """action_cards 的 instrument_key 匹配论点 tags。"""
