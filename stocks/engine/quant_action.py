@@ -153,11 +153,16 @@ class MacroOverlay:
                         f"情报 CRITICAL: [{c_theme}] {c.get('summary', '')[:80]} → 确认减仓方向"
                     )
 
-            # 正面事件 → 确认加仓
-            if c_sentiment == "positive" and review.signal == "add":
-                review.facts.append(
-                    f"情报确认: [{c_theme}] {c.get('summary', '')[:80]}"
-                )
+            # 正面事件 → 确认加仓 / 提示减仓矛盾
+            if c_sentiment == "positive":
+                if review.signal == "add":
+                    review.facts.append(
+                        f"情报确认: [{c_theme}] {c.get('summary', '')[:80]}"
+                    )
+                elif review.signal in ("reduce", "reduce_risk"):
+                    review.facts.append(
+                        f"情报利好: [{c_theme}] {c.get('summary', '')[:80]} → 与减仓信号矛盾，技术面若未恶化可考虑减仓后等回踩补回"
+                    )
 
         # ── 3. 数据新鲜度 ──
         if data_freshness == "stale":
@@ -193,12 +198,12 @@ class QuantActionEngine:
     PROFIT_PULLBACK_MIN_PNL = 3.0
     # 趋势保护 — 阶梯式减仓：偏离越大，减仓越多
     TREND_MA20_BREAK_CUTOFF = 0.995  # 收盘价低于 MA20 * 0.995 视为跌破
-    # (price/ma20, reduce_ratio) — 越小越严重
+    # (price/ma20, reduce_ratio) — 越小越严重；迭代时 reversed 从最严重开始
     TREND_BREAK_LADDER = [
         (0.995, 0.25),   # <0.5% 偏离 → 减仓 25%（轻微）
         (0.980, 0.50),   # <2.0% 偏离 → 减仓 50%（确认）
         (0.950, 0.75),   # <5.0% 偏离 → 减仓 75%（严重）
-        (0.000, 1.00),   # 极端偏离 → 清仓
+        (0.850, 1.00),   # >15% 偏离 → 清仓
     ]
     # 仓位
     DEFAULT_POSITION_LIMIT_PCT = 5.0
@@ -265,14 +270,16 @@ class QuantActionEngine:
             if price < ma20 * self.TREND_MA20_BREAK_CUTOFF and (macd_hist is None or macd_hist < 0):
                 ratio = 0.25  # default fallback
                 deviation = (ma20 - price) / ma20
-                for threshold, ladder_ratio in self.TREND_BREAK_LADDER:
+                # reversed: check most severe threshold first
+                for threshold, ladder_ratio in reversed(self.TREND_BREAK_LADDER):
                     if price / ma20 < threshold:
                         ratio = ladder_ratio
                         break
                 signal = "reduce"
                 action = f"趋势走弱（MA20偏离 {deviation:.1%}），减仓 {int(ratio*100)}%"
                 stop_price = round(float(ma20 * self.TREND_MA20_BREAK_CUTOFF), 4)
-                facts.append(f"现价 {price:.2f} 跌破 MA20 {ma20:.2f}（偏离 {deviation:.1%}），MACD 柱为负")
+                trigger_price = ma20 * self.TREND_MA20_BREAK_CUTOFF
+                facts.append(f"现价 {price:.2f} 跌破 MA20 {ma20:.2f}（触发线 {trigger_price:.4f}，偏离 {deviation:.1%}），MACD 柱为负")
                 return self._build(
                     position_id, signal, action, ratio, facts, stop_price, target_prices,
                     current_weight_pct, price, quantity,

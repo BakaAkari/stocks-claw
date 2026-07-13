@@ -661,6 +661,8 @@ def build_scheduled_run(
         event_clusters=event_clusters,
         data_freshness=data_freshness,
         rotation_ranks=rotation_ranks if rotation_ranks else None,
+        constraints=context.get("portfolio_constraints"),
+        portfolio_mapping=context.get("portfolio_mapping"),
     )
     portfolio_risk = _build_portfolio_risk_summary(context.get("position_valuations") or [])
     rotation_leaders_data = context.get("rotation", {}).get("items", [])
@@ -728,6 +730,7 @@ def build_scheduled_run(
             "requires_user_confirmation": True,
         },
         "notification": notification,
+        "risk_assessment": _compute_risk_assessment(context),
         "context_digest": {
             "market_state": context.get("market_state") or {},
             "market_state_summary": _market_state_summary(context.get("market_state") or {}),
@@ -741,6 +744,35 @@ def build_scheduled_run(
             "intelligence_digest": context.get("intelligence_digest") or {},
             "upcoming_events": context.get("upcoming_events") or [],
         },
+    }
+
+
+def _compute_risk_assessment(context: dict) -> dict:
+    """Lightweight risk assessment for run reports using intelligence clusters."""
+    from stocks.engine.risk_warning import assess_risk
+
+    macro = (context.get("market_state") or {}).get("macro") or context.get("macro") or {}
+    intel_digest = context.get("intelligence_digest") or {}
+    clusters = intel_digest.get("top_clusters") or []
+
+    geopolitical_crisis = any(
+        c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
+        for c in clusters
+    )
+
+    risk = assess_risk(
+        vix=macro.get("vix"),
+        cluster_urgencies=[c.get("urgency") for c in clusters],
+        negative_cluster_count=sum(1 for c in clusters if c.get("sentiment") == "negative"),
+        geopolitical_crisis=geopolitical_crisis,
+    )
+
+    return {
+        "level": risk.level,
+        "triggers": [{"condition": t.condition, "value": t.value} for t in risk.triggers],
+        "recommended_actions": risk.recommended_actions,
+        "suspend_accumulation": risk.suspend_accumulation,
+        "cash_target_pct": risk.cash_target_pct,
     }
 
 
@@ -1015,6 +1047,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "哪些候选方向只适合观察,不能追",
             "数据质量是否足以形成盘前计划",
             "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
+            "【风险边界】读取 risk_assessment：如果 level 不是 normal，显式报告。如果 suspend_accumulation=true，盘前计划必须标注'暂停开新仓'",
         ],
         "open_watch": [
             "开盘后已有持仓是否出现异常跳空、破位或过热",
@@ -1036,6 +1069,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "明天开盘前重点看什么",
             "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
             "是否需要让用户补录数据或确认长期记录",
+            "【风险边界】读取 risk_assessment：如果 level 不是 normal，必须显式报告风险等级、触发原因和系统建议操作（如暂停加仓、现金目标）。情报管道中的地缘政治事件，如果触发了 risk_assessment，必须在风险边界段报告",
         ],
         "mid_session_check": [
             "盘中波动是否改变已有计划",
@@ -1101,6 +1135,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "轮动": "rotation_leaders — 轮动排名领涨的板块和标的",
             "组合": "exposure_summary.top — 组合暴露分布和潜在缺口",
             "资金分配": "capital_allocation — constraint_alerts(大类超限)、reduce_items(减仓回收预估)、add_candidates(加仓优先级排序)、net_deployable_cny(净可动用资金)",
+            "风险等级": "risk_assessment — level(hedge/reduce/watch/normal)、triggers(触发条件)、recommended_actions(建议操作)、suspend_accumulation(是否暂停加仓)、cash_target_pct(现金目标比例)",
         },
 
         # ── 输出格式 ──
@@ -1116,6 +1151,10 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 {
                     "name": "一句话执行结论",
                     "content": "以 action_cards 的止损/止盈信号为最高优先级，给出当前最关键的 1 个动作判断",
+                },
+                {
+                    "name": "风险边界",
+                    "content": "读取 risk_assessment。如果 level!=normal，必须显式报告风险等级、触发原因和系统建议操作。如果 suspend_accumulation=true，必须标注'暂停加仓'。如果 72 小时内有 CPI/FOMC/NFP，显式警告'X小时后CPI发布，当前交易逻辑可能单日逆转'",
                 },
                 {
                     "name": "持仓动作",
@@ -1383,6 +1422,8 @@ def _build_action_cards(
     event_clusters: Optional[list[dict]] = None,
     data_freshness: str = "fresh",
     rotation_ranks: Optional[dict[str, int]] = None,
+    constraints: Optional[dict] = None,
+    portfolio_mapping: Optional[dict] = None,
 ) -> list[dict]:
     """为每个持仓计算量化行动卡。
 
@@ -1390,6 +1431,31 @@ def _build_action_cards(
         position_valuations: 持仓估值列表
         intelligence_signals: {symbol: {direction, urgency, rationale}} 情报信号
     """
+
+    # ── 预计算约束分配比例（用于加仓信号互查）──
+    _TAG_TO_BUCKET = {
+        "gold": "黄金", "mining": "黄金",
+        "a_share": "权益", "us_equity": "权益", "tech": "权益",
+        "nasdaq100": "权益", "qdii": "权益", "semiconductor": "权益",
+        "star_board": "权益", "blue_chip": "权益", "dividend_low_vol": "权益",
+        "high_dividend": "权益", "active_equity": "权益",
+        "energy": "权益", "oil_gas": "权益", "defense": "权益",
+        "aerospace": "权益", "ai": "权益",
+        "fixed_income": "固收", "credit_plus": "固收", "us_rates": "固收",
+        "bank_wmp": "固收", "short_treasury": "固收",
+        "cash_like": "现金", "money_market": "现金",
+    }
+    total_value = sum(item.get("market_value_cny") or 0.0 for item in position_valuations)
+    ratios = (portfolio_mapping or {}).get("ratios", {}) if portfolio_mapping else {}
+    over_limit_buckets: set[str] = set()
+    if constraints and total_value > 0:
+        for bucket_name, rule in constraints.items():
+            if not isinstance(rule, dict):
+                continue
+            max_pct = rule.get("max")
+            actual = ratios.get(bucket_name)
+            if max_pct is not None and actual is not None and actual > max_pct:
+                over_limit_buckets.add(bucket_name)
 
     cards = []
     for item in position_valuations:
@@ -1602,6 +1668,22 @@ def _build_action_cards(
             review.facts.append(
                 f"情报面: {intel.get('direction', '?')} {intel_symbol} — {intel.get('rationale', '')[:80]}"
             )
+
+        # 约束互查：加仓信号→检查对应大类是否已超限
+        if review.signal == "add" and over_limit_buckets:
+            klass = item.get("classification") or {}
+            tags = klass.get("exposure_tags") or []
+            matched_buckets = set()
+            for tag in tags:
+                b = _TAG_TO_BUCKET.get(tag)
+                if b:
+                    matched_buckets.add(b)
+            if matched_buckets & over_limit_buckets:
+                over_b = (matched_buckets & over_limit_buckets).pop()
+                review.facts.append(f"约束互查：{over_b} 大类已超限，加仓信号暂停")
+                adjusted_ratio = 0.0
+                review.action = f"暂停加仓（{over_b} 大类超限，等待减仓后重新评估）"
+                conflict = "caution"  # downgrade if no conflict already
 
         cards.append({
             "position_id": review.position_id,
@@ -1853,14 +1935,25 @@ def _build_capital_allocation(
                     "rationale": f"轮动排名 #{rank_val}，20日收益 {leader.get('r20', '?')}%，可作为{under_limit_buckets or '权益'}配置候补",
                 })
 
-    # ── 7. 优先级摘要 ──
+    # ── 7. 优先级摘要（含执行排序建议）──
     priority_summary = []
     if constraint_alerts:
         breaches = [a for a in constraint_alerts if a["severity"] == "breach"]
         if breaches:
             priority_summary.append(f"首要：解决 {', '.join(a['bucket'] for a in breaches)} 约束偏离")
     if conflicts:
+        # 区分冲突类型，给出排序建议
+        reduce_conflicts = [c for c in conflicts if c["signal"] in ("reduce", "stop_loss", "take_profit")]
+        add_conflicts = [c for c in conflicts if c["signal"] == "add"]
         priority_summary.append(f"注意：{len(conflicts)} 个持仓信号与约束方向冲突")
+        if reduce_conflicts and add_conflicts:
+            priority_summary.append(
+                "排序建议：先执行减仓信号回收资金→再按约束方向加仓→最后补齐不足大类"
+            )
+        elif reduce_conflicts and constraint_alerts:
+            priority_summary.append(
+                "排序建议：先执行减仓→回笼资金后等方向明确再补仓，不宜同时加减"
+            )
     if add_candidates:
         top = add_candidates[0]
         penalty = "（约束受限）" if top["constraint_note"] != "无约束冲突" else ""
