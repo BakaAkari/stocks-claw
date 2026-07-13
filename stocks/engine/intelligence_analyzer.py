@@ -636,6 +636,8 @@ class LLMIntelligenceAnalyzer:
         timeout: int = 90,
         max_input_articles: int = 80,
         fallback_to_rules: bool = True,
+        env_file_path: Optional[Path] = None,
+        base_url: Optional[str] = None,
     ):
         self.holdings = set(holdings or [])
         self.model = model
@@ -643,6 +645,8 @@ class LLMIntelligenceAnalyzer:
         self.timeout = timeout
         self.max_input_articles = max_input_articles
         self.fallback_to_rules = fallback_to_rules
+        self._env_file_path = env_file_path
+        self._base_url_override = base_url
         self._fallback = IntelligenceAnalyzer(lookback_hours=6, holdings=list(self.holdings))
         self._api_key: Optional[str] = None
         self._base_url: Optional[str] = None
@@ -651,7 +655,13 @@ class LLMIntelligenceAnalyzer:
         if self._api_key and self._base_url:
             return self._api_key, self._base_url
 
-        env_file = Path("/opt/data/.env")
+        # Resolve .env file path (parameter > env > default)
+        if self._env_file_path is not None:
+            env_file = Path(self._env_file_path)
+        elif os.environ.get("STOCKS_SECRET_ENV_FILE"):
+            env_file = Path(os.environ["STOCKS_SECRET_ENV_FILE"])
+        else:
+            env_file = Path("/opt/data/.env")
         api_key = ""
         if env_file.exists():
             for line in env_file.read_text().splitlines():
@@ -662,7 +672,13 @@ class LLMIntelligenceAnalyzer:
                 if line.startswith("OPENAI_API_KEY=") and "COMPATIBLE" not in line:
                     api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
         api_key = api_key or os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
-        base_url = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
+        # Resolve base URL (parameter > env > config fallback)
+        base_url = (
+            self._base_url_override
+            or os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("STOCKS_LLM__FALLBACK_BASE_URL")
+            or "http://100.121.167.1:8317/v1"
+        )
 
         self._api_key = api_key
         self._base_url = base_url

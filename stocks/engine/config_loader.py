@@ -23,6 +23,7 @@ DEFAULT_ENGINE_CONFIG = {
         "data_dir": None,
         "local_data_dir": None,
         "secret_dir": None,
+        "secret_env_file": None,  # 自定义 .env 文件路径（用于 LLM API key 加载）
     },
     "providers": {
         "tencent_a": {"enabled": True},
@@ -62,6 +63,28 @@ DEFAULT_ENGINE_CONFIG = {
         "analysis_model": "kimi-k2.6",
         "api_key_env": "OPENAI_API_KEY",
         "base_url_env": "OPENAI_BASE_URL",
+        "fallback_base_url": "http://100.121.167.1:8317/v1",
+    },
+    "risk_warning": {
+        # VIX 阈值
+        "vix_hedge": 35,
+        "vix_reduce": 25,
+        "vix_watch": 20,
+        # 情报集群触发
+        "critical_cluster_trigger": 1,
+        "negative_cluster_trigger": 3,
+        # 地缘政治
+        "geopolitical_action": "hedge",
+        # 持仓回撤阈值（%）
+        "drawdown_hedge_pct": 12,
+        "drawdown_reduce_pct": 8,
+        # 现金目标比例
+        "cash_target_hedge": 0.15,
+        "cash_target_reduce": 0.10,
+        # 各风险等级推荐操作
+        "hedge_actions": ["暂停全部加仓", "评估对冲工具", "检查止损线"],
+        "reduce_actions": ["暂停权益加仓", "关注防御板块", "检查高beta暴露"],
+        "watch_actions": ["关注风险指标", "不新增高beta仓位"],
     },
     "logging": {
         "level": "INFO",

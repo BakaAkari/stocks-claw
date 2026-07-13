@@ -514,12 +514,17 @@ class ScheduledAnalysisRunner:
         holdings = []
         if hasattr(self.engine, '_asset_positions_v2'):
             holdings = [p.instrument_key for p in self.engine._asset_positions_v2 if p.instrument_key]
+        llm_cfg = self.engine._config.get("llm", {}) if hasattr(self.engine, "_config") else {}
+        paths_cfg = self.engine._config.get("paths", {}) if hasattr(self.engine, "_config") else {}
         analyzer = LLMIntelligenceAnalyzer(
             holdings=holdings,
             fallback_to_rules=True,
-            model="deepseek-v4-flash",
-            max_input_articles=25,
-            timeout=60,
+            model=llm_cfg.get("analysis_model", "deepseek-v4-flash"),
+            max_input_articles=llm_cfg.get("analysis_max_articles", 25),
+            timeout=llm_cfg.get("analysis_timeout", 60),
+            temperature=llm_cfg.get("analysis_temperature", 0.1),
+            env_file_path=paths_cfg.get("secret_env_file"),
+            base_url=llm_cfg.get("fallback_base_url"),
         )
         analysis_result = analyzer.analyze(recent_snapshots)
         store.save_clusters(analysis_result.clusters, formed_at=now)
@@ -768,6 +773,7 @@ def build_intelligence_run(
             c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
             for c in clusters
         ),
+        config=self.engine._config.get("risk_warning") if hasattr(self.engine, "_config") else None,
     )
 
     # Non-trading-day downgrade: weekends can't act on signals,
