@@ -22,6 +22,7 @@ from stocks.engine.news_intelligence_store import (
 )
 from stocks.engine.quant_action import QuantActionEngine, _TAG_TO_BUCKET, compute_portfolio_risk, finalize_decision
 from stocks.engine.shadow_account import save_snapshot, build_shadow_block
+from stocks.engine.hypothesis_tracker import HypothesisStore, auto_check_hypotheses, format_hypothesis_report
 from stocks.engine.risk_warning import assess_risk
 from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
 from stocks.logging_utils import get_logger
@@ -381,6 +382,20 @@ class ScheduledAnalysisRunner:
             if shadow:
                 mb = run.setdefault("mandatory_blocks", {})
                 mb["shadow_account"] = shadow
+
+        # Hypothesis Tracker: 自动关联本期 action_cards 到相关论点
+        if action_cards and self._repo_root:
+            try:
+                store = HypothesisStore(store_dir=self._repo_root / ".local" / "hypotheses")
+                matched = auto_check_hypotheses(store, run["run_id"], action_cards)
+                if matched:
+                    all_h = store.list_all()
+                    report = format_hypothesis_report(all_h)
+                    if report:
+                        mb = run.setdefault("mandatory_blocks", {})
+                        mb["hypothesis_tracker"] = report
+            except Exception:
+                pass  # 非关键路径
 
         paths = self.store.save(run)
         return {
@@ -1383,6 +1398,9 @@ def format_run_markdown(run: dict) -> str:
     if mb.get("shadow_account"):
         lines.append("")
         lines.append(mb["shadow_account"])
+    if mb.get("hypothesis_tracker"):
+        lines.append("")
+        lines.append(mb["hypothesis_tracker"])
     return "\n".join(lines)
 
 
