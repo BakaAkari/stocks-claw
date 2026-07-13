@@ -517,7 +517,8 @@ class ScheduledAnalysisRunner:
         analyzer = LLMIntelligenceAnalyzer(
             holdings=holdings,
             fallback_to_rules=True,
-            max_input_articles=8,
+            model="deepseek-v4-flash",
+            max_input_articles=25,
             timeout=60,
         )
         analysis_result = analyzer.analyze(recent_snapshots)
@@ -768,6 +769,23 @@ def build_intelligence_run(
         ),
     )
 
+    # Non-trading-day downgrade: weekends can't act on signals,
+    # so reduce alarm level to avoid unnecessary anxiety.
+    if generated_at.weekday() >= 5:  # Saturday=5, Sunday=6
+        _DOWNGRADE = {"hedge": "reduce", "reduce": "watch", "watch": "watch", "normal": "normal"}
+        downgraded = _DOWNGRADE.get(risk.level, risk.level)
+        if downgraded != risk.level:
+            from stocks.engine.risk_warning import RiskAssessment
+            risk = RiskAssessment(
+                level=downgraded,
+                triggers=risk.triggers,
+                recommended_actions=[
+                    f"非交易日降级: {risk.level}→{downgraded}（市场休市，信号无法执行）"
+                ] + risk.recommended_actions,
+                suspend_accumulation=risk.suspend_accumulation,
+                cash_target_pct=risk.cash_target_pct,
+            )
+
     # Silent mode: no signals + no critical clusters + low priority → archive only
     has_critical = any(c.get("urgency") == "critical" for c in clusters)
     has_signals = len(signals) > 0
@@ -840,6 +858,13 @@ def build_intelligence_run(
             "signals": signals[:10],
             "macro": macro,
             "quotes": quotes,
+            # agent_task 引用 intelligence_digest.top_clusters / top_signals
+            "intelligence_digest": {
+                "top_clusters": clusters[:8],
+                "top_signals": signals[:10],
+                "metadata": analysis.get("metadata", {}),
+                "cross_cluster_synthesis_cn": analysis.get("metadata", {}).get("cross_cluster", ""),
+            },
         },
     }
 

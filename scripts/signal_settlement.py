@@ -4,16 +4,14 @@
 Run via cron: every 6 hours, checks unsettled signals and settles them
 if their time windows (24h / 1w) have elapsed.
 """
-import json
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 
 PROJECT_ROOT = "/mnt/user/code-project/stocks-claw"
 sys.path.insert(0, PROJECT_ROOT)
 
-from stocks.engine.signal_tracker import SignalTracker
-from stocks.engine.intelligence_harvester import IntelligenceHarvester
+from stocks.engine.intelligence_harvester import IntelligenceHarvester  # noqa: E402
+from stocks.engine.signal_tracker import SignalTracker  # noqa: E402
 
 
 def main():

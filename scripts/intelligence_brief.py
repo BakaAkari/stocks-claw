@@ -70,6 +70,9 @@ def build_brief(data: dict) -> dict:
     signals = digest.get("signals", []) or []
     macro = digest.get("macro", {}) or {}
     quotes = digest.get("quotes", {}) or {}
+    intel_digest = digest.get("intelligence_digest", {}) or {}
+    intel_meta = intel_digest.get("metadata", {}) or {}
+    analysis_errors = (data.get("data_quality") or {}).get("errors", []) or []
 
     macro_compact = {}
     for key, label in [
@@ -117,6 +120,8 @@ def build_brief(data: dict) -> dict:
             "direction": s.get("direction", "?"),
             "symbol": s.get("symbol", "?"),
             "rationale": s.get("rationale", "")[:200],
+            "falsification": s.get("falsification", "")[:150],
+            "confidence": s.get("confidence", 0.0),
         })
 
     return {
@@ -128,6 +133,8 @@ def build_brief(data: dict) -> dict:
         "cluster_count": len(cluster_briefs),
         "signal_count": len(signal_briefs),
         "run_id": data.get("run_id", "")[:24],
+        "cross_cluster_synthesis_cn": intel_meta.get("cross_cluster", ""),
+        "data_quality_notes": analysis_errors,
     }
 
 
@@ -172,7 +179,27 @@ def format_stdout(brief: dict) -> str:
         lines.append("**信号**")
         for s in brief["signals"]:
             d = {"buy": "买入", "sell": "卖出"}.get(s["direction"], s["direction"])
-            lines.append(f"- {d} `{s['symbol']}` — {s['rationale'][:120]}")
+            conf = s.get("confidence", 0)
+            lines.append(f"- {d} `{s['symbol']}` (conf={conf:.0%}) — {s['rationale'][:120]}")
+            fals = s.get("falsification", "")
+            if fals:
+                lines.append(f"  证伪: {fals[:120]}")
+        lines.append("")
+
+    # Cross-cluster synthesis
+    cross = brief.get("cross_cluster_synthesis_cn", "")
+    if cross:
+        lines.append("**跨集群传导**")
+        lines.append(cross)
+        lines.append("")
+
+    # Data quality notes (LLM self-flagged issues)
+    notes = brief.get("data_quality_notes", [])
+    if notes:
+        lines.append("**数据质疑**")
+        for note in notes[:5]:
+            if note and note not in ("No event clusters formed", "Insufficient articles"):
+                lines.append(f"- {note}")
         lines.append("")
 
     # LLM 快速总结

@@ -692,7 +692,7 @@ class LLMIntelligenceAnalyzer:
             llm_result = self._call_llm(articles, macro, api_key, base_url)
             clusters = self._parse_clusters(llm_result, articles)
             signals = self._parse_signals(llm_result)
-            market_impact = self._build_market_impact(llm_result, clusters, macro)
+            market_impact = self._build_market_impact(llm_result, clusters, macro, signals)
             data_quality = self._build_quality(llm_result, articles, clusters, signals)
 
             return AnalysisResult(
@@ -880,8 +880,19 @@ class LLMIntelligenceAnalyzer:
             ))
         return signals
 
+    # Symbol → asset class mapping for market impact
+    _SYMBOL_TO_ASSET = {
+        "SPY": "equity", "QQQ": "equity", "NVDA": "equity", "IWM": "equity",
+        "XLE": "oil", "USO": "oil",
+        "GLD": "gold", "NEM": "gold", "IAU": "gold",
+        "TLT": "bond", "SGOV": "bond", "SHY": "bond",
+        "UUP": "dxy",
+        "KWEB": "china_assets", "FXI": "china_assets", "ASHR": "china_assets",
+    }
+
     def _build_market_impact(
-        self, llm_result: dict, clusters: list[EventCluster], macro: dict
+        self, llm_result: dict, clusters: list[EventCluster], macro: dict,
+        signals: list[IntelligenceSignal],
     ) -> dict:
         impact = {
             "equity": {"direction": "neutral", "confidence": 0.0, "drivers": []},
@@ -891,6 +902,7 @@ class LLMIntelligenceAnalyzer:
             "dxy": {"direction": "neutral", "confidence": 0.0, "drivers": []},
             "china_assets": {"direction": "neutral", "confidence": 0.0, "drivers": []},
         }
+        # Layer 1: cluster-level sentiment (coarse)
         for c in clusters:
             for market in ["equity", "oil", "gold", "bond", "dxy"]:
                 if market in (c.affected_markets or []):
@@ -902,6 +914,21 @@ class LLMIntelligenceAnalyzer:
                         impact[market]["direction"] = "negative"
                         impact[market]["confidence"] = max(impact[market]["confidence"], c.confidence)
 
+        # Layer 2: signal-level direction (fine-grained, highest priority)
+        for sig in signals:
+            asset = self._SYMBOL_TO_ASSET.get(sig.symbol)
+            if not asset or sig.direction == "watch":
+                continue
+            if sig.direction in ("buy", "accumulate", "long"):
+                impact[asset]["direction"] = "positive"
+                impact[asset]["confidence"] = max(impact[asset]["confidence"], sig.confidence)
+                impact[asset]["drivers"].append(f"signal:{sig.symbol}_buy")
+            elif sig.direction in ("sell", "reduce", "short"):
+                impact[asset]["direction"] = "negative"
+                impact[asset]["confidence"] = max(impact[asset]["confidence"], sig.confidence)
+                impact[asset]["drivers"].append(f"signal:{sig.symbol}_sell")
+
+        # Layer 3: macro override
         if macro.get("vix", 0) > 25:
             impact["equity"]["direction"] = "negative"
             impact["equity"]["drivers"].append(f"VIX elevated at {macro['vix']}")
