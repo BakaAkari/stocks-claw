@@ -42,6 +42,7 @@ from stocks.domain.models import (
 )
 from stocks.engine.config_loader import load_engine_config
 from stocks.engine.context_builder import ContextBuilder
+from stocks.engine.economic_event_watcher import EconomicEventWatcher
 from stocks.engine.event_calendar import (
     EventCalendar,
     FinnhubEarningsCalendarProvider,
@@ -263,6 +264,7 @@ class StocksEngine:
         # 2.35 初始化未来事件日历（官方日程 + 财报日历）
         calendar_cfg = self._config.get("calendar", {})
         self.event_calendar = None
+        self._event_watcher: EconomicEventWatcher | None = None
         if calendar_cfg.get("enabled", True):
             calendar_providers = []
             static_events = self._load_json("event_calendar.json")
@@ -288,6 +290,12 @@ class StocksEngine:
                     calendar_providers,
                     lookahead_days=calendar_cfg.get("lookahead_days", 14),
                 )
+                self._event_watcher = EconomicEventWatcher(
+                    self.event_calendar,
+                    cooldown_minutes=calendar_cfg.get("trigger_cooldown_minutes", 30),
+                )
+            else:
+                self._event_watcher = None
 
         self.context_builder = ContextBuilder(
             fund_nav_provider=self.fund_nav_provider,
@@ -1167,6 +1175,7 @@ class StocksEngine:
                 self,
                 config=config,
                 artifact_dir=resolve_artifact_dir(config, repo_root=repo_root),
+                event_watcher=self._event_watcher,
             )
         return self._scheduled_runner
 
@@ -1198,6 +1207,14 @@ class StocksEngine:
     def scheduled_run_latest(self, session_id: str) -> dict:
         """Read the latest scheduled analysis artifact for a session."""
         return self._get_scheduled_runner().latest(session_id)
+
+    async def check_event_triggers(self, *, now: Optional[str] = None) -> dict:
+        """Check for economic calendar event triggers without executing them.
+
+        Dry-run: returns what events WOULD trigger, with event details and windows.
+        """
+        current = parse_datetime(now) if now else None
+        return await self._get_scheduled_runner().check_event_triggers(now=current)
 
     def preview_asset_migration_v2(self) -> dict:
         """生成 v1 -> v2 资产文件迁移预览，不写文件。"""

@@ -38,19 +38,56 @@ GNEWS_KEY_PATHS = (
 )
 
 DEFAULT_KEYWORDS = [
-    "VIX volatility",
-    "crude oil price",
-    "US Treasury yield",
-    "gold price",
-    "Bitcoin BTC",
-    "US Dollar Index",
-    "China stock market",
-    "Federal Reserve",
+    # GNews tier (top 4, 96 calls/day at hourly frequency):
+    "Federal Reserve interest rate policy",
+    "CPI inflation PPI economic data",
+    "crude oil price supply OPEC",
+    "gold price safe haven",
+    # Google RSS tier (unlimited):
+    "VIX volatility stock market fear",
+    "US Treasury yield bond market",
+    "ECB BOJ central bank monetary policy",
+    "US Dollar Index DXY currency forex",
+    "Bitcoin BTC cryptocurrency",
+    "China stock market economy stimulus",
+    "tariffs trade war sanctions geopolitics",
+    "copper industrial metals commodity",
+    "NVIDIA AI semiconductor chip tech",
+    "defense aerospace military spending",
+    "credit spread high yield corporate bond",
+    "stock market sell-off correction crash",
 ]
 
-# GNews free tier: 100 req/day. At hourly frequency, 4 keywords = 96/day.
-# The first 4 are highest signal for portfolio impact (VIX/Fed/oil/gold).
-_GNEWS_KEYWORD_COUNT = 4
+# GNews free tier: 100 req/day. 3 keywords × 24 = 72/day, 28 headroom.
+# Top 3: Fed (monetary policy), CPI (inflation), oil (energy/geopolitics).
+# Gold moved to RSS-only (adequate coverage, frees GNews quota).
+_GNEWS_KEYWORD_COUNT = 3
+
+# Source credibility weights (0–1). Used by IntelligenceAnalyzer to grade signals.
+SOURCE_CREDIBILITY = {
+    # Tier 1: primary data sources / top-tier wire services
+    "Reuters": 0.95, "Bloomberg": 0.95, "WSJ": 0.90, "Financial Times": 0.90,
+    "Federal Reserve": 1.0, "Bureau of Labor Statistics": 1.0,
+    "MarketWatch": 0.75, "CNBC": 0.75, "France 24": 0.70, "BBC": 0.80,
+    # Tier 2: reliable aggregators / financial media
+    "Investing.com": 0.65, "Yahoo Finance": 0.65, "FXStreet": 0.60,
+    "ForexLive": 0.55, "GNews": 0.60, "Google News": 0.50,
+    "OilPrice.com": 0.60, "blockchain.news": 0.45,
+    # Tier 3: analysis/opinion sources
+    "Seeking Alpha": 0.40, "Benzinga": 0.35, "The Motley Fool": 0.35,
+    "ZeroHedge": 0.30,
+    # Fallback
+    "_default": 0.50,
+}
+
+def source_credibility(source_name: str) -> float:
+    """Return credibility weight for a source name. Fuzzy matches known names."""
+    if not source_name:
+        return SOURCE_CREDIBILITY["_default"]
+    for known, weight in SOURCE_CREDIBILITY.items():
+        if known.lower() in source_name.lower():
+            return weight
+    return SOURCE_CREDIBILITY["_default"]
 
 _ETF_SYMBOLS = [
     ("SPY", "SPDR S&P 500 ETF", "us"),
@@ -127,6 +164,32 @@ class IntelligenceHarvester:
         self._max_items_per_source = max(1, max_items_per_source)
         self._fred = FredMacroProvider(cache_dir=fred_cache_dir, cache_ttl=14400)
         self._watchlist = watchlist or _WATCHLIST_DEFAULT
+        # API usage tracking
+        self._usage_dir: Optional[Path] = None
+
+    def enable_usage_tracking(self, usage_dir: Path) -> None:
+        """Enable API usage tracking to a JSONL file under usage_dir."""
+        self._usage_dir = Path(usage_dir)
+        self._usage_dir.mkdir(parents=True, exist_ok=True)
+
+    def _log_usage(self, source: str, calls: int, errors: int = 0, extra: Optional[dict] = None) -> None:
+        """Log one API usage record as JSONL."""
+        if self._usage_dir is None:
+            return
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "source": source,
+            "calls": calls,
+            "errors": errors,
+        }
+        if extra:
+            record.update(extra)
+        try:
+            usage_file = self._usage_dir / f"api_usage_{datetime.now(timezone.utc).strftime('%Y%m%d')}.jsonl"
+            with open(usage_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            pass  # Don't let usage tracking break harvesting
 
     async def harvest(self) -> HarvestResult:
         collected_at = datetime.now(timezone.utc)
@@ -147,6 +210,15 @@ class IntelligenceHarvester:
             except Exception as exc:
                 logger.warning(f"Intelligence source {name} failed: {exc}")
                 source_status[name] = {"status": "error", "error": str(exc), "count": 0}
+
+        # Track API usage
+        gnews_count = source_status.get("gnews", {}).get("count", 0)
+        self._log_usage("gnews", calls=_GNEWS_KEYWORD_COUNT, errors=1 if gnews_count == 0 else 0,
+                        extra={"articles": gnews_count})
+        self._log_usage("google_rss", calls=len(self._keywords),
+                        extra={"articles": source_status.get("google_rss", {}).get("count", 0)})
+        self._log_usage("finnhub_news", calls=3,
+                        extra={"articles": source_status.get("finnhub_market", {}).get("count", 0)})
 
         # Deduplicate by URL
         seen_urls: set[str] = set()

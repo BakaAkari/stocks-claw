@@ -1,13 +1,19 @@
 """Intelligence analyzer: cluster news, assess market impact, generate signals.
 
-Operates on raw snapshots from NewsIntelligenceStore. No external network calls.
+Operates on raw snapshots from NewsIntelligenceStore.
+LLMIntelligenceAnalyzer makes one LLM call per harvest for semantic analysis.
+IntelligenceAnalyzer is the keyword-rules fallback.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 from stocks.engine.news_intelligence_store import (
@@ -592,3 +598,334 @@ def _parse_iso(value: str) -> datetime:
         return parsed
     except ValueError:
         return datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+class LLMIntelligenceAnalyzer:
+    """LLM-driven intelligence analyzer — replaces keyword matching with semantic analysis.
+
+    One LLM call per harvest handles: dedup, multi-label clustering, sentiment×asset,
+    cross-cluster synthesis, and portfolio-aware signal generation.
+
+    Falls back to IntelligenceAnalyzer (keyword rules) on any failure.
+    """
+
+    _LLM_PROMPT_SYSTEM = (
+        "你是全球市场情报分析师。分析新闻文章，生成结构化JSON。\n\n"
+        "规则:\n"
+        "1. 去重: 同一事件的多篇报道合并为一条dedup_article，列出article_ids\n"
+        "2. 聚类: 按主题分cluster，summary_cn用中文写1-2句摘要\n"
+        "3. 主题: theme用英文(geopolitics/monetary_policy/energy/technology/crypto/macro_data/general)\n"
+        "4. 信号: 仅在置信度>=0.65时生成，symbol用具体代码(SPY/QQQ/GLD/USO/XLE/NVDA/BTCUSDT)\n"
+        "5. article_ids: 每个cluster必须包含article_ids数组，引用新闻的编号[0][1]等\n"
+        "6. 跨集群合成: cross_cluster_synthesis_cn用中文写一句传导链\n"
+        "7. 没有重要事件时clusters可为空\n\n"
+        "输出严格JSON:\n"
+        '{"schema_version":1,"dedup_articles":[{"article_ids":[0,3],"representative_title":"...","duplicate_count":2}],'
+        '"clusters":[{"theme":"geopolitics","sub_cluster":"us_iran","summary_cn":"...","article_ids":[0,3],'
+        '"sentiment":{"equity":"bearish","oil":"bullish","gold":"bullish"},"urgency":"critical","confidence":0.85}],'
+        '"cross_cluster_synthesis_cn":"","signals":[{"symbol":"USO","direction":"buy","rationale_cn":"...",'
+        '"confidence":0.75,"falsification_cn":"..."}],"notes":[]}'
+    )
+
+    def __init__(
+        self,
+        *,
+        holdings: Optional[list[str]] = None,
+        model: str = "deepseek-v4-pro",
+        temperature: float = 0.1,
+        timeout: int = 90,
+        max_input_articles: int = 80,
+        fallback_to_rules: bool = True,
+    ):
+        self.holdings = set(holdings or [])
+        self.model = model
+        self.temperature = temperature
+        self.timeout = timeout
+        self.max_input_articles = max_input_articles
+        self.fallback_to_rules = fallback_to_rules
+        self._fallback = IntelligenceAnalyzer(lookback_hours=6, holdings=list(self.holdings))
+        self._api_key: Optional[str] = None
+        self._base_url: Optional[str] = None
+
+    def _load_api_config(self) -> tuple[str, str]:
+        if self._api_key and self._base_url:
+            return self._api_key, self._base_url
+
+        env_file = Path("/opt/data/.env")
+        api_key = ""
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("OPENAI_COMPATIBLE_API_KEY="):
+                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+                if line.startswith("OPENAI_API_KEY=") and "COMPATIBLE" not in line:
+                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+        api_key = api_key or os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+        base_url = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
+
+        self._api_key = api_key
+        self._base_url = base_url
+        return api_key, base_url
+
+    def analyze(self, snapshots: list[IntelligenceSnapshot]) -> AnalysisResult:
+        analyzed_at = datetime.now(timezone.utc)
+        if not snapshots:
+            return AnalysisResult(
+                analyzed_at=analyzed_at, clusters=[], market_impact={},
+                signals=[], data_quality={"status": "degraded", "errors": ["no snapshots"]},
+            )
+
+        primary = max(snapshots, key=lambda s: s.collected_at)
+        articles = primary.articles[:self.max_input_articles]
+        macro = primary.macro or {}
+
+        if not articles:
+            return self._fallback.analyze(snapshots)
+
+        api_key, base_url = self._load_api_config()
+        if not api_key:
+            logger.warning("LLMIntelligenceAnalyzer: no API key — falling back to rules")
+            return self._fallback_analyze(snapshots)
+
+        try:
+            llm_result = self._call_llm(articles, macro, api_key, base_url)
+            clusters = self._parse_clusters(llm_result, articles)
+            signals = self._parse_signals(llm_result)
+            market_impact = self._build_market_impact(llm_result, clusters, macro)
+            data_quality = self._build_quality(llm_result, articles, clusters, signals)
+
+            return AnalysisResult(
+                analyzed_at=analyzed_at,
+                clusters=clusters,
+                market_impact=market_impact,
+                signals=signals,
+                data_quality=data_quality,
+                metadata={
+                    "analysis_mode": "llm",
+                    "model": self.model,
+                    "articles_input": len(articles),
+                    "dedup_count": len(llm_result.get("dedup_articles", [])),
+                    "cross_cluster": llm_result.get("cross_cluster_synthesis_cn", ""),
+                },
+            )
+        except Exception as exc:
+            logger.warning(f"LLMIntelligenceAnalyzer failed: {exc} — falling back to rules")
+            if self.fallback_to_rules:
+                return self._fallback_analyze(snapshots)
+            raise
+
+    def _fallback_analyze(self, snapshots: list[IntelligenceSnapshot]) -> AnalysisResult:
+        result = self._fallback.analyze(snapshots)
+        # Tag as fallback
+        dq = dict(result.data_quality)
+        dq["analysis_mode"] = "fallback_rules"
+        return AnalysisResult(
+            analyzed_at=result.analyzed_at,
+            clusters=result.clusters,
+            market_impact=result.market_impact,
+            signals=result.signals,
+            data_quality=dq,
+            metadata={**(result.metadata or {}), "analysis_mode": "fallback_rules"},
+        )
+
+    def _call_llm(self, articles: list[dict], macro: dict, api_key: str, base_url: str) -> dict:
+        prompt = self._build_prompt(articles, macro)
+        payload = json.dumps({
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self._LLM_PROMPT_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": 8000,
+        }, ensure_ascii=False).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+
+        content = result["choices"][0]["message"]["content"].strip()
+        # Extract JSON from markdown code block if present
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            # LLM might have returned text before/after JSON
+            # Try to find the first { and last }
+            start = content.find("{")
+            end = content.rfind("}")
+            if start >= 0 and end > start:
+                content = content[start:end+1]
+            parsed = json.loads(content)
+
+        if not isinstance(parsed, dict):
+            raise ValueError(f"LLM returned non-dict: {type(parsed)}")
+        return parsed
+
+    def _build_prompt(self, articles: list[dict], macro: dict) -> str:
+        parts = []
+
+        # Holdings context
+        if self.holdings:
+            parts.append(f"## 用户持仓\n{', '.join(sorted(self.holdings))}\n")
+
+        # Macro context
+        macro_items = []
+        for key, label in [
+            ("vix", "VIX"), ("us_10y_yield", "US10Y"), ("dxy", "DXY"),
+            ("usd_cny", "USDCNY"), ("crude_oil", "OIL"), ("gold", "GOLD"),
+        ]:
+            val = macro.get(key)
+            if val is not None:
+                macro_items.append(f"{label}={val}")
+        if macro_items:
+            parts.append(f"## 宏观数据\n{', '.join(macro_items)}\n")
+
+        # Articles
+        parts.append(f"## 新闻文章 ({len(articles)} 篇)\n")
+        for i, a in enumerate(articles):
+            title = a.get("title", "")[:150]
+            source = a.get("source_name", "?")
+            published = (a.get("published_at") or "")[:19]
+            summary = (a.get("summary") or "")[:200]
+            parts.append(f"[{i}] {title}")
+            parts.append(f"    来源: {source} | {published}")
+            if summary:
+                parts.append(f"    摘要: {summary}")
+            parts.append("")
+
+        parts.append("请分析以上数据，输出JSON。")
+        return "\n".join(parts)
+
+    def _parse_clusters(self, llm_result: dict, articles: list[dict]) -> list[EventCluster]:
+        clusters = []
+        for i, c in enumerate(llm_result.get("clusters", [])):
+            article_ids = c.get("article_ids", c.get("articles", []))
+            article_refs = []
+            for aid in article_ids:
+                if isinstance(aid, int) and 0 <= aid < len(articles):
+                    a = articles[aid]
+                    article_refs.append({
+                        "title": a.get("title", ""),
+                        "url": a.get("url", ""),
+                        "source_name": a.get("source_name", ""),
+                        "published_at": a.get("published_at"),
+                    })
+            # If LLM didn't return article IDs, use representative articles
+            if not article_refs and articles:
+                # Take first 3 articles as representative
+                for a in articles[:3]:
+                    article_refs.append({
+                        "title": a.get("title", ""),
+                        "url": a.get("url", ""),
+                        "source_name": a.get("source_name", ""),
+                        "published_at": a.get("published_at"),
+                    })
+
+            sentiment = c.get("sentiment", {})
+            sentiment_str = "neutral"
+            if isinstance(sentiment, dict):
+                directions = list(sentiment.values())
+                bulls = sum(1 for d in directions if d == "bullish")
+                bears = sum(1 for d in directions if d == "bearish")
+                sentiment_str = "positive" if bulls > bears else ("negative" if bears > bulls else "neutral")
+
+            sub = c.get("sub_cluster", "")
+            theme = c.get("theme", "general")
+            summary = c.get("summary_cn", c.get("summary", f"{theme} related events"))
+
+            clusters.append(EventCluster(
+                cluster_id=f"{theme}_{i:04d}",
+                theme=theme,
+                event_type=theme,
+                summary=f"[{sub}] {summary}" if sub else summary,
+                articles=article_refs[:5],
+                affected_markets=c.get("affected_markets", ["equity"]),
+                affected_symbols=c.get("affected_symbols", []),
+                sentiment=sentiment_str,
+                urgency=c.get("urgency", "medium"),
+                confidence=c.get("confidence", 0.7),
+                formed_at=datetime.now(timezone.utc),
+            ))
+        return clusters
+
+    def _parse_signals(self, llm_result: dict) -> list[IntelligenceSignal]:
+        signals = []
+        for s in llm_result.get("signals", []):
+            sym = s.get("symbol", "") or s.get("asset", "") or "GENERAL"
+            signals.append(IntelligenceSignal(
+                symbol=sym,
+                name=s.get("name", sym),
+                direction=s.get("direction", "watch"),
+                horizon=s.get("horizon", "short_term"),
+                rationale=s.get("rationale_cn", s.get("rationale", "")),
+                falsification=s.get("falsification_cn", s.get("falsification", "")),
+                risk_source=s.get("risk_source", "llm_analysis"),
+                confidence=s.get("confidence", 0.5),
+                urgency=s.get("urgency", "medium"),
+                generated_at=datetime.now(timezone.utc),
+            ))
+        return signals
+
+    def _build_market_impact(
+        self, llm_result: dict, clusters: list[EventCluster], macro: dict
+    ) -> dict:
+        impact = {
+            "equity": {"direction": "neutral", "confidence": 0.0, "drivers": []},
+            "bond": {"direction": "neutral", "confidence": 0.0, "drivers": []},
+            "oil": {"direction": "neutral", "confidence": 0.0, "drivers": []},
+            "gold": {"direction": "neutral", "confidence": 0.0, "drivers": []},
+            "dxy": {"direction": "neutral", "confidence": 0.0, "drivers": []},
+            "china_assets": {"direction": "neutral", "confidence": 0.0, "drivers": []},
+        }
+        for c in clusters:
+            for market in ["equity", "oil", "gold", "bond", "dxy"]:
+                if market in (c.affected_markets or []):
+                    impact[market]["drivers"].append(c.theme)
+                    if c.sentiment == "positive":
+                        impact[market]["direction"] = "positive"
+                        impact[market]["confidence"] = max(impact[market]["confidence"], c.confidence)
+                    elif c.sentiment == "negative":
+                        impact[market]["direction"] = "negative"
+                        impact[market]["confidence"] = max(impact[market]["confidence"], c.confidence)
+
+        if macro.get("vix", 0) > 25:
+            impact["equity"]["direction"] = "negative"
+            impact["equity"]["drivers"].append(f"VIX elevated at {macro['vix']}")
+        elif macro.get("vix", 100) < 15:
+            impact["equity"]["drivers"].append(f"VIX calm at {macro['vix']}")
+        if macro.get("us_10y_yield", 0) > 4.5:
+            impact["bond"]["drivers"].append(f"10Y yield high at {macro['us_10y_yield']}%")
+
+        return impact
+
+    def _build_quality(self, llm_result: dict, articles: list[dict],
+                       clusters: list[EventCluster], signals: list[IntelligenceSignal]) -> dict:
+        errors = []
+        if not clusters:
+            errors.append("No event clusters formed")
+        if len(articles) < 5:
+            errors.append("Insufficient articles")
+        notes = llm_result.get("notes", [])
+        return {
+            "status": "ok" if not errors else "degraded",
+            "errors": errors + notes,
+            "articles": len(articles),
+            "clusters": len(clusters),
+            "signals": len(signals),
+            "analysis_mode": "llm",
+            "dedup_articles": len(llm_result.get("dedup_articles", [])),
+        }

@@ -13,13 +13,19 @@ from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from stocks.engine.intelligence_analyzer import IntelligenceAnalyzer
+from stocks.engine.economic_event_watcher import EconomicEventWatcher
+from stocks.engine.intelligence_analyzer import LLMIntelligenceAnalyzer
 from stocks.engine.intelligence_harvester import IntelligenceHarvester
 from stocks.engine.news_intelligence_store import (
     IntelligenceSnapshot,
     NewsIntelligenceStore,
 )
 from stocks.engine.quant_action import QuantActionEngine, compute_portfolio_risk
+from stocks.engine.risk_warning import assess_risk
+from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
+from stocks.logging_utils import get_logger
+
+logger = get_logger("scheduled_analysis")
 
 SCHEDULED_RUN_SCHEMA_VERSION = 1
 
@@ -238,11 +244,13 @@ class ScheduledAnalysisRunner:
         *,
         config: dict,
         artifact_dir: str | Path,
+        event_watcher = None,
     ):
         self.engine = engine
         self.config = config
         self.calendar = MarketSessionCalendar(config)
         self.store = RunArtifactStore(artifact_dir)
+        self.event_watcher: Optional[EconomicEventWatcher] = event_watcher
 
     async def run_due(
         self,
@@ -251,26 +259,50 @@ class ScheduledAnalysisRunner:
         force: bool = False,
     ) -> dict:
         current = now or datetime.now(timezone.utc)
+
+        # 1. Check event triggers FIRST — they take priority over time sessions.
+        event_runs: list[dict] = []
+        if self.event_watcher is not None:
+            event_result = await self._run_event_triggered(current)
+            if event_result is not None and event_result.get("runs"):
+                event_runs = event_result["runs"]
+
+        # 2. Check time-based sessions.
         due = self.calendar.due_sessions(current)
-        if not due:
+
+        # If event already ran an intelligence harvest, skip duplicate session.
+        if event_runs:
+            due = [
+                occ for occ in due
+                if occ.session.id != "global_intelligence_watch"
+            ]
+
+        time_runs = []
+        for occurrence in due:
+            time_runs.append(await self.run_occurrence(occurrence, now=current, force=force))
+
+        all_runs = event_runs + time_runs
+
+        if not all_runs:
             return {
                 "success": True,
                 "status": "skipped_no_due",
                 "generated_at": _iso_utc(current),
                 "runs": [],
             }
-        runs = []
-        for occurrence in due:
-            runs.append(await self.run_occurrence(occurrence, now=current, force=force))
-        statuses = {str(item.get("status")) for item in runs}
-        return {
+
+        statuses = {str(item.get("status")) for item in all_runs}
+        result = {
             "success": True,
             "status": (
                 "ok" if "ok" in statuses else "degraded" if "degraded" in statuses else "skipped"
             ),
             "generated_at": _iso_utc(current),
-            "runs": runs,
+            "runs": all_runs,
         }
+        if event_runs:
+            result["event_triggered"] = True
+        return result
 
     async def run_session(
         self,
@@ -336,6 +368,105 @@ class ScheduledAnalysisRunner:
             "agent_task": run["agent_task"],
         }
 
+    async def check_event_triggers(self, *, now: Optional[datetime] = None) -> dict:
+        """Check for calendar event triggers without executing them.
+
+        Dry-run: returns what WOULD trigger, with event details and trigger windows.
+        """
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+        if self.event_watcher is None:
+            return {
+                "success": True,
+                "status": "no_watcher",
+                "checked_at": _iso_utc(current),
+                "message": "EconomicEventWatcher not configured — no event calendar available",
+                "triggers": [],
+                "upcoming": [],
+            }
+
+        check = await self.event_watcher.check(now=current)
+        return {
+            "success": True,
+            "status": "triggered" if check.has_triggers else "no_triggers",
+            "checked_at": _iso_utc(current),
+            "triggered": [
+                {
+                    "name": t.event.name,
+                    "event_type": t.event.event_type,
+                    "market": t.event.market,
+                    "scheduled_at": t.scheduled_at.isoformat(),
+                    "window_end": t.trigger_window_end.isoformat(),
+                    "minutes_since_event": t.minutes_since_event,
+                    "reason": t.reason,
+                }
+                for t in check.triggered
+            ],
+            "upcoming": [
+                {
+                    "name": e.name,
+                    "event_type": e.event_type,
+                    "date": e.date,
+                    "status": getattr(e, "status", "scheduled"),
+                    "days_until": getattr(e, "days_until", None),
+                }
+                for e in check.upcoming[:10]
+            ],
+            "cooldown_active": check.cooldown_active,
+            "calendar_quality": check.calendar_quality,
+        }
+
+    async def _run_event_triggered(self, now: datetime) -> Optional[dict]:
+        """Check for event triggers and run intelligence harvest if any are active.
+
+        Returns a result dict if an event triggered, else None.
+        """
+        if self.event_watcher is None:
+            return None
+
+        check = await self.event_watcher.check(now=now)
+        if not check.has_triggers:
+            return None
+
+        trigger_names = [t.event.name for t in check.triggered]
+        trigger_reasons = [t.reason for t in check.triggered]
+
+        logger.info(
+            f"Event trigger(s) detected: {', '.join(trigger_names)}. "
+            f"Forcing intelligence harvest."
+        )
+
+        # Run intelligence harvest using the global_intelligence_watch session
+        occurrence = self.calendar.occurrence_for("global_intelligence_watch", now)
+        result = await self._run_intelligence(occurrence, now=now)
+
+        # Mark all triggers as acted upon (cooldown)
+        self.event_watcher.mark_all_triggered(check.triggered)
+
+        # Enrich result with event trigger metadata
+        result["event_trigger"] = {
+            "triggered_by": trigger_names,
+            "trigger_reasons": trigger_reasons,
+            "checked_at": _iso_utc(check.checked_at),
+            "calendar_quality": check.calendar_quality,
+        }
+        # Override notification to indicate event-driven
+        if "notification" in result:
+            result["notification"]["reason"] = f"Event-driven: {', '.join(trigger_names)}"
+        if "session_summary" in result:
+            result["session_summary"]["priority"] = "high"
+            result["session_summary"]["headline"] = (
+                f"Event-triggered intelligence: {', '.join(trigger_names)}"
+            )
+
+        return {
+            "success": True,
+            "status": "ok_event_triggered",
+            "generated_at": _iso_utc(now),
+            "triggered_by": trigger_names,
+            "runs": [result],
+        }
+
     async def _run_intelligence(self, occurrence: SessionOccurrence, *, now: datetime) -> dict:
         # Run the global_intelligence_watch session.
         repo_root = Path(__file__).resolve().parents[2]
@@ -355,11 +486,13 @@ class ScheduledAnalysisRunner:
             finnhub_client = FinnhubQuoteProvider()
 
         fred_cache_dir = repo_root / ".local" / "macro_cache"
+        usage_dir = repo_root / ".local" / "usage"
         harvester = IntelligenceHarvester(
             finnhub_client=finnhub_client,
             max_items_per_source=10,
             fred_cache_dir=fred_cache_dir,
         )
+        harvester.enable_usage_tracking(usage_dir)
         harvest_result = await harvester.harvest()
         snapshot = IntelligenceSnapshot(
             collected_at=now,
@@ -377,10 +510,46 @@ class ScheduledAnalysisRunner:
             end=now,
         )
         recent_snapshots = store.load_snapshots(recent_paths) + [snapshot]
-        analyzer = IntelligenceAnalyzer(lookback_hours=6)
+        # Try LLM-driven analysis first, fall back to keyword rules
+        holdings = []
+        if hasattr(self.engine, '_asset_positions_v2'):
+            holdings = [p.instrument_key for p in self.engine._asset_positions_v2 if p.instrument_key]
+        analyzer = LLMIntelligenceAnalyzer(
+            holdings=holdings,
+            fallback_to_rules=True,
+            max_input_articles=8,
+            timeout=60,
+        )
         analysis_result = analyzer.analyze(recent_snapshots)
         store.save_clusters(analysis_result.clusters, formed_at=now)
         store.save_signals(analysis_result.signals, generated_at=now)
+
+        # Signal tracking: record signals for backtest
+        if analysis_result.signals:
+            tracker_dir = repo_root / ".local" / "signal_tracker"
+            tracker = SignalTracker(tracker_dir)
+            macro_ctx = harvest_result.macro or {}
+            tracked = []
+            for sig in analysis_result.signals:
+                price = None
+                quotes_dict = harvest_result.quotes or {}
+                if sig.symbol in quotes_dict:
+                    q = quotes_dict[sig.symbol]
+                    if isinstance(q, dict):
+                        price = q.get("price")
+                tracked.append(TrackedSignal(
+                    signal_id=f"{now.strftime('%Y%m%dT%H%M%S')}_{sig.symbol}_{sig.direction}",
+                    generated_at=now,
+                    symbol=sig.symbol,
+                    direction=sig.direction,
+                    rationale=sig.rationale,
+                    generation_price=price,
+                    confidence=sig.confidence,
+                    source=analysis_result.metadata.get("analysis_mode", "unknown"),
+                    urgency=sig.urgency,
+                    regime={"vix": macro_ctx.get("vix"), "mode": analysis_result.metadata.get("analysis_mode", "unknown")},
+                ))
+            tracker.record_batch(tracked)
         store.archive_and_purge(now=now)
 
         run = build_intelligence_run(
@@ -588,7 +757,33 @@ def build_intelligence_run(
     signals = analysis.get("signals") or []
     data_quality = analysis.get("data_quality") or harvest_result.get("data_quality") or {}
     status = "ok" if data_quality.get("status") == "ok" else "degraded"
-    notification = {"recommended": True, "policy": "push_now", "reason": "hourly patrol"}
+    # Risk assessment
+    risk = assess_risk(
+        vix=macro.get("vix"),
+        cluster_urgencies=[c.get("urgency") for c in clusters],
+        negative_cluster_count=sum(1 for c in clusters if c.get("sentiment") == "negative"),
+        geopolitical_crisis=any(
+            c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
+            for c in clusters
+        ),
+    )
+
+    # Silent mode: no signals + no critical clusters + low priority → archive only
+    has_critical = any(c.get("urgency") == "critical" for c in clusters)
+    has_signals = len(signals) > 0
+    if not has_critical and not has_signals and risk.level == "normal":
+        notification = {"recommended": False, "policy": "archive_only", "reason": "silent_mode: no critical events or signals"}
+    else:
+        reason_parts = []
+        if has_critical:
+            reason_parts.append("critical clusters detected")
+        if has_signals:
+            reason_parts.append(f"{len(signals)} signals")
+        if risk.level != "normal":
+            reason_parts.append(f"risk level: {risk.level}")
+        if not reason_parts:
+            reason_parts.append("hourly patrol")
+        notification = {"recommended": True, "policy": "push_now", "reason": "; ".join(reason_parts)}
     return {
         "schema_version": GLOBAL_INTELLIGENCE_WATCH_SCHEMA_VERSION,
         "run_id": occurrence.run_id,
@@ -627,6 +822,13 @@ def build_intelligence_run(
             "requires_user_confirmation": True,
         },
         "notification": notification,
+        "risk_assessment": {
+            "level": risk.level,
+            "triggers": [{"condition": t.condition, "value": t.value} for t in risk.triggers],
+            "recommended_actions": risk.recommended_actions,
+            "suspend_accumulation": risk.suspend_accumulation,
+            "cash_target_pct": risk.cash_target_pct,
+        },
         "context_digest": {
             "market_state_summary": {
                 "risk_appetite": _risk_appetite_from_macro(macro),

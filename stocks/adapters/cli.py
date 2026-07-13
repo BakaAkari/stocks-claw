@@ -127,9 +127,14 @@ class CLIAdapter:
             help="保存一条预测记录；值为 ForecastRecord 字段的 JSON 对象",
         )
         asset_actions.add_argument(
+            "--check-event-triggers",
+            action="store_true",
+            help="检查是否有经济日历事件触发（仅检查，不执行采集）",
+        )
+        asset_actions.add_argument(
             "--scheduled-run-due",
             action="store_true",
-            help="运行当前到期的定时分析 session",
+            help="运行当前到期的定时分析 session（含事件触发检查）",
         )
         asset_actions.add_argument(
             "--scheduled-run-session",
@@ -216,6 +221,8 @@ class CLIAdapter:
             print(output_text)
 
     async def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
+        if args.check_event_triggers:
+            return await self.engine.check_event_triggers(now=args.now)
         if args.scheduled_run_due:
             return await self.engine.scheduled_run_due(now=args.now, force=args.force)
         if args.scheduled_run_session:

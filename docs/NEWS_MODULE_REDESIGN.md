@@ -38,7 +38,7 @@
 |---|---|
 | 数据重复采集 | harvest() 和 build_context() 各自调 Finnhub/Yahoo，同一时刻两次 API 调用 |
 | 情报时效断开 | 盘面 agent 读的 intelligence_digest 是上次整点的快照，CPI 发布后盘面分析要等到下个整点 |
-| 叙事无法传递 | 情报产出"紧缩叙事 ↑70%"，盘面 agent 看不到这个结论，只能自己猜 |
+| (已否决) 叙事层 | ~~原计划 NarrativeBuilder~~ → 方案A否决，cluster 直接供 Agent 自行归纳。见 2026-07-13 决策 |
 | 分析各自为政 | 两个 LLM agent（情报 Agent + 盘面 Agent）各写各的，风格、深度、结论不保证一致 |
 
 ### 2.3 缺乏事件响应能力
@@ -79,7 +79,7 @@ CPI 20:30 发布 → 下次情报在 21:00 → 30 分钟窗口 = 价格发现已
                          │ 1. 新闻采集 (一次)     │
                          │ 2. 行情+宏观 (一次)    │
                          │ 3. 组合估值+轮动 (一次) │
-                         │ 4. 情报分析+叙事       │
+                         │ 4. 情报分析            │
                          │ 5. 跨资产交叉验证      │
                          │ 6. 组合防御评估        │
                          └──────────┬───────────┘
@@ -89,7 +89,7 @@ CPI 20:30 发布 → 下次情报在 21:00 → 30 分钟窗口 = 价格发现已
                          │                      │
                          │ ┌──────────────────┐ │
                          │ │ 情报栏 (左)       │ │
-                         │ │ · 宏观叙事+概率   │ │
+                         │ │ · 事件聚类+情感   │ │
                          │ │ · 事件聚类+情感   │ │
                          │ │ · 来源可信度标注   │ │
                          │ │ · 跨资产传导评估   │ │
@@ -101,7 +101,7 @@ CPI 20:30 发布 → 下次情报在 21:00 → 30 分钟窗口 = 价格发现已
                          │ │ · 风险预警级别    │ │
                          │ ├──────────────────┤ │
                          │ │ 决策栏 (底)       │ │
-                         │ │ · 叙事→调仓映射   │ │
+                         │ │ · 事件→调仓映射   │ │
                          │ │ · 时间视域+置信度  │ │
                          │ │ · 情景概率分布    │ │
                          │ │ · 防御模式建议    │ │
@@ -175,7 +175,6 @@ CPI 20:30 发布 → 下次情报在 21:00 → 30 分钟窗口 = 价格发现已
 触发: CPI 发布 (3.3% vs 预期 3.1%) | 来源: BLS (Tier 1)
 
 **━━━ 宏观环境 ━━━**
-当前叙事: **紧缩恐惧** (概率 78%) | 竞争叙事: 软着陆 (22%)
 VIX 24.2 ↑3.1 | 10Y 4.45% ↑8bp | DXY 105.1 ↑0.3%
 Gold 2410 ↑0.8% | Crude 78.5 ↓1.2% | BTC 62.4k ↓2.1%
 
@@ -189,7 +188,7 @@ Gold 2410 ↑0.8% | Crude 78.5 ↓1.2% | BTC 62.4k ↓2.1%
 
 **━━━ 组合影响 ━━━**
 纳指 QDII  142,000 → 建议减仓 5-10%
-  → 紧缩叙事下，高估值成长股首当其冲
+  → 高利率环境下，高估值成长股首当其冲
   → 相似事件 (2024-04 CPI) 后 2 周纳指 -3.2%
 A股 ETF   76,000 → 维持，等待中国刺激信号
 黄金       161,000 → 维持，短期承压但结构性看多
@@ -238,15 +237,14 @@ class UnifiedHarvester:
 
         # Phase 2: 分析层
         clusters = self._analyze_news(news)       # 聚类 + 情感 + 来源权重
-        narrative = self._build_narrative(clusters, macro, quotes)
         cross_validation = self._cross_validate(clusters, macro, quotes)
-        defense_signal = self._assess_defense(clusters, narrative, quotes)
+        defense_signal = self._assess_defense(clusters, quotes)
 
         # Phase 3: 组合层
         portfolio = await self._build_portfolio_context(quotes, macro)
 
         return UnifiedSnapshot(
-            news=news, clusters=clusters, narrative=narrative,
+            news=news, clusters=clusters,
             macro=macro, quotes=quotes, portfolio=portfolio,
             cross_validation=cross_validation, defense=defense_signal,
             trigger_type=trigger_type,
@@ -265,18 +263,7 @@ class UnifiedHarvester:
 
 ### 6.3 情报快照连续化
 
-当前 `NewsIntelligenceStore` 存离散 snapshot。统一后改为连续时间线：
-
-```python
-# 每个 UnifiedSnapshot 存储时携带前序叙事状态
-snapshot.narrative_continuity = {
-    "previous_narrative": "紧缩恐惧 65%",
-    "current_narrative": "紧缩恐惧 78%",
-    "narrative_shift": "strengthening",
-    "shift_drivers": ["CPI连续第三月超预期"],
-    "hours_since_last_shift": 3.5,
-}
-```
+> **2026-07-13 决策**: 叙事模板方案（NarrativeBuilder）已否决。快照连续化简化为纯数据层追踪——追踪 cluster 的主题消长和 sentiment 方向变化，不做叙事归类。详见方案A决策记录。
 
 ---
 
@@ -306,55 +293,13 @@ class EconomicEvent:
 | Tier 2 | 0.60-0.85 | CNBC, MarketWatch, WSJ, FT | inference → 触发关注 |
 | Tier 3 | 0.30-0.55 | Seeking Alpha, Benzinga, FXStreet | rumor → 仅记录 |
 
-### 7.3 叙事构建 (NarrativeBuilder)
+### 7.3 叙事层 — 已否决
 
-```python
-NARRATIVE_TEMPLATES = {
-    "tightening_fear": {
-        "conditions": ["inflation↑", "fed_hawkish↑", "yield↑", "equity↓"],
-        "counter": "soft_landing",
-        "allocation": "defensive",
-        "lead_assets": ["short_duration", "value_equity", "cash"],
-        "risk_level": "reduce",
-    },
-    "risk_on": {
-        "conditions": ["vix↓", "equity↑", "crypto↑", "gold↓"],
-        "counter": "risk_off",
-        "allocation": "growth",
-        "lead_assets": ["tech_equity", "high_beta", "crypto"],
-        "risk_level": "watch",
-    },
-    "reflation": {
-        "conditions": ["inflation↑", "commodity↑", "yield↑", "dxy↓"],
-        "counter": "stagflation",
-        "allocation": "cyclical",
-        "lead_assets": ["commodities", "value_equity", "tips"],
-        "risk_level": "watch",
-    },
-    "stagflation": {
-        "conditions": ["inflation↑", "employment↓", "equity↓", "gold↑"],
-        "counter": "soft_landing",
-        "allocation": "defensive",
-        "lead_assets": ["gold", "commodities", "cash"],
-        "risk_level": "hedge",
-    },
-    "geopolitical_crisis": {
-        "conditions": ["geopolitics↑", "oil↑", "gold↑", "vix↑", "equity↓"],
-        "counter": "contained_conflict",
-        "allocation": "panic",
-        "lead_assets": ["gold", "oil", "defensive_equity", "cash"],
-        "risk_level": "hedge",
-    },
-    "china_reflation": {
-        "conditions": ["china_macro↑", "commodity↑", "emerging_market↑"],
-        "counter": "china_slowdown",
-        "allocation": "cyclical",
-        "lead_assets": ["china_equity", "commodities"],
-        "risk_level": "watch",
-    },
-}
-```
-
+> **2026-07-13 决策**: 方案A — 不做 NarrativeBuilder。理由：
+> - 当前 cluster 的 theme/sentiment/summary 已包含足够上下文，Agent 可自行归纳宏观判断
+> - 预定义的 6 个叙事模板（tightening_fear / risk_on / reflation / stagflation / geopolitical_crisis / china_reflation）会将复杂的宏观环境强行归类，导致输出固化
+> - 跨 cluster 关联是真正有价值的方向，但用规则引擎做关联检测比叙事模板更合适（未来可选方案B）
+> - 宏观叙事的合成是 LLM 的天然能力，不应由确定性规则代劳
 ### 7.4 三级风险预警
 
 | 级别 | 触发条件 | 系统行为 |
@@ -473,12 +418,12 @@ THEME_KEYWORDS = {
 - [ ] 消除 API 重复调用
 - [ ] 主题 6→12 + 多标签聚类
 - [ ] LLM 情感判断 + 字典降级
-- [ ] 情报快照连续化 (narrative_continuity)
+- [ ] 情报快照连续化 (纯数据层 — cluster 主题消长追踪，不做叙事归类)
 
 ### Phase 2 — 统一报告 (一月内)
 
 - [ ] ReportBuilder 三栏结构
-- [ ] 叙事模板库 + NarrativeBuilder
+- [x] ~~叙事模板库 + NarrativeBuilder~~ (2026-07-13 方案A否决)
 - [ ] 主题→配置动作映射表
 - [ ] ReportRouter (四级推送)
 - [ ] cron jobs 合并 (10→3: 事件触发器 + 时间触发器 + 异常监控)
@@ -499,7 +444,7 @@ THEME_KEYWORDS = {
 | 风险 | 缓释措施 |
 |---|---|
 | 统一采集层成为单点 | 保持每个源的独立异常处理；统一失败时降级到旧管道 |
-| LLM 调用增加（叙事构建新增） | 叙事模板匹配基于规则，LLM 仅用于情感和最终总结 |
+| ~~LLM 调用增加（叙事构建新增）~~ | (已否决，不需要缓释) |
 | 金融日历数据维护成本 | 初期只覆盖 CPI/FOMC/非农 3 个事件，后续渐进 |
 | 推送减少后用户感知信息缺失 | Phase 0 先做"安静模式"（采存不推送），保持用户可手动查询 |
 | 旧 cron jobs 与新系统并存时的冲突 | 统一管道上线后，旧 cron jobs 先 pause 而非 remove，观察 2 周 |
