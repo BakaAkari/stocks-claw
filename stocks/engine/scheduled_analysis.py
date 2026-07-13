@@ -672,6 +672,7 @@ def build_scheduled_run(
         rotation_ranks=rotation_ranks if rotation_ranks else None,
         constraints=context.get("portfolio_constraints"),
         portfolio_mapping=context.get("portfolio_mapping"),
+        quant_config=context.get("engine_config", {}).get("quant_action"),
     )
     portfolio_risk = _build_portfolio_risk_summary(context.get("position_valuations") or [])
     rotation_leaders_data = context.get("rotation", {}).get("items", [])
@@ -878,7 +879,7 @@ def build_intelligence_run(
             c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
             for c in clusters
         ),
-        config=self.engine._config.get("risk_warning") if hasattr(self.engine, "_config") else None,
+        config=None,  # engine config not in scope for standalone function
     )
 
     # Non-trading-day downgrade: weekends can't act on signals,
@@ -1349,6 +1350,14 @@ def format_run_markdown(run: dict) -> str:
             f"- {item.get('display_name')} ({item.get('instrument_key') or 'manual'})"
             f"{pnl_text}{level_tag}"
         )
+    # ── Mandatory blocks ──
+    mb = run.get("mandatory_blocks") or {}
+    if mb.get("risk_boundary"):
+        lines.append("")
+        lines.append(mb["risk_boundary"])
+    if mb.get("constraint_alerts"):
+        lines.append("")
+        lines.append(mb["constraint_alerts"])
     return "\n".join(lines)
 
 
@@ -1498,6 +1507,7 @@ def _build_action_cards(
     rotation_ranks: Optional[dict[str, int]] = None,
     constraints: Optional[dict] = None,
     portfolio_mapping: Optional[dict] = None,
+    quant_config: Optional[dict] = None,
 ) -> list[dict]:
     """为每个持仓计算量化行动卡 — 通过 finalize_decision 一次性裁决。
 
@@ -1531,7 +1541,7 @@ def _build_action_cards(
         indicators = item.get("indicators") or {}
         if valuation_method == "fund_nav":
             indicators = {}  # 代理价格 ≠ 基金净值
-        engine = QuantActionEngine(indicators)
+        engine = QuantActionEngine(indicators, config=quant_config)
         tech = engine.review_position(
             position_id=pid,
             price=item.get("price"),

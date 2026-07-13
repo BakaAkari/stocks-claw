@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+import pandas as pd
 
 from stocks.engine.exchange_rate import get_usd_cny_rate
 
@@ -217,7 +218,7 @@ class QuantActionEngine:
                 if pnl_pct >= level:
                     target_prices.append(round(cost * (1 + level / 100), 4))
             if target_prices:
-                triggered = [(l, r) for l, r in c["take_profit_levels"] if pnl_pct >= l]
+                triggered = [(lv, rv) for lv, rv in c["take_profit_levels"] if pnl_pct >= lv]
                 if triggered:
                     total_reduce = min(sum(r for _, r in triggered), 0.75)
                     max_level = triggered[-1][0]
