@@ -20,7 +20,7 @@ from stocks.engine.news_intelligence_store import (
     IntelligenceSnapshot,
     NewsIntelligenceStore,
 )
-from stocks.engine.quant_action import QuantActionEngine, compute_portfolio_risk, finalize_decision
+from stocks.engine.quant_action import QuantActionEngine, _TAG_TO_BUCKET, compute_portfolio_risk, finalize_decision
 from stocks.engine.risk_warning import assess_risk
 from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
 from stocks.logging_utils import get_logger
@@ -573,6 +573,7 @@ class ScheduledAnalysisRunner:
             occurrence=occurrence,
             generated_at=now,
             config=self.config,
+            engine_config=self.engine._config,
         )
         paths = self.store.save(run)
         return {
@@ -860,6 +861,7 @@ def build_intelligence_run(
     occurrence: SessionOccurrence,
     generated_at: datetime,
     config: dict,
+    engine_config: Optional[dict] = None,
 ) -> dict:
     """Build a ScheduledAnalysisRun artifact for global_intelligence_watch."""
     session = occurrence.session
@@ -879,7 +881,7 @@ def build_intelligence_run(
             c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
             for c in clusters
         ),
-        config=None,  # engine config not in scope for standalone function
+        config=engine_config.get("risk_warning") if engine_config else None,
     )
 
     # Non-trading-day downgrade: weekends can't act on signals,
@@ -1614,20 +1616,6 @@ def _build_capital_allocation(
     constraints = constraints or {}
     rotation_ranks = rotation_ranks or {}
     rotation_leaders = rotation_leaders or []
-
-    # ── 曝光标签 → 约束大类映射 ──
-    _TAG_TO_BUCKET = {
-        "gold": "黄金", "mining": "黄金",
-        "a_share": "权益", "us_equity": "权益", "tech": "权益",
-        "nasdaq100": "权益", "qdii": "权益", "semiconductor": "权益",
-        "star_board": "权益", "blue_chip": "权益", "dividend_low_vol": "权益",
-        "high_dividend": "权益", "active_equity": "权益",
-        "energy": "权益", "oil_gas": "权益", "defense": "权益",
-        "aerospace": "权益", "ai": "权益",
-        "fixed_income": "固收", "credit_plus": "固收", "us_rates": "固收",
-        "bank_wmp": "固收", "short_treasury": "固收",
-        "cash_like": "现金", "money_market": "现金",
-    }
 
     # ── 1. 约束检查 ──
     constraint_alerts = []

@@ -1465,6 +1465,9 @@ class AnalysisContext:
     asset_data_boundaries: dict = field(default_factory=dict)
     advice_granularity: dict = field(default_factory=dict)
 
+    # 引擎运行时配置（从 engine.yaml 加载，阈值/风控参数等）
+    engine_config: dict = field(default_factory=dict)
+
     # 元信息（带默认值）
     schema_version: int = 12
 
@@ -1503,6 +1506,7 @@ class AnalysisContext:
             "liquidity_summary": self.liquidity_summary,
             "asset_data_boundaries": self.asset_data_boundaries,
             "advice_granularity": self.advice_granularity,
+            "engine_config": self.engine_config,
         }
 
 

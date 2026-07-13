@@ -21,7 +21,6 @@ import pandas as pd
 
 from stocks.engine.exchange_rate import get_usd_cny_rate
 
-
 # ── 事件主题 → 持仓暴露标签 ──
 THEME_TO_EXPOSURE: dict[str, list[str]] = {
     "geopolitics": ["energy", "defense", "gold", "oil_gas", "aerospace", "mining"],

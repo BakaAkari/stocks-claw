@@ -1139,6 +1139,9 @@ class StocksEngine:
             exposure_proxy=self._exposure_proxy,
         )
 
+        # 注入引擎运行时配置，使下游分析管道可直接访问阈值/风控参数
+        object.__setattr__(context, 'engine_config', self._config)
+
         # 保存最小快照，供下一次上下文进行前后对照。
         self.persistence.save_context(context)
 
