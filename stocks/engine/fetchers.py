@@ -42,10 +42,15 @@ class DataFetcher:
         self.retry_delay = retry_delay
         self.fallback_order = fallback_order or {}
         self._degradation_log: list[DegradationRecord] = []
+        self._tracker = None  # FallbackTracker, 惰性注入
         self._tracker = None  # set via set_fallback_tracker()
 
     def set_fallback_tracker(self, tracker) -> None:
         """注入 FallbackTracker 实例（惰性，避免启动时依赖）。"""
+        self._tracker = tracker
+
+    def set_fallback_tracker(self, tracker) -> None:
+        """注入 FallbackTracker（惰性，避免测试环境依赖目录结构）。"""
         self._tracker = tracker
 
     def get_degradation_log(self) -> list[DegradationRecord]:

@@ -35,9 +35,12 @@ class FallbackTracker:
         if store_dir is None:
             store_dir = Path(__file__).resolve().parents[2] / ".local" / "fallback_logs"
         self._dir = Path(store_dir)
-        self._dir.mkdir(parents=True, exist_ok=True)
         self._log_path = self._dir / "records.jsonl"
         self._max_records = max_records
+
+    def _ensure_dir(self) -> None:
+        if not self._dir.exists():
+            self._dir.mkdir(parents=True, exist_ok=True)
 
     def record(
         self,
@@ -50,6 +53,7 @@ class FallbackTracker:
         failure_reasons: dict[str, str] | None = None,
         latency_ms: float = 0,
     ) -> None:
+        self._ensure_dir()
         rec = FallbackRecord(
             symbol=symbol, market=market, data_type=data_type,
             requested_sources=requested_sources, used_source=used_source,
