@@ -86,6 +86,21 @@ DEFAULT_ENGINE_CONFIG = {
         "reduce_actions": ["暂停权益加仓", "关注防御板块", "检查高beta暴露"],
         "watch_actions": ["关注风险指标", "不新增高beta仓位"],
     },
+    "quant_action": {
+        "stop_loss_pct": -12.0,
+        "mid_stop_pct": -10.0,
+        "mid_stop_ratio": 0.3,
+        "warning_loss_pct": -8.0,
+        "take_profit_levels": [[10.0, 0.25], [20.0, 0.25], [30.0, 0.50]],
+        "profit_pullback_pct": -2.0,
+        "profit_pullback_min_pnl": 3.0,
+        "trend_ma20_break_cutoff": 0.995,
+        "trend_break_ladder": [[0.995, 0.25], [0.980, 0.50], [0.950, 0.75], [0.850, 1.0]],
+        "default_position_limit_pct": 5.0,
+        "trend_confirmed_limit_pct": 10.0,
+        "left_add_max_rsi": 65.0,
+        "left_add_min_rsi": 40.0,
+    },
     "logging": {
         "level": "INFO",
         "desensitize": True,  # 脱敏日志中的金额和 API Key

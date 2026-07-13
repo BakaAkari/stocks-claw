@@ -20,7 +20,7 @@ from stocks.engine.news_intelligence_store import (
     IntelligenceSnapshot,
     NewsIntelligenceStore,
 )
-from stocks.engine.quant_action import QuantActionEngine, compute_portfolio_risk
+from stocks.engine.quant_action import QuantActionEngine, compute_portfolio_risk, finalize_decision
 from stocks.engine.risk_warning import assess_risk
 from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
 from stocks.logging_utils import get_logger
@@ -338,6 +338,15 @@ class ScheduledAnalysisRunner:
                 "market_date": market_date,
                 "scheduled_for": occurrence.scheduled_for.isoformat(),
             }
+        elif existing and force:
+            # 强制覆盖：先删除旧 artifact，避免路径冲突
+            old_path = self.store._artifact_path(existing, suffix=".json")
+            old_md = self.store._artifact_path(existing, suffix=".md")
+            for p in (old_path, old_md):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
         if occurrence.session.id == "global_intelligence_watch":
             return await self._run_intelligence(occurrence, now=now)
@@ -731,6 +740,12 @@ def build_scheduled_run(
         },
         "notification": notification,
         "risk_assessment": _compute_risk_assessment(context),
+        "mandatory_blocks": build_mandatory_blocks(
+            _compute_risk_assessment(context),
+            capital_allocation.get("constraint_alerts", []),
+            context.get("upcoming_events") or [],
+            total_value_cny=capital_allocation.get("total_value_cny", 0),
+        ),
         "context_digest": {
             "market_state": context.get("market_state") or {},
             "market_state_summary": _market_state_summary(context.get("market_state") or {}),
@@ -774,6 +789,64 @@ def _compute_risk_assessment(context: dict) -> dict:
         "suspend_accumulation": risk.suspend_accumulation,
         "cash_target_pct": risk.cash_target_pct,
     }
+
+
+def build_mandatory_blocks(
+    risk_assessment: dict,
+    constraint_alerts: list[dict],
+    upcoming_events: list[dict],
+    *,
+    total_value_cny: float = 0.0,
+) -> dict[str, str]:
+    """生成 agent 必须原样嵌入的确定性报告段。
+
+    不依赖 LLM 选择性渲染 — 这些文本是系统计算的确定事实。
+    """
+    blocks: dict[str, str] = {}
+
+    # ── 风险边界段 ──
+    ra = risk_assessment or {}
+    level = ra.get("level", "normal")
+    if level != "normal":
+        lines = ["**风险边界**"]
+        lines.append(f"风险等级: {level}")
+        triggers = ra.get("triggers") or []
+        for t in triggers:
+            lines.append(f"- 触发: {t.get('condition', '?')} — {t.get('value', '?')}")
+        actions = ra.get("recommended_actions") or []
+        for a in actions:
+            lines.append(f"- 系统建议: {a}")
+        if ra.get("suspend_accumulation"):
+            lines.append("- 暂停加仓: 是")
+        if ra.get("cash_target_pct") is not None:
+            lines.append(f"- 现金目标: {ra['cash_target_pct']*100:.0f}%")
+        # 72h 内重大事件警告
+        if upcoming_events:
+            now_utc = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
+            urgent = []
+            for ev in upcoming_events[:3]:
+                timestamp = ev.get("timestamp")
+                if timestamp:
+                    try:
+                        ev_time = __import__('datetime').datetime.fromisoformat(timestamp)
+                        hours_left = (ev_time - now_utc).total_seconds() / 3600
+                        if 0 < hours_left <= 72:
+                            urgent.append(f"{ev.get('title', '?')}（{hours_left:.0f}小时后）")
+                    except Exception:
+                        pass
+            if urgent:
+                lines.append(f"- 临近事件: {', '.join(urgent)} — 当前交易逻辑可能被单日逆转")
+        blocks["risk_boundary"] = "\n".join(lines)
+
+    # ── 约束偏离段 ──
+    breaches = [a for a in constraint_alerts if a.get("severity") == "breach"]
+    if breaches:
+        lines2 = ["**大类约束偏离**"]
+        for a in breaches:
+            lines2.append(f"- {a.get('message', '')}")
+        blocks["constraint_alerts"] = "\n".join(lines2)
+
+    return blocks
 
 
 GLOBAL_INTELLIGENCE_WATCH_SCHEMA_VERSION = 1
@@ -1069,7 +1142,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "明天开盘前重点看什么",
             "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
             "是否需要让用户补录数据或确认长期记录",
-            "【风险边界】读取 risk_assessment：如果 level 不是 normal，必须显式报告风险等级、触发原因和系统建议操作（如暂停加仓、现金目标）。情报管道中的地缘政治事件，如果触发了 risk_assessment，必须在风险边界段报告",
+            "【风险边界】读取 risk_assessment 和 mandatory_blocks.risk_boundary：如果 mandatory_blocks.risk_boundary 存在，必须原样嵌入报告末尾（用**加粗**标题，- 列表）。不得改写、省略或合并到其他段。情报管道中的地缘政治事件，如果触发了 risk_assessment，必须在风险边界段报告",
         ],
         "mid_session_check": [
             "盘中波动是否改变已有计划",
@@ -1136,6 +1209,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "组合": "exposure_summary.top — 组合暴露分布和潜在缺口",
             "资金分配": "capital_allocation — constraint_alerts(大类超限)、reduce_items(减仓回收预估)、add_candidates(加仓优先级排序)、net_deployable_cny(净可动用资金)",
             "风险等级": "risk_assessment — level(hedge/reduce/watch/normal)、triggers(触发条件)、recommended_actions(建议操作)、suspend_accumulation(是否暂停加仓)、cash_target_pct(现金目标比例)",
+            "必修文本": "mandatory_blocks — risk_boundary(风险边界，level!=normal时存在)和constraint_alerts(约束偏离)是系统计算的确定事实，必须原样嵌入报告末尾，不得改写或省略",
         },
 
         # ── 输出格式 ──
@@ -1425,153 +1499,40 @@ def _build_action_cards(
     constraints: Optional[dict] = None,
     portfolio_mapping: Optional[dict] = None,
 ) -> list[dict]:
-    """为每个持仓计算量化行动卡。
+    """为每个持仓计算量化行动卡 — 通过 finalize_decision 一次性裁决。
 
-    Args:
-        position_valuations: 持仓估值列表
-        intelligence_signals: {symbol: {direction, urgency, rationale}} 情报信号
+    优先级链：stop_loss → constraint_override → intel_override →
+              macro/event overlay → routing_downgrade → data_freshness
     """
+    from stocks.engine.quant_action import QuantActionEngine, finalize_decision
 
-    # ── 预计算约束分配比例（用于加仓信号互查）──
-    _TAG_TO_BUCKET = {
-        "gold": "黄金", "mining": "黄金",
-        "a_share": "权益", "us_equity": "权益", "tech": "权益",
-        "nasdaq100": "权益", "qdii": "权益", "semiconductor": "权益",
-        "star_board": "权益", "blue_chip": "权益", "dividend_low_vol": "权益",
-        "high_dividend": "权益", "active_equity": "权益",
-        "energy": "权益", "oil_gas": "权益", "defense": "权益",
-        "aerospace": "权益", "ai": "权益",
-        "fixed_income": "固收", "credit_plus": "固收", "us_rates": "固收",
-        "bank_wmp": "固收", "short_treasury": "固收",
-        "cash_like": "现金", "money_market": "现金",
-    }
-    total_value = sum(item.get("market_value_cny") or 0.0 for item in position_valuations)
     ratios = (portfolio_mapping or {}).get("ratios", {}) if portfolio_mapping else {}
-    over_limit_buckets: set[str] = set()
-    if constraints and total_value > 0:
-        for bucket_name, rule in constraints.items():
-            if not isinstance(rule, dict):
-                continue
-            max_pct = rule.get("max")
-            actual = ratios.get(bucket_name)
-            if max_pct is not None and actual is not None and actual > max_pct:
-                over_limit_buckets.add(bucket_name)
-
     cards = []
+
     for item in position_valuations:
         pid = item.get("position_id", "")
-        mv = item.get("market_value_cny")
-
-        # 获取流动性/调仓约束
-        liq = item.get("liquidity") or {}
-        rebalance_ok = liq.get("rebalance_eligible", True)
-        klass = item.get("classification") or {}
-        exposure_tags = klass.get("exposure_tags") or []
-        product_type = klass.get("product_type", "")
         valuation_method = item.get("valuation_method", "")
 
-        # 锁定资产（tier=locked 或含 insurance 标签），不生成调仓建议
-        # 其他 rebalance_eligible=False 的资产（场外基金/贵金属等）可调，后续降上限处理
-        if liq.get("tier") == "locked" or "insurance" in exposure_tags:
-            cards.append({
-                "position_id": pid,
-                "signal": "hold",
-                "action": "锁定资产，不可调仓",
-                "ratio": 0.0,
-                "facts": [],
-                "stop_price": None,
-                "target_prices": [],
-                "position_limit_pct": 0.0,
-                "current_weight_pct": 0.0,
-                "risk_to_stop_pct": None,
-                "risk_amount_cny": None,
-                "intelligence_conflict": "none",
-            })
-            continue
-
-        # 跳过已清仓或估值为 0 的持仓
+        # 跳过已清仓持仓（finalize_decision 也会处理，但这里提前过滤减少调用）
+        mv = item.get("market_value_cny")
         if mv is None or mv <= 0:
             qty = (item.get("holding") or {}).get("quantity", 0) if item.get("holding") else 0
             cards.append({
-                "position_id": pid,
-                "signal": "hold",
+                "position_id": pid, "signal": "hold",
                 "action": "已清仓，无持仓" if qty == 0 else "持仓为零，无需操作",
-                "ratio": 0.0,
-                "facts": [],
-                "stop_price": None,
-                "target_prices": [],
-                "position_limit_pct": 5.0,
-                "current_weight_pct": 0.0,
-                "risk_to_stop_pct": None,
-                "risk_amount_cny": None,
+                "ratio": 0.0, "facts": [], "stop_price": None, "target_prices": [],
+                "position_limit_pct": 5.0, "current_weight_pct": 0.0,
+                "risk_to_stop_pct": None, "risk_amount_cny": None,
                 "intelligence_conflict": "none",
             })
             continue
 
-        # ── 产品类型路由：每种资产类型有独立规则 ──
-        _PRODUCT_TYPE_RULES = {
-            # 全规则：tech 面 + 基本面全部适用
-            "exchange_traded_fund": {"mode": "full"},
-            "stock": {"mode": "full"},
-            "short_treasury_etf": {"mode": "full"},
-            # 配置型：信号为建议参考，不生成自动调仓比例
-            "qdii_fund": {"mode": "config_only", "context": "场外 QDII，申赎 T+2，适合长期配置。无明确替代方向时不宜频繁止盈"},
-            "feeder_fund": {"mode": "config_only", "context": "场外联接基金，申赎 T+2，适合长期配置"},
-            "mixed_fund": {"mode": "config_only", "context": "主动管理混合基金，高浮盈后需关注基金经理风格漂移风险"},
-            "fixed_income_plus_fund": {"mode": "config_only", "context": "固收+产品，波动率低，MA20/RSI 技术信号不适用"},
-            "precious_metal_account": {"mode": "config_only", "context": "积存金，买卖有价差，短线操作成本高"},
-            # 不可交易型
-            "bank_wealth_management": {"mode": "info_only", "context": "银行理财，有开放期限制，非开放期不可操作"},
-            "money_market_fund": {"mode": "skip"},
-            "cash": {"mode": "skip"},
-            "cash_equivalent": {"mode": "skip"},
-            "insurance_policy": {"mode": "skip"},
-        }
-        rule = _PRODUCT_TYPE_RULES.get(product_type, {"mode": "full"})
-        routing_mode = rule["mode"]
-
-        if routing_mode == "skip":
-            cards.append({
-                "position_id": pid,
-                "signal": "hold",
-                "action": "现金/货基/保险类资产，无需操作",
-                "ratio": 0.0,
-                "facts": [],
-                "stop_price": None,
-                "target_prices": [],
-                "position_limit_pct": 0.0,
-                "current_weight_pct": item.get("portfolio_weight") or 0.0,
-                "risk_to_stop_pct": None,
-                "risk_amount_cny": None,
-                "intelligence_conflict": "none",
-            })
-            continue
-
-        if routing_mode == "info_only":
-            cards.append({
-                "position_id": pid,
-                "signal": "hold",
-                "action": "持有（" + rule.get("context", "非交易型资产") + "）",
-                "ratio": 0.0,
-                "facts": [rule.get("context", "")],
-                "stop_price": None,
-                "target_prices": [],
-                "position_limit_pct": 0.0,
-                "current_weight_pct": item.get("portfolio_weight") or 0.0,
-                "risk_to_stop_pct": None,
-                "risk_amount_cny": None,
-                "intelligence_conflict": "none",
-            })
-            continue
-
-        # config_only 和 full 都通过引擎计算，config_only 后续降权
-
+        # ── 技术面信号 ──
         indicators = item.get("indicators") or {}
-        # fund_nav 持仓不应用代理标的的 MA20/RSI 做趋势判断（代理价格≠基金净值）
         if valuation_method == "fund_nav":
-            indicators = {}
+            indicators = {}  # 代理价格 ≠ 基金净值
         engine = QuantActionEngine(indicators)
-        review = engine.review_position(
+        tech = engine.review_position(
             position_id=pid,
             price=item.get("price"),
             cost=item.get("cost_amount"),
@@ -1581,124 +1542,36 @@ def _build_action_cards(
             quantity=(item.get("holding") or {}).get("quantity") if item.get("holding") else None,
         )
 
-        # 多维度交叉分析叠加：宏观 + 事件 + 数据新鲜度 + 轮动
-        from stocks.engine.quant_action import MacroOverlay
-        # rotation_symbol: "us:XLE" 格式，与 rotation_ranks 的 key 一致
+        # ── 确定性最终决策 ──
         rotation_symbol = item.get("instrument_key") or ""
-        MacroOverlay.apply(
-            review,
+        decision = finalize_decision(
+            tech=tech,
+            position=item,
             market_state=market_state,
             event_clusters=event_clusters,
-            data_freshness=data_freshness,
+            intelligence_signals=intelligence_signals,
             rotation_ranks=rotation_ranks,
             rotation_symbol=rotation_symbol,
-            exposure_tags=exposure_tags,
+            data_freshness=data_freshness,
+            constraints=constraints,
+            portfolio_ratios=ratios,
         )
-
-        # 按产品类型路由：config_only / info_only 降权为建议参考
-        if routing_mode == "config_only":
-            review.ratio = 0.0
-            ctx = rule.get("context", "")
-            if ctx:
-                review.facts.insert(0, ctx)
-            # fund_nav 已获取实时净值，不标手工估值
-            nav_label = "手工估值（非实时净值），建议确认后手动执行" if valuation_method != "fund_nav" else "净值来源：天天基金（T-1 确认净值）"
-            # 量化估值滞后：当日标的ETF涨跌幅 × 0.85 ≈ 真实净值偏差
-            odc = item.get("one_day_change_pct")
-            if valuation_method == "fund_nav" and isinstance(odc, (int, float)):
-                lag_pct = round(odc * 0.85, 2)
-                lag_dir = "上涨" if lag_pct > 0 else ("下跌" if lag_pct < 0 else "持平")
-                if abs(lag_pct) > 0.5:
-                    review.facts.append(
-                        f"T-1净值滞后：当日标的ETF {lag_dir} {abs(odc):.2f}%，"
-                        f"估算真实净值偏差 {abs(lag_pct):.2f}%，止盈建议以基金公司确认为准"
-                    )
-            if review.signal == "stop_loss":
-                review.action = "止损预警（配置型资产，建议登录平台确认）"
-                review.facts.append(nav_label)
-            elif review.signal == "take_profit":
-                review.action = "止盈提醒（配置型资产，无明确替代方向时建议持有）"
-                review.facts.append(nav_label)
-            elif review.signal in ("reduce", "add"):
-                review.action = review.action + "（配置型资产，建议审慎评估）"
-                review.facts.append(nav_label)
-            elif review.signal not in ("hold", "wait"):
-                review.facts.append(nav_label)
-
-        # 非 rebalance_eligible 资产降低仓位上限并加注谨慎标记
-        if not rebalance_ok:
-            review.position_limit_pct = min(review.position_limit_pct, 2.0)
-            review.facts.append("可调仓但需谨慎（场外基金/贵金属），仓位上限 2%")
-
-        # 情报面冲突检测：从 instrument_key 提取 symbol，匹配情报信号
-        inst_key = item.get("instrument_key") or ""
-        # "us:XLE" → "XLE", "a:588000" → "588000"
-        raw_symbol = inst_key.split(":")[-1] if ":" in inst_key else ""
-        intel_symbol = raw_symbol if raw_symbol and raw_symbol in (intelligence_signals or {}) else None
-        # 跨品种代理: USO 信号影响 XLE 持仓 (USO 是原油ETF代理)
-        from stocks.engine.quant_action import _INTEL_SIGNAL_PROXY
-        if not intel_symbol:
-            for proxy_sym, target_sym in _INTEL_SIGNAL_PROXY.items():
-                if target_sym == raw_symbol and proxy_sym in (intelligence_signals or {}):
-                    intel_symbol = proxy_sym
-                    break
-        conflict = engine.resolve_intelligence_conflict(
-            review.signal, intelligence_signals, intel_symbol
-        )
-
-        # 根据冲突级别调权
-        adjusted_ratio = review.ratio
-        if conflict == "caution" and review.ratio != 0:
-            adjusted_ratio = review.ratio * 0.5
-            # Update action text to reflect adjusted ratio
-            if review.signal == "reduce" and abs(adjusted_ratio) > 0:
-                review.action = f"趋势走弱，情报反向（{intel_symbol} {intelligence_signals.get(intel_symbol, {}).get('direction', '?')}），减仓降为 {int(adjusted_ratio*100)}%"
-            elif review.signal == "add" and abs(adjusted_ratio) > 0:
-                review.action = f"左侧加仓，情报反向（{intel_symbol}），加仓降为 {int(abs(adjusted_ratio)*100)}%"
-        elif conflict == "override" and review.signal not in ("hold", "wait"):
-            review.facts.append(
-                f"情报冲突（{intel_symbol} {intelligence_signals.get(intel_symbol, {}).get('direction', '?')}），"
-                f"暂停执行等待情报确认"
-            )
-            adjusted_ratio = 0.0
-            review.action = f"暂停执行：技术面{review.signal}，情报面反向（{intel_symbol}），等待确认"
-
-        if conflict != "none" and intel_symbol:
-            intel = intelligence_signals.get(intel_symbol, {}) if intelligence_signals else {}
-            review.facts.append(
-                f"情报面: {intel.get('direction', '?')} {intel_symbol} — {intel.get('rationale', '')[:80]}"
-            )
-
-        # 约束互查：加仓信号→检查对应大类是否已超限
-        if review.signal == "add" and over_limit_buckets:
-            klass = item.get("classification") or {}
-            tags = klass.get("exposure_tags") or []
-            matched_buckets = set()
-            for tag in tags:
-                b = _TAG_TO_BUCKET.get(tag)
-                if b:
-                    matched_buckets.add(b)
-            if matched_buckets & over_limit_buckets:
-                over_b = (matched_buckets & over_limit_buckets).pop()
-                review.facts.append(f"约束互查：{over_b} 大类已超限，加仓信号暂停")
-                adjusted_ratio = 0.0
-                review.action = f"暂停加仓（{over_b} 大类超限，等待减仓后重新评估）"
-                conflict = "caution"  # downgrade if no conflict already
 
         cards.append({
-            "position_id": review.position_id,
-            "signal": review.signal,
-            "action": review.action,
-            "ratio": adjusted_ratio,
-            "facts": review.facts,
-            "stop_price": review.stop_price,
-            "target_prices": review.target_prices,
-            "position_limit_pct": review.position_limit_pct,
-            "current_weight_pct": review.current_weight_pct,
-            "risk_to_stop_pct": review.risk_to_stop_pct,
-            "risk_amount_cny": review.risk_amount_cny,
-            "intelligence_conflict": conflict,
+            "position_id": decision.position_id,
+            "signal": decision.signal,
+            "action": decision.action,
+            "ratio": decision.ratio,
+            "facts": decision.facts,
+            "stop_price": decision.stop_price,
+            "target_prices": decision.target_prices,
+            "position_limit_pct": decision.position_limit_pct,
+            "current_weight_pct": decision.current_weight_pct,
+            "risk_to_stop_pct": decision.risk_to_stop_pct,
+            "risk_amount_cny": decision.risk_amount_cny,
+            "intelligence_conflict": decision.intelligence_conflict,
         })
+
     return cards
 
 
