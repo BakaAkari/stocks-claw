@@ -1181,6 +1181,7 @@ class StocksEngine:
                 self,
                 config=config,
                 artifact_dir=resolve_artifact_dir(config, repo_root=repo_root),
+                repo_root=repo_root,
                 event_watcher=self._event_watcher,
             )
         return self._scheduled_runner

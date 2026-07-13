@@ -21,6 +21,7 @@ from stocks.engine.news_intelligence_store import (
     NewsIntelligenceStore,
 )
 from stocks.engine.quant_action import QuantActionEngine, _TAG_TO_BUCKET, compute_portfolio_risk, finalize_decision
+from stocks.engine.shadow_account import save_snapshot, build_shadow_block
 from stocks.engine.risk_warning import assess_risk
 from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
 from stocks.logging_utils import get_logger
@@ -245,11 +246,13 @@ class ScheduledAnalysisRunner:
         config: dict,
         artifact_dir: str | Path,
         event_watcher = None,
+        repo_root: Path | None = None,
     ):
         self.engine = engine
         self.config = config
         self.calendar = MarketSessionCalendar(config)
         self.store = RunArtifactStore(artifact_dir)
+        self._repo_root = repo_root or Path(artifact_dir).parent.parent if artifact_dir else None
         self.event_watcher: Optional[EconomicEventWatcher] = event_watcher
 
     async def run_due(
@@ -362,6 +365,23 @@ class ScheduledAnalysisRunner:
             generated_at=now,
             config=self.config,
         )
+
+        # Shadow Account: 保存本期建议快照 + 注入诊断
+        action_cards = run.get("action_cards") or []
+        if action_cards and self._repo_root:
+            save_snapshot(
+                action_cards,
+                run_id=run["run_id"],
+                session=run["session"],
+                generated_at=run["generated_at"],
+                market_date=run["market_date"],
+                repo_root=self._repo_root,
+            )
+            shadow = build_shadow_block(repo_root=self._repo_root)
+            if shadow:
+                mb = run.setdefault("mandatory_blocks", {})
+                mb["shadow_account"] = shadow
+
         paths = self.store.save(run)
         return {
             "success": True,
@@ -1360,6 +1380,9 @@ def format_run_markdown(run: dict) -> str:
     if mb.get("constraint_alerts"):
         lines.append("")
         lines.append(mb["constraint_alerts"])
+    if mb.get("shadow_account"):
+        lines.append("")
+        lines.append(mb["shadow_account"])
     return "\n".join(lines)
 
 

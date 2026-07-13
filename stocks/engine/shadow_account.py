@@ -1,8 +1,7 @@
 """
 Shadow Account — 执行行为诊断模块
 
-从 ExecutionRecord 提取用户执行模式，对比系统建议与用户实际行为，
-产出行为诊断报告。不改动任何决策逻辑，纯只读分析。
+保存每期建议快照，加载历史快照，产出行为诊断。
 """
 
 from __future__ import annotations
@@ -18,163 +17,139 @@ from stocks.logging_utils import get_logger
 
 logger = get_logger("shadow_account")
 
+SNAPSHOT_DIR = ".local/advice_snapshots"
+
 
 @dataclass
-class AdviceRecord:
+class AdviceSnapshot:
+    """单次 run 的建议快照。"""
     run_id: str
     session: str
     generated_at: str
-    position_id: str
-    signal: str
-    action: str
-    ratio: float
-    stop_price: Optional[float] = None
-    target_prices: list[float] = field(default_factory=list)
+    action_cards: list[dict]    # position_id, signal, action, ratio
+    market_date: str = ""
 
 
-@dataclass
-class ExecutionMatch:
-    advice: AdviceRecord
-    executed: bool
-    action_taken: str = ""
-    extent: str = ""
-    note: str = ""
-    executed_at: str = ""
+def save_snapshot(
+    action_cards: list[dict],
+    *,
+    run_id: str,
+    session: str,
+    generated_at: str,
+    market_date: str = "",
+    repo_root: Path | None = None,
+) -> Path:
+    """保存当前 run 的建议快照到 .local/advice_snapshots/。"""
+    root = repo_root or Path(__file__).resolve().parents[2]
+    snap_dir = root / SNAPSHOT_DIR
+    snap_dir.mkdir(parents=True, exist_ok=True)
 
-
-@dataclass
-class BehavioralDiagnostic:
-    generated_at: str
-    total_advice: int
-    total_executed: int
-    adoption_rate: float
-    adoption_by_signal: dict
-    systemic_biases: list[str]
-    execution_lag_stats: dict
-    summary: str
-    over_trading_signals: list[str] = field(default_factory=list)
-    under_reaction_signals: list[str] = field(default_factory=list)
-
-
-def load_advice_from_runs(runs_dir: Path, *, max_days: int = 30) -> list[AdviceRecord]:
-    advice_list: list[AdviceRecord] = []
-    if not runs_dir.exists():
-        return advice_list
-
-    for date_dir in sorted(runs_dir.iterdir(), reverse=True):
-        if not date_dir.is_dir() or date_dir.name == "latest":
-            continue
-        for session_type_dir in sorted(date_dir.iterdir()):
-            if not session_type_dir.is_dir():
-                continue
-            for session_id_dir in sorted(session_type_dir.iterdir()):
-                if not session_id_dir.is_dir():
-                    continue
-                for json_file in session_id_dir.glob("*.json"):
-                    try:
-                        data = json.loads(json_file.read_text())
-                    except (json.JSONDecodeError, OSError):
-                        continue
-                    cards = data.get("action_cards") or []
-                    for card in cards:
-                        advice_list.append(AdviceRecord(
-                            run_id=data.get("run_id", ""),
-                            session=data.get("session", ""),
-                            generated_at=data.get("generated_at", ""),
-                            position_id=card.get("position_id", ""),
-                            signal=card.get("signal", ""),
-                            action=card.get("action", ""),
-                            ratio=float(card.get("ratio", 0)),
-                            stop_price=card.get("stop_price"),
-                            target_prices=card.get("target_prices") or [],
-                        ))
-    return advice_list
-
-
-def match_executions(advice_list, executions):
-    matches = []
-    for adv in advice_list:
-        matches.append(ExecutionMatch(advice=adv, executed=False))
-    return matches
-
-
-def analyze_behavior(matches):
-    total_advice = len(matches)
-    total_executed = sum(1 for m in matches if m.executed)
-    adoption_rate = total_executed / total_advice if total_advice > 0 else 0.0
-
-    by_signal: dict = {}
-    for m in matches:
-        sig = m.advice.signal or "unknown"
-        if sig not in by_signal:
-            by_signal[sig] = {"total": 0, "executed": 0}
-        by_signal[sig]["total"] += 1
-        if m.executed:
-            by_signal[sig]["executed"] += 1
-    for sig in by_signal:
-        d = by_signal[sig]
-        d["rate"] = d["executed"] / d["total"] if d["total"] > 0 else 0.0
-
-    biases = []
-    reduce_signals = by_signal.get("reduce_risk", {})
-    if reduce_signals.get("total", 0) >= 3 and reduce_signals.get("rate", 1.0) < 0.5:
-        biases.append(f"止损/减仓信号采纳率仅 {reduce_signals['rate']:.0%}")
-
-    execution_lag_stats = {"avg_hours": 0, "samples": 0}
-    summary = f"整体采纳率 {adoption_rate:.0%}" if not biases else f"采纳率 {adoption_rate:.0%}，{len(biases)} 个偏差"
-
-    return BehavioralDiagnostic(
-        generated_at=datetime.now(timezone.utc).isoformat(),
-        total_advice=total_advice, total_executed=total_executed,
-        adoption_rate=adoption_rate, adoption_by_signal=by_signal,
-        systemic_biases=biases, execution_lag_stats=execution_lag_stats,
-        summary=summary,
+    snapshot = AdviceSnapshot(
+        run_id=run_id,
+        session=session,
+        generated_at=generated_at,
+        market_date=market_date,
+        action_cards=action_cards,
     )
 
+    filename = f"{run_id}.json"
+    filepath = snap_dir / filename
+    filepath.write_text(json.dumps({
+        "run_id": snapshot.run_id,
+        "session": snapshot.session,
+        "generated_at": snapshot.generated_at,
+        "market_date": snapshot.market_date,
+        "action_cards": snapshot.action_cards,
+    }, ensure_ascii=False, indent=2))
+    return filepath
 
-def run_shadow_diagnostic(repo_root=None):
-    if repo_root is None:
-        repo_root = Path(__file__).resolve().parents[2]
-    runs_dir = repo_root / ".local" / "scheduled_runs"
-    exec_dir = repo_root / ".local" / "executions"
-    advice_list = load_advice_from_runs(runs_dir)
-    executions = []
-    if exec_dir.exists():
-        for exec_file in exec_dir.glob("*.jsonl"):
-            for line in exec_file.read_text().splitlines():
-                line = line.strip()
-                if line:
-                    try:
-                        executions.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-    matches = match_executions(advice_list, executions)
-    diag = analyze_behavior(matches)
 
-    if diag.total_advice == 0:
-        return {
-            "diagnostic": {},
-            "output": "## 执行行为诊断\n\n"
-                      "无执行记录。开始使用 advice_save 记录执行后，"
-                      "系统将自动追踪采纳率与行为偏差。\n",
-        }
+def load_all_snapshots(repo_root: Path | None = None) -> list[AdviceSnapshot]:
+    """加载所有历史建议快照。"""
+    root = repo_root or Path(__file__).resolve().parents[2]
+    snap_dir = root / SNAPSHOT_DIR
+    if not snap_dir.exists():
+        return []
+
+    snapshots = []
+    for json_file in sorted(snap_dir.glob("*.json")):
+        try:
+            data = json.loads(json_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        snapshots.append(AdviceSnapshot(
+            run_id=data.get("run_id", ""),
+            session=data.get("session", ""),
+            generated_at=data.get("generated_at", ""),
+            market_date=data.get("market_date", ""),
+            action_cards=data.get("action_cards") or [],
+        ))
+    return snapshots
+
+
+def analyze_snapshots(snapshots: list[AdviceSnapshot]) -> dict:
+    """分析所有快照的聚合统计。"""
+    by_signal: dict[str, int] = defaultdict(int)
+    by_session: dict[str, int] = defaultdict(int)
+    total_cards = 0
+
+    for snap in snapshots:
+        for card in snap.action_cards:
+            sig = card.get("signal", "unknown")
+            by_signal[sig] += 1
+            by_session[snap.session] += 1
+            total_cards += 1
+
+    top_signals = sorted(by_signal.items(), key=lambda x: -x[1])[:5]
+    total_runs = len(snapshots)
+
+    return {
+        "total_runs": total_runs,
+        "total_advice": total_cards,
+        "by_signal": dict(by_signal),
+        "by_session": dict(by_session),
+        "top_signals": top_signals,
+        "latest_run_at": snapshots[-1].generated_at if snapshots else "",
+    }
+
+
+def build_shadow_block(repo_root: Path | None = None) -> str:
+    """生成 Shadow Account 诊断段（markdown）。"""
+    snapshots = load_all_snapshots(repo_root)
+    stats = analyze_snapshots(snapshots)
+
+    if stats["total_advice"] == 0:
+        return ""
 
     lines = [
-        "## 执行行为诊断", "",
-        f"- 统计周期内建议: {diag.total_advice}",
-        f"- 已执行: {diag.total_executed} ({diag.adoption_rate:.0%})",
-        f"- 未执行: {diag.total_advice - diag.total_executed}", "",
+        "**执行行为追踪**",
+        f"- 累计分析: {stats['total_runs']} 次会话, {stats['total_advice']} 条建议",
     ]
-    if diag.adoption_by_signal:
-        lines.append("### 按信号类型采纳率")
-        for sig in sorted(diag.adoption_by_signal.keys()):
-            d = diag.adoption_by_signal[sig]
-            lines.append(f"- `{sig}`: {d['rate']:.0%} ({d['executed']}/{d['total']})")
-    if diag.systemic_biases:
-        lines.append("")
-        lines.append("### 检测到的行为偏差")
-        for b in diag.systemic_biases:
-            lines.append(f"- {b}")
-    lines.append("")
-    lines.append(f"**诊断摘要**: {diag.summary}")
-    return {"diagnostic": {"generated_at": diag.generated_at, "summary": diag.summary}, "output": "\n".join(lines)}
+    for sig, count in stats["top_signals"]:
+        pct = count / stats["total_advice"] * 100
+        lines.append(f"- `{sig}`: {count} 次 ({pct:.0f}%)")
+
+    # 执行记录追踪: 检查 .local/executions/
+    root = repo_root or Path(__file__).resolve().parents[2]
+    exec_dir = root / ".local" / "executions"
+    if exec_dir.exists():
+        exec_count = sum(1 for _ in exec_dir.glob("*.jsonl"))
+        lines.append(f"- 已记录执行: {exec_count} 次" if exec_count > 0 else "- 尚未记录任何执行")
+    else:
+        lines.append("- 尚未记录任何执行")
+
+    # 最近一次分析
+    if stats["latest_run_at"]:
+        try:
+            dt = datetime.fromisoformat(stats["latest_run_at"])
+            lines.append(f"- 最近分析: {dt.strftime('%m-%d %H:%M')}")
+        except (ValueError, TypeError):
+            pass
+
+    # 信号分布健康度检查
+    reduce_count = stats["by_signal"].get("reduce_risk", 0) + stats["by_signal"].get("reduce", 0)
+    add_count = stats["by_signal"].get("add", 0) + stats["by_signal"].get("accumulate", 0)
+    if add_count > reduce_count * 3 and reduce_count > 0:
+        lines.append("- ⚠️ 加仓信号远多于减仓信号，检查是否存在过度乐观偏差")
+
+    return "\n".join(lines)
