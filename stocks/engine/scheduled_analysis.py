@@ -734,6 +734,7 @@ def build_scheduled_run(
                 context.get("rotation") or {}, max_items=8
             ),
             "intelligence_digest": context.get("intelligence_digest") or {},
+            "upcoming_events": context.get("upcoming_events") or [],
         },
     }
 
@@ -879,6 +880,7 @@ def build_intelligence_agent_task(session: ScheduledSession) -> dict:
         "primary_market": session.primary_market,
         "must_answer": [
             "本小时最重要的 1-2 个事件是什么（引用 intelligence_digest.top_clusters）",
+            "72小时内是否有CPI/FOMC/NFP等重大数据发布？如有，当前所有交易逻辑可能被该数据单日逆转，必须在风险边界段显式警告",
             "它们对 VIX、油、金、美债、美元、中国资产的可能影响",
             "哪些标的出现了可买入/卖出/观察的信号（引用 intelligence_digest.top_signals）",
             "数据质量是否有明显缺口",
@@ -1089,6 +1091,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "持仓事实": "position_reviews[] — 逐持仓估值、盈亏、session_facts（含 severe_loss 标注）",
             "情报": "intelligence_digest — top_clusters（事件聚类）、top_signals（方向信号）",
             "情报brief": ".local/intelligence/latest_brief.json — clusters（含portfolio_relevance）、signals、macro（每小时更新）",
+            "事件日历": "upcoming_events[] — 未来72小时内的重大数据发布时间（CPI/FOMC/NFP等），每个事件标注距现在的剩余小时数。如果72小时内有事件，风险边界段必须显式标注'X小时后CPI发布，当前通胀交易逻辑可能单日逆转'",
             "轮动": "rotation_leaders — 轮动排名领涨的板块和标的",
             "组合": "exposure_summary.top — 组合暴露分布和潜在缺口",
             "资金分配": "capital_allocation — constraint_alerts(大类超限)、reduce_items(减仓回收预估)、add_candidates(加仓优先级排序)、net_deployable_cny(净可动用资金)",
@@ -1528,6 +1531,16 @@ def _build_action_cards(
                 review.facts.insert(0, ctx)
             # fund_nav 已获取实时净值，不标手工估值
             nav_label = "手工估值（非实时净值），建议确认后手动执行" if valuation_method != "fund_nav" else "净值来源：天天基金（T-1 确认净值）"
+            # 量化估值滞后：当日标的ETF涨跌幅 × 0.85 ≈ 真实净值偏差
+            odc = item.get("one_day_change_pct")
+            if valuation_method == "fund_nav" and isinstance(odc, (int, float)):
+                lag_pct = round(odc * 0.85, 2)
+                lag_dir = "上涨" if lag_pct > 0 else ("下跌" if lag_pct < 0 else "持平")
+                if abs(lag_pct) > 0.5:
+                    review.facts.append(
+                        f"T-1净值滞后：当日标的ETF {lag_dir} {abs(odc):.2f}%，"
+                        f"估算真实净值偏差 {abs(lag_pct):.2f}%，止盈建议以基金公司确认为准"
+                    )
             if review.signal == "stop_loss":
                 review.action = "止损预警（配置型资产，建议登录平台确认）"
                 review.facts.append(nav_label)
@@ -1565,12 +1578,18 @@ def _build_action_cards(
         adjusted_ratio = review.ratio
         if conflict == "caution" and review.ratio != 0:
             adjusted_ratio = review.ratio * 0.5
+            # Update action text to reflect adjusted ratio
+            if review.signal == "reduce" and abs(adjusted_ratio) > 0:
+                review.action = f"趋势走弱，情报反向（{intel_symbol} {intelligence_signals.get(intel_symbol, {}).get('direction', '?')}），减仓降为 {int(adjusted_ratio*100)}%"
+            elif review.signal == "add" and abs(adjusted_ratio) > 0:
+                review.action = f"左侧加仓，情报反向（{intel_symbol}），加仓降为 {int(abs(adjusted_ratio)*100)}%"
         elif conflict == "override" and review.signal not in ("hold", "wait"):
             review.facts.append(
                 f"情报冲突（{intel_symbol} {intelligence_signals.get(intel_symbol, {}).get('direction', '?')}），"
                 f"暂停执行等待情报确认"
             )
             adjusted_ratio = 0.0
+            review.action = f"暂停执行：技术面{review.signal}，情报面反向（{intel_symbol}），等待确认"
 
         if conflict != "none" and intel_symbol:
             intel = intelligence_signals.get(intel_symbol, {}) if intelligence_signals else {}
@@ -1757,6 +1776,18 @@ def _build_capital_allocation(
     for card in action_cards:
         if card["signal"] != "add":
             continue
+        # Skip trivial allocations below ¥800 threshold
+        mv = 0.0
+        for pv in position_valuations:
+            if pv.get("position_id") == card["position_id"]:
+                mv = pv.get("market_value_cny") or 0.0
+                break
+        alloc_amount = mv * abs(card.get("ratio", 0))
+        if alloc_amount < 800:
+            card["facts"].append(f"分配金额 ¥{alloc_amount:.0f} 低于 ¥800 有效下限，仅作观察不执行")
+            card["ratio"] = 0.0
+            card["signal"] = "hold"
+            card["action"] = "持仓观察（加仓信号有效但金额低于执行下限）"
         strength = abs(card.get("ratio", 0))
         tags = pid_to_tags.get(card["position_id"], [])
         # 约束惩罚/奖励：每个匹配的约束大类只生效一次（去重）

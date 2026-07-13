@@ -72,7 +72,16 @@ THEME_TO_EXPOSURE: dict[str, list[str]] = {
 # ── 情报信号 symbol → 持仓关联（仅跨品种代理关系）──
 # 例: USO（原油ETF）信号影响 XLE（能源板块ETF）
 _INTEL_SIGNAL_PROXY: dict[str, str] = {
+    # 原油 → 能源板块 (ETF→ETF, 期货→ETF)
     "USO": "XLE",
+    # 黄金 → 金矿股 (ETF→股票, 现货→ETF)
+    "GLD": "NEM",
+    # 纳指 → 纳指QDII基金 (ETF→QDII，两个基金都映射)
+    "QQQ": "alipay_gf_nasdaq",
+    # 国防 → 国防ETF (直接映射)
+    "ITA": "ITA",
+    # 标普 → 宽基ETF
+    "SPY": "SPY",
 }
 
 
@@ -182,8 +191,15 @@ class QuantActionEngine:
     # 单日回撤止盈
     PROFIT_PULLBACK_PCT = -2.0
     PROFIT_PULLBACK_MIN_PNL = 3.0
-    # 趋势保护
+    # 趋势保护 — 阶梯式减仓：偏离越大，减仓越多
     TREND_MA20_BREAK_CUTOFF = 0.995  # 收盘价低于 MA20 * 0.995 视为跌破
+    # (price/ma20, reduce_ratio) — 越小越严重
+    TREND_BREAK_LADDER = [
+        (0.995, 0.25),   # <0.5% 偏离 → 减仓 25%（轻微）
+        (0.980, 0.50),   # <2.0% 偏离 → 减仓 50%（确认）
+        (0.950, 0.75),   # <5.0% 偏离 → 减仓 75%（严重）
+        (0.000, 1.00),   # 极端偏离 → 清仓
+    ]
     # 仓位
     DEFAULT_POSITION_LIMIT_PCT = 5.0
     TREND_CONFIRMED_LIMIT_PCT = 10.0
@@ -242,16 +258,21 @@ class QuantActionEngine:
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= self.WARNING_LOSS_PCT:
             facts.append(f"浮亏 {pnl_pct:.2f}% 触发警示阈值 {self.WARNING_LOSS_PCT}%")
 
-        # 4. 20 日低点 / 趋势跌破
+        # 4. 20 日低点 / 趋势跌破 — 阶梯减仓
         ma20 = self.indicators.get("ma_20")
         macd_hist = (self.indicators.get("macd") or {}).get("hist")
         if isinstance(price, (int, float)) and ma20 is not None:
             if price < ma20 * self.TREND_MA20_BREAK_CUTOFF and (macd_hist is None or macd_hist < 0):
+                ratio = 0.25  # default fallback
+                deviation = (ma20 - price) / ma20
+                for threshold, ladder_ratio in self.TREND_BREAK_LADDER:
+                    if price / ma20 < threshold:
+                        ratio = ladder_ratio
+                        break
                 signal = "reduce"
-                action = "趋势走弱，减仓 50%"
-                ratio = 0.5
+                action = f"趋势走弱（MA20偏离 {deviation:.1%}），减仓 {int(ratio*100)}%"
                 stop_price = round(float(ma20 * self.TREND_MA20_BREAK_CUTOFF), 4)
-                facts.append(f"现价 {price:.2f} 跌破 MA20 {ma20:.2f} 且 MACD 柱为负")
+                facts.append(f"现价 {price:.2f} 跌破 MA20 {ma20:.2f}（偏离 {deviation:.1%}），MACD 柱为负")
                 return self._build(
                     position_id, signal, action, ratio, facts, stop_price, target_prices,
                     current_weight_pct, price, quantity,
