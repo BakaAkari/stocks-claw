@@ -753,8 +753,11 @@ def build_scheduled_run(
         rotation_leaders=rotation_leaders_data,
     )
     session_intent_props = _session_intent_props(session.id)
+    filtered_action_signals = _filter_action_signals_by_market(
+        context.get("action_signals") or {}, session.primary_market
+    )
     action_signal_reviews = _build_action_signal_reviews(
-        context.get("action_signals") or {},
+        filtered_action_signals,
         session=session,
         max_primary=8,
         max_cross=2,
@@ -798,9 +801,7 @@ def build_scheduled_run(
         "capital_allocation": capital_allocation,
         "trigger_reviews": trigger_reviews,
         "action_signal_reviews": action_signal_reviews,
-        "action_signals": _filter_action_signals_by_market(
-            context.get("action_signals") or {}, session.primary_market
-        ),
+        "action_signals": filtered_action_signals,
         "rule_scorecard": context.get("rule_scorecard", {}),
         "data_quality": context_quality,
         "agent_task": build_agent_task(session),
