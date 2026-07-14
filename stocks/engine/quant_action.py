@@ -149,9 +149,11 @@ class FinalDecision:
     current_weight_pct: Optional[float]
     risk_to_stop_pct: Optional[float]
     risk_amount_cny: Optional[float]
-    intelligence_conflict: str
-    constraint_conflict: str
-
+    intelligence_conflict: str = "none"
+    constraint_conflict: str = "none"
+    drivers: list[dict] = field(default_factory=list)
+    dissent: Optional[dict] = None
+    confidence: str = "medium"
 
 # ---------------------------------------------------------------------------
 # QuantActionEngine — 纯技术面
@@ -296,6 +298,125 @@ class QuantActionEngine:
 # ---------------------------------------------------------------------------
 # finalize_decision — 确定性最终决策
 # ---------------------------------------------------------------------------
+
+
+def _build_drivers(*, tech, signal, action, votes, intelligence_signals, position):
+    """构建多源信号驱动向量 — 每个信号源独立标注方向和理由。"""
+    drivers = []
+    tech_dir = _signal_direction(signal)
+    tech_reasons = tech.facts[:2] if tech.facts else [f"最终信号: {signal}"]
+    drivers.append({"source": "technical", "signal": signal, "direction": tech_dir, "reasons": tech_reasons})
+
+    intel_sigs = intelligence_signals or {}
+    inst_key = position.get("instrument_key", "")
+    classification = position.get("classification") or {}
+    exposure_tags = classification.get("exposure_tags") or []
+    tags_lower = [t.lower() for t in exposure_tags]
+
+    intel_signals_for_position = []
+    for key, sig in intel_sigs.items():
+        if key == inst_key or key in tags_lower or sig.get("symbol") in tags_lower:
+            intel_signals_for_position.append(sig)
+    if not intel_signals_for_position:
+        for key, sig in intel_sigs.items():
+            sym = sig.get("symbol", "").lower()
+            if sym and any(t in sym for t in tags_lower):
+                intel_signals_for_position.append(sig)
+
+    if intel_signals_for_position:
+        intel_dir = _intel_consensus_direction(intel_signals_for_position)
+        intel_reasons = [f"{s.get('symbol','?')}: {s.get('direction','?')} ({s.get('rationale','')[:80]})" for s in intel_signals_for_position[:2]]
+        drivers.append({"source": "intelligence", "signal": intel_dir, "direction": intel_dir, "reasons": intel_reasons})
+    else:
+        drivers.append({"source": "intelligence", "signal": "neutral", "direction": "neutral", "reasons": ["未匹配到该持仓的情报信号"]})
+
+    factor_dirs = []
+    factor_items = []
+    for v in votes:
+        d = _vote_direction(v)
+        factor_dirs.append(d)
+        factor_items.append({"factor": v.factor_name, "modifier": v.ratio_modifier, "direction": d, "facts": v.facts[:2] if v.facts else []})
+    fac_dir = _consensus(factor_dirs) if factor_dirs else "neutral"
+    drivers.append({"source": "factor", "signal": fac_dir, "direction": fac_dir, "reasons": [f"{f['factor']}: ratio_mod={f['modifier']:.2f} {' '.join(f['facts'][:1])}" for f in factor_items[:3]] if factor_items else ["无活跃因子"], "details": factor_items})
+    return drivers
+
+
+def _detect_dissent(drivers: list[dict], final_signal: str) -> Optional[dict]:
+    final_dir = _signal_direction(final_signal)
+    for d in drivers:
+        src_dir = d.get("direction", "neutral")
+        if src_dir == "neutral" or final_dir == "neutral":
+            continue
+        if (src_dir == "bullish" and final_dir == "bearish") or (src_dir == "bearish" and final_dir == "bullish"):
+            reasons = d.get("reasons", [])
+            impact = ""
+            if d["source"] == "intelligence":
+                impact = "若情报方向正确，当前操作可能过早，建议关注信号是否反转"
+            elif d["source"] == "factor":
+                impact = "因子层与最终方向冲突，建议复核因子权重"
+            return {"source": d["source"], "direction": src_dir, "signal": "、".join(reasons[:2]) if reasons else f"{d['source']} 管线方向与最终结论相反", "impact": impact or f"{d['source']} 方向冲突"}
+    return None
+
+
+def _compute_confidence(drivers: list[dict]) -> str:
+    dirs = [d.get("direction", "neutral") for d in drivers]
+    active = [d for d in dirs if d != "neutral"]
+    if not active:
+        return "low"
+    unique = set(active)
+    if len(unique) == 1:
+        return "high"
+    if len(unique) == 2 and len(active) == 3:
+        return "medium"
+    if len(unique) >= 2:
+        return "low"
+    return "medium"
+
+
+def _signal_direction(signal: str) -> str:
+    bearish = {"reduce", "reduce_risk", "stop_loss", "sell", "avoid_catching_falling_knife"}
+    bullish = {"add", "accumulate_candidate", "buy", "rotation_candidate"}
+    neutral_exit = {"take_profit"}
+    if signal in bearish:
+        return "bearish"
+    if signal in bullish:
+        return "bullish"
+    if signal in neutral_exit:
+        return "neutral"
+    return "neutral"
+
+
+def _intel_consensus_direction(signals: list[dict]) -> str:
+    dirs = []
+    for s in signals:
+        d = (s.get("direction") or "").lower()
+        if d in ("buy", "bullish", "positive"):
+            dirs.append("bullish")
+        elif d in ("sell", "bearish", "negative"):
+            dirs.append("bearish")
+        else:
+            dirs.append("neutral")
+    return _consensus(dirs)
+
+
+def _vote_direction(vote) -> str:
+    if vote.ratio_modifier > 1.0:
+        return "bullish"
+    if vote.ratio_modifier < 1.0:
+        return "bearish"
+    return "neutral"
+
+
+def _consensus(dirs: list[str]) -> str:
+    b = dirs.count("bullish")
+    s = dirs.count("bearish")
+    if b > s:
+        return "bullish"
+    if s > b:
+        return "bearish"
+    return "neutral"
+
+
 
 def finalize_decision(
     *,
@@ -462,6 +583,15 @@ def finalize_decision(
     if not rebalance_ok:
         facts.append("可调仓但需谨慎（场外基金/贵金属），仓位上限 2%")
 
+    # ── 10. 构建多源驱动向量 ──
+    drivers = _build_drivers(
+        tech=tech, signal=signal, action=action,
+        votes=votes, intelligence_signals=intelligence_signals,
+        position=position,
+    )
+    dissent = _detect_dissent(drivers, signal)
+    confidence = _compute_confidence(drivers)
+
     return FinalDecision(
         position_id=tech.position_id, signal=signal, action=action,
         ratio=ratio, facts=facts,
@@ -472,6 +602,9 @@ def finalize_decision(
         risk_amount_cny=tech.risk_amount_cny,
         intelligence_conflict=intel_conflict,
         constraint_conflict=constraint_conflict,
+        drivers=drivers,
+        dissent=dissent,
+        confidence=confidence,
     )
 
 

@@ -1279,11 +1279,14 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "accumulate_candidate 必须按综合得分分三档展示：≥0.4 强推荐（最多3个）、0.2-0.4 可关注（最多3个）、<0.2 弱信号（仅列名），不得平铺10个",
             "若 capital_allocation.constraint_alerts 中某大类超限，标注'等减仓后再考虑'；低于下限则标注'优先填补缺口'",
             "不得只挑自己喜欢的板块展示——必须按系统给出的信号原样报告",
+            # 分歧处理
+            "若 action_cards 中任一卡的 dissent 非空，必须在持仓动作段单独讨论分歧场景：说明哪个信号源（技术/情报/因子）与最终结论方向相反、可能的影响、用户应关注什么信号来裁决",
         ],
 
         # ── 数据字段引用指南 ──
         "data_reference": {
             "持仓动作": "action_cards[] — 逐持仓的动作信号。routing: full=可操作, fund=场外基金(T+2/高阈值), precious=贵金属(有价差), info_only=银行理财(只读), skip=跳过。所有非full持仓标注操作约束",
+            "驱动向量": "action_cards 中每卡的 drivers[] — 技术面/情报/因子各自的独立信号，dissent=非空表示有信号源与最终结论冲突，confidence=high/medium/low",
             "方向信号": "action_signals — items[] 全量扫描池(61个标的)及 counts 汇总；ranked 是排序结果。accumulate_candidate=可加仓, wait_for_pullback=等回调, neutral_hold=观望, avoid_catching_falling_knife=勿抄底",
             "风险仪表盘": "portfolio_risk.scenario — global_risk_off / china_shock / inflation_commodity 三个多因子情景",
             "持仓事实": "position_reviews[] — 逐持仓估值、盈亏、session_facts（含 severe_loss 标注）",
@@ -1635,6 +1638,7 @@ def _build_action_cards(
                 "position_limit_pct": 5.0, "current_weight_pct": 0.0,
                 "risk_to_stop_pct": None, "risk_amount_cny": None,
                 "intelligence_conflict": "none",
+                "drivers": [], "dissent": None, "confidence": "high",
             })
             continue
 
@@ -1722,6 +1726,9 @@ def _build_action_cards(
             "risk_to_stop_pct": decision.risk_to_stop_pct,
             "risk_amount_cny": decision.risk_amount_cny,
             "intelligence_conflict": decision.intelligence_conflict,
+            "drivers": decision.drivers,
+            "dissent": decision.dissent,
+            "confidence": decision.confidence,
         })
 
     return cards
