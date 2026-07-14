@@ -323,9 +323,11 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
 |------|--------|--------------|
 | `stop_loss_pct` | -12.0 | 决定硬止损线。偏好"接受浮亏"→放宽至-15~-20；偏好"果断止损"→收紧至-5~-8 |
 | `take_profit_levels` | [[10,25],[20,25],[30,50]] | 决定止盈阶梯。"让利润奔跑"→阈值提高；"落袋为安"→降低阈值、加大减仓比例 |
-| `add_ladder` | [0.02] | 决定回踩加仓比例。"分批建仓"→多档如[0.03,0.05,0.08] |
+| `add_ladder` | [0.02] | 回踩加仓多档。引擎按 pnl_pct 自动选档（浮盈/浅亏→首档，中度浮亏→二档，深度浮亏→三档），facts 展示完整阶梯。"分批建仓"→[0.03,0.05,0.08] |
 | `chase_enabled` | false | "不追涨"→false；允许突破追入→true |
-| `trend_confirm_days` | 1 | "趋势证伪才离场"→提高至3-5天 |
+| `trend_confirm_days` | 1 | "趋势证伪才离场"→3~5天。首次跌破 MA20 时 ratio÷N 降权（例：30%→10%），facts 标注"需 N 天确认" |
+| `profit_pullback_pct` | -2.5 | 盈利回撤阈值（%），触发止盈锁定建议 |
+| `profit_pullback_min_pnl` | 5.0 | 触发盈利回撤保护的最低浮盈（%），低于此值不触发 |
 | ~10 个其他参数 | 见 DEFAULT_PARAMS | 根据偏好自动调整 |
 
 ### 5.4 Agent 如何感知
@@ -334,7 +336,10 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
    `.local/computed_profile.json`，合并进 QuantActionEngine。无需 Agent 手动操作。
 2. **报告层面**：`build_agent_task` 的 `persona` 段由 `_build_persona()` 动态生成，
    包含风格化指令（如"用户容忍较大回撤，不必催促止损"）。
-3. **无文件时的行为**：若 `.local/computed_profile.json` 不存在，引擎使用默认参数，
+3. **资金部署**：`mandatory_blocks.capital_deployment` 提供用户可读的资金建议块，
+   含约束告警、信号冲突、减仓回收预估、加仓候选排序、闲置资金轮动方向。
+   由 `_format_capital_advice()` 格式化，LLM 必须原样嵌入报告。
+4. **无文件时的行为**：若 `.local/computed_profile.json` 不存在，引擎使用默认参数，
    报告 persona 使用通用模板。不报错、不阻塞。
 
 ### 5.5 Agent 操作规范
@@ -350,6 +355,23 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
 - computed_profile.json 必须通过 `--interpret-profile --confirmed --params-json` 写入，
   不直接编辑文件。
 
+
+### 5.6 资金部署建议 (capital_deployment)
+
+每次 session 的 `mandatory_blocks` 包含 `capital_deployment` 字段——一条用户可读的中文资金建议块，
+由 `_format_capital_advice()` 从 `capital_allocation` 数据生成。LLM 必须原样嵌入报告。
+
+包含以下内容：
+
+- **总体状态**：总资产 + 净可动用资金 + 现金占比
+- **约束状态**：大类资产桶的偏离（超限/不足）
+- **信号冲突**：持仓信号方向 vs 约束方向的冲突（如"权益不足应加仓但信号为减仓"）
+- **减仓回收**：预计回收金额和笔数
+- **加仓排序**：按优先级×约束×轮动综合得分的加仓候选（若无有效加仓信号则展示轮动领涨方向）
+- **执行优先级**：从 constraint_alerts 和 conflicts 推导的优先级摘要
+
+Agent 在撰写报告时，应将此块的结论融入"一句话执行结论"或"前瞻展望"段，
+回答"今天钱往哪放"的核心问题。
 
 ## 6. HTTP 边界
 
