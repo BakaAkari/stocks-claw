@@ -670,6 +670,28 @@ def _build_rotation_leaders(rotation: dict, max_items: int = 8) -> list[dict]:
     return result
 
 
+def _filter_action_signals_by_market(action_signals: dict, primary_market: str) -> dict:
+    """过滤 action_signals.items，只保留与 session 市场相关的标的。"""
+    market_prefix = {"cn": "a:", "us": "us:", "crypto": "crypto:"}.get(primary_market, "")
+    if not market_prefix:
+        return action_signals  # 无法判断，保留全部
+    items = action_signals.get("items") or []
+    filtered = [i for i in items if str(i.get("symbol", "")).startswith(market_prefix)]
+    return {
+        **action_signals,
+        "items": filtered,
+        "counts": _recount_signals(filtered),
+    }
+
+
+def _recount_signals(items: list[dict]) -> dict:
+    counts: dict[str, int] = {}
+    for item in items:
+        sig = item.get("signal", "unknown")
+        counts[sig] = counts.get(sig, 0) + 1
+    return counts
+
+
 def build_scheduled_run(
     context: dict,
     *,
@@ -776,7 +798,9 @@ def build_scheduled_run(
         "capital_allocation": capital_allocation,
         "trigger_reviews": trigger_reviews,
         "action_signal_reviews": action_signal_reviews,
-        "action_signals": context.get("action_signals") or {},
+        "action_signals": _filter_action_signals_by_market(
+            context.get("action_signals") or {}, session.primary_market
+        ),
         "rule_scorecard": context.get("rule_scorecard", {}),
         "data_quality": context_quality,
         "agent_task": build_agent_task(session),

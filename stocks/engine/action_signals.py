@@ -45,6 +45,7 @@ _PULLBACK_POSITION = 85.0  # 布林带位置百分比
 _ACCUMULATE_R20 = 2.0      # 排除仅略高于 0 的横盘噪声
 _ACCUMULATE_RSI_LOW = 40.0
 _ACCUMULATE_RSI_HIGH = 65.0
+_ACCUMULATE_R20_MAX = 15.0   # 短期涨幅过高，即使 RSI 未超买也应等回调
 
 # 横截面排序权重
 _RANK_WEIGHT_R20 = 0.40        # 中期趋势强度
@@ -125,6 +126,18 @@ def _signal_for_item(
             reasons.append(f"RSI {rsi:.1f} 接近超买")
         if price_position is not None and price_position >= _PULLBACK_POSITION:
             reasons.append(f"布林带位置 {price_position:.0f}% 接近上轨")
+        return "wait_for_pullback", reasons
+
+    # 3b. 短期涨速过高：即使 RSI 未超买，短期已大幅上涨也应等回调
+    if (
+        ma20 is not None
+        and price > ma20
+        and r20 is not None
+        and r20 >= _ACCUMULATE_R20_MAX
+        and (rsi is None or rsi < _PULLBACK_RSI)
+    ):
+        reasons.append(f"现价 {price:.2f} 高于 MA20 {ma20:.2f}，近20根 {r20:+.2f}%")
+        reasons.append(f"短期涨幅过高（≥{_ACCUMULATE_R20_MAX}%），即使RSI未超买也应等回调确认")
         return "wait_for_pullback", reasons
 
     # 4. 分批布局：趋势向上、动能配合、未过热
