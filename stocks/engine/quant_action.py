@@ -328,7 +328,7 @@ def _build_drivers(*, tech, signal, action, votes, intelligence_signals, positio
         intel_reasons = [f"{s.get('symbol','?')}: {s.get('direction','?')} ({s.get('rationale','')[:80]})" for s in intel_signals_for_position[:2]]
         drivers.append({"source": "intelligence", "signal": intel_dir, "direction": intel_dir, "reasons": intel_reasons})
     else:
-        drivers.append({"source": "intelligence", "signal": "neutral", "direction": "neutral", "reasons": ["未匹配到该持仓的情报信号"]})
+        drivers.append({"source": "intelligence", "signal": "unavailable", "direction": "unavailable", "reasons": ["未匹配到该持仓的情报信号"]})
 
     factor_dirs = []
     factor_items = []
@@ -345,7 +345,7 @@ def _detect_dissent(drivers: list[dict], final_signal: str) -> Optional[dict]:
     final_dir = _signal_direction(final_signal)
     for d in drivers:
         src_dir = d.get("direction", "neutral")
-        if src_dir == "neutral" or final_dir == "neutral":
+        if src_dir in ("neutral", "unavailable") or final_dir == "neutral":
             continue
         if (src_dir == "bullish" and final_dir == "bearish") or (src_dir == "bearish" and final_dir == "bullish"):
             reasons = d.get("reasons", [])
@@ -359,18 +359,31 @@ def _detect_dissent(drivers: list[dict], final_signal: str) -> Optional[dict]:
 
 
 def _compute_confidence(drivers: list[dict]) -> str:
+    """基于信号源一致度与可用性计算置信度。
+
+    - 任一源 unavailable → 上限 medium（信息不完整）
+    - 两个活跃源方向一致 → medium（缺第三源验证）
+    - 活跃源方向分歧 → low
+    - 仅当三源全可用且一致 → high
+    """
     dirs = [d.get("direction", "neutral") for d in drivers]
-    active = [d for d in dirs if d != "neutral"]
+    unavailable_count = dirs.count("unavailable")
+    active = [d for d in dirs if d not in ("neutral", "unavailable")]
+    unique = set(active) if active else set()
+
+    if unavailable_count >= 2:
+        return "low"
     if not active:
         return "low"
-    unique = set(active)
+    if unavailable_count == 1:
+        if len(unique) == 1 and len(active) >= 1:
+            return "medium"
+        return "low"
     if len(unique) == 1:
         return "high"
     if len(unique) == 2 and len(active) == 3:
         return "medium"
-    if len(unique) >= 2:
-        return "low"
-    return "medium"
+    return "low"
 
 
 def _signal_direction(signal: str) -> str:
@@ -400,10 +413,16 @@ def _intel_consensus_direction(signals: list[dict]) -> str:
 
 
 def _vote_direction(vote) -> str:
-    if vote.ratio_modifier > 1.0:
-        return "bullish"
-    if vote.ratio_modifier < 1.0:
-        return "bearish"
+    """判断因子是否表达了方向意见。
+
+    ratio_modifier != 1.0 不一定是方向信号 —— data_freshness
+    的降权是可靠性调节，不是方向判断。只有 signal_override
+    或明确的 conflict_type 才表示方向意见。
+    """
+    if vote.signal_override:
+        return _signal_direction(vote.signal_override)
+    if vote.conflict_type in ("override", "caution"):
+        return "bearish" if vote.ratio_modifier < 1.0 else "bullish"
     return "neutral"
 
 
