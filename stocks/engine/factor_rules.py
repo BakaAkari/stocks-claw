@@ -223,4 +223,8 @@ def adjudicate(current_signal, current_action, current_ratio, votes):
         facts.extend(v.facts)
         if v.conflict_type != "none":
             conflicts.append(f"{v.factor_name}:{v.conflict_type}")
+    # ── 后处理：ratio 边界保护 ──
+    ratio = max(0.0, min(1.0, ratio))
+    if ratio <= 0 and signal in ("add", "accumulate"):
+        signal, action = "hold", "加仓信号被因子管道压制（ratio→0），暂不操作"
     return {"signal": signal, "action": action, "ratio": ratio, "facts": facts, "conflicts": conflicts}

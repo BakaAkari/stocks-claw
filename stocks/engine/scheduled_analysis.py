@@ -1251,6 +1251,8 @@ def build_agent_task(session: ScheduledSession) -> dict:
             # 扫描池完整性（硬性）
             "action_signals 中 signal=accumulate_candidate 的标的必须全部在前瞻展望段列出，标注当前价格和触发理由",
             "action_signals 中 signal=wait_for_pullback 的标的至少列出前 3 个",
+            "accumulate_candidate 必须按综合得分分三档展示：≥0.4 强推荐（最多3个）、0.2-0.4 可关注（最多3个）、<0.2 弱信号（仅列名），不得平铺10个",
+            "若 capital_allocation.constraint_alerts 中某大类超限，标注'等减仓后再考虑'；低于下限则标注'优先填补缺口'",
             "不得只挑自己喜欢的板块展示——必须按系统给出的信号原样报告",
         ],
 
@@ -1306,7 +1308,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 },
                 {
                     "name": "前瞻展望",
-                    "content": "第一部分：action_signals 扫描池全景。列出所有 accumulate_candidate（标注信号理由）和 wait_for_pullback（前 3 个，标注等什么）。第二部分：综合 intelligence_digest + exposure_summary 的方向判断。每个方向附依据、标的、与组合的关系",
+                    "content": "第一部分：扫描池分级展示。accumulate_candidate 按综合得分分三档：≥0.4 强推荐（可分批布局）| 0.2-0.4 可关注（回踩再确认）| <0.2 弱信号（仅供参考）。每档不超过 3 个，超出部分只列名字不加详述。wait_for_pullback 只列出前 3 个。第二部分：结合 capital_allocation.constraint_alerts——如果某大类超限，对应板块的推荐标注'等减仓后再考虑'；如果某大类低于下限，对应板块的推荐标注'优先填补缺口'。第三部分：综合 intelligence_digest + exposure_summary 的方向判断",
                 },
                 {
                     "name": "风险与数据边界",
