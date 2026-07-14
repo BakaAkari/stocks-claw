@@ -1248,12 +1248,16 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "routing=info_only 的资产的唯一合法操作是'持有，有开放期限制'，不得建议减仓/加仓",
             "routing=full 的资产正常报告操作建议",
             "routing=skip 的资产不在报告中出现",
+            # 扫描池完整性（硬性）
+            "action_signals 中 signal=accumulate_candidate 的标的必须全部在前瞻展望段列出，标注当前价格和触发理由",
+            "action_signals 中 signal=wait_for_pullback 的标的至少列出前 3 个",
+            "不得只挑自己喜欢的板块展示——必须按系统给出的信号原样报告",
         ],
 
         # ── 数据字段引用指南 ──
         "data_reference": {
             "持仓动作": "action_cards[] — 逐持仓的动作信号。routing: full=可操作, fund=场外基金(T+2/高阈值), precious=贵金属(有价差), info_only=银行理财(只读), skip=跳过。所有非full持仓标注操作约束",
-            "方向信号": "action_signal_reviews[] — 有 rank 的按 rank 升序排列，rank#1 是最优候选",
+            "方向信号": "action_signals — items[] 全量扫描池(61个标的)及 counts 汇总；ranked 是排序结果。accumulate_candidate=可加仓, wait_for_pullback=等回调, neutral_hold=观望, avoid_catching_falling_knife=勿抄底",
             "风险仪表盘": "portfolio_risk.scenario — global_risk_off / china_shock / inflation_commodity 三个多因子情景",
             "持仓事实": "position_reviews[] — 逐持仓估值、盈亏、session_facts（含 severe_loss 标注）",
             "情报": "intelligence_digest — top_clusters（事件聚类）、top_signals（方向信号）",
@@ -1302,7 +1306,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 },
                 {
                     "name": "前瞻展望",
-                    "content": "综合 intelligence_digest + rotation_leaders + exposure_summary，给出 3+ 个方向，每个方向附依据、标的、与组合的关系",
+                    "content": "第一部分：action_signals 扫描池全景。列出所有 accumulate_candidate（标注信号理由）和 wait_for_pullback（前 3 个，标注等什么）。第二部分：综合 intelligence_digest + exposure_summary 的方向判断。每个方向附依据、标的、与组合的关系",
                 },
                 {
                     "name": "风险与数据边界",
