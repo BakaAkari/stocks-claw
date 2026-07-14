@@ -25,9 +25,9 @@ from stocks.engine.news_intelligence_store import (
     IntelligenceSnapshot,
     NewsIntelligenceStore,
 )
+from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
 from stocks.engine.quant_action import (
     _TAG_TO_BUCKET,
-    QuantActionEngine,
     compute_portfolio_risk,
     finalize_decision,
 )
@@ -692,6 +692,23 @@ def _recount_signals(items: list[dict]) -> dict:
     return counts
 
 
+def _merge_profile_config(base_config):
+    """将 computed_profile.json 的参数合并到引擎配置中。
+
+    computed_profile（个性化参数）优先级最高，覆盖 engine.yaml 默认值。
+    """
+    from pathlib import Path as _Path
+    local = _Path(__file__).resolve().parent.parent.parent / ".local"
+    computed = load_computed(local / "computed_profile.json")
+    if not computed:
+        return base_config or {}
+    # computed 覆盖 base_config，保证个性化参数不被默认值冲掉
+    merged = merge_with_defaults(computed)
+    if base_config:
+        return {**base_config, **merged}
+    return merged
+
+
 def build_scheduled_run(
     context: dict,
     *,
@@ -739,9 +756,14 @@ def build_scheduled_run(
         rotation_ranks=rotation_ranks if rotation_ranks else None,
         constraints=context.get("portfolio_constraints"),
         portfolio_mapping=context.get("portfolio_mapping"),
-        quant_config=context.get("engine_config", {}).get("quant_action"),
+        quant_config=_merge_profile_config(
+            context.get("engine_config", {}).get("quant_action"),
+        ),
     )
-    portfolio_risk = _build_portfolio_risk_summary(context.get("position_valuations") or [])
+    portfolio_risk = _build_portfolio_risk_summary(
+        context.get("position_valuations") or [],
+        action_cards=action_cards,
+    )
     rotation_leaders_data = context.get("rotation", {}).get("items", [])
     capital_allocation = _build_capital_allocation(
         action_cards,
@@ -815,6 +837,7 @@ def build_scheduled_run(
             _compute_risk_assessment(context),
             capital_allocation.get("constraint_alerts", []),
             context.get("upcoming_events") or [],
+            capital_allocation=capital_allocation,
             total_value_cny=capital_allocation.get("total_value_cny", 0),
         ),
         "context_digest": {
@@ -862,11 +885,84 @@ def _compute_risk_assessment(context: dict) -> dict:
     }
 
 
+def _format_capital_advice(capital_allocation: dict) -> str:
+    """将 capital_allocation 结构化为用户可读的中文资金部署建议块。
+
+    由 build_mandatory_blocks 调用，LLM 必须原样嵌入报告。
+    """
+    lines = ["**💰 资金部署建议**"]
+    ca = capital_allocation or {}
+
+    total = ca.get("total_value_cny", 0)
+    net = ca.get("net_deployable_cny", 0)
+    ratio_pct = round(net / total * 100, 1) if total > 0 else 0
+
+    lines.append(f"总资产 ¥{total:,.0f} ｜ 净可动用 ¥{net:,.0f}（{ratio_pct}%）")
+
+    # Constraint alerts
+    alerts = ca.get("constraint_alerts", [])
+    breaches = [a for a in alerts if a.get("severity") == "breach"]
+    nears = [a for a in alerts if a.get("severity") == "near"]
+    if breaches or nears:
+        lines.append("")
+        lines.append("**约束状态**")
+        for a in breaches:
+            lines.append(f"- ⚠ {a['message']}")
+        for a in nears:
+            lines.append(f"- ⚡ {a['message']}")
+
+    # Conflicts
+    conflicts = ca.get("conflicts", [])
+    if conflicts:
+        # Only summarize, don't list all
+        reduce_conf = [c for c in conflicts if c.get("signal") in ("reduce", "stop_loss", "take_profit")]
+        add_conf = [c for c in conflicts if c.get("signal") == "add"]
+        parts = []
+        if reduce_conf:
+            parts.append(f"{len(reduce_conf)} 个减仓信号 vs 约束要求加仓")
+        if add_conf:
+            parts.append(f"{len(add_conf)} 个加仓信号 vs 约束要求减仓")
+        lines.append(f"- ⚡ 信号冲突：{'；'.join(parts)}")
+
+    # Reduce proceeds
+    reduce_items = ca.get("reduce_items", [])
+    if reduce_items:
+        total_reduce = sum(r.get("proceeds_cny", 0) for r in reduce_items)
+        lines.append(f"- 📤 预计回收 ¥{total_reduce:,.0f}（{len(reduce_items)} 笔减仓/止盈）")
+
+    # Add candidates
+    lines.append("")
+    add_candidates = ca.get("add_candidates", [])
+    if add_candidates:
+        lines.append("**加仓排序**（按优先级 × 约束 × 轮动综合得分）")
+        for i, ad in enumerate(add_candidates[:5]):
+            note = f" — {ad['constraint_note']}" if ad.get("constraint_note") not in ("无约束冲突", "") else ""
+            lines.append(f"{i+1}. {ad['position_id']} {ad['action']}{note}")
+    else:
+        # No add candidates → suggest alternatives
+        idle = ca.get("idle_cash_suggestions", [])
+        if idle:
+            lines.append("**当前无有效加仓信号**（持仓加仓被因子压制或条件不满足）")
+            lines.append(f"闲置资金 ¥{net:,.0f} 可关注轮动领涨方向：")
+            for s in idle[:3]:
+                lines.append(f"- #{s.get('rank','?')} {s.get('symbol','?')} {s.get('name','')} "
+                           f"（20日 +{s.get('r20','?')}%）— {s.get('category','')}")
+
+    # Priority summary
+    ps = ca.get("priority_summary", "")
+    if ps and ps != "无优先动作":
+        lines.append("")
+        lines.append(f"**执行优先级**：{ps}")
+
+    return "\n".join(lines)
+
+
 def build_mandatory_blocks(
     risk_assessment: dict,
     constraint_alerts: list[dict],
     upcoming_events: list[dict],
     *,
+    capital_allocation: dict | None = None,
     total_value_cny: float = 0.0,
 ) -> dict[str, str]:
     """生成 agent 必须原样嵌入的确定性报告段。
@@ -916,6 +1012,12 @@ def build_mandatory_blocks(
         for a in breaches:
             lines2.append(f"- {a.get('message', '')}")
         blocks["constraint_alerts"] = "\n".join(lines2)
+
+    # ── 资金部署建议段 ──
+    if capital_allocation:
+        cap_text = _format_capital_advice(capital_allocation)
+        if cap_text:
+            blocks["capital_deployment"] = cap_text
 
     return blocks
 
@@ -1165,6 +1267,56 @@ def _signal_to_action_review(signal: dict) -> dict:
     }
 
 
+def _build_persona() -> dict:
+    """从 computed_profile 构建风格化 persona。"""
+    from pathlib import Path as _Path
+    local = _Path(__file__).resolve().parent.parent.parent / ".local"
+    computed = load_computed(local / "computed_profile.json")
+
+    base = {
+        "role": "你是用户的私人投资分析师，不是市场播报员。你了解用户的每一笔持仓、成本和偏好。",
+        "principles": [
+            "用第一人称对用户说话",
+            "决策给选项，不给命令",
+            "没变化就直说——不要为了凑字数编内容",
+            "引用具体数字",
+            "主动提醒风险",
+            "引用上次建议（如果相关）",
+        ],
+    }
+
+    if computed and computed.get("style_summary"):
+        summary = computed["style_summary"]
+        params = computed.get("params", {})
+        style_rules = [f"用户交易风格: {summary}"]
+
+        # 根据参数生成风格化指令
+        stop = params.get("stop_loss_pct")
+        if stop is not None and stop < -15:
+            style_rules.append(f"用户容忍较大回撤（止损线 {stop}%），不必在小幅浮亏时催促止损")
+        elif stop is not None and stop > -8:
+            style_rules.append(f"用户偏好严格风控（止损线 {stop}%），浮亏接近止损线时主动提醒")
+
+        if not params.get("chase_enabled", False):
+            style_rules.append("用户不追涨——轮动排名靠前但已拉升的标的只做参考，不建议追高买入")
+
+        ladder = params.get("add_ladder", [0.02])
+        if len(ladder) > 1 or ladder[0] > 0.03:
+            style_rules.append(f"用户偏好分批建仓（{len(ladder)}档），加仓建议分档给出")
+
+        tp = params.get("take_profit_levels")
+        if tp:
+            max_tp = max(lvl[0] for lvl in tp)
+            if max_tp > 40:
+                style_rules.append("用户偏好让利润奔跑，止盈提醒偏保守、偏延迟")
+            elif max_tp < 20:
+                style_rules.append("用户偏好落袋为安，止盈提醒偏积极")
+
+        base["principles"] = style_rules + base["principles"]
+
+    return base
+
+
 def build_agent_task(session: ScheduledSession) -> dict:
     """构建自包含的 Agent 任务说明书。
 
@@ -1349,19 +1501,8 @@ def build_agent_task(session: ScheduledSession) -> dict:
             ],
         },
 
-        # ── 分析师人格（塑造输出风格） ──
-        "persona": {
-            "role": "你是用户的私人投资分析师，不是市场播报员。你了解用户的每一笔持仓、成本和偏好。",
-            "principles": [
-                "用第一人称对用户说话：'你的电力ETF'，不是'电力ETF'",
-                "决策给选项，不给命令：'有三个选择：A)… B)… C)… 我倾向A，因为…'",
-                "没变化就直说：'今天没有触发新动作，继续持有'——不要为了凑字数编内容",
-                "有新信息才展开：情报管道发现了值得关注的变化？展开。什么都没变？缩到三句话",
-                "引用具体数字：'科创100ETF rank#1，20日涨了8.2%，RSI 53——这意味着…'",
-                "主动提醒风险：'你的组合里A股中小盘+美股科技占比X%，这两个在VIX飙升时会同时挨打'",
-                "引用上次建议（如果 relevant）：'上次你说等电力反弹到X再动，现在又跌了Y%，原来的计划还成立吗？'",
-            ],
-        },
+        # ── 分析师人格（塑造输出风格，由 computed_profile 驱动） ──
+        "persona": _build_persona(),
 
         # ── 自适应输出（根据内容调整篇幅） ──
         "adaptability": {
@@ -1993,29 +2134,14 @@ def _build_capital_allocation(
     }
 
 
-def _build_portfolio_risk_summary(position_valuations: list[dict]) -> dict:
-    """组合风险仪表盘。"""
-
+def _build_portfolio_risk_summary(
+    position_valuations: list[dict], *, action_cards: list[dict],
+) -> dict:
+    """组合风险仪表盘。action_cards 作为唯一决策源——不再独立计算。"""
     total_value = sum(item.get("market_value_cny") or 0.0 for item in position_valuations)
-    reviews = []
-    for item in position_valuations:
-        valuation_method = item.get("valuation_method", "")
-        indicators = item.get("indicators") or {}
-        # fund_nav 持仓不应用代理标的的 MA20/RSI 做趋势判断（代理价格≠基金净值）
-        if valuation_method == "fund_nav":
-            indicators = {}
-        engine = QuantActionEngine(indicators)
-        review = engine.review_position(
-            position_id=item.get("position_id", ""),
-            price=item.get("price"),
-            cost=item.get("cost_amount"),
-            pnl_pct=item.get("pnl_pct"),
-            one_day_change_pct=item.get("one_day_change_pct"),
-            current_weight_pct=item.get("portfolio_weight"),
-            quantity=(item.get("holding") or {}).get("quantity") if item.get("holding") else None,
-        )
-        reviews.append(review)
-    return compute_portfolio_risk(reviews, total_value, position_valuations=position_valuations)
+    return compute_portfolio_risk(
+        action_cards, total_value, position_valuations=position_valuations,
+    )
 
 
 def _position_facts(item: dict) -> list[str]:

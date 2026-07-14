@@ -1215,6 +1215,92 @@ class StocksEngine:
         """Read the latest scheduled analysis artifact for a session."""
         return self._get_scheduled_runner().latest(session_id)
 
+    async def interpret_profile(
+        self, *, confirmed: bool = False, params_json: Optional[str] = None,
+    ) -> dict:
+        """个性化参数管理。
+
+        无 --confirmed: 返回 profile 摘要 + 翻译 prompt，供 Agent 阅读后生成参数。
+        有 --confirmed --params-json: Agent 将生成的 JSON 直接写入 computed_profile.json。
+        """
+        from stocks.engine.profile_interpreter import (
+            INTERPRETER_SYSTEM_PROMPT,
+            build_prompt,
+            load_computed,
+            load_profile,
+            save_computed,
+            validate_computed,
+        )
+
+        profile_path = self._local_data_dir / "investor_profile.json"
+        computed_path = self._local_data_dir / "computed_profile.json"
+
+        profile = load_profile(profile_path)
+        prompt = build_prompt(profile)
+        existing = load_computed(computed_path)
+
+        preview = {
+            "profile_summary": {
+                "risk_tolerance": profile.get("risk_tolerance"),
+                "investment_horizon": profile.get("investment_horizon"),
+                "preferences": profile.get("preferences"),
+                "constraints": profile.get("constraints", {}).get("notes", []),
+            },
+            "current_computed": (
+                {"style_summary": existing["style_summary"], "generated_at": existing["generated_at"]}
+                if existing else None
+            ),
+            "interpreter_prompt_available": True,
+        }
+
+        if not confirmed:
+            return {
+                "success": True,
+                "status": "preview",
+                "message": (
+                    "Agent: 阅读 system_prompt 和 user_prompt，生成个性化参数 JSON，"
+                    "然后执行 --interpret-profile --confirmed --params-json '...'"
+                ),
+                "data": preview,
+                "system_prompt": INTERPRETER_SYSTEM_PROMPT,
+                "user_prompt": prompt,
+            }
+
+        # ── confirmed 模式：直接写入 Agent 提供的参数 ──
+        if not params_json:
+            return {
+                "success": False,
+                "error": "需要 --params-json 参数。Agent 应先阅读预览中的 prompt，生成参数后传入。",
+            }
+
+        import json as _json
+        try:
+            computed = _json.loads(params_json)
+        except _json.JSONDecodeError as e:
+            return {"success": False, "error": f"params-json 解析失败: {e}"}
+
+        errors = validate_computed(computed)
+        if errors:
+            return {
+                "success": False,
+                "error": "参数校验失败",
+                "validation_errors": errors,
+                "computed": computed,
+            }
+
+        output_path = save_computed(computed, computed_path)
+
+        return {
+            "success": True,
+            "status": "saved",
+            "message": f"已写入 {output_path}",
+            "data": {
+                "style_summary": computed.get("style_summary"),
+                "params": computed.get("params"),
+                "reasoning": computed.get("reasoning"),
+            },
+        }
+
     async def check_event_triggers(self, *, now: Optional[str] = None) -> dict:
         """Check for economic calendar event triggers without executing them.
 

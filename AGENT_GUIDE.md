@@ -267,7 +267,91 @@ export SEC_USER_AGENT="stocks-claw/1.0 you@example.com"
 
 缺少该变量不会伪装成功；`data_quality.news.errors` 会逐标的报告配置缺失。
 
-## 5. HTTP 边界
+## 5. 个性化配置 (ProfileInterpreter)
+
+### 5.1 概述
+
+用户偏好存储在 `.local/investor_profile.json`（自然语言描述，如"趋势未变时接受浮亏并分批加仓"）。
+ProfileInterpreter 将这些自然语言偏好翻译为量化引擎可消费的数字参数。
+
+**数据流：**
+
+```
+investor_profile.json (自然语言)
+  → --interpret-profile (Agent 读取 prompt)
+  → Agent 直接推理生成参数 JSON
+  → --interpret-profile --confirmed --params-json '...'
+  → 校验写入 .local/computed_profile.json
+  → 每次 session 自动合并进 QuantActionEngine
+  → 报告 persona 按风格定制
+```
+
+### 5.2 Agent 驱动的翻译流程
+
+ProfileInterpreter 由 Agent（而非外部 API）直接完成翻译。
+仅在用户**更新交易偏好后**手动触发。不随 session 自动运行。
+
+**流程：**
+
+1. 预览：Agent 运行 `--interpret-profile`，获取 `system_prompt` 和 `user_prompt`
+2. Agent 阅读 prompt，按专业量化策略师 persona 翻译用户偏好为数值参数
+3. Agent 将生成的 JSON 通过 `--params-json` 传入：
+```bash
+uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
+  --params-json '{"params":{...},"reasoning":{...},"style_summary":"..."}'
+```
+4. 系统校验参数合法性后写入 `.local/computed_profile.json`
+
+**Agent 操作步骤：**
+```bash
+# 步骤 1: 读取 profile 和 prompt
+uv run python -m stocks.adapters.cli --interpret-profile
+# → 阅读输出中的 system_prompt + user_prompt
+
+# 步骤 2: Agent 生成参数 JSON（直接推理，不调外部 API）
+
+# 步骤 3: 写入
+uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
+  --params-json '{"params":{"stop_loss_pct":-18.0,...},"reasoning":{...},"style_summary":"左侧交易"}'
+```
+
+执行后输出包含 `style_summary`、`params`、`reasoning`。
+
+### 5.3 影响的参数
+
+| 参数 | 默认值 | 个性化后的影响 |
+|------|--------|--------------|
+| `stop_loss_pct` | -12.0 | 决定硬止损线。偏好"接受浮亏"→放宽至-15~-20；偏好"果断止损"→收紧至-5~-8 |
+| `take_profit_levels` | [[10,25],[20,25],[30,50]] | 决定止盈阶梯。"让利润奔跑"→阈值提高；"落袋为安"→降低阈值、加大减仓比例 |
+| `add_ladder` | [0.02] | 决定回踩加仓比例。"分批建仓"→多档如[0.03,0.05,0.08] |
+| `chase_enabled` | false | "不追涨"→false；允许突破追入→true |
+| `trend_confirm_days` | 1 | "趋势证伪才离场"→提高至3-5天 |
+| ~10 个其他参数 | 见 DEFAULT_PARAMS | 根据偏好自动调整 |
+
+### 5.4 Agent 如何感知
+
+1. **引擎层面**：`scheduled_analysis._merge_profile_config()` 在每次 session 自动读取
+   `.local/computed_profile.json`，合并进 QuantActionEngine。无需 Agent 手动操作。
+2. **报告层面**：`build_agent_task` 的 `persona` 段由 `_build_persona()` 动态生成，
+   包含风格化指令（如"用户容忍较大回撤，不必催促止损"）。
+3. **无文件时的行为**：若 `.local/computed_profile.json` 不存在，引擎使用默认参数，
+   报告 persona 使用通用模板。不报错、不阻塞。
+
+### 5.5 Agent 操作规范
+
+- 用户说"更新交易风格/偏好"→ 先更新 `.local/investor_profile.json`（通过 `--profile-update`），
+  再运行两步流程（预览 → 生成 → 写入）。
+- 不要在不改偏好的情况下重复运行 `--interpret-profile`。
+- Agent 生成参数时必须：
+  - 逐条引用用户原文作为 reasoning 依据
+  - 只输出用户偏好明确涉及的参数，未涉及的保持默认值
+  - 输出纯 JSON，不附带解释文字
+- 如果用户对某个参数有异议，引导用户说明具体的偏好变更后重新翻译。
+- computed_profile.json 必须通过 `--interpret-profile --confirmed --params-json` 写入，
+  不直接编辑文件。
+
+
+## 6. HTTP 边界
 
 HTTP 适配器默认只监听回环地址，并默认隐藏精确金额：
 
@@ -280,7 +364,7 @@ curl http://127.0.0.1:8687/api/v1/health
 `.secret/http-token`；请求使用 `Authorization: Bearer <token>`。当前实现没有限速和
 CORS，不应直接暴露公网。
 
-## 6. 飞书格式约束
+## 7. 飞书格式约束
 
 所有推送到飞书的输出必须仅使用以下格式:
 - `**加粗**` 代替标题层级
@@ -294,7 +378,7 @@ CORS，不应直接暴露公网。
 
 此约束已编码在 `agent_task.must_not_do` 和 `output_structure.format_rules` 中。
 
-## 7. 每次修改的验收
+## 8. 每次修改的验收
 
 ```bash
 uv run ruff check .

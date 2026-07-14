@@ -146,6 +146,16 @@ class CLIAdapter:
             metavar="SESSION",
             help="读取指定 session 的最新定时分析 JSON 产物",
         )
+        asset_actions.add_argument(
+            "--interpret-profile",
+            action="store_true",
+            help="预览/写入个性化引擎参数。加 --confirmed --params-json '...' 直接写入",
+        )
+        parser.add_argument(
+            "--params-json",
+            default=None,
+            help="Agent 生成的个性化参数 JSON（配合 --interpret-profile --confirmed 使用）",
+        )
         parser.add_argument(
             "--confirmed",
             action="store_true",
@@ -233,6 +243,8 @@ class CLIAdapter:
             )
         if args.scheduled_run_latest:
             return self.engine.scheduled_run_latest(args.scheduled_run_latest)
+        if args.interpret_profile:
+            return await self.engine.interpret_profile(confirmed=args.confirmed)
         if args.profile_get:
             return {"success": True, "data": self.engine.get_profile()}
         if args.advice_list:
@@ -261,6 +273,8 @@ class CLIAdapter:
                 args.scheduled_run_due,
                 args.scheduled_run_session,
                 args.scheduled_run_latest,
+                args.interpret_profile,
+                args.params_json,
             )
         )
         if not write_requested:

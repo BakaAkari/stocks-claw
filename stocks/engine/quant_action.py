@@ -202,7 +202,7 @@ class QuantActionEngine:
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= c["warning_loss_pct"]:
             facts.append(f"浮亏 {pnl_pct:.2f}% 触发警示阈值 {c['warning_loss_pct']}%")
 
-        # 4. 趋势跌破 — 阶梯减仓
+        # 4. 趋势跌破 — 阶梯减仓（trend_confirm_days 控制首次信号强度）
         if isinstance(price, (int, float)) and ma20 is not None:
             trigger_price = ma20 * c["trend_ma20_break_cutoff"]
             if price < trigger_price and (macd_hist is None or macd_hist < 0):
@@ -212,11 +212,25 @@ class QuantActionEngine:
                     if price / ma20 < threshold:
                         ratio = ladder_ratio
                         break
+                # trend_confirm_days > 1 → 首次跌破降权，避免假突破误杀
+                confirm_days = c.get("trend_confirm_days", 1)
+                original_ratio = ratio
+                if confirm_days > 1:
+                    ratio = ratio / confirm_days
+                reason = (
+                    f"现价 {price:.2f} 跌破 MA20 {ma20:.2f}（触发线 {trigger_price:.4f}，"
+                    f"偏离 {deviation:.1%}），MACD 柱为负"
+                )
+                facts_list = [reason]
+                if confirm_days > 1 and original_ratio > ratio:
+                    facts_list.append(
+                        f"首次跌破，需 {confirm_days} 天确认（信号从 {int(original_ratio*100)}% "
+                        f"降权至 {int(ratio*100)}%）"
+                    )
                 return self._build(position_id, "reduce",
                     f"趋势走弱（MA20偏离 {deviation:.1%}），减仓 {int(ratio*100)}%",
                     ratio,
-                    [f"现价 {price:.2f} 跌破 MA20 {ma20:.2f}（触发线 {trigger_price:.4f}，"
-                     f"偏离 {deviation:.1%}），MACD 柱为负"],
+                    facts_list,
                     round(float(trigger_price), 4), [], current_weight_pct, price, quantity)
 
         # 5. 止盈阶梯
@@ -244,16 +258,37 @@ class QuantActionEngine:
                 [f"单日下跌 {one_day_change_pct:.2f}%，浮盈 {pnl_pct:.2f}%"],
                 stop_price, [], current_weight_pct, price, quantity)
 
-        # 7. 左侧加仓
+        # 7. 回踩加仓（add_ladder 多档：pnl_pct 越负 → 档位越高）
         if isinstance(price, (int, float)) and ma20 is not None and cost is not None:
             rsi = self.indicators.get("rsi_14")
             near_ma20 = 0.97 <= price / ma20 <= 1.03
             rsi_ok = rsi is None or (c["left_add_min_rsi"] <= rsi <= c["left_add_max_rsi"])
             macd_ok = macd_hist is None or macd_hist >= 0
             if near_ma20 and rsi_ok and macd_ok and pnl_pct is not None and pnl_pct < 5.0:
+                ladder = c.get("add_ladder", [0.02])
+                # pnl_pct 驱动档位：浮盈/浅亏→首档，中度浮亏→二档，深度浮亏→三档
+                tier = 0
+                if isinstance(pnl_pct, (int, float)):
+                    if pnl_pct < -10 and len(ladder) > 2:
+                        tier = 2
+                    elif pnl_pct < -5 and len(ladder) > 1:
+                        tier = 1
+                add_size = ladder[min(tier, len(ladder) - 1)]
+                add_pct = round(add_size * 100)
+                tier_label = ["首档", "二档", "三档"][tier] if tier < 3 else f"档位{tier+1}"
+                facts_extras = [
+                    f"价格回踩 MA20 {ma20:.2f}，RSI {rsi}，MACD 未走坏",
+                ]
+                if len(ladder) > 1:
+                    remaining = [f"{round(s*100)}%" for s in ladder[tier+1:]]
+                    if remaining:
+                        facts_extras.append(
+                            f"加仓阶梯({tier_label} {add_pct}%)：后续 {', '.join(remaining)}"
+                            f"（浮亏扩大时自动升档）"
+                        )
                 return self._build(position_id, "add",
-                    "回踩 MA20，左侧加仓 2%", -0.02,
-                    [f"价格回踩 MA20 {ma20:.2f}，RSI {rsi}，MACD 未走坏"],
+                    f"回踩 MA20，加仓 {add_pct}%（{tier_label}）", -add_size,
+                    facts_extras,
                     stop_price, [], current_weight_pct, price, quantity)
 
         if not facts:
@@ -437,6 +472,59 @@ def _consensus(dirs: list[str]) -> str:
 
 
 
+
+
+def _format_action_text(
+    signal: str,
+    ratio: float,
+    mode: str,
+    rule: dict,
+    *,
+    base_action: str = '',
+) -> str:
+    """从最终 (signal, ratio, mode) 统一生成 action 文本。
+
+    这是 action 文本的单一生成点——所有管道阶段修改 ratio/signal 后，
+    不直接拼接字符串，而是调用此函数。保证 action 文本永远与 ratio 一致。
+    """
+    import re
+    pct = round(abs(ratio) * 100)
+
+    # ── 路由后缀 ──
+    if mode == 'fund':
+        suffix = '场外基金 T+2 到账，以收盘净值为准 — 登录平台操作'
+    elif mode == 'precious':
+        suffix = '贵金属账户有买卖价差 — 登录平台确认后操作'
+    else:
+        suffix = ''
+
+    def joined(s):
+        return f'{s}。{suffix}' if suffix else s
+
+    if signal == 'stop_loss':
+        if mode in ('fund', 'precious'):
+            return joined(f'止损触发 — 建议减仓 {pct}%')
+        return '止损清仓' if ratio >= 1.0 else f'止损触发 — 减仓 {pct}%'
+
+    if signal == 'take_profit':
+        return joined(f'止盈触发 — 建议减仓 {pct}%')
+
+    if signal == 'reduce':
+        # 保留 tech engine 的定性描述，替换百分比部分
+        desc = re.sub(r'[，,]\s*减仓\s*\d+%?\s*$', '', base_action)
+        result = f'{desc}，减仓 {pct}%'
+        return f'{result}（{suffix}）' if suffix else result
+
+    if signal == 'add':
+        desc = re.sub(r'[，,]\s*加仓\s*\d+%?\s*$', '', base_action)
+        result = f'{desc}，加仓 {pct}%'
+        return f'{result}（{suffix}）' if suffix else result
+
+    # hold / wait — 保持原文本
+    if suffix and signal not in ('hold', 'wait'):
+        return f'{base_action}（{suffix}）'
+    return base_action
+
 def finalize_decision(
     *,
     tech: QuantReview,
@@ -532,11 +620,19 @@ def finalize_decision(
         data_freshness=data_freshness,
         rotation_symbol=rotation_symbol,
     )
+    tech_ratio = ratio  # 保存原始技术信号 ratio，用于信号链可见化
     result = adjudicate(signal, action, ratio, votes)
     signal = result["signal"]
     action = result["action"]
     ratio = result["ratio"]
     facts.extend(result["facts"])
+    # ── 信号链可见化：因子调整若改变了 ratio，说明原因 ──
+    if tech_ratio > 0 and abs(ratio - tech_ratio) > 0.001:
+        # 找出哪些因子修改了 ratio
+        ratio_votes = [v for v in votes if v.ratio_modifier != 1.0]
+        modifiers = [f'{v.factor_name}: ×{v.ratio_modifier:.2f}' for v in ratio_votes]
+        chain = ' → '.join(modifiers) if modifiers else '因子调整'
+        facts.append(f'信号链: 原始 ratio={tech_ratio} → {chain} → 最终 ratio={ratio:.4f}')
     # 提取冲突类型
     for c in result["conflicts"]:
         if c.startswith("constraint_check"):
@@ -551,32 +647,19 @@ def finalize_decision(
         if rank and rank <= 3 and signal == "add":
             facts.append(f"轮动排名 #{rank}，加仓信号获动量确认")
 
-    # ── 8. 分层路由降权 ──
-    # fund: 场外基金 — 保留比例，标注 T+2/净值约束
-    # precious: 贵金属 — 保留比例，标注价差
-    # info_only: 银行理财 — ratio=0, 只读
-    if mode in ("fund", "precious"):
-        ctx = rule.get("context", "")
+    # ── 8. 分层路由：统一从最终 (signal, ratio, mode) 生成 action ──
+    ctx = rule.get("context", "")
+    if mode in ("fund", "precious", "full"):
         if ctx:
             facts.insert(0, ctx)
-        nav_label = ("手工估值（非实时净值），建议确认后手动操作"
-                     if valuation_method != "fund_nav"
-                     else "净值来源：天天基金（T-1 确认净值）")
-        if mode == "fund":
-            settlement = "场外基金 T+2 到账，以收盘净值为准 — 登录平台操作"
-        else:
-            settlement = "贵金属账户有买卖价差 — 登录平台确认后操作"
-        if signal == "stop_loss":
-            action = f"止损触发 — {settlement}"
-            facts.append(nav_label)
-        elif signal == "take_profit":
-            pct = round(ratio * 100)
-            action = f"止盈触发 — 建议减仓 {pct}%。{settlement}"
-            facts.append(nav_label)
-        elif signal in ("reduce", "add"):
-            action = f"{action}（{settlement}）"
-            facts.append(nav_label)
-        elif signal not in ("hold", "wait"):
+        # 重新生成 action 文本 — 使用最终 ratio，保证与 signal 链一致
+        action = _format_action_text(
+            signal, ratio, mode, rule, base_action=action,
+        )
+        if mode in ("fund", "precious"):
+            nav_label = ("手工估值（非实时净值），建议确认后手动操作"
+                         if valuation_method != "fund_nav"
+                         else "净值来源：天天基金（T-1 确认净值）")
             facts.append(nav_label)
         odc = one_day_change_pct
         if valuation_method == "fund_nav" and isinstance(odc, (int, float)) and abs(odc) > 0.5:
@@ -586,7 +669,6 @@ def finalize_decision(
                          f"估算真实净值偏差 {abs(lag_pct):.2f}%，止盈建议以基金公司确认为准")
     elif mode == "info_only":
         ratio = 0.0
-        ctx = rule.get("context", "")
         if ctx:
             facts.insert(0, ctx)
         if signal == "stop_loss":
@@ -611,6 +693,12 @@ def finalize_decision(
     dissent = _detect_dissent(drivers, signal)
     confidence = _compute_confidence(drivers)
 
+    # ── 低置信度警告 ──
+    if confidence == "low":
+        unavailable_sources = [d["source"] for d in drivers if d.get("direction") == "unavailable"]
+        warn = "⚠️ 低置信度" + (f'（{"、".join(unavailable_sources)} 数据缺失）' if unavailable_sources else '')
+        facts.insert(0, warn)
+
     return FinalDecision(
         position_id=tech.position_id, signal=signal, action=action,
         ratio=ratio, facts=facts,
@@ -632,22 +720,25 @@ def finalize_decision(
 # ---------------------------------------------------------------------------
 
 def compute_portfolio_risk(
-    reviews: list[QuantReview], total_value_cny: float,
+    cards: list[dict], total_value_cny: float,
     *, position_valuations: Optional[list[dict]] = None,
 ) -> dict:
-    if not reviews or total_value_cny <= 0:
+    """组合风险仪表盘。cards 为 _build_action_cards 产出的最终决策卡，
+    与 action_cards 完全一致——portfolio_risk.items 不再独立计算。"""
+    if not cards or total_value_cny <= 0:
         return {"total_value_cny": total_value_cny, "top3_concentration_pct": 0.0,
                 "stop_loss_risk_pct": 0.0, "stop_loss_risk_cny": 0.0,
                 "scenario": {}, "items": []}
     sorted_weights = sorted(
-        [r for r in reviews if r.current_weight_pct is not None],
-        key=lambda r: r.current_weight_pct or 0, reverse=True)
-    top3 = sum(r.current_weight_pct for r in sorted_weights[:3])
-    stop_risk_cny = sum(r.risk_amount_cny for r in reviews if r.risk_amount_cny) or 0.0
-    stop_risk_pct = stop_risk_cny / total_value_cny * 100
-    items = [{"position_id": r.position_id, "signal": r.signal, "action": r.action,
-              "weight_pct": r.current_weight_pct, "stop_price": r.stop_price,
-              "risk_to_stop_pct": r.risk_to_stop_pct} for r in reviews]
+        [c for c in cards if c.get("current_weight_pct") is not None],
+        key=lambda c: c.get("current_weight_pct") or 0, reverse=True)
+    top3 = sum(c.get("current_weight_pct") or 0 for c in sorted_weights[:3])
+    stop_risk_cny = sum(c.get("risk_amount_cny") or 0 for c in cards)
+    stop_risk_pct = stop_risk_cny / total_value_cny * 100 if total_value_cny > 0 else 0.0
+    items = [{"position_id": c["position_id"], "signal": c.get("signal", "hold"),
+              "action": c.get("action", "持有"), "weight_pct": c.get("current_weight_pct"),
+              "stop_price": c.get("stop_price"),
+              "risk_to_stop_pct": c.get("risk_to_stop_pct")} for c in cards]
     scenario = _build_scenarios(total_value_cny, position_valuations)
     return {"total_value_cny": round(total_value_cny, 2),
             "top3_concentration_pct": round(top3, 2),
