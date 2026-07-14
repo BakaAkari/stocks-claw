@@ -25,8 +25,22 @@
         },
         {
           "id": "cn_open_watch",
-          "time": "09:45",
+          "time": "10:00",
           "intent": "open_watch",
+          "push": "normal",
+          "primary_market": "cn"
+        },
+        {
+          "id": "cn_morning_close",
+          "time": "11:00",
+          "intent": "morning_close_check",
+          "push": "normal",
+          "primary_market": "cn"
+        },
+        {
+          "id": "cn_afternoon_open",
+          "time": "13:05",
+          "intent": "afternoon_open_check",
           "push": "normal",
           "primary_market": "cn"
         },
@@ -69,14 +83,15 @@
           "id": "us_mid_session",
           "time": "12:30",
           "intent": "mid_session_check",
-          "push": "disabled",
-          "enabled": false
+          "push": "digest",
+          "primary_market": "us",
+          "enabled": true
         },
         {
           "id": "us_pre_close",
           "time": "15:30",
           "intent": "pre_close_decision",
-          "push": "critical_only",
+          "push": "digest",
           "primary_market": "us"
         },
         {
@@ -95,7 +110,7 @@
       "sessions": [
         {
           "id": "global_intelligence_watch",
-          "time": "00:00",
+          "time": "07:00",
           "intent": "intelligence_patrol",
           "push": "normal",
           "primary_market": "global",

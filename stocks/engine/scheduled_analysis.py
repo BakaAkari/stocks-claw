@@ -1359,6 +1359,20 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "是否需要让用户补录数据或确认长期记录",
             "【风险边界】读取 risk_assessment 和 mandatory_blocks.risk_boundary：如果 mandatory_blocks.risk_boundary 存在，必须原样嵌入报告末尾（用**加粗**标题，- 列表）。不得改写、省略或合并到其他段。情报管道中的地缘政治事件，如果触发了 risk_assessment，必须在风险边界段报告",
         ],
+        "morning_close_check": [
+            "上午走势小结：哪些持仓触发了信号或接近触发",
+            _intel_brief_task,
+            "午间休市前是否需要提前减仓或止盈",
+            "午后重点关注哪些持仓和方向",
+            "数据质量是否足以支持午间判断",
+        ],
+        "afternoon_open_check": [
+            "午间有无重大消息改变上午盘前计划",
+            "下午开盘是否有跳空或异常波动",
+            _intel_brief_task,
+            "是否需要在收盘前提前行动",
+            "上午未触发但下午可能触发的持仓",
+        ],
         "mid_session_check": [
             "盘中波动是否改变已有计划",
             _intel_brief_task,
@@ -2329,6 +2343,8 @@ def _headline(session_id: str) -> str:
         "us_mid_session": "美股盘中:只检查高波动或 critical 风险",
         "us_pre_close": "美股收盘前:默认生成,仅 critical 建议即时推送",
         "us_after_close": "美股盘后:复盘今日盈亏与触发器事实,不做新建议",
+        "cn_morning_close": "A 股午前:检查上午走势和午后应对计划",
+        "cn_afternoon_open": "A 股午后开盘:检查午间变化和下午方向",
     }.get(session_id, f"{session_id}: scheduled analysis")
 
 
@@ -2345,6 +2361,16 @@ _SESSION_INTENT_PROPERTIES = {
         "can_review_closed": False,
     },
     "cn_pre_close": {
+        "focus": "a+中国/香港市场",
+        "can_recommend_new": True,
+        "can_review_closed": False,
+    },
+    "cn_morning_close": {
+        "focus": "a+中国/香港市场",
+        "can_recommend_new": True,
+        "can_review_closed": False,
+    },
+    "cn_afternoon_open": {
         "focus": "a+中国/香港市场",
         "can_recommend_new": True,
         "can_review_closed": False,
