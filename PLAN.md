@@ -1,6 +1,6 @@
 # stocks-claw 开发主线计划
 
-> 版本:v4.7(2026-07-11,v8产品类型路由+v9 Polygon+v10基金净值+v11资金分配)
+> 版本:v4.8(2026-07-14,个性化引擎+架构修正+资金部署事实化)
 > **现行准则只有两份:本文档(方向、规则与状态)+ `EXECUTION_PLAN.md`(任务与验收)。**
 > 北极星是 `stocks/VISION.md`(v2.0);现状描述文档为 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md`、`AGENT_GUIDE.md`(只描述现实,不含路线)。
 > `docs/archive/` 下的一切(含 2026-07-03 归档的 `PLAN_v3.0_20260703.md`、`EXECUTION_PLAN_20260703.md`)无现行效力,仅作历史与参考。
@@ -25,7 +25,9 @@
   - **v10 基金净值 Provider(2026-07-11)**:`stocks/providers/fund_nav.py`,天天基金JSONP接口,5只公募基金自动拉取T-1确认净值,标注从"手工估值"→"净值来源:天天基金"。
   - **v11 组合级资金分配(2026-07-11)**:`_build_capital_allocation()` — 约束检测(权益/固收/现金/黄金 vs portfolio_constraints.json)、冲突标注(约束方向 vs 信号方向)、约束感知加仓排序(超限大类惩罚×0.2)、闲置资金建议(轮动领涨候选)、优先级摘要。
   - **v8 产品类型路由(2026-07-11)**:`_build_action_cards()` 新增 `_PRODUCT_TYPE_RULES` 表,按 `classification.product_type` 分四档路由:`full`(场内ETF/股票,完整止损止盈)、`config_only`(QDII/混合/固收+/积存金,ratio=0,信号降级为提醒)、`info_only`(银行理财,纯状态说明)、`skip`(货基/现金/保险,直接跳过)。支付宝6项+建行4项资产明细已补全(票号/份额/成本价+代理instrument)。
-- **当前开发方向**:v8/v9/v10/v11已完成。**2026-07-13 五个模块接入系统**。下一步候选:估值数据层(PE/PB百分位)。
+- **v12 个性化参数引擎 (2026-07-13)**:`ProfileInterpreter` — Agent 直接推理将自然语言偏好翻译为量化参数(`computed_profile.json`),引擎自动合并。15 个参数覆盖止损/止盈/加仓/趋势确认/仓位上限。
+- **v13 架构修正 (2026-07-14)**:`trend_confirm_days` 改为 cutoff 收紧(ratio÷N→阈值偏移,消除"首次跌破"谎言);`add_ladder` 改为 MA20 偏离驱动档位+仓位上限门(pnl_pct→同源偏离);`capital_deployment` 拆为 `capital_facts`(纯事实块)+LLM 负责解释。
+- **当前开发方向**:v8~v13已完成。下一步候选:反馈回路(建议vs执行对照)。
 - **Backlog其余项**(组合归因/危机预案/DecisionPlan)未排期。
 
 - **五个模块系统接入 (2026-07-13)**:
@@ -182,4 +184,8 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-08:立项 `global_intelligence_watch` 切片设计:在现有 8 次持仓推送外新增每小时全量新闻/宏观情报刮削分析推送。决策点:①主新闻源用 Google News RSS+现有 RSS,一手补充 Finnhub Market News;②行情/宏观覆盖 VIX/原油/美债/黄金/比特币/美元指数,黄金/原油/美元指数优先用 GLD/USO/UUP ETF 代理;③FRED API 由用户单独提供 key,因免费档约 120 次/日,美债 10Y/2Y/美元指数改为每 4 小时集中抓取;④排除低价值时段:北京时间 02:00-07:00 跳过,实际每天运行 19 次;⑤不设置新闻噪音阈值,全量生成产物;⑥非持仓标的允许给出买入/卖出/观察建议;⑦数据保留 7 天在线、7-30 天归档、>30 天删除;⑧产物复用 ScheduledAnalysisRun v1,新增 IntelligenceHarvester/IntelligenceAnalyzer/NewsIntelligenceStore 组件,不修改 AnalysisContext 主结构与现有测试。依据:用户明确确认 6 个设计约束并要求直接写方案。
 - 2026-07-08:S3-E 真实试运行验收关闭。用户试用两天后给出 5 项调整点已完成并穿越验收:市场焦点过滤、触发器显式输出、高亏损标注、市场状态摘要、after_close 复盘意图区分。同日立项 global_intelligence_watch 每小时新闻/宏观情报切片并将开工实现。依据:用户真实试用反馈、全局验收 ruff/pytest/compileall/CLI smoke 通过。
 - 2026-07-09:六角度专业审查完成。实施四项P0修复(硬编码汇率→实时汇率、-10%中间止损档、信号横截面排序、多因子压力测试);产出开发方向建议书 docs/archive/DEVELOPMENT_DIRECTION_20260709.md,含三层(健壮性→分析深度→长期愿景)共12个方向项与6条新增架构不变式。验收:ruff/pytest 509/compileall/CLI smoke 全绿。依据:用户要求多角度专业分析并整理开发建议。
+- 2026-07-13:ProfileInterpreter 上线。Agent 直接推理完成自然语言→量化参数翻译,写入 computed_profile.json;引擎每次 session 自动合并 15 项参数。依据:用户要求系统个性化,API key 401 后改为 Agent 直推。
+- 2026-07-14:架构修正三轮。①trend_confirm_days:ratio÷N→cutoff 收紧,消除无状态引擎追踪不了"第几天"的根因;②add_ladder:pnl_pct→MA20 偏离选档+仓位门;③capital_deployment→capital_facts 纯事实,LLM 负责解释。ruff 全绿,pytest 536/538。依据:对抗式校验发现三个改动存在架构假设错误。
+- 2026-07-14:标记反馈回路为待开发功能。用户裁决当前报告质量已达收益递减点,继续对抗式校验 ROI 极低。依据:用户明确判断。
+
 - (追加格式:`日期:决定;依据`)

@@ -336,7 +336,7 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
    `.local/computed_profile.json`，合并进 QuantActionEngine。无需 Agent 手动操作。
 2. **报告层面**：`build_agent_task` 的 `persona` 段由 `_build_persona()` 动态生成，
    包含风格化指令（如"用户容忍较大回撤，不必催促止损"）。
-3. **资金部署**：`mandatory_blocks.capital_deployment` 提供用户可读的资金建议块，
+3. **资金部署**：`mandatory_blocks.capital_facts` 提供纯事实资金状况块，
    含约束告警、信号冲突、减仓回收预估、加仓候选排序、闲置资金轮动方向。
    由 `_format_capital_advice()` 格式化，LLM 必须原样嵌入报告。
 4. **无文件时的行为**：若 `.local/computed_profile.json` 不存在，引擎使用默认参数，
@@ -356,10 +356,10 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
   不直接编辑文件。
 
 
-### 5.6 资金部署建议 (capital_deployment)
+### 5.6 资金状况事实 (capital_facts)
 
-每次 session 的 `mandatory_blocks` 包含 `capital_deployment` 字段——一条用户可读的中文资金建议块，
-由 `_format_capital_advice()` 从 `capital_allocation` 数据生成。LLM 必须原样嵌入报告。
+每次 session 的 `mandatory_blocks` 包含 `capital_facts` 字段——一条纯事实的中文资金状况块（不含建议），
+由 `_format_capital_facts()` 从 `capital_allocation` 数据生成。LLM 必须原样嵌入报告,并基于这些事实在报告前半部独立成段给出资金部署建议。
 
 包含以下内容：
 
@@ -368,10 +368,10 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
 - **信号冲突**：持仓信号方向 vs 约束方向的冲突（如"权益不足应加仓但信号为减仓"）
 - **减仓回收**：预计回收金额和笔数
 - **加仓排序**：按优先级×约束×轮动综合得分的加仓候选（若无有效加仓信号则展示轮动领涨方向）
-- **执行优先级**：从 constraint_alerts 和 conflicts 推导的优先级摘要
 
-Agent 在撰写报告时，应将此块的结论融入"一句话执行结论"或"前瞻展望"段，
-回答"今天钱往哪放"的核心问题。
+
+Agent 在撰写报告时,应基于 capital_facts 的事实独立生成"资金部署"段,结合 persona 和 intelligence_digest 回答"今天钱往哪放"。
+不得笼统说"关注"或"观望",必须引用具体数字。
 
 ## 6. HTTP 边界
 

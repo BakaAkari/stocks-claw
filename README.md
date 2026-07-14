@@ -89,6 +89,7 @@ uv run python -m stocks.adapters.cli --asset-migrate-v2 --confirmed
 ```text
 .local/financial_assets.json          private holdings
 .local/investor_profile.json          private preferences
+.local/computed_profile.json          interpreted quant parameters
 .local/history/                       quote history cache
 .local/event_cache/                   Finnhub earnings-calendar cache
 .local/snapshots/                     minimal rolling snapshots

@@ -10,7 +10,12 @@
 - Engine 负责读取确认过的金融记忆、获取市场数据、计算轻量脚手架、记录质量与溯源，
   最终构建 `AnalysisContext v12`。
 - Engine 也能按配置生成 `ScheduledAnalysisRun v1` 文件产物，供外部 Agent 定时读取。
+- `ProfileInterpreter` 将用户自然语言偏好翻译为量化引擎参数(`computed_profile.json`),
+  每次 session 自动合并进 `QuantActionEngine`,覆盖 15 项参数。
 - 外部 Agent 读取上下文或定时运行产物并完成最终判断。
+- 定时产物 `mandatory_blocks` 含四块确定事实:`risk_boundary`(风险等级)、
+  `constraint_alerts`(大类约束偏离)、`capital_facts`(资金状况:约束/净可动用/冲突/回收/轮动参考)、
+  `shadow_account`(建议信号分布)。`capital_facts` 只陈述事实不做解释,资金部署建议由 LLM 基于 persona 生成。
 - 可选 `LLMAnalysis` 能生成兼容报告，但默认关闭，不改变主边界。
 - 系统没有券商连接和下单能力。
 

@@ -1,6 +1,6 @@
 # EXECUTION_PLAN.md — 现行任务与验收
 
-> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-11(v8产品类型路由+v9 Polygon+v10基金净值+v11资金分配)
+> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-14(v12个性化引擎+v13架构修正)
 > 本文是**唯一的行动清单**,与 `PLAN.md`(方向、规则与状态)互补。
 > 已完成 S0~S2-7 的完整任务卡和证据归档于
 > `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;2026-07-03 以前历史证据归档于
@@ -212,9 +212,28 @@
 - [x] 闲置资金建议: 加仓候选需求 << 净可动用时, 从 rotation_leaders top-5 推荐配置候补
 - [x] 全局验收: ruff 全绿、pytest 498 passed、compileall 0
 
+## 已关闭 — v12 个性化参数引擎 (2026-07-13)
+
+- [x] 新增 `stocks/engine/profile_interpreter.py`:Agent 直接推理翻译自然语言偏好→量化参数
+- [x] CLI 新增 `--interpret-profile` / `--params-json`:预览→生成→确认写入流程
+- [x] `scheduled_analysis._merge_profile_config()`:每次 session 自动合并 computed_profile.json
+- [x] `_build_persona()`:按用户风格定制 LLM 报告 persona(5 条原则)
+- [x] `quant_action.py`:硬编码参数全部改为 config 驱动,覆盖 15 项
+- [x] 全局验收:ruff 全绿、pytest 536/538、compileall 0
+
+## 已关闭 — v13 架构修正 (2026-07-14)
+
+- [x] trend_confirm_days:ratio÷N→cutoff 收紧。无状态引擎追踪不了"第几天",改为阈值偏移
+- [x] add_ladder:pnl_pct 选档→MA20 偏离选档+仓位上限门。消除建仓时机与回踩深度的混淆
+- [x] capital_deployment→capital_facts:纯事实块,LLM 管解释
+- [x] LLM prompt 强化:资金部署独立成段,必须引用具体数字
+- [x] AGENT_GUIDE.md §5 更新:§5.3 参数表 + §5.6 资金部署文档
+- [x] 全局验收:ruff 全绿、pytest 536/538、compileall 0
+
 ## Backlog(未排期,禁止开工)
 
-- 基金净值与贵金属报价 Provider:用户已补录票号/份额/克数,手工估值已可计算逐笔盈亏。自动净值拉取待后续 provider 开发。
+- **反馈回路(已标记待开发)**:建议vs执行对照→策略归因(胜率/盈亏/时序)→自适应参数。概念设计完成,等待用户裁决排期。
+- 基金净值与贵金属报价 Provider:用户已补录票号/份额/克数,手工估值已可计算逐笔盈亏。
 - 估值数据层:A 股/美股指数 PE/PB 百分位,用于长线判断。
 - 论点笔记本、组合归因、危机预案、分批执行计划。
 - DecisionPlan 引擎化与内部 LLM 双路径:原 G1~G7 方向;G0 契约已落盘休眠。
