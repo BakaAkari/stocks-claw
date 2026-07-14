@@ -202,9 +202,13 @@ class QuantActionEngine:
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= c["warning_loss_pct"]:
             facts.append(f"浮亏 {pnl_pct:.2f}% 触发警示阈值 {c['warning_loss_pct']}%")
 
-        # 4. 趋势跌破 — 阶梯减仓（trend_confirm_days 控制首次信号强度）
+        # 4. 趋势跌破 — 阶梯减仓（trend_confirm_days 收紧触发阈值）
         if isinstance(price, (int, float)) and ma20 is not None:
-            trigger_price = ma20 * c["trend_ma20_break_cutoff"]
+            confirm_days = c.get("trend_confirm_days", 1)
+            # 多天确认 → 收紧 cutoff，要求更深偏离才触发（每多1天收紧 0.005）
+            adjusted_cutoff = c["trend_ma20_break_cutoff"] - (confirm_days - 1) * 0.005
+            adjusted_cutoff = max(adjusted_cutoff, 0.910)  # 不低于 0.91
+            trigger_price = ma20 * adjusted_cutoff
             if price < trigger_price and (macd_hist is None or macd_hist < 0):
                 ratio = 0.25
                 deviation = (ma20 - price) / ma20
@@ -212,20 +216,15 @@ class QuantActionEngine:
                     if price / ma20 < threshold:
                         ratio = ladder_ratio
                         break
-                # trend_confirm_days > 1 → 首次跌破降权，避免假突破误杀
-                confirm_days = c.get("trend_confirm_days", 1)
-                original_ratio = ratio
-                if confirm_days > 1:
-                    ratio = ratio / confirm_days
                 reason = (
                     f"现价 {price:.2f} 跌破 MA20 {ma20:.2f}（触发线 {trigger_price:.4f}，"
                     f"偏离 {deviation:.1%}），MACD 柱为负"
                 )
                 facts_list = [reason]
-                if confirm_days > 1 and original_ratio > ratio:
+                if confirm_days > 1:
                     facts_list.append(
-                        f"首次跌破，需 {confirm_days} 天确认（信号从 {int(original_ratio*100)}% "
-                        f"降权至 {int(ratio*100)}%）"
+                        f"趋势确认模式（{confirm_days}天）：跌破阈值收紧至 {adjusted_cutoff:.3f}"
+                        f"（默认 {c['trend_ma20_break_cutoff']:.3f}），要求偏离 ≥{((1-adjusted_cutoff)*100):.1f}% 才触发"
                     )
                 return self._build(position_id, "reduce",
                     f"趋势走弱（MA20偏离 {deviation:.1%}），减仓 {int(ratio*100)}%",
@@ -258,38 +257,45 @@ class QuantActionEngine:
                 [f"单日下跌 {one_day_change_pct:.2f}%，浮盈 {pnl_pct:.2f}%"],
                 stop_price, [], current_weight_pct, price, quantity)
 
-        # 7. 回踩加仓（add_ladder 多档：pnl_pct 越负 → 档位越高）
+        # 7. 回踩加仓（MA20 偏离驱动档位 + 仓位上限门）
         if isinstance(price, (int, float)) and ma20 is not None and cost is not None:
             rsi = self.indicators.get("rsi_14")
             near_ma20 = 0.97 <= price / ma20 <= 1.03
             rsi_ok = rsi is None or (c["left_add_min_rsi"] <= rsi <= c["left_add_max_rsi"])
             macd_ok = macd_hist is None or macd_hist >= 0
-            if near_ma20 and rsi_ok and macd_ok and pnl_pct is not None and pnl_pct < 5.0:
+            # 仓位上限门：已接近 position_limit → 不加仓
+            limit = c.get("default_position_limit_pct", 5.0)
+            weight_ok = (current_weight_pct or 0) < limit * 0.8
+            if near_ma20 and rsi_ok and macd_ok and weight_ok                     and pnl_pct is not None and pnl_pct < 5.0:
                 ladder = c.get("add_ladder", [0.02])
-                # pnl_pct 驱动档位：浮盈/浅亏→首档，中度浮亏→二档，深度浮亏→三档
+                # MA20 偏离驱动档位（与触发条件同源）
+                deviation_ma20 = (ma20 - price) / ma20  # >0 = 低于MA20
                 tier = 0
-                if isinstance(pnl_pct, (int, float)):
-                    if pnl_pct < -10 and len(ladder) > 2:
-                        tier = 2
-                    elif pnl_pct < -5 and len(ladder) > 1:
-                        tier = 1
+                if deviation_ma20 > 0.02 and len(ladder) > 2:
+                    tier = 2
+                elif deviation_ma20 > 0.01 and len(ladder) > 1:
+                    tier = 1
                 add_size = ladder[min(tier, len(ladder) - 1)]
                 add_pct = round(add_size * 100)
                 tier_label = ["首档", "二档", "三档"][tier] if tier < 3 else f"档位{tier+1}"
                 facts_extras = [
-                    f"价格回踩 MA20 {ma20:.2f}，RSI {rsi}，MACD 未走坏",
+                    f"价格回踩 MA20（偏离 {deviation_ma20:.1%}），RSI {rsi}，MACD 未走坏",
                 ]
                 if len(ladder) > 1:
                     remaining = [f"{round(s*100)}%" for s in ladder[tier+1:]]
                     if remaining:
                         facts_extras.append(
-                            f"加仓阶梯({tier_label} {add_pct}%)：后续 {', '.join(remaining)}"
-                            f"（浮亏扩大时自动升档）"
+                            f"加仓阶梯({tier_label} {add_pct}%)：偏离扩大后→ {', '.join(remaining)}"
                         )
                 return self._build(position_id, "add",
-                    f"回踩 MA20，加仓 {add_pct}%（{tier_label}）", -add_size,
+                    f"回踩 MA20（偏离 {deviation_ma20:.1%}），加仓 {add_pct}%（{tier_label}）", -add_size,
                     facts_extras,
                     stop_price, [], current_weight_pct, price, quantity)
+            # 仓位已满，记录但不生成 add 信号
+            if near_ma20 and rsi_ok and macd_ok and not weight_ok                     and pnl_pct is not None and pnl_pct < 5.0:
+                facts.append(
+                    f"回踩 MA20 但仓位 {current_weight_pct:.1f}% 接近上限 {limit:.0f}%×0.8，不触发加仓"
+                )
 
         if not facts:
             facts.append("未触发任何规则")

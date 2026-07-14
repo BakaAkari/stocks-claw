@@ -885,36 +885,33 @@ def _compute_risk_assessment(context: dict) -> dict:
     }
 
 
-def _format_capital_advice(capital_allocation: dict) -> str:
-    """将 capital_allocation 结构化为用户可读的中文资金部署建议块。
+def _format_capital_facts(capital_allocation: dict) -> str:
+    """将 capital_allocation 化为纯事实块——不含建议、不含解释。
 
-    由 build_mandatory_blocks 调用，LLM 必须原样嵌入报告。
+    由 build_mandatory_blocks 调用，LLM 基于这些事实自行生成资金部署建议。
     """
-    lines = ["**💰 资金部署建议**"]
+    lines = ["**💰 资金状况**"]
     ca = capital_allocation or {}
 
     total = ca.get("total_value_cny", 0)
     net = ca.get("net_deployable_cny", 0)
     ratio_pct = round(net / total * 100, 1) if total > 0 else 0
-
     lines.append(f"总资产 ¥{total:,.0f} ｜ 净可动用 ¥{net:,.0f}（{ratio_pct}%）")
 
-    # Constraint alerts
+    # Constraint alerts — facts only
     alerts = ca.get("constraint_alerts", [])
     breaches = [a for a in alerts if a.get("severity") == "breach"]
     nears = [a for a in alerts if a.get("severity") == "near"]
     if breaches or nears:
         lines.append("")
-        lines.append("**约束状态**")
         for a in breaches:
-            lines.append(f"- ⚠ {a['message']}")
+            lines.append(f"- 约束偏离：{a['message']}")
         for a in nears:
-            lines.append(f"- ⚡ {a['message']}")
+            lines.append(f"- 约束逼近：{a['message']}")
 
-    # Conflicts
+    # Conflicts — facts only
     conflicts = ca.get("conflicts", [])
     if conflicts:
-        # Only summarize, don't list all
         reduce_conf = [c for c in conflicts if c.get("signal") in ("reduce", "stop_loss", "take_profit")]
         add_conf = [c for c in conflicts if c.get("signal") == "add"]
         parts = []
@@ -922,37 +919,31 @@ def _format_capital_advice(capital_allocation: dict) -> str:
             parts.append(f"{len(reduce_conf)} 个减仓信号 vs 约束要求加仓")
         if add_conf:
             parts.append(f"{len(add_conf)} 个加仓信号 vs 约束要求减仓")
-        lines.append(f"- ⚡ 信号冲突：{'；'.join(parts)}")
+        lines.append(f"- 信号冲突：{'；'.join(parts)}")
 
     # Reduce proceeds
     reduce_items = ca.get("reduce_items", [])
     if reduce_items:
         total_reduce = sum(r.get("proceeds_cny", 0) for r in reduce_items)
-        lines.append(f"- 📤 预计回收 ¥{total_reduce:,.0f}（{len(reduce_items)} 笔减仓/止盈）")
+        lines.append(f"- 预计回收：¥{total_reduce:,.0f}（{len(reduce_items)} 笔）")
 
-    # Add candidates
-    lines.append("")
+    # Add candidates — facts only
     add_candidates = ca.get("add_candidates", [])
     if add_candidates:
-        lines.append("**加仓排序**（按优先级 × 约束 × 轮动综合得分）")
+        lines.append("")
+        lines.append("**加仓候选**（按综合得分排序）")
         for i, ad in enumerate(add_candidates[:5]):
             note = f" — {ad['constraint_note']}" if ad.get("constraint_note") not in ("无约束冲突", "") else ""
             lines.append(f"{i+1}. {ad['position_id']} {ad['action']}{note}")
-    else:
-        # No add candidates → suggest alternatives
-        idle = ca.get("idle_cash_suggestions", [])
-        if idle:
-            lines.append("**当前无有效加仓信号**（持仓加仓被因子压制或条件不满足）")
-            lines.append(f"闲置资金 ¥{net:,.0f} 可关注轮动领涨方向：")
-            for s in idle[:3]:
-                lines.append(f"- #{s.get('rank','?')} {s.get('symbol','?')} {s.get('name','')} "
-                           f"（20日 +{s.get('r20','?')}%）— {s.get('category','')}")
 
-    # Priority summary
-    ps = ca.get("priority_summary", "")
-    if ps and ps != "无优先动作":
+    # Rotation reference — facts only
+    idle = ca.get("idle_cash_suggestions", [])
+    if idle:
         lines.append("")
-        lines.append(f"**执行优先级**：{ps}")
+        lines.append("**轮动参考**")
+        for s in idle[:3]:
+            lines.append(f"- #{s.get('rank','?')} {s.get('symbol','?')} {s.get('name','')} "
+                       f"（20日 +{s.get('r20','?')}%）")
 
     return "\n".join(lines)
 
@@ -1013,11 +1004,11 @@ def build_mandatory_blocks(
             lines2.append(f"- {a.get('message', '')}")
         blocks["constraint_alerts"] = "\n".join(lines2)
 
-    # ── 资金部署建议段 ──
+    # ── 资金状况事实段 ──
     if capital_allocation:
-        cap_text = _format_capital_advice(capital_allocation)
+        cap_text = _format_capital_facts(capital_allocation)
         if cap_text:
-            blocks["capital_deployment"] = cap_text
+            blocks["capital_facts"] = cap_text
 
     return blocks
 
@@ -1343,7 +1334,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "每个方向写明：依据（引用具体数据）→ 对应标的 → 与现有组合的关系",
             "哪些候选方向只适合观察,不能追",
             "数据质量是否足以形成盘前计划",
-            "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
+            "【资金部署】读取 mandatory_blocks.capital_facts 和 capital_allocation 全文：基于约束偏离、净可动用金额、回收预估、加仓候选和轮动参考，结合 persona 风格和 intelligence_digest 方向，给出'今天钱往哪放'的具体判断——是保持现金、等回收后补特定板块，还是有可立即执行的加仓方向。必须引用 capital_facts 中的具体数字，不笼统说'关注'或'观望'",
             "【风险边界】读取 risk_assessment：如果 level 不是 normal，显式报告。如果 suspend_accumulation=true，盘前计划必须标注'暂停开新仓'",
         ],
         "open_watch": [
@@ -1358,13 +1349,13 @@ def build_agent_task(session: ScheduledSession) -> dict:
             _intel_brief_task,
             "【前瞻展望】综合分析 intelligence_digest + rotation_leaders + exposure_summary，给出未来1-2周最值得关注的板块和方向（不少于3个），每个方向写明依据和对应标的",
             "是否有不应追高或不应补弱的标的",
-            "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
+            "【资金部署】读取 mandatory_blocks.capital_facts 和 capital_allocation 全文：基于约束偏离、净可动用金额、回收预估、加仓候选和轮动参考，结合 persona 风格和 intelligence_digest 方向，给出'今天钱往哪放'的具体判断——是保持现金、等回收后补特定板块，还是有可立即执行的加仓方向。必须引用 capital_facts 中的具体数字，不笼统说'关注'或'观望'",
         ],
         "after_close_review": [
             "今天触发器和持仓事实如何复盘",
             _intel_brief_task,
             "明天开盘前重点看什么",
-            "【资金分配】读取 capital_allocation：约束告警 → 减仓回收 → 加仓候选 → 净可动用。给出'今天钱往哪放'的优先级判断",
+            "【资金部署】读取 mandatory_blocks.capital_facts 和 capital_allocation 全文：基于约束偏离、净可动用金额、回收预估、加仓候选和轮动参考，结合 persona 风格和 intelligence_digest 方向，给出'今天钱往哪放'的具体判断——是保持现金、等回收后补特定板块，还是有可立即执行的加仓方向。必须引用 capital_facts 中的具体数字，不笼统说'关注'或'观望'",
             "是否需要让用户补录数据或确认长期记录",
             "【风险边界】读取 risk_assessment 和 mandatory_blocks.risk_boundary：如果 mandatory_blocks.risk_boundary 存在，必须原样嵌入报告末尾（用**加粗**标题，- 列表）。不得改写、省略或合并到其他段。情报管道中的地缘政治事件，如果触发了 risk_assessment，必须在风险边界段报告",
         ],
@@ -1447,9 +1438,9 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "事件日历": "upcoming_events[] — 未来72小时内的重大数据发布时间（CPI/FOMC/NFP等），每个事件标注距现在的剩余小时数。如果72小时内有事件，风险边界段必须显式标注'X小时后CPI发布，当前通胀交易逻辑可能单日逆转'",
             "轮动": "rotation_leaders — 轮动排名领涨的板块和标的",
             "组合": "exposure_summary.top — 组合暴露分布和潜在缺口",
-            "资金分配": "capital_allocation — constraint_alerts(大类超限)、reduce_items(减仓回收预估)、add_candidates(加仓优先级排序)、net_deployable_cny(净可动用资金)",
+            "资金部署": "capital_facts(mandatory_blocks) + capital_allocation — constraint_alerts(大类超限)、conflicts(信号方向冲突)、reduce_items(减仓回收)、add_candidates(加仓优先级)、net_deployable_cny(净可动用)、idle_cash_suggestions(轮动参考)。capital_facts 是系统计算的确定事实，资金部署建议必须在报告中独立成段",
             "风险等级": "risk_assessment — level(hedge/reduce/watch/normal)、triggers(触发条件)、recommended_actions(建议操作)、suspend_accumulation(是否暂停加仓)、cash_target_pct(现金目标比例)",
-            "必修文本": "mandatory_blocks — risk_boundary(风险边界，level!=normal时存在)和constraint_alerts(约束偏离)是系统计算的确定事实，必须原样嵌入报告末尾，不得改写或省略",
+            "必修文本": "mandatory_blocks — risk_boundary(风险边界)、constraint_alerts(约束偏离)和capital_facts(资金状况事实)是系统计算的确定事实，必须原样嵌入报告末尾，不得改写或省略。基于 capital_facts 在报告前半部独立成段给出资金部署建议",
         },
 
         # ── 输出格式 ──
@@ -1479,8 +1470,8 @@ def build_agent_task(session: ScheduledSession) -> dict:
                     "content": "列出 routing=info_only 的持仓（仅有银行理财等），只报告状态不输出操作。routing=skip 的不出现。",
                 },
                 {
-                    "name": "资金分配",
-                    "content": "读取 capital_allocation.summary；如有约束告警先列超限大类；按 add_candidates 优先级给出加仓方向；标注净可动用资金",
+                    "name": "资金部署",
+                    "content": "基于 mandatory_blocks.capital_facts 的事实（约束偏离、净可动用、回收预估、轮动参考），生成资金部署判断：现金层建议（持有/部署/等回收）、可操作方向（按约束优先级 + 轮动 + persona 过滤）、需等待的条件（什么信号出现后才能动）。必须引用具体数字，不笼统说'关注'",
                 },
                 {
                     "name": "情报要点",
@@ -1488,7 +1479,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 },
                 {
                     "name": "前瞻展望",
-                    "content": "第一部分：扫描池分级展示。accumulate_candidate 按综合得分分三档：≥0.4 强推荐（可分批布局）| 0.2-0.4 可关注（回踩再确认）| <0.2 弱信号（仅供参考）。每档不超过 3 个，超出部分只列名字不加详述。wait_for_pullback 只列出前 3 个。第二部分：结合 capital_allocation.constraint_alerts——如果某大类超限，对应板块的推荐标注'等减仓后再考虑'；如果某大类低于下限，对应板块的推荐标注'优先填补缺口'。第三部分：综合 intelligence_digest + exposure_summary 的方向判断",
+                    "content": "第一部分：扫描池分级展示。accumulate_candidate 按综合得分分三档：≥0.4 强推荐（可分批布局）| 0.2-0.4 可关注（回踩再确认）| <0.2 弱信号（仅供参考）。每档不超过 3 个，超出部分只列名字不加详述。wait_for_pullback 只列出前 3 个。第二部分：结合 capital_facts.constraint_alerts + 资金部署段的结论——如果某大类超限标注'等减仓后再考虑'；低于下限标注'优先填补缺口'。第三部分：综合 intelligence_digest + exposure_summary 的方向判断",
                 },
                 {
                     "name": "风险与数据边界",
