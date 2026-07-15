@@ -133,6 +133,8 @@ _DEFAULT_QUANT_CONFIG: dict = {
     "trend_confirmed_limit_pct": 10.0,
     "left_add_max_rsi": 65.0,
     "left_add_min_rsi": 40.0,
+    "ma20_pullback_add_ratios": [0.02],
+    "trend_break_extra_deviation_pct": 0.0,
 }
 
 
@@ -247,11 +249,11 @@ class QuantActionEngine:
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= c["warning_loss_pct"]:
             facts.append(f"浮亏 {pnl_pct:.2f}% 触发警示阈值 {c['warning_loss_pct']}%")
 
-        # 4. 趋势跌破 — 阶梯减仓（trend_confirm_days 收紧触发阈值）
+        # 4. 趋势跌破 — 阶梯减仓（trend_break_extra_deviation_pct 收紧触发阈值）
         if isinstance(price, (int, float)) and ma20 is not None:
-            confirm_days = c.get("trend_confirm_days", 1)
-            # 多天确认 → 收紧 cutoff，要求更深偏离才触发（每多1天收紧 0.005）
-            adjusted_cutoff = c["trend_ma20_break_cutoff"] - (confirm_days - 1) * 0.005
+            extra_dev = c.get("trend_break_extra_deviation_pct", 0.0)
+            # extra_dev 是额外偏离百分点，直接缩小 cutoff
+            adjusted_cutoff = c["trend_ma20_break_cutoff"] - extra_dev / 100.0
             adjusted_cutoff = max(adjusted_cutoff, 0.910)  # 不低于 0.91
             trigger_price = ma20 * adjusted_cutoff
             if price < trigger_price and (macd_hist is None or macd_hist < 0):
@@ -266,9 +268,9 @@ class QuantActionEngine:
                     f"偏离 {deviation:.1%}），MACD 柱为负"
                 )
                 facts_list = [reason]
-                if confirm_days > 1:
+                if extra_dev > 0:
                     facts_list.append(
-                        f"趋势确认模式（{confirm_days}天）：跌破阈值收紧至 {adjusted_cutoff:.3f}"
+                        f"趋势触发收紧：额外偏离 {extra_dev}%，阈值收紧至 {adjusted_cutoff:.3f}"
                         f"（默认 {c['trend_ma20_break_cutoff']:.3f}），要求偏离 ≥{((1-adjusted_cutoff)*100):.1f}% 才触发"
                     )
                 # evidence: deeper deviation → stronger signal (0.3 base + deviation depth)
@@ -320,7 +322,7 @@ class QuantActionEngine:
             limit = c.get("default_position_limit_pct", 5.0)
             weight_ok = (current_weight_pct or 0) < limit * 0.8
             if near_ma20 and rsi_ok and macd_ok and weight_ok                     and pnl_pct is not None and pnl_pct < 5.0:
-                ladder = c.get("add_ladder", [0.02])
+                ladder = c.get("ma20_pullback_add_ratios", [0.02])
                 # MA20 偏离驱动档位（与触发条件同源）
                 deviation_ma20 = (ma20 - price) / ma20  # >0 = 低于MA20
                 tier = 0

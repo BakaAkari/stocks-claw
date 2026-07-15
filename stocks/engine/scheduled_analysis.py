@@ -1401,7 +1401,7 @@ def _build_persona() -> dict:
         if not params.get("chase_enabled", False):
             style_rules.append("用户不追涨——轮动排名靠前但已拉升的标的只做参考，不建议追高买入")
 
-        ladder = params.get("add_ladder", [0.02])
+        ladder = params.get("ma20_pullback_add_ratios", [0.02])
         if len(ladder) > 1 or ladder[0] > 0.03:
             style_rules.append(f"用户偏好分批建仓（{len(ladder)}档），加仓建议分档给出")
 
