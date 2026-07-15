@@ -6,6 +6,12 @@ from stocks.engine.intelligence_analyzer import LLMIntelligenceAnalyzer
 from stocks.engine.news_intelligence_store import IntelligenceSignal
 from stocks.engine.quant_action import QuantReview, _build_drivers
 
+# Action-card coverage intentionally excludes the other padding targets:
+# - us:QQQ is an exposure proxy, not a separate portfolio position.
+# - a:511880 is cash-like and routed as skip.
+# - alipay_info is non-trading information-only.
+EXCLUDED_NON_ACTION_TARGETS = {"us:QQQ", "a:511880", "alipay_info"}
+
 ACTIVE_POSITIONS = [
     ("us:NEM", ["gold", "mining"]),
     ("a:518880", ["gold"]),
@@ -41,6 +47,12 @@ def test_all_active_positions_receive_an_intelligence_driver() -> None:
         )
     ]
     padded = LLMIntelligenceAnalyzer()._pad_category_signals(direct_signals, [])
+    padded_targets = {
+        signal.symbol for signal in padded if signal.symbol != "NVDA"
+    } | {"us:NVDA"}
+    active_targets = {instrument_key for instrument_key, _ in ACTIVE_POSITIONS}
+    assert padded_targets == active_targets | EXCLUDED_NON_ACTION_TARGETS
+
     signals = {signal.symbol: signal.to_dict() for signal in padded}
     tech = QuantReview(
         position_id="test",
