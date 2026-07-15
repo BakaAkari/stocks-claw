@@ -821,12 +821,17 @@ def build_scheduled_run(
             run_id=occurrence.run_id,
         )
     except Exception:
-        from stocks.engine.portfolio_adjudicator import PortfolioDecision
+        from stocks.engine.portfolio_adjudicator import (
+            PortfolioDecision,
+            make_decision_id,
+        )
 
         logger.exception("Portfolio adjudication failed")
         portfolio_decision = PortfolioDecision(
             status="review_required",
-            decision_id=f"{occurrence.run_id}:adjudication_failed",
+            decision_id=make_decision_id(
+                occurrence.run_id, "portfolio", "adjudication_failed", 0.0
+            ),
             unresolved_conflicts=[{
                 "code": "adjudication_failed",
                 "message": "组合裁决失败，所有动作均未获批，需人工复核",

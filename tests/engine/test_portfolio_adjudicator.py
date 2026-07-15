@@ -571,6 +571,7 @@ class TestScheduledAdjudicationFailure:
         decision = run["portfolio_decision"]
         assert decision["status"] == "review_required"
         assert decision["approved_actions"] == []
+        assert len(decision["decision_id"]) == 16
         assert decision["unresolved_conflicts"][0]["code"] == "adjudication_failed"
 
 
@@ -1314,6 +1315,8 @@ class TestDecisionCompleteness:
         projection = decision.to_dict()["post_trade_projection"]
         assert projection["before_ratios"]["黄金"] == 0.2
         assert projection["after_ratios"]["黄金"] == 0.1
+        assert projection["cash_schedule_before"] == _liquidity()
+        assert projection["cash_schedule_after"] == decision.to_dict()["cash_schedule"]
 
     def test_approved_sale_updates_decision_cash_schedule(self):
         cards = [_make_card("gold", signal="reduce", ratio=0.5,

@@ -665,6 +665,7 @@ def adjudicate_portfolio(
     post_trade_projection = {
         "before_ratios": before_ratios,
         "after_ratios": after_ratios,
+        "cash_schedule_before": copy.deepcopy(liquidity),
         "total_value_cny": round(total_value, 2),
     }
     valuations = [
@@ -673,6 +674,9 @@ def adjudicate_portfolio(
     ]
     decision_cash_schedule = build_cash_schedule(
         valuations, approved_sales, total_value
+    )
+    post_trade_projection["cash_schedule_after"] = copy.deepcopy(
+        decision_cash_schedule
     )
 
     return PortfolioDecision(
