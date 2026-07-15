@@ -279,7 +279,7 @@ Engine 配置优先级：环境变量 > YAML > 代码默认值。嵌套键使用
 
 - 全局 quote freshness 当前会传给全部持仓,跨市场 session 可能相互污染动作比例。
 - `capital_allocation` 将 T1/T2 持仓计入 deployable,不能直接解释为今日现金。
-- `_build_capital_allocation()` 对低于 800 元的加仓会原地修改 Action Card,存在顺序依赖。
+- **P1 已知缺陷**:`_build_capital_allocation()` 对低于 800 元的加仓会原地修改 Action Card,存在顺序依赖和原始信号丢失风险。
 - 情报 Driver 与 IntelConflictRule 使用不同匹配路径,可能出现结构化冲突漏报。
 - 产品路由在 `quant_action.py` 与 `scheduled_analysis.py` 存在重复映射。
 - Watch Window 仍以完整快照为主,尚未实现 Delta/SILENT 闭环。

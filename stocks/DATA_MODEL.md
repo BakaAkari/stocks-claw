@@ -152,7 +152,7 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `capital_allocation`：约束告警、信号冲突、减仓回收、加仓候选、轮动参考与
   `net_deployable_cny`。注意:当前 deployable 口径包含 cash/T0 和 T1/T2 持仓价值,
   不是今日即时现金;消费端必须结合 `context_digest.liquidity_summary.buckets` 拆分。
-- `risk_assessment`：`level/triggers/recommended_actions/suspend_accumulation/cash_target_pct`。
+- `risk_assessment`：`level ∈ {hedge, reduce, watch, normal}`、`triggers`、`recommended_actions`、`suspend_accumulation`、`cash_target_pct`。
 - `mandatory_blocks`：风险边界、约束偏离、资金事实、Shadow Account 和可选研究论点。
 - `agent_task`(v4)：自包含的 Agent 任务说明书,含以下子字段:
   - `task_version`：4

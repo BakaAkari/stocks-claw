@@ -154,6 +154,6 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
 现行 schema 见 `stocks/DATA_MODEL.md`,交易质量边界见
-`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。审查基线的新鲜验证为:ruff 通过,
-pytest 536 passed / 2 failed(情报测试固定日期超出滚动窗口)。本项目只用于分析、学习与参考,
+`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。当前审查基线:ruff 通过,
+pytest 536 passed / 2 failed(情报测试 fixture 固定日期超出 6 小时窗口)。本项目只用于分析、学习与参考,
 不构成确定性投资建议。
