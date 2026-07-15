@@ -2091,7 +2091,7 @@ def _build_capital_allocation(
     for card in action_cards:
         if card["signal"] != "add":
             continue
-        # Skip trivial allocations below ¥800 threshold
+        # Skip trivial allocations below ¥800 threshold (do NOT mutate card)
         mv = 0.0
         for pv in position_valuations:
             if pv.get("position_id") == card["position_id"]:
@@ -2099,10 +2099,9 @@ def _build_capital_allocation(
                 break
         alloc_amount = mv * abs(card.get("ratio", 0))
         if alloc_amount < 800:
-            card["facts"].append(f"分配金额 ¥{alloc_amount:.0f} 低于 ¥800 有效下限，仅作观察不执行")
-            card["ratio"] = 0.0
-            card["signal"] = "hold"
-            card["action"] = "持仓观察（加仓信号有效但金额低于执行下限）"
+            # Suppression only — original card kept intact.
+            # Suppression record is produced by build_capital_allocation_with_suppression.
+            continue
         strength = abs(card.get("ratio", 0))
         tags = pid_to_tags.get(card["position_id"], [])
         # 约束惩罚/奖励：每个匹配的约束大类只生效一次（去重）
