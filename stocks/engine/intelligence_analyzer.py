@@ -176,6 +176,34 @@ class IntelligenceAnalyzer:
         holdings: Optional list of user holdings (instrument_key or symbol) for matching.
     """
 
+    # Known valid ticker/ETF symbols
+    _KNOWN_SYMBOLS = frozenset({
+        "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "IVV", "VWO", "EFA",
+        "GLD", "SLV", "GDX", "NEM", "XAU",
+        "USO", "XLE", "XOM", "CVX", "OIH",
+        "TLT", "IEF", "SHY", "AGG", "LQD", "HYG", "BND", "SGOV",
+        "EEM", "FXI", "KWEB", "ASHR", "MCHI",
+        "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "AVGO",
+        "AMD", "INTC", "QCOM", "MU", "ARM", "SMCI",
+        "JPM", "GS", "BAC", "WFC", "C", "MS", "BLK", "V", "MA",
+        "XLV", "XBI", "XLP", "XLY", "XLF", "XLI", "XLK", "XLU", "XLB",
+        "ITA", "NOC", "LMT", "RTX", "PPA",
+        "SOXX", "SMH", "SOXL", "SOXS",
+        "BTC", "ETH", "BTCUSDT", "ETHUSDT",
+        "VIX", "VIXY", "UVXY", "VXX", "SVXY",
+        "GC", "CL", "NG", "SI", "HG", "ZC", "ZS", "ZW",
+    })
+
+    _NOISE_WORDS = frozenset({
+        "CRYPTO", "GENERAL", "STOCK", "STOCKS", "MARKET", "TRADE",
+        "TRADING", "BANK", "BANKS", "FUND", "FUNDS", "INDEX",
+        "RATE", "RATES", "YIELD", "BOND", "BONDS", "OIL",
+        "GOLD", "SILVER", "ENERGY", "METAL", "METALS",
+        "CHIP", "CHIPS", "TECH", "FINANCE", "HEALTH",
+        "DATA", "NEWS", "ALERT", "UPDATE", "REPORT",
+        "BREAKING", "LATEST", "WATCH", "LIVE", "EXCLUSIVE",
+    })
+
     def __init__(
         self,
         *,

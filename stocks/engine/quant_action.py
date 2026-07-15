@@ -40,8 +40,39 @@ THEME_TO_EXPOSURE: dict[str, list[str]] = {
 
 # ── 情报信号 symbol → 持仓关联 ──
 _INTEL_SIGNAL_PROXY: dict[str, str] = {
-    "USO": "XLE", "GLD": "NEM", "QQQ": "alipay_gf_nasdaq",
-    "ITA": "ITA", "SPY": "SPY",
+    # Macro → user positions
+    "USO": "XLE",           # oil fund → US energy ETF
+    "GLD": "NEM",            # gold ETF → gold miners ETF (and gold positions)
+    "NEM": "NEM",            # gold miners → direct
+    # Equity indices
+    # Gold → multiple gold-related positions
+    "GOLD": "NEM",
+    # Equity
+    "QQQ": "alipay_gf_nasdaq",  # NASDAQ ETF → Alipay NASDAQ fund
+    "SPY": "SPY",           # S&P 500
+    "ITA": "ITA",           # defense ETF
+    "NVDA": "NVDA",         # NVIDIA stock
+    "XLE": "XLE",           # energy ETF
+    # China market
+    "KWEB": "alipay_info",  # China internet → active info fund
+    "FXI": "a_510300",     # China large cap → 沪深300
+    "ASHR": "a_510300",    # China A-shares → 沪深300
+    # Gold/precious metals
+    "GDX": "NEM",          # gold miners ETF → NEM
+    "SLV": "NEM",          # silver → gold miners proxy
+    "GC=F": "ccb_gold",    # gold futures → 建行黄金
+    "XAU": "ccb_gold",     # gold spot → 建行黄金
+    "GC": "ccb_gold",      # gold futures → 建行黄金
+    # China gold
+    "518880": "518880",    # 黄金ETF
+    # Fixed income
+    "TLT": "SGOV",         # long treasury → short treasury
+    "SHY": "SGOV",         # short treasury → short treasury
+    "SGOV": "SGOV",        # short treasury ETF
+    # Broad market
+    "IWM": "a_512890",     # Russell 2000 → 中证500
+    # Bitcoin
+    "BTCUSDT": "alipay_info",  # Bitcoin → active fund (tech-heavy)
 }
 
 # ── 曝光标签 → 约束大类 ──
@@ -371,13 +402,28 @@ def _build_drivers(*, tech, signal, action, votes, intelligence_signals, positio
     tags_lower = [t.lower() for t in exposure_tags]
 
     intel_signals_for_position = []
+    inst_lower = (inst_key or "").lower()
     for key, sig in intel_sigs.items():
-        if key == inst_key or key in tags_lower or sig.get("symbol") in tags_lower:
+        key_lower = key.lower()
+        proxy = _INTEL_SIGNAL_PROXY.get(key, key)
+        proxy_lower = proxy.lower()
+        # Match: exact, suffix, proxy suffix (GLD→NEM→us:NEM),
+        # or exposure tag match
+        if (key == inst_key
+                or inst_lower.endswith(f":{key_lower}")
+                or inst_lower.endswith(f":{proxy_lower}")
+                or key_lower in [t.lower() for t in tags_lower]
+                or sig.get("symbol", "").lower() in [t.lower() for t in tags_lower]
+                or proxy_lower in [t.lower() for t in tags_lower]):
             intel_signals_for_position.append(sig)
     if not intel_signals_for_position:
         for key, sig in intel_sigs.items():
             sym = sig.get("symbol", "").lower()
+            rationale = (sig.get("rationale", "") or "").lower()
             if sym and any(t in sym for t in tags_lower):
+                intel_signals_for_position.append(sig)
+            elif rationale and any(t in rationale for t in tags_lower):
+                # Subject match: signal mentions "gold" → match position tagged "gold"
                 intel_signals_for_position.append(sig)
 
     if intel_signals_for_position:
