@@ -1730,7 +1730,7 @@ class ContextBuilder:
                         "rationale": s.get("rationale"),
                         "urgency": s.get("urgency"),
                     }
-                    for s in (signals.get("signals", []) if signals else [])[:5]
+                    for s in (signals.get("signals", []) if signals else [])
                 ],
             }
         except Exception as exc:  # noqa: BLE001

@@ -728,6 +728,7 @@ def build_scheduled_run(
     intel_digest = context.get("intelligence_digest") or {}
     intel_signals: dict[str, dict] = {
         s.get("symbol", ""): {
+            "symbol": s.get("symbol", ""),
             "direction": s.get("direction", ""),
             "urgency": s.get("urgency", "medium"),
             "rationale": s.get("rationale", ""),

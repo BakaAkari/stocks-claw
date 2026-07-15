@@ -1028,7 +1028,7 @@ class LLMIntelligenceAnalyzer:
             'china_sci': ['a:588000', 'a:512480', 'a:561560'],
             'qdii': ['alipay_gf_nasdaq', 'alipay_dc_nasdaq'],
             'active': ['alipay_info'],
-            'bonds': ['us:SGOV'],
+            'bonds': ['us:SGOV', 'a:159110'],
         }
         # Category → cluster theme mapping for rationale sourcing
         category_theme = {
@@ -1059,7 +1059,9 @@ class LLMIntelligenceAnalyzer:
 
         padded = list(signals)
         for cat, syms in categories.items():
-            if any(s in proxy_covered for s in syms):
+            # Only emit for symbols NOT already covered by LLM signals or proxy
+            uncovered = [s for s in syms if s not in proxy_covered]
+            if not uncovered:
                 continue
             # Find relevant cluster for rationale
             themes = category_theme.get(cat, ['general'])
@@ -1073,20 +1075,20 @@ class LLMIntelligenceAnalyzer:
                 rationale = "无相关重大事件，维持持有"
                 urgency = "low"
                 conf = 0.55
-            # Pick the primary holding symbol for this category
-            target = syms[0]
-            padded.append(IntelligenceSignal(
-                symbol=target,
-                name=cat,
-                direction="hold",
-                horizon="short_term",
-                rationale=rationale,
-                falsification="重大事件改变基本面格局",
-                risk_source="主题切换或突发事件",
-                confidence=conf,
-                urgency=urgency,
-                generated_at=datetime.now(timezone.utc),
-            ))
+            # Emit hold signal for EVERY uncovered symbol in this category
+            for target in uncovered:
+                padded.append(IntelligenceSignal(
+                    symbol=target,
+                    name=cat,
+                    direction="hold",
+                    horizon="short_term",
+                    rationale=rationale,
+                    falsification="重大事件改变基本面格局",
+                    risk_source="主题切换或突发事件",
+                    confidence=conf,
+                    urgency=urgency,
+                    generated_at=datetime.now(timezone.utc),
+                ))
         return padded
 
     def _parse_signals(self, llm_result: dict) -> list[IntelligenceSignal]:
