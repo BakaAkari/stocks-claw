@@ -5,11 +5,13 @@ Strict TDD — these tests must fail RED before implementation.
 from __future__ import annotations
 
 import copy
+import hashlib
 from datetime import datetime, timezone
 
 import pytest
 
 from stocks.engine.portfolio_adjudicator import (
+    adjudicate_portfolio,
     build_capital_allocation_with_suppression,
     build_cash_schedule,
 )
@@ -24,8 +26,10 @@ def _make_position(
     market_value_cny: float = 10_000.0,
     tradable: bool = True,
     rebalance_eligible: bool = True,
+    exposure_tags: list[str] | None = None,
 ) -> dict:
     """Helper to build minimal position_valuation dicts."""
+    tags = exposure_tags if exposure_tags is not None else [product_type]
     return {
         "position_id": position_id,
         "display_name": position_id,
@@ -38,7 +42,7 @@ def _make_position(
         "indicators": {},
         "classification": {
             "product_type": product_type,
-            "exposure_tags": [product_type],
+            "exposure_tags": tags,
         },
         "liquidity": {
             "tier": liquidity_tier,
@@ -520,3 +524,860 @@ class TestScheduledCashScheduleIntegration:
             "cash_hkd", "cash_usd", "alipay_mmf"
         }
         assert "cn_588000" not in run["cash_schedule"]["immediate_cash_position_ids"]
+
+
+# =====================================================================
+# Task 5: PortfolioAdjudicator tests
+# =====================================================================
+
+# =====================================================================
+# Task 5: PortfolioAdjudicator tests — six RED fixture classes
+# =====================================================================
+
+RULE_VERSION = "decision-trust-t1-v1"
+
+
+def _run_id() -> str:
+    return "20260715T144500Z_cn_pre_close"
+
+
+def _expected_did(run_id: str, position_id: str, raw_signal: str, raw_ratio: float) -> str:
+    raw = f"{run_id}{position_id}{raw_signal}{raw_ratio}{RULE_VERSION}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _make_evidence_map(
+    *,
+    data_anomaly: bool = False,
+    exposure_tags: list[str] | None = None,
+    product_type: str = "stock",
+    liquidity_tier: str = "t1",
+    market_value_cny: float = 10_000.0,
+    price_freshness: str = "current",
+) -> dict:
+    return {
+        "classification": {
+            "product_type": product_type,
+            "exposure_tags": exposure_tags or [product_type],
+        },
+        "liquidity": {"tier": liquidity_tier, "tradable": True, "rebalance_eligible": True},
+        "market_value_cny": market_value_cny,
+        "evidence": {
+            "price_freshness": price_freshness,
+            "data_anomalies": [
+                {"code": "mixed_adjustment_regime", "severity": "high"}
+            ] if data_anomaly else [],
+            "action_eligible": not data_anomaly,
+        },
+        "product_type": product_type,
+    }
+
+
+def _make_card(
+    position_id: str,
+    *,
+    signal: str = "hold",
+    action: str = "持有观察",
+    ratio: float = 0.0,
+    product_type: str = "stock",
+    raw_signal: str = "hold",
+    raw_ratio: float = 0.0,
+    evidence_status: str = "ok",
+    liquidity_tier: str = "t1",
+) -> dict:
+    return {
+        "position_id": position_id,
+        "display_name": position_id,
+        "instrument_key": f"a:{position_id.split('_')[-1]}",
+        "product_type": product_type,
+        "routing": "full",
+        "account_type": "broker",
+        "signal": signal,
+        "action": action,
+        "ratio": ratio,
+        "facts": [],
+        "stop_price": None,
+        "target_prices": [],
+        "position_limit_pct": 5.0,
+        "current_weight_pct": 0.05,
+        "risk_to_stop_pct": None,
+        "risk_amount_cny": None,
+        "intelligence_conflict": "none",
+        "drivers": [],
+        "dissent": None,
+        "confidence": "high",
+        "raw_signal": raw_signal,
+        "raw_ratio": raw_ratio,
+        "raw_action": action,
+        "evidence_status": evidence_status,
+        "liquidity_tier": liquidity_tier,
+    }
+
+
+def _constraints(
+    gold_min: float = 0.0, gold_max: float = 0.15,
+    equity_min: float = 0.25, equity_max: float = 0.55,
+) -> dict:
+    return {
+        "黄金": {"min": gold_min, "max": gold_max},
+        "权益": {"min": equity_min, "max": equity_max},
+    }
+
+
+def _risk_state(*, suspend_accumulation: bool = False, level: str = "normal") -> dict:
+    return {
+        "level": level,
+        "suspend_accumulation": suspend_accumulation,
+        "cash_target_pct": None,
+        "active_triggers": [],
+    }
+
+
+def _liquidity(
+    immediate: float = 50_000.0,
+    settling: float = 0.0,
+    strategic: float = 0.0,
+    locked: float = 0.0,
+) -> dict:
+    return {
+        "immediate_cash_cny": immediate,
+        "settling_cash_cny": settling,
+        "strategic_exit_value_cny": strategic,
+        "locked_value_cny": locked,
+        "safety_buffer_cny": 0.0,
+    }
+
+
+def _evidences(positions: list[dict]) -> dict[str, dict]:
+    ev = {}
+    for p in positions:
+        pid = p["position_id"]
+        ev[pid] = {
+            "classification": p.get("classification", {}),
+            "liquidity": p.get("liquidity", {}),
+            "market_value_cny": p.get("market_value_cny", 0.0),
+            "evidence": p.get("evidence", {}),
+            "product_type": p.get("classification", {}).get("product_type", ""),
+        }
+    return ev
+
+
+# ── Fixture 1: 数据异常 ──────────────────────────────────────────────
+
+
+class TestDataAnomaly:
+    """Position with data anomaly must be suppressed, not approved."""
+
+    def test_data_anomaly_suppressed(self):
+        """A card with evidence_status='blocked' must end in suppressed_actions."""
+        cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
+                            raw_signal="reduce", raw_ratio=0.3,
+                            evidence_status="blocked")]
+        evidences = {"cn_588000": _make_evidence_map(data_anomaly=True)}
+        constraints = _constraints()
+        risk = _risk_state()
+        liquidity = _liquidity()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, liquidity,
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert decision.status == "suppressed"
+        assert len(decision.approved_actions) == 0
+        assert len(decision.suppressed_actions) >= 1
+        suppressed_ids = [a.position_id for a in decision.suppressed_actions]
+        assert "cn_588000" in suppressed_ids
+
+    def test_data_anomaly_never_approved(self):
+        """When data anomaly exists, status must not be approved."""
+        cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
+                            raw_signal="reduce", raw_ratio=0.3,
+                            evidence_status="blocked")]
+        evidences = {"cn_588000": _make_evidence_map(data_anomaly=True)}
+        constraints = _constraints()
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        assert decision.status != "approved"
+
+    def test_healthy_card_not_suppressed(self):
+        """Without anomaly, the card should not be suppressed due to anomaly."""
+        cards = [_make_card("cn_588000", signal="hold", ratio=0.0,
+                            raw_signal="hold", raw_ratio=0.0,
+                            evidence_status="ok")]
+        evidences = {"cn_588000": _make_evidence_map(data_anomaly=False)}
+        constraints = _constraints()
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        suppressed = [a for a in decision.suppressed_actions
+                      if "anomaly" in a.reason.lower()]
+        assert len(suppressed) == 0
+
+
+# ── Fixture 2: 黄金超配加仓 ──────────────────────────────────────────
+
+
+class TestGoldOverAllocationAdd:
+    """Gold over max limit with add signal must be suppressed."""
+
+    def test_gold_add_suppressed_when_over_allocated(self):
+        """Gold = 16.7%, max = 15%, add signal -> suppressed."""
+        cards = [_make_card("alipay_gold", signal="add", ratio=0.02,
+                            raw_signal="add", raw_ratio=0.02,
+                            product_type="precious_metal_account")]
+        pos = _make_position("alipay_gold", product_type="precious_metal_account",
+                             exposure_tags=["gold"], market_value_cny=80_000.0)
+        evidences = _evidences([pos])
+        constraints = _constraints(gold_max=0.15, equity_min=0.25)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert decision.status != "approved"
+        suppressed_ids = [a.position_id for a in decision.suppressed_actions]
+        assert "alipay_gold" in suppressed_ids
+
+    def test_gold_hold_allowed_when_over_allocated(self):
+        """Hold signal for gold over limit is fine — no conflict."""
+        cards = [_make_card("alipay_gold", signal="hold", ratio=0.0,
+                            raw_signal="hold", raw_ratio=0.0,
+                            product_type="precious_metal_account")]
+        pos = _make_position("alipay_gold", product_type="precious_metal_account",
+                             exposure_tags=["gold"], market_value_cny=80_000.0)
+        evidences = _evidences([pos])
+        constraints = _constraints(gold_max=0.15, equity_min=0.25)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        assert len(decision.unresolved_conflicts) == 0
+
+
+# ── Fixture 3: 权益低配减仓无替代 ─────────────────────────────────────
+
+
+class TestEquityUnderWeightReduceNoAlternative:
+    """Equity under min with reduce signal but no alternative -> review_required."""
+
+    def test_review_required_when_no_alternative(self):
+        """Equity under min + reduce signal + no alternative equity buy -> review_required."""
+        cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
+                            raw_signal="reduce", raw_ratio=0.3)]
+        positions = [
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=100_000.0),
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=400_000.0),
+            _make_position("ccb_wmp", product_type="bank_wealth_management",
+                           exposure_tags=["bank_wmp"], liquidity_tier="periodic_open",
+                           market_value_cny=100_000.0, tradable=False),
+        ]
+        evidences = _evidences(positions)
+        constraints = _constraints(equity_min=0.25, equity_max=0.55, gold_max=0.15)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert decision.status == "review_required"
+        assert len(decision.approved_actions) == 0
+        assert len(decision.unresolved_conflicts) > 0
+
+    def test_unresolved_conflict_mentions_equity_bucket(self):
+        """The unresolved conflict must reference the equity bucket."""
+        cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
+                            raw_signal="reduce", raw_ratio=0.3)]
+        positions = [
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=100_000.0),
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=400_000.0),
+        ]
+        evidences = _evidences(positions)
+        constraints = _constraints(equity_min=0.25, equity_max=0.55)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        conflict_texts = [c.get("message", "") for c in decision.unresolved_conflicts]
+        assert any("权益" in t for t in conflict_texts)
+
+
+# ── Fixture 4: 权益低配减仓有替代 ─────────────────────────────────────
+
+
+class TestEquityUnderWeightReduceWithAlternative:
+    """Equity under min with reduce signal + alternative equity buy -> replacement chain."""
+
+    def _setup(self):
+        cards = [
+            _make_card("cn_588000", signal="reduce", ratio=0.3,
+                       raw_signal="reduce", raw_ratio=0.3),
+            _make_card("us_qqq", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+        ]
+        positions = [
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=100_000.0),
+            _make_position("us_qqq", exposure_tags=["us_equity"],
+                           market_value_cny=150_000.0),
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=800_000.0),
+        ]
+        return cards, positions
+
+    def test_replacement_chain_produced(self):
+        """With alternative equity to buy, must produce a replacement chain."""
+        cards, positions = self._setup()
+        evidences = _evidences(positions)
+        constraints = _constraints(equity_min=0.25, equity_max=0.55)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(settling=30_000.0),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert len(decision.replacement_chains) > 0
+
+    def test_chain_has_sale_and_buy_leg(self):
+        """Each replacement chain must have sale leg, buy leg, timing, post_trade_ratio."""
+        cards, positions = self._setup()
+        evidences = _evidences(positions)
+        constraints = _constraints(equity_min=0.25, equity_max=0.55)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(settling=30_000.0),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        for chain in decision.replacement_chains:
+            assert chain.sale_leg is not None
+            assert chain.buy_leg is not None
+            assert chain.settlement_timing is not None
+            assert chain.post_trade_ratio is not None
+
+    def test_chain_sale_leg_is_reduce_position(self):
+        """The sale leg must be the position with the reduce signal."""
+        cards, positions = self._setup()
+        evidences = _evidences(positions)
+        constraints = _constraints(equity_min=0.25, equity_max=0.55)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(settling=30_000.0),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        for chain in decision.replacement_chains:
+            assert chain.sale_leg.position_id == "cn_588000"
+
+    def test_chain_buy_leg_is_alternative_equity(self):
+        """The buy leg must be an alternative equity position."""
+        cards, positions = self._setup()
+        evidences = _evidences(positions)
+        constraints = _constraints(equity_min=0.25, equity_max=0.55)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(settling=30_000.0),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        for chain in decision.replacement_chains:
+            assert chain.buy_leg.position_id == "us_qqq"
+
+    def test_status_can_be_approved_with_chain(self):
+        """With a valid replacement chain, status may be approved."""
+        cards, positions = self._setup()
+        evidences = _evidences(positions)
+        constraints = _constraints(equity_min=0.25, equity_max=0.55)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(settling=30_000.0),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        if len(decision.unresolved_conflicts) == 0:
+            assert decision.status == "approved"
+            assert len(decision.approved_actions) > 0
+
+
+class TestReplacementChainSemantics:
+    def test_sale_settlement_comes_from_reduce_position(self):
+        cards = [
+            _make_card("sell_t2", signal="reduce", ratio=0.25,
+                       raw_signal="reduce", raw_ratio=0.25),
+            _make_card("buy_t1", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+            _make_card("last_t0", signal="hold", ratio=0.0),
+        ]
+        positions = [
+            _make_position("sell_t2", exposure_tags=["a_share"],
+                           liquidity_tier="t2_plus", market_value_cny=100_000.0),
+            _make_position("buy_t1", exposure_tags=["us_equity"],
+                           liquidity_tier="t1", market_value_cny=100_000.0),
+            _make_position("last_t0", product_type="cash", exposure_tags=["cash_like"],
+                           liquidity_tier="t0", market_value_cny=800_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(equity_min=0.25),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        assert decision.replacement_chains[0].settlement_timing == "T+2"
+        assert decision.replacement_chains[0].sale_leg.settlement_timing == "T+2"
+
+    def test_full_equity_reinvestment_preserves_total_equity_ratio(self):
+        cards = [
+            _make_card("sell", signal="reduce", ratio=0.5,
+                       raw_signal="reduce", raw_ratio=0.5),
+            _make_card("buy", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+            _make_card("other_equity", signal="hold", ratio=0.0),
+        ]
+        positions = [
+            _make_position("sell", exposure_tags=["a_share"], market_value_cny=100_000.0),
+            _make_position("buy", exposure_tags=["us_equity"], market_value_cny=50_000.0),
+            _make_position("other_equity", exposure_tags=["a_share"], market_value_cny=50_000.0),
+            _make_position("fixed", product_type="fixed_income_plus_fund",
+                           exposure_tags=["fixed_income"], market_value_cny=800_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(equity_min=0.25),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        assert decision.replacement_chains[0].post_trade_ratio == 0.2
+
+    def test_derived_buy_action_id_includes_planned_ratio(self):
+        cards = [
+            _make_card("sell_a", signal="reduce", ratio=0.25,
+                       raw_signal="reduce", raw_ratio=0.25),
+            _make_card("sell_b", signal="reduce", ratio=0.25,
+                       raw_signal="reduce", raw_ratio=0.25),
+            _make_card("buy", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+        ]
+        positions = [
+            _make_position("sell_a", exposure_tags=["a_share"], market_value_cny=50_000.0),
+            _make_position("sell_b", exposure_tags=["a_share"], market_value_cny=50_000.0),
+            _make_position("buy", exposure_tags=["us_equity"], market_value_cny=50_000.0),
+            _make_position("fixed", product_type="fixed_income_plus_fund",
+                           exposure_tags=["fixed_income"], market_value_cny=850_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(equity_min=0.25),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        ids = [action.decision_id for action in decision.approved_actions]
+        assert len(ids) == len(set(ids))
+        buy_ids = [chain.buy_leg.decision_id for chain in decision.replacement_chains]
+        assert len(buy_ids) == len(set(buy_ids))
+
+    def test_buy_leg_waits_for_sale_proceeds(self):
+        cards = [
+            _make_card("sell_t2", signal="reduce", ratio=0.25,
+                       raw_signal="reduce", raw_ratio=0.25),
+            _make_card("buy", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+        ]
+        positions = [
+            _make_position("sell_t2", exposure_tags=["a_share"],
+                           liquidity_tier="t2_plus", market_value_cny=100_000.0),
+            _make_position("buy", exposure_tags=["us_equity"], market_value_cny=50_000.0),
+            _make_position("fixed", product_type="fixed_income_plus_fund",
+                           exposure_tags=["fixed_income"], market_value_cny=850_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(equity_min=0.25),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        chain = decision.replacement_chains[0]
+        assert chain.buy_leg.settlement_timing == "after_T+2_proceeds"
+        assert "到账" in chain.buy_leg.reason
+
+    def test_hold_card_is_not_promoted_to_replacement_buy(self):
+        cards = [
+            _make_card("sell", signal="reduce", ratio=0.5,
+                       raw_signal="reduce", raw_ratio=0.5),
+            _make_card("hold_only", signal="hold", ratio=0.0,
+                       raw_signal="hold", raw_ratio=0.0),
+        ]
+        positions = [
+            _make_position("sell", exposure_tags=["a_share"], market_value_cny=100_000.0),
+            _make_position("hold_only", exposure_tags=["us_equity"], market_value_cny=50_000.0),
+            _make_position("fixed", product_type="fixed_income_plus_fund",
+                           exposure_tags=["fixed_income"], market_value_cny=850_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(equity_min=0.25),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        assert decision.status == "review_required"
+        assert decision.replacement_chains == []
+        assert all(a.position_id != "hold_only" for a in decision.approved_actions)
+
+    def test_buy_ratio_is_sale_proceeds_over_total_portfolio(self):
+        cards = [
+            _make_card("sell", signal="reduce", ratio=0.5,
+                       raw_signal="reduce", raw_ratio=0.5),
+            _make_card("buy", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+        ]
+        positions = [
+            _make_position("sell", exposure_tags=["a_share"], market_value_cny=100_000.0),
+            _make_position("buy", exposure_tags=["us_equity"], market_value_cny=50_000.0),
+            _make_position("fixed", product_type="fixed_income_plus_fund",
+                           exposure_tags=["fixed_income"], market_value_cny=850_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(equity_min=0.25),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        assert decision.replacement_chains[0].buy_leg.ratio == 0.05
+
+
+# ── Fixture 5: 风险暂停加仓 ──────────────────────────────────────────
+
+
+class TestRiskSuspendAdd:
+    """When risk state has suspend_accumulation=True, all add signals suppressed."""
+
+    def test_add_suppressed_during_suspend(self):
+        """suspend_accumulation=True -> all add cards in suppressed_actions."""
+        cards = [
+            _make_card("cn_588000", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+            _make_card("us_qqq", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+        ]
+        positions = [
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=100_000.0),
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=400_000.0),
+        ]
+        evidences = _evidences(positions)
+        constraints = _constraints()
+        risk = _risk_state(suspend_accumulation=True, level="hedge")
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert decision.status != "approved"
+        suppressed_ids = [a.position_id for a in decision.suppressed_actions]
+        assert "cn_588000" in suppressed_ids
+
+    def test_stop_loss_not_suppressed_during_suspend(self):
+        """Stop_loss should still be allowed during suspend."""
+        cards = [_make_card("cn_588000", signal="stop_loss", ratio=1.0,
+                            raw_signal="stop_loss", raw_ratio=1.0)]
+        positions = [
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=100_000.0),
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=400_000.0),
+        ]
+        evidences = _evidences(positions)
+        constraints = _constraints()
+        risk = _risk_state(suspend_accumulation=True, level="hedge")
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        suppressed_ids = [a.position_id for a in decision.suppressed_actions]
+        assert "cn_588000" not in suppressed_ids
+
+    def test_reduce_not_suppressed_during_suspend(self):
+        """Reduce signals should still be allowed during suspend."""
+        cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
+                            raw_signal="reduce", raw_ratio=0.3)]
+        positions = [
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=100_000.0),
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=400_000.0),
+        ]
+        evidences = _evidences(positions)
+        constraints = {}  # No constraints, so equity under-weight check doesn't trigger
+        risk = _risk_state(suspend_accumulation=True, level="hedge")
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        suppressed_ids = [a.position_id for a in decision.suppressed_actions]
+        assert "cn_588000" not in suppressed_ids
+
+
+# ── Fixture 6: 锁定资产 ──────────────────────────────────────────────
+
+
+class TestLockedPositions:
+    """Locked/periodic_open positions with any signal -> suppressed."""
+
+    def test_locked_suppressed(self):
+        """Locked tier position with any action -> suppressed."""
+        cards = [_make_card("boc_insurance", signal="reduce", ratio=0.3,
+                            raw_signal="reduce", raw_ratio=0.3,
+                            product_type="insurance_policy",
+                            liquidity_tier="locked")]
+        pos = _make_position("boc_insurance", product_type="insurance_policy",
+                             liquidity_tier="locked", market_value_cny=100_000.0,
+                             tradable=False, rebalance_eligible=False)
+        evidences = _evidences([pos])
+        constraints = _constraints()
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert decision.status == "suppressed"
+        suppressed_ids = [a.position_id for a in decision.suppressed_actions]
+        assert "boc_insurance" in suppressed_ids
+
+    def test_periodic_open_suppressed(self):
+        """Periodic_open tier position -> suppressed."""
+        cards = [_make_card("ccb_wmp", signal="hold", ratio=0.0,
+                            raw_signal="hold", raw_ratio=0.0,
+                            product_type="bank_wealth_management",
+                            liquidity_tier="periodic_open")]
+        pos = _make_position("ccb_wmp", product_type="bank_wealth_management",
+                             liquidity_tier="periodic_open", market_value_cny=200_000.0,
+                             tradable=False)
+        evidences = _evidences([pos])
+        constraints = _constraints()
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert decision.status == "suppressed"
+        suppressed_ids = [a.position_id for a in decision.suppressed_actions]
+        assert "ccb_wmp" in suppressed_ids
+
+
+# ── Decision ID determinism ──────────────────────────────────────────
+
+
+class TestDecisionIdDeterminism:
+    """decision_id must be deterministic sha256 hash."""
+
+    def test_deterministic_hash(self):
+        """Same inputs produce same decision_id."""
+        did1 = _expected_did(_run_id(), "cn_588000", "reduce", 0.3)
+        did2 = _expected_did(_run_id(), "cn_588000", "reduce", 0.3)
+        assert did1 == did2
+        assert len(did1) == 16
+
+    def test_different_inputs_different_hash(self):
+        """Different inputs produce different decision_id."""
+        rid = _run_id()
+        did1 = _expected_did(rid, "cn_588000", "reduce", 0.3)
+        did2 = _expected_did(rid, "cn_588000", "reduce", 0.5)
+        did3 = _expected_did(rid, "us_qqq", "reduce", 0.3)
+        assert did1 != did2
+        assert did1 != did3
+        assert did2 != did3
+
+    def test_decision_id_on_approved_action(self):
+        """Approved actions must have a valid decision_id."""
+        cards = [_make_card("cn_588000", signal="stop_loss", ratio=1.0,
+                            raw_signal="stop_loss", raw_ratio=1.0)]
+        positions = [
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=100_000.0),
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=400_000.0),
+        ]
+        evidences = _evidences(positions)
+        constraints = _constraints()
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        if decision.approved_actions:
+            for action in decision.approved_actions:
+                assert len(action.decision_id) == 16
+                assert isinstance(action.decision_id, str)
+
+
+# ── Status mutual exclusion ──────────────────────────────────────────
+
+
+class TestStatusMutualExclusion:
+    """approved, suppressed, review_required must be mutually exclusive."""
+
+    def test_status_is_one_of_three(self):
+        """status must be one of: approved, suppressed, review_required."""
+        cards = [_make_card("cn_588000", signal="hold", ratio=0.0)]
+        pos = _make_position("cn_588000", market_value_cny=100_000.0)
+        evidences = _evidences([pos])
+        constraints = _constraints()
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        assert decision.status in ("approved", "suppressed", "review_required")
+
+    def test_unresolved_conflicts_block_approved(self):
+        """When unresolved_conflicts is non-empty, status must NOT be approved."""
+        cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
+                            raw_signal="reduce", raw_ratio=0.3)]
+        positions = [
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=100_000.0),
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=400_000.0),
+        ]
+        evidences = _evidences(positions)
+        constraints = _constraints(equity_min=0.25, equity_max=0.55)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        if len(decision.unresolved_conflicts) > 0:
+            assert decision.status != "approved"
+
+
+# ── Real artifact scenario: equities 16%, gold 16.7% ─────────────────
+
+
+class TestRealArtifactScenario:
+    """CN pre-close scenario: equities ~16%, gold ~16.7%."""
+
+    def _realistic_positions(self):
+        return [
+            # Equity: ~575k total
+            _make_position("cn_588000", exposure_tags=["a_share"],
+                           market_value_cny=210_000.0),
+            _make_position("us_qqq", exposure_tags=["us_equity"],
+                           market_value_cny=150_000.0),
+            _make_position("alipay_nasdaq", exposure_tags=["qdii"],
+                           market_value_cny=120_000.0),
+            _make_position("cn_512480", exposure_tags=["semiconductor"],
+                           market_value_cny=85_000.0),
+            # Gold: ~170k -> 170/3500 ~4.9%
+            _make_position("alipay_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=80_000.0),
+            _make_position("ccb_gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=90_000.0),
+            # Cash: only 100k
+            _make_position("cash_hkd", product_type="cash",
+                           exposure_tags=["cash"], liquidity_tier="cash",
+                           market_value_cny=30_000.0),
+            _make_position("cash_usd", product_type="cash_equivalent",
+                           exposure_tags=["cash"], liquidity_tier="t0",
+                           market_value_cny=20_000.0),
+            # Large non-equity: WMP + insurance + large bonds
+            _make_position("ccb_wmp", product_type="bank_wealth_management",
+                           exposure_tags=["bank_wmp"], liquidity_tier="periodic_open",
+                           market_value_cny=1_500_000.0, tradable=False),
+            _make_position("boc_insurance", product_type="insurance_policy",
+                           exposure_tags=[], liquidity_tier="locked",
+                           market_value_cny=800_000.0, tradable=False,
+                           rebalance_eligible=False),
+            _make_position("alipay_mmf", product_type="money_market_fund",
+                           exposure_tags=["money_market"], liquidity_tier="t0",
+                           market_value_cny=50_000.0),
+            # Large fixed income to dilute equity
+            _make_position("ccb_fixed", product_type="fixed_income_plus_fund",
+                           exposure_tags=["fixed_income"], liquidity_tier="t2_plus",
+                           market_value_cny=1_000_000.0),
+        ]
+
+    def _realistic_cards(self):
+        return [
+            _make_card("cn_588000", signal="reduce", ratio=0.3,
+                       raw_signal="reduce", raw_ratio=0.3),
+            _make_card("us_qqq", signal="reduce", ratio=0.15,
+                       raw_signal="reduce", raw_ratio=0.15),
+            _make_card("alipay_nasdaq", signal="reduce", ratio=0.15,
+                       raw_signal="reduce", raw_ratio=0.15),
+            _make_card("cn_512480", signal="reduce", ratio=0.5,
+                       raw_signal="reduce", raw_ratio=0.5),
+            _make_card("alipay_gold", signal="hold", ratio=0.0,
+                       raw_signal="hold", raw_ratio=0.0,
+                       product_type="precious_metal_account"),
+            _make_card("ccb_gold", signal="hold", ratio=0.0,
+                       raw_signal="hold", raw_ratio=0.0,
+                       product_type="precious_metal_account"),
+            _make_card("alipay_mmf", signal="hold", ratio=0.0,
+                       raw_signal="hold", raw_ratio=0.0,
+                       product_type="money_market_fund"),
+        ]
+
+    def test_scenario_not_approved_without_chain(self):
+        """Real scenario must not approve without resolving conflicts."""
+        cards = self._realistic_cards()
+        positions = self._realistic_positions()
+        evidences = _evidences(positions)
+        constraints = _constraints(gold_max=0.15, equity_min=0.25)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(
+                immediate=50_000.0, settling=0.0,
+                strategic=2_735_000.0, locked=2_300_000.0,
+            ),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        if decision.status == "approved":
+            assert len(decision.replacement_chains) > 0
+        else:
+            assert decision.status in ("suppressed", "review_required")
+
+    def test_no_101w_misleading_deployable(self):
+        """Must not claim 108w as executable cash in portfolio_decision."""
+        cards = self._realistic_cards()
+        positions = self._realistic_positions()
+        evidences = _evidences(positions)
+        constraints = _constraints(gold_max=0.15, equity_min=0.25)
+        risk = _risk_state()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, risk, _liquidity(
+                immediate=50_000.0, settling=0.0,
+                strategic=2_735_000.0, locked=2_300_000.0,
+            ),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        for action in decision.approved_actions:
+            assert action.decision_id is not None

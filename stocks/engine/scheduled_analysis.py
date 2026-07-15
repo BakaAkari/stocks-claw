@@ -774,6 +774,7 @@ def build_scheduled_run(
     )
     rotation_leaders_data = context.get("rotation", {}).get("items", [])
     from stocks.engine.portfolio_adjudicator import (
+        adjudicate_portfolio,
         build_capital_allocation_with_suppression,
         build_cash_schedule,
     )
@@ -794,6 +795,35 @@ def build_scheduled_run(
     cash_schedule = build_cash_schedule(
         context.get("position_valuations") or [], [], total_value
     )
+    # Build adjudicator evidences from position valuations
+    pv_list = context.get("position_valuations") or []
+    evidences = {}
+    for pv in pv_list:
+        pid = pv.get("position_id", "")
+        if pid:
+            evidences[pid] = {
+                "classification": pv.get("classification", {}),
+                "liquidity": pv.get("liquidity", {}),
+                "market_value_cny": pv.get("market_value_cny", 0.0),
+                "evidence": pv.get("evidence", {}),
+                "product_type": (pv.get("classification") or {}).get("product_type", ""),
+            }
+    # Adjudicate portfolio actions using the current risk assessment.
+    # Task 7 will replace this stateless assessment with persistent RiskState.
+    risk_assessment = _compute_risk_assessment(context)
+    try:
+        portfolio_decision = adjudicate_portfolio(
+            action_cards,
+            evidences,
+            context.get("portfolio_constraints") or {},
+            risk_assessment,
+            cash_schedule,
+            run_id=occurrence.run_id,
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Portfolio adjudication failed")
+        portfolio_decision = None
     session_intent_props = _session_intent_props(session.id)
     filtered_action_signals = _filter_action_signals_by_market(
         context.get("action_signals") or {}, session.primary_market
@@ -844,6 +874,7 @@ def build_scheduled_run(
         "portfolio_risk": portfolio_risk,
         "capital_allocation": capital_allocation,
         "cash_schedule": cash_schedule,
+        "portfolio_decision": portfolio_decision.to_dict() if portfolio_decision else {},
         "trigger_reviews": trigger_reviews,
         "action_signal_reviews": action_signal_reviews,
         "action_signals": filtered_action_signals,
@@ -855,9 +886,9 @@ def build_scheduled_run(
             "requires_user_confirmation": True,
         },
         "notification": notification,
-        "risk_assessment": _compute_risk_assessment(context),
+        "risk_assessment": risk_assessment,
         "mandatory_blocks": build_mandatory_blocks(
-            _compute_risk_assessment(context),
+            risk_assessment,
             capital_allocation.get("constraint_alerts", []),
             context.get("upcoming_events") or [],
             capital_allocation=capital_allocation,
