@@ -616,6 +616,86 @@ class IntelligenceAnalyzer:
         }
 
 
+def _robust_json_parse(content: str) -> Optional[dict]:
+    """Parse JSON from LLM output, handling common formatting issues.
+
+    Tries multiple strategies: strict parse, markdown extraction,
+    bracket extraction, and basic repair (trailing commas, truncated output).
+    """
+    attempts = [content]
+
+    # Strategy 1: extract from markdown code block
+    if "```json" in content:
+        attempts.append(content.split("```json")[1].split("```")[0].strip())
+    elif "```" in content:
+        attempts.append(content.split("```")[1].split("```")[0].strip())
+
+    # Strategy 2: extract from first { to last }
+    start = content.find("{")
+    end = content.rfind("}")
+    if start >= 0 and end > start:
+        attempts.append(content[start:end+1])
+
+    for attempt in attempts:
+        if not attempt or not attempt.strip():
+            continue
+        # Strategy A: strict parse
+        try:
+            return json.loads(attempt)
+        except json.JSONDecodeError:
+            pass
+        # Strategy B: strip trailing commas before ] or }
+        import re as _re_strict
+        fixed = _re_strict.sub(r',\s*}', '}', attempt)
+        fixed = _re_strict.sub(r',\s*]', ']', fixed)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+        # Strategy C: try truncating to the last complete JSON structure
+        # LLM output often gets truncated mid-array or mid-object.
+        # Walk backwards from the end, try to close open structures.
+        stripped = attempt.rstrip()
+        if stripped.endswith(','):
+            stripped = stripped[:-1]
+            try:
+                return json.loads(stripped + "\n]\n}")
+            except json.JSONDecodeError:
+                pass
+        # Strategy D: find last complete cluster + signal, reconstruct
+        # Count braces to find valid closing point
+        depth = 0
+        last_good_pos = 0
+        in_string = False
+        escaped = False
+        for i, ch in enumerate(stripped):
+            if escaped:
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch in '{[':
+                depth += 1
+            elif ch in '}]':
+                depth -= 1
+                if depth == 0:
+                    last_good_pos = i + 1
+        if last_good_pos > 0 and last_good_pos < len(stripped):
+            truncated = stripped[:last_good_pos]
+            try:
+                return json.loads(truncated)
+            except json.JSONDecodeError:
+                pass
+
+    return None
+
+
 def _parse_iso(value: str) -> datetime:
     if not value:
         return datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -739,6 +819,32 @@ class LLMIntelligenceAnalyzer:
             market_impact = self._build_market_impact(llm_result, clusters, macro, signals)
             data_quality = self._build_quality(llm_result, articles, clusters, signals)
 
+            # Backfill affected_symbols from signals when LLM skips them in clusters
+            signal_symbols = {s.symbol for s in signals}
+            if signal_symbols:
+                backfilled = []
+                for cluster in clusters:
+                    syms = list(cluster.affected_symbols) if cluster.affected_symbols else []
+                    if not syms:
+                        # Assign signal symbols whose rationale or direction aligns
+                        # with the cluster theme. Simple: take all signal symbols as
+                        # they are already thematic to the news flow.
+                        syms = sorted(signal_symbols)[:3]
+                    backfilled.append(EventCluster(
+                        cluster_id=cluster.cluster_id,
+                        theme=cluster.theme,
+                        event_type=cluster.event_type,
+                        summary=cluster.summary,
+                        articles=cluster.articles,
+                        affected_markets=cluster.affected_markets,
+                        affected_symbols=syms,
+                        sentiment=cluster.sentiment,
+                        urgency=cluster.urgency,
+                        confidence=cluster.confidence,
+                        formed_at=cluster.formed_at,
+                    ))
+                clusters = backfilled
+
             return AnalysisResult(
                 analyzed_at=analyzed_at,
                 clusters=clusters,
@@ -804,16 +910,9 @@ class LLMIntelligenceAnalyzer:
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
 
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            # LLM might have returned text before/after JSON
-            # Try to find the first { and last }
-            start = content.find("{")
-            end = content.rfind("}")
-            if start >= 0 and end > start:
-                content = content[start:end+1]
-            parsed = json.loads(content)
+        parsed = _robust_json_parse(content)
+        if parsed is None:
+            raise ValueError(f"Failed to parse LLM response as JSON: {content[:200]}...")
 
         if not isinstance(parsed, dict):
             raise ValueError(f"LLM returned non-dict: {type(parsed)}")
