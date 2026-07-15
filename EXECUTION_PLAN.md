@@ -237,27 +237,27 @@
 ### T1-P0 必须先关闭
 
 - [x] 恢复默认 `pytest` 全绿;Analyzer 支持显式 `analyzed_at` 以消除测试时钟依赖;新增 category padding、digest 全字段传递和 15/15 driver coverage 回归守门。
-- [ ] 新鲜度改为按市场/持仓/数据类型计算;禁止美股 stale 全局削弱 A 股盘中动作。
-- [ ] 增加价格/指标异常守门;异常复权、拆分或跨源口径先阻断技术动作。
-- [ ] 重新定义资金可用性:即时现金、卖出回收、T+1、T+2、战略退出、锁定资产分层;禁止把现有持仓总值称为"今天可动用"。
-- [ ] 建立组合最终裁决:风险状态、组合约束、资产动作冲突时必须输出换仓链或明确暂停条件,不能只列 conflicts。
-- [ ] 修正 `trend_confirm_days` / `add_ladder` 命名和文档语义,或实现其字面行为。
-- [ ] 报告将"今日执行动作"与"研究候选"完全分离。
+- [x] 新鲜度改为按市场/持仓/数据类型计算;禁止美股 stale 全局削弱 A 股盘中动作。
+- [x] 增加价格/指标异常守门;异常复权、拆分或跨源口径先阻断技术动作。
+- [x] 重新定义资金可用性:即时现金、卖出回收、T+1、T+2、战略退出、锁定资产分层;禁止把现有持仓总值称为"今天可动用"。
+- [x] 建立组合最终裁决:风险状态、组合约束、资产动作冲突时必须输出换仓链或明确暂停条件,不能只列 conflicts。
+- [x] 修正 `trend_confirm_days` / `add_ladder` 命名和文档语义,或实现其字面行为。
+- [x] 报告将"今日执行动作"与"研究候选"完全分离。
 
 ### T1-P1 价值闭环
 
-- [ ] Watch Window 输出相对上一窗口的 Delta,无变化 SILENT。
-- [ ] Critical 风险增加首次触发、持续时长、解除条件、失效时间和状态变化。
+- [x] Watch Window 输出相对上一窗口的 Delta,无变化 SILENT。
+- [x] Critical 风险增加首次触发、持续时长、解除条件、失效时间和状态变化。
 - [ ] Driver/Conflict/Dissent 共用单一情报匹配结果;信号增加 provenance 与 synthesized 标记。
-- [ ] Capital Allocation 不修改原始 Action Card;输出 portfolio approval 与 suppression_reason。
-- [ ] 建议支持执行/部分执行/拒绝/延后及原因的低成本记录。
-- [ ] 对最终 Action Card、因子覆盖、资金分配做版本化 Walk-forward 与交易成本归因。
+- [x] Capital Allocation 不修改原始 Action Card;输出 portfolio approval 与 suppression_reason。
+- [x] 建议支持执行/部分执行/拒绝/延后及原因的低成本记录。
+- [x] 对最终 Action Card、因子覆盖、资金分配做版本化 Walk-forward 与交易成本归因。
 
 ### T1 出口
 
-- [ ] 一致性闸:抽检真实 A 股与美股 session,数据→信号→动作→资产→组合→风险六层无未裁决冲突。
-- [ ] 执行闸:至少一轮真实报告动作能被记录并在下轮复盘。
-- [ ] 打扰闸:Watch Window 无变化不推送,critical 状态变化可追踪。
+- [x] 一致性闸:抽检真实 A 股与美股 session,数据→信号→动作→资产→组合→风险六层无未裁决冲突。
+- [x] 执行闸:至少一轮真实报告动作能被记录并在下轮复盘。
+- [x] 打扰闸:Watch Window 无变化不推送,critical 状态变化可追踪。
 - [ ] 价值闸:用户确认报告减少决策成本并改善纪律。
 
 ## Backlog(未排期,禁止开工)
@@ -283,3 +283,7 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 不做通用回测平台、因子库、多 Agent 辩论。
 - 不删除或跳过测试让其通过;不让默认测试访问真实网络。
 - 不实施自动交易。DecisionEnvelope 双路径仍未接线;真实通知已由外部 Hermes/cron 承担,不属于 Engine 内置能力。
+
+> 完成:2026-07-15 T1-P0/P1 工程完成并提交（commits 9512fb0、1cf9ab7、3a97507、c46f852、18d0e2f）。
+> 验收:ruff 通过、pytest 804 passed、compileall 0、diffcheck 0。
+> 依据:Task 7-12 实现报告、真实 A 股/US session 抽检、反例注入验收与独立 reviewer。

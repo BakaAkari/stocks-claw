@@ -29,7 +29,7 @@
 - **v13 架构修正 (2026-07-14)**:`trend_confirm_days` 改为 cutoff 收紧(ratio÷N→阈值偏移,消除"首次跌破"谎言);`add_ladder` 改为 MA20 偏离驱动档位+仓位上限门(pnl_pct→同源偏离);`capital_deployment` 拆为 `capital_facts`(纯事实块)+LLM 负责解释。
 - **v14 情报驱动向量与覆盖修复(2026-07-14~15)**:`action_cards` 新增 `drivers/dissent/confidence`;情报 JSON 解析增强;`10f5e05` 修复 digest 截断、缺失 symbol 和分类部分覆盖,使 15/15 活跃持仓获得 intelligence driver。注意:这是结构字段覆盖,多数新增信号为 category fallback `hold`,不等同于独立方向情报或已验证交易优势。
 - **2026-07-15 对抗性交易审查**:风险监控、情报辅助和持仓盘点通过或有条件通过;自动交易动作、组合资金部署和可直接照单执行报告不通过。下一阶段主线改为**决策一致性与执行反馈**,完整证据见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
-- **当前工程状态**:`ruff` 全绿;默认 `pytest` 为 536 passed / 2 failed,失败是 `test_intelligence.py` 固定日期 fixture 超出 6 小时窗口。质量门未全绿。
+- **当前工程状态**:`ruff` 全绿;默认 `pytest` 为 804 passed;compileall 0;diffcheck 0。T1-P0/P1 工程已完成并提交（commits 9512fb0、1cf9ab7、3a97507、c46f852、18d0e2f）。
 - **Backlog其余项**(组合归因/危机预案/DecisionPlan)未排期。
 
 - **五个模块系统接入 (2026-07-13)**:
@@ -189,6 +189,7 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-13:ProfileInterpreter 上线。Agent 直接推理完成自然语言→量化参数翻译,写入 computed_profile.json;引擎每次 session 自动合并 15 项参数。依据:用户要求系统个性化,API key 401 后改为 Agent 直推。
 - 2026-07-14:架构修正三轮。①trend_confirm_days:ratio÷N→cutoff 收紧,消除无状态引擎追踪不了"第几天"的根因;②add_ladder:pnl_pct→MA20 偏离选档+仓位门;③capital_deployment→capital_facts 纯事实,LLM 负责解释。ruff 全绿,pytest 536/538。依据:对抗式校验发现三个改动存在架构假设错误。
 - 2026-07-14:标记反馈回路为待开发功能。用户裁决当前报告质量已达收益递减点,继续对抗式校验 ROI 极低。依据:用户明确判断。
+- 2026-07-15:T1 决策一致性与执行价值整改 P0/P1 工程完成。依据:Task 7-12 实现报告、全量 804 passed 、真实 session 抽检与反例注入验收。
 - 2026-07-15:完成最终对抗性交易系统审查,新增现行质量基准 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。裁决风险监控/情报辅助/持仓盘点通过或有条件通过,自动动作/组合资金部署/照单执行报告不通过;下一主线从扩字段切换为六层一致性、真实流动性、窗口 Delta、执行反馈与效果归因。同批登记该新增 md 并执行全项目文档新鲜度收口。依据:当前代码、12 个 latest session 产物、历史回测与 536 passed/2 failed 测试证据。
 
 - (追加格式:`日期:决定;依据`)

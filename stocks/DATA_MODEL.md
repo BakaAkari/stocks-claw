@@ -153,6 +153,13 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
   `net_deployable_cny`。注意:当前 deployable 口径包含 cash/T0 和 T1/T2 持仓价值,
   不是今日即时现金;消费端必须结合 `context_digest.liquidity_summary.buckets` 拆分。
 - `risk_assessment`：`level ∈ {hedge, reduce, watch, normal}`、`triggers`、`recommended_actions`、`suspend_accumulation`、`cash_target_pct`。
+- `risk_state`：持久化风险状态（含 `level`、`transition`、`suspend_accumulation` 等），写入 `.local/risk_state/{market}_{market_date}.json`。
+- `window_delta`：相对上一窗口的语义变化摘要（`material`、`changes`、`priority`、`notification`、`first_in_session`）。
+- `portfolio_decision`：组合最终裁决，含 `status`、`approved_actions`、`suppressed_actions`、`replacement_chains`、`unresolved_conflicts`、`cash_schedule`。每个 `approved_action` 输出 `position_id`、`signal`、`ratio`、`action_description`、`cancel_condition`、`settlement_timing`、`next_checkpoint`。
+- `data_boundaries`：结构化数据边界，`data_quality` + `source_context`。
+- `research_candidates`：research_only 信号候选，最多 8 个，不进入 approved_actions。
+- `execution_review`：对当前 run 中 `approved_actions` 的执行状态对照（executed/partial/rejected/deferred/not_executed/unknown）。
+- `agent_task`：`task_version` 已升级为 5，只引用上述 5 个可信字段，输出固定五段：变化摘要 / 今日动作 / 禁止待确认 / 资金到账与边界 / 研究候选。
 - `mandatory_blocks`：风险边界、约束偏离、资金事实、Shadow Account 和可选研究论点。
 - `agent_task`(v4)：自包含的 Agent 任务说明书,含以下子字段:
   - `task_version`：4
@@ -175,6 +182,8 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 
 - `data_quality.quotes.freshness` 当前是全局值,下游 Action Card 仍未按持仓市场拆分。
 - `capital_allocation.net_deployable_cny` 当前包含 cash/T0 与 T1/T2 资产,消费端不得当作即时现金。
+- `window_delta` 仅比较语义键，忽略 `decision_id` 中的 run ID 和 `generated_at` 等运行时变化。
+- `portfolio_decision.cash_schedule` 区分 `immediate_cash_cny`、`settling_cash_cny`、`strategic_exit_value_cny`、`locked_value_cny`，不得把持仓总值直接称为"今天可动用"。
 - category fallback `hold` 可提高 intelligence driver 字段覆盖率,但不等于独立方向情报。
 - `confidence` 表示当前证据与新鲜度,不表示历史胜率或未来收益概率。
 - 完整交易质量边界见 `../docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
@@ -230,6 +239,32 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `note`
 - `executed_at`：实际执行或确认未执行的时间
 - `recorded_at`：系统记录时间
+- `run_id`：来源 scheduled run id
+- `decision_id`：必须关联的 portfolio action decision id
+- `status ∈ {executed, rejected, deferred, planned, not_executed}`
+- `planned_ratio`：建议动作比例
+- `executed_ratio`：实际执行比例（0-1）
+- `price`：执行或确认价格；status=executed 必填
+- `rejection_reason`：status=rejected 必填
+- `next_review_at`：status=deferred 可选的下次复核时间
+
+`status=executed` 时要求 `price` 与 `executed_ratio`；`status=rejected` 要求 `rejection_reason`。
+执行记录通过 `decision_id` 与后续 `execution_review` 精确关联，不再只依赖 `target` 字符串。
+
+## DecisionSnapshot / OutcomeAttribution
+
+`DecisionSnapshot` 保存每个 approved/suppressed action 的决策版本与计划，用于后续 Shadow Trial 效果归因：
+
+- `decision_id`：关联 portfolio_decision / action
+- `rule_version`：生成该决策的规则版本
+- `params_hash`：当时个性化参数哈希
+- `data_as_of`：决策所基于数据的时间戳
+- `position_id`、`signal`、`ratio`、`horizon_days`
+- `executed`：是否实际执行（基于 ExecutionRecord.status=executed）
+- `entry_price`、`execution_price`、`settlement_timing`、`commission_rate`
+- `settled`、`outcome`：结算状态与结果（hold/return 等）
+
+快照持久化于 `.local/decisions/{decision_id}_{horizon}d.json`。`settle_decisions(as_of, price_history, snapshots, executions)` 对到期 horizon 结算，使用确定性价格序列，扣除往返交易成本（2×commission_rate），区分 executed 与 shadow（未执行）反事实；样本<10 只输出 count/raw outcomes，≥10 才输出 Wilson 95% 置信区间。
 
 ## ForecastRecord
 
