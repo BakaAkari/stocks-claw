@@ -1724,13 +1724,8 @@ class ContextBuilder:
                     for c in (clusters.get("clusters", []) if clusters else [])[:5]
                 ],
                 "top_signals": [
-                    {
-                        "symbol": s.get("symbol"),
-                        "direction": s.get("direction"),
-                        "rationale": s.get("rationale"),
-                        "urgency": s.get("urgency"),
-                    }
-                    for s in (signals.get("signals", []) if signals else [])
+                    dict(signal)
+                    for signal in (signals.get("signals", []) if signals else [])
                 ],
             }
         except Exception as exc:  # noqa: BLE001

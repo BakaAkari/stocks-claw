@@ -51,10 +51,10 @@ stocks-claw 已经不是行情脚本或简单 LLM 报告生成器。它具备多
 - 当前审查基线：`10f5e05 fix: intelligence pipeline 0%→100% active-position coverage`
 - 审查取证开始时 Git 工作区为 clean，`master` 与 `origin/master` 对齐；本文及配套文档更新随后形成待提交 diff
 - `uv run ruff check stocks tests`：通过
-- `uv run pytest -q`：536 passed，2 failed
-- 失败均位于 `tests/engine/test_intelligence.py`
+- 原始审查基线 `uv run pytest -q`：536 passed，2 failed；失败均位于 `tests/engine/test_intelligence.py`
 - 根因是固定日期 Fixture 落在 Analyzer 当前 6 小时滚动窗口之外，导致文章被过滤、cluster 为空
-- 这属于测试时间确定性缺陷，不是 LLM 网络波动，但当前质量门仍不是全绿
+- T1 第一项已修复：Analyzer 支持显式 `analyzed_at`，并新增 category padding、digest 全字段传递和 15/15 driver coverage 回归守门
+- 2026-07-15 新鲜验证：`uv run pytest -q` 541 passed，`ruff` 与 `compileall` 通过
 
 ### 3.2 最新真实运行产物
 

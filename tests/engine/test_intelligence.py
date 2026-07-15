@@ -10,6 +10,7 @@ import pytest
 from stocks.engine.intelligence_analyzer import (
     AnalysisResult,
     IntelligenceAnalyzer,
+    LLMIntelligenceAnalyzer,
 )
 from stocks.engine.intelligence_harvester import (
     HarvestResult,
@@ -156,7 +157,10 @@ class TestIntelligenceAnalyzer:
 
     def test_analyze_clusters(self, sample_snapshot: IntelligenceSnapshot) -> None:
         analyzer = IntelligenceAnalyzer()
-        result = analyzer.analyze([sample_snapshot])
+        result = analyzer.analyze(
+            [sample_snapshot],
+            analyzed_at=sample_snapshot.collected_at + timedelta(minutes=1),
+        )
         assert len(result.clusters) > 0
         themes = {c.theme for c in result.clusters}
         assert "geopolitics" in themes or "macro_data" in themes or "energy" in themes
@@ -164,17 +168,54 @@ class TestIntelligenceAnalyzer:
 
     def test_vix_signal(self, sample_snapshot: IntelligenceSnapshot) -> None:
         analyzer = IntelligenceAnalyzer()
-        result = analyzer.analyze([sample_snapshot])
+        result = analyzer.analyze(
+            [sample_snapshot],
+            analyzed_at=sample_snapshot.collected_at + timedelta(minutes=1),
+        )
         vix_signals = [s for s in result.signals if s.symbol == "VIX"]
         assert len(vix_signals) > 0
         assert vix_signals[0].direction == "sell"
 
     def test_urgency_and_sentiment(self, sample_snapshot: IntelligenceSnapshot) -> None:
         analyzer = IntelligenceAnalyzer()
-        result = analyzer.analyze([sample_snapshot])
+        result = analyzer.analyze(
+            [sample_snapshot],
+            analyzed_at=sample_snapshot.collected_at + timedelta(minutes=1),
+        )
         for cluster in result.clusters:
             assert cluster.urgency in {"low", "medium", "high", "critical"}
             assert cluster.sentiment in {"positive", "negative", "neutral"}
+
+    def test_category_padding_covers_every_configured_holding(self) -> None:
+        analyzer = LLMIntelligenceAnalyzer()
+        direct_signal = IntelligenceSignal(
+            symbol="NVDA",
+            name="NVIDIA",
+            direction="buy",
+            horizon="short_term",
+            rationale="AI demand remains strong",
+            falsification="Demand weakens",
+            risk_source="llm_analysis",
+            confidence=0.8,
+            urgency="medium",
+            generated_at=datetime.now(timezone.utc),
+        )
+        padded = analyzer._pad_category_signals([direct_signal], [])
+        by_symbol = {signal.symbol: signal for signal in padded}
+        expected_positions = {
+            "us:NEM", "a:518880", "ccb_gold", "us:NVDA", "us:QQQ",
+            "us:XLE", "us:ITA", "a:510300", "a:512890", "a:511880",
+            "a:588000", "a:512480", "a:561560", "alipay_gf_nasdaq",
+            "alipay_dc_nasdaq", "alipay_info", "us:SGOV", "a:159110",
+        }
+        covered_positions = set(by_symbol) | {"us:NVDA"}
+        assert expected_positions <= covered_positions
+        assert by_symbol["NVDA"] is direct_signal
+        assert all(
+            signal.direction == "hold"
+            for symbol, signal in by_symbol.items()
+            if symbol != "NVDA"
+        )
 
 
 class TestIntelligenceHarvester:
@@ -207,7 +248,10 @@ class TestIntegration:
         tmp_store.save_snapshot(sample_snapshot)
         snapshots = tmp_store.load_snapshots(tmp_store.list_snapshots())
         analyzer = IntelligenceAnalyzer()
-        result = analyzer.analyze(snapshots)
+        result = analyzer.analyze(
+            snapshots,
+            analyzed_at=sample_snapshot.collected_at + timedelta(minutes=1),
+        )
         tmp_store.save_clusters(result.clusters, formed_at=sample_snapshot.collected_at)
         tmp_store.save_signals(result.signals, generated_at=sample_snapshot.collected_at)
         loaded_clusters = tmp_store.latest_clusters()

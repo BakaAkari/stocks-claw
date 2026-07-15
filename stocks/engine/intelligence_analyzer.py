@@ -215,8 +215,13 @@ class IntelligenceAnalyzer:
         self.holdings = set(holdings or [])
         self._article_index = 0
 
-    def analyze(self, snapshots: list[IntelligenceSnapshot]) -> AnalysisResult:
-        analyzed_at = datetime.now(timezone.utc)
+    def analyze(
+        self,
+        snapshots: list[IntelligenceSnapshot],
+        *,
+        analyzed_at: Optional[datetime] = None,
+    ) -> AnalysisResult:
+        analyzed_at = analyzed_at or datetime.now(timezone.utc)
         if not snapshots:
             return AnalysisResult(
                 analyzed_at=analyzed_at,

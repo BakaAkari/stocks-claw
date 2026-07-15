@@ -36,6 +36,36 @@ from stocks.domain.models import (
 )
 from stocks.engine.context_builder import ContextBuilder
 from stocks.engine.history_cache import HistoryCache
+from stocks.engine.news_intelligence_store import IntelligenceSignal, NewsIntelligenceStore
+
+
+def test_intelligence_digest_preserves_complete_signal_payload(
+    tmp_path: Path, mock_fetcher, mock_scaffolds
+):
+    portfolio_scaffold, market_scaffold = mock_scaffolds
+    intelligence_dir = tmp_path / "intelligence"
+    store = NewsIntelligenceStore(intelligence_dir)
+    signal = IntelligenceSignal(
+        symbol="a:588000",
+        name="科创50ETF",
+        direction="hold",
+        horizon="short_term",
+        rationale="无直接利空",
+        falsification="重大事件改变格局",
+        risk_source="主题切换或突发事件",
+        confidence=0.55,
+        urgency="low",
+        generated_at=datetime.now(timezone.utc),
+    )
+    store.save_signals([signal], generated_at=signal.generated_at)
+    builder = ContextBuilder(
+        mock_fetcher,
+        portfolio_scaffold,
+        market_scaffold,
+        config={"intelligence_dir": str(intelligence_dir)},
+    )
+    digest = builder._build_intelligence_digest(repo_root=tmp_path)
+    assert digest["top_signals"] == [signal.to_dict()]
 
 
 @pytest.fixture

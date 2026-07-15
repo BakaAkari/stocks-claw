@@ -232,11 +232,11 @@
 
 ## 当前闸门 — T1 决策一致性与真实执行价值整改
 
-**依据**:`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。当前系统可作为风险监控与研究工作台,但自动动作、组合资金部署和可直接照单执行报告尚未通过。当前新鲜验证:`ruff` 通过、`compileall` 通过、CLI smoke 为 AnalysisContext v12 / 23 资产 / data_quality v10;`pytest` 536 passed / 2 failed。
+**依据**:`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。当前系统可作为风险监控与研究工作台,但自动动作、组合资金部署和可直接照单执行报告尚未通过。T1 第一项新鲜验证:`ruff` 通过、`compileall` 通过、CLI smoke 为 AnalysisContext v12 / data_quality v10;`pytest` 541 passed。
 
 ### T1-P0 必须先关闭
 
-- [ ] 恢复默认 `pytest` 全绿;修复 intelligence 测试时钟依赖,并增加 category padding、digest 完整传递和 15/15 driver coverage 回归测试。
+- [x] 恢复默认 `pytest` 全绿;Analyzer 支持显式 `analyzed_at` 以消除测试时钟依赖;新增 category padding、digest 全字段传递和 15/15 driver coverage 回归守门。
 - [ ] 新鲜度改为按市场/持仓/数据类型计算;禁止美股 stale 全局削弱 A 股盘中动作。
 - [ ] 增加价格/指标异常守门;异常复权、拆分或跨源口径先阻断技术动作。
 - [ ] 重新定义资金可用性:即时现金、卖出回收、T+1、T+2、战略退出、锁定资产分层;禁止把现有持仓总值称为"今天可动用"。
