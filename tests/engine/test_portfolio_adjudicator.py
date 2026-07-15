@@ -362,6 +362,43 @@ class TestCashSchedule:
             + schedule["safety_buffer_cny"]
         ) == 100_000.0
 
+    def test_multiple_approved_sales_cannot_exceed_position_value(self):
+        positions = [
+            _make_position(
+                "cn_588000", product_type="exchange_traded_fund",
+                liquidity_tier="t1", market_value_cny=100_000.0,
+            ),
+        ]
+        sales = [
+            {"position_id": "cn_588000", "ratio": 0.6,
+             "settlement": {"timing": "T+0"}},
+            {"position_id": "cn_588000", "ratio": 0.6,
+             "settlement": {"timing": "T+1"}},
+        ]
+        schedule = build_cash_schedule(positions, sales, 100_000.0)
+        classified = (
+            schedule["immediate_cash_cny"]
+            + schedule["settling_cash_cny"]
+            + schedule["strategic_exit_value_cny"]
+            + schedule["locked_value_cny"]
+            + schedule["safety_buffer_cny"]
+        )
+        assert classified == 100_000.0
+        assert schedule["settling_cash_cny"] == 40_000.0
+
+    def test_non_insurance_ineligible_fund_is_strategic_exit(self):
+        positions = [
+            _make_position(
+                "offline_fund", product_type="mixed_fund",
+                liquidity_tier="t2_plus", market_value_cny=100_000.0,
+                tradable=True, rebalance_eligible=False,
+            ),
+        ]
+        schedule = build_cash_schedule(positions, [], 100_000.0)
+        assert schedule["strategic_exit_value_cny"] == 100_000.0
+        assert schedule["locked_value_cny"] == 0.0
+        assert schedule["strategic_exit_position_ids"] == ["offline_fund"]
+
     def test_approved_sale_goes_to_settling_cash(self, sample_portfolio, approved_sales_fixture):
         """Approved sales with settlement appear in settling_cash."""
         positions, total_value = sample_portfolio

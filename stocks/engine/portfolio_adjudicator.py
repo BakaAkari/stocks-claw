@@ -111,8 +111,11 @@ def build_cash_schedule(
         sold_ratio = min(1.0, sum(abs(sale.get("ratio", 0) or 0) for sale in sales))
         residual_value = value * (1.0 - sold_ratio)
 
+        remaining_sale_ratio = 1.0
         for sale in sales:
-            ratio = min(abs(sale.get("ratio", 0) or 0), 1.0)
+            requested_ratio = min(abs(sale.get("ratio", 0) or 0), 1.0)
+            ratio = min(requested_ratio, remaining_sale_ratio)
+            remaining_sale_ratio -= ratio
             sale_value = value * ratio
             timing = (sale.get("settlement") or {}).get("timing", "T+1")
             if timing in ("T+0", "cash", "same_day"):
@@ -127,7 +130,10 @@ def build_cash_schedule(
         if (
             tier in _LOCKED_LIQUIDITY_TIERS
             or liq.get("tradable") is False
-            or liq.get("rebalance_eligible") is False
+            or (
+                product_type == "insurance_policy"
+                and liq.get("rebalance_eligible") is False
+            )
         ):
             schedule.locked_value_cny += residual_value
             schedule.locked_position_ids.append(pid)
