@@ -235,7 +235,7 @@ class TestThresholdConfig:
     def test_custom_thresholds_override_defaults(self):
         """传入自定义阈值应覆盖默认值"""
         import pandas as pd
-        custom = {**DEFAULT_THRESHOLDS, "single_bar_jump_pct": 5.0}
+        custom = {**DEFAULT_THRESHOLDS, "single_bar_jump_pct": 4.0}
         prices = [100.0, 103.0, 101.0, 106.0, 102.0]
         rows = []
         for i, p in enumerate(prices):
@@ -246,7 +246,47 @@ class TestThresholdConfig:
             })
         frame = pd.DataFrame(rows)
         anomalies = detect_price_anomalies(frame, current_price=102.0, ma20=None, thresholds=custom)
-        assert len(anomalies) >= 0  # 不报错即可
+        codes = {item["code"] for item in anomalies}
+        assert "single_bar_jump" in codes
+
+
+class TestDefensiveValidation:
+    """非有限数值和 lookback 配置必须产生确定行为。"""
+
+    def test_nan_close_blocks_instead_of_silently_passing(self):
+        import pandas as pd
+
+        frame = pd.DataFrame({"close": [100.0, float("nan"), 101.0]})
+        anomalies = detect_price_anomalies(frame, current_price=101.0, ma20=100.0)
+
+        assert anomalies[0]["code"] == "insufficient_data"
+        assert anomalies[0]["severity"] == "high"
+
+    def test_nan_current_price_blocks_instead_of_silently_passing(self):
+        import pandas as pd
+
+        frame = pd.DataFrame({"close": [100.0, 101.0, 102.0]})
+        anomalies = detect_price_anomalies(
+            frame, current_price=float("nan"), ma20=100.0
+        )
+
+        assert anomalies[0]["code"] == "insufficient_data"
+        assert anomalies[0]["severity"] == "high"
+
+    def test_regime_lookback_limits_mixed_adjustment_detection(self):
+        import pandas as pd
+
+        frame = pd.DataFrame({"close": [100.0, 50.0, 51.0, 52.0, 53.0]})
+        anomalies = detect_price_anomalies(
+            frame,
+            current_price=53.0,
+            ma20=None,
+            thresholds={"regime_lookback": 3},
+        )
+
+        codes = {item["code"] for item in anomalies}
+        assert "single_bar_jump" in codes
+        assert "mixed_adjustment_regime" not in codes
 
 
 # ============================================================

@@ -34,17 +34,9 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     # mixed adjustment ratio 判断区间 [low, high]
     "mixed_adjustment_ratio_min": 0.45,
     "mixed_adjustment_ratio_max": 0.55,
-    # "gap" threshold for regime detection (2:1 ≈ 0.5, 1:2 ≈ 2.0)
-    "gap_ratio_threshold": 0.55,
-    "reverse_gap_ratio_threshold": 2.0 - 0.55,  # 1.45
 }
 
 # ── 异常代码 ──
-PRICE_REGIME_CODES = {
-    "code": "price_regime",
-    # Individual codes used as identifiers
-}
-# Individual code strings
 SINGLE_BAR_JUMP = "single_bar_jump"
 PRICE_MA20_DISLOCATION = "price_ma20_dislocation"
 PREV_CLOSE_MISMATCH = "prev_close_mismatch"
@@ -73,6 +65,17 @@ def _validate_frame(frame: pd.DataFrame) -> Optional[dict]:
             "description": f"缺少必要列: {missing}",
             "bar_index": None,
             "evidence": {"missing_columns": list(missing)},
+        }
+    close_values = pd.to_numeric(frame["close"], errors="coerce")
+    invalid_mask = close_values.isna() | ~close_values.map(lambda value: float("-inf") < value < float("inf"))
+    if invalid_mask.any():
+        invalid_indices = [int(index) for index in frame.index[invalid_mask]]
+        return {
+            "code": INSUFFICIENT_DATA,
+            "severity": _SEVERITY_HIGH,
+            "description": f"价格序列含非有限数值，位置: {invalid_indices}",
+            "bar_index": invalid_indices[0] if invalid_indices else None,
+            "evidence": {"invalid_indices": invalid_indices},
         }
     return None
 
@@ -213,6 +216,8 @@ def _detect_mixed_adjustment_regime(
     closes = frame["close"].values
     if len(closes) < 3:
         return []
+    start_index = max(0, len(closes) - lookback)
+    closes = closes[start_index:]
 
     # 找所有 > jump_pct 的跳变
     jumps: list[tuple[int, float, float]] = []
@@ -222,7 +227,7 @@ def _detect_mixed_adjustment_regime(
         change = _calc_pct_change(prev_val, cur_val)
         if change > jump_pct and prev_val > 0 and cur_val > 0:
             ratio = prev_val / cur_val  # 2.70/1.33 ≈ 2.03 (接近 2:1)
-            jumps.append((i, prev_val, cur_val, ratio))
+            jumps.append((start_index + i, prev_val, cur_val, ratio))
 
     # 检查比例是否接近 1:2 (~0.5) 或 2:1 (~2.0)
     for bar_idx, prev_val, cur_val, ratio in jumps:
@@ -327,6 +332,19 @@ def detect_price_anomalies(
     validation = _validate_frame(normalized)
     if validation:
         return [validation]
+    scalar_values = {"current_price": current_price, "ma20": ma20}
+    invalid_scalars = [
+        name for name, value in scalar_values.items()
+        if value is not None and (pd.isna(value) or not float("-inf") < float(value) < float("inf"))
+    ]
+    if invalid_scalars:
+        return [{
+            "code": INSUFFICIENT_DATA,
+            "severity": _SEVERITY_HIGH,
+            "description": f"检测输入含非有限数值: {invalid_scalars}",
+            "bar_index": None,
+            "evidence": {"invalid_fields": invalid_scalars},
+        }]
     if len(normalized) < 2:
         return []
 

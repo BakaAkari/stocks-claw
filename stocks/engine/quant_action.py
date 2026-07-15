@@ -174,7 +174,7 @@ class FinalDecision:
 
     新增字段（Task 2）：
       raw_signal / raw_ratio / raw_action — 原始技术面信号（异常阻断时保留）
-      evidence_status — 证据态: ok / blocked_by_anomaly / partial
+      evidence_status — 证据态: ok / blocked / partial
     """
     position_id: str
     signal: str
