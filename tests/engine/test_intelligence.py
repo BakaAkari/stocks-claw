@@ -205,7 +205,7 @@ class TestIntelligenceAnalyzer:
         expected_positions = {
             "us:NEM", "a:518880", "ccb_gold", "us:NVDA", "us:QQQ",
             "us:XLE", "us:ITA", "a:510300", "a:512890", "a:511880",
-            "a:588000", "a:512480", "a:561560", "alipay_gf_nasdaq",
+            "a:588000", "a:512480", "a:561560", "a:516020", "alipay_gf_nasdaq",
             "alipay_dc_nasdaq", "alipay_info", "us:SGOV", "a:159110",
         }
         covered_positions = set(by_symbol) | {"us:NVDA"}

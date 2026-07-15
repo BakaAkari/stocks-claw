@@ -24,6 +24,7 @@ ACTIVE_POSITIONS = [
     ("a:588000", ["a_share", "star_board"]),
     ("a:512480", ["a_share", "semiconductor"]),
     ("a:561560", ["a_share", "utilities"]),
+    ("a:516020", ["a_share", "chemical", "cyclical"]),
     ("alipay_gf_nasdaq", ["qdii", "nasdaq100"]),
     ("alipay_dc_nasdaq", ["qdii", "nasdaq100"]),
     ("us:SGOV", ["fixed_income", "short_treasury"]),
