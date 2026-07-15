@@ -1804,6 +1804,10 @@ def _build_action_cards(
             quantity=(item.get("holding") or {}).get("quantity") if item.get("holding") else None,
         )
 
+        # ── 逐持仓 freshness（从 evidence 取，不再使用全局单一值）──
+        position_freshness = (
+            item.get("evidence", {}).get("price_freshness") or data_freshness
+        )
         # ── 确定性最终决策 ──
         rotation_symbol = item.get("instrument_key") or ""
         decision = finalize_decision(
@@ -1814,7 +1818,7 @@ def _build_action_cards(
             intelligence_signals=intelligence_signals,
             rotation_ranks=rotation_ranks,
             rotation_symbol=rotation_symbol,
-            data_freshness=data_freshness,
+            data_freshness=position_freshness,
             constraints=constraints,
             portfolio_ratios=ratios,
         )

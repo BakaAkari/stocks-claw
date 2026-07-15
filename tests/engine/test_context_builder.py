@@ -1176,6 +1176,35 @@ class TestDataQuality:
         assert quality["by_market"]["us"]["single_source"] is True
         assert quality["by_market"]["crypto"]["single_source"] is True
 
+    def test_quote_quality_reports_freshness_per_market(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+    ):
+        """by_market 各市场应有独立 freshness，A 股当日前、US 前收不互相污染。"""
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        a_inst = Instrument("000001", "平安银行", "a")
+        us_inst = Instrument("AAPL", "Apple", "us")
+        # A 股当日盘中 14:45 CST = 06:45 UTC，报价 06:30 UTC（15分钟前→fresh）
+        # US 前日收盘 ~20:00 UTC（约 11h 前→stale/old）
+        quotes = {
+            "a": [Quote(a_inst, price=10.0, as_of="2026-07-15T06:30:00+00:00")],
+            "us": [Quote(us_inst, price=210.0, as_of="2026-07-14T20:00:00+00:00")],
+        }
+        quality = builder._quote_quality(
+            "2026-07-15T06:45:00+00:00",
+            [a_inst, us_inst],
+            quotes,
+            [],
+        )
+        # 全局 freshness 被最老的 US 拖慢
+        assert quality["freshness"] in ("stale", "old")
+        # A 股市场独立 freshness 应为 fresh
+        assert quality["by_market"]["a"]["freshness"] == "fresh"
+        # US 市场独立 freshness 应为 stale 或 old
+        assert quality["by_market"]["us"]["freshness"] in ("stale", "old")
+
 
 class TestAnalysisContextSerialization:
     async def test_to_dict_includes_schema_v10_decision_inputs_and_data_quality(

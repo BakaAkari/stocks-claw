@@ -148,6 +148,14 @@ class DataFreshnessRule(FactorRule):
             return FactorVote("data_freshness", "hold", 0.0, signal_override="hold",
                               action_text="行情严重延迟，仅止损信号保留",
                               facts=["行情严重延迟，仅止损信号保留"], priority=self.priority)
+        if data_freshness == "missing" and current_signal not in ("hold", "wait", "stop_loss"):
+            return FactorVote("data_freshness", "hold", 0.0, signal_override="hold",
+                              action_text="行情缺失，仅止损信号保留",
+                              facts=["行情缺失，仅止损信号保留"], priority=self.priority)
+        if data_freshness == "previous_close" and current_signal in ("reduce", "add", "accumulate"):
+            return FactorVote("data_freshness", current_signal, 0.5,
+                              facts=["非实时行情（前收盘），需要盘中精度的信号降权 50%"],
+                              priority=self.priority)
         return FactorVote("data_freshness", current_signal)
 
 

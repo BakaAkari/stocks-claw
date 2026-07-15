@@ -604,6 +604,25 @@ class ContextBuilder:
         elif proxy is not None and proxy.get("signal") is None:
             flags.append("proxy_not_in_universe")
 
+        # ── 逐持仓证据（freshness 等）──
+        evidence = {}
+        if as_of:
+            parsed_as_of = self._parse_iso_datetime(as_of)
+            if parsed_as_of:
+                fi = self._freshness_from_datetime(parsed_as_of, generated_at)
+                evidence["price_freshness"] = fi["freshness"]
+                evidence["indicator_freshness"] = fi["freshness"]
+            else:
+                evidence["price_freshness"] = "missing"
+                evidence["indicator_freshness"] = "missing"
+        else:
+            evidence["price_freshness"] = "missing"
+            evidence["indicator_freshness"] = "missing"
+        # 若无有效 indicators，indicator_freshness 单独标注
+        ind = indicators or {}
+        if not ind.get("data_points") or ind.get("data_points") < 15:
+            evidence["indicator_freshness"] = "missing"
+
         return {
             "position_id": position.position_id,
             "account_id": position.account_id,
@@ -636,6 +655,7 @@ class ContextBuilder:
             "missing_fields": sorted(set(missing_fields)),
             "confirmed": position.confirmed,
             "notes": position.notes,
+            "evidence": evidence,
         }
 
     @staticmethod
@@ -1267,8 +1287,14 @@ class ContextBuilder:
                 market_status = "degraded"
             else:
                 market_status = "ok"
+            market_freshness_info = (
+                self._freshness_from_datetime(market_oldest_as_of, generated_at)
+                if market_oldest_as_of
+                else {"freshness": "unknown", "age_seconds": None}
+            )
             by_market[market] = {
                 "status": market_status,
+                "freshness": market_freshness_info["freshness"],
                 "as_of": market_oldest_as_of.isoformat() if market_oldest_as_of else None,
                 "single_source": self._is_single_source(
                     market, record.get("primary_provider")
