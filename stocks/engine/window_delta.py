@@ -16,7 +16,6 @@ class WindowDelta:
     changes: list[dict]
     first_in_session: bool
     priority: str = "normal"
-    notification_policy: str = "push_now"
 
     def to_dict(self) -> dict:
         return {
@@ -29,7 +28,6 @@ class WindowDelta:
             "changes": self.changes,
             "first_in_session": self.first_in_session,
             "priority": self.priority,
-            "notification_policy": self.notification_policy,
         }
 
 
@@ -158,5 +156,4 @@ def compute_window_delta(
         material=material,
         changes=changes,
         first_in_session=False,
-        notification_policy="push_now" if material else "archive_only",
     )

@@ -240,21 +240,26 @@ class TestComputeWindowDelta:
 
     def test_trigger_fixture_restores_material_push(self):
         previous = {
-            "run_id": "r1", "risk_state": {"level": "normal", "transition": "unchanged"},
+            "run_id": "r1",
+            "risk_state": {"level": "normal", "transition": "unchanged"},
             "portfolio_decision": {"status": "approved", "approved_actions": []},
             "trigger_reviews": [],
         }
         current = {
-            "run_id": "r2", "risk_state": {"level": "normal", "transition": "unchanged"},
+            "run_id": "r2",
+            "risk_state": {"level": "normal", "transition": "unchanged"},
             "portfolio_decision": {"status": "approved", "approved_actions": []},
-            "trigger_reviews": [{
-                "trigger_id": "sl-p1", "type": "stop_loss", "instrument": "p1",
-                "status": "fired",
-            }],
+            "trigger_reviews": [
+                {
+                    "trigger_id": "sl-p1",
+                    "type": "stop_loss",
+                    "instrument": "p1",
+                    "status": "fired",
+                }
+            ],
         }
         delta = compute_window_delta(previous, current, session_id="cn_pre_close", market="cn")
         assert delta.material is True
-        assert delta.notification_policy == "push_now"
         assert delta.changes[-1]["newly_fired"] == ["sl-p1"]
 
     def test_new_fired_trigger_is_material(self):
@@ -488,11 +493,9 @@ class TestPriority:
         p = _priority(risk_state, portfolio_decision, fired_triggers)
         assert p == "critical"
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 3. Delta-driven notification
-# ═══════════════════════════════════════════════════════════════════════════
-
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 3. Delta-driven notification
+    # ═══════════════════════════════════════════════════════════════════════════
 
     def test_persistent_hedge_is_high_not_repeated_critical(self):
         priority = _priority(
@@ -512,6 +515,34 @@ class TestPriority:
         assert priority == "normal"
 
 
+class TestProductionArtifactFields:
+    def test_position_review_carries_real_anomaly_evidence(self, tmp_path):
+        from stocks.engine.scheduled_analysis import MarketSessionCalendar
+
+        config = TestWindowDeltaIntegration()._config(tmp_path)
+        calendar = MarketSessionCalendar(config)
+        occurrence = calendar.occurrence_for(
+            "cn_pre_close", datetime.fromisoformat("2026-07-15T14:35:00+08:00")
+        )
+        context = TestWindowDeltaIntegration()._context()
+        context["position_valuations"] = [
+            {
+                "position_id": "p1",
+                "instrument_key": "a:1",
+                "display_name": "P1",
+                "liquidity": {},
+                "evidence": {"data_anomalies": [{"code": "price_jump"}]},
+            }
+        ]
+        run = build_scheduled_run(
+            context,
+            occurrence=occurrence,
+            generated_at=datetime.fromisoformat("2026-07-15T14:35:00+08:00"),
+            config=config,
+        )
+        assert run["position_reviews"][0]["evidence"]["data_anomalies"][0]["code"] == "price_jump"
+
+
 class TestDeltaDrivenNotification:
     """Notification policy driven by window delta."""
 
@@ -526,7 +557,6 @@ class TestDeltaDrivenNotification:
             changes=[],
             first_in_session=True,
             priority="normal",
-            notification_policy="push_now",
         )
         notif = _notification(
             session=cn_session,
@@ -549,7 +579,6 @@ class TestDeltaDrivenNotification:
             changes=[],
             first_in_session=False,
             priority="normal",
-            notification_policy="archive_only",
         )
         notif = _notification(
             session=cn_session,
@@ -572,7 +601,6 @@ class TestDeltaDrivenNotification:
             changes=[{"field": "risk_state.level", "old": "normal", "new": "hedge"}],
             first_in_session=False,
             priority="critical",
-            notification_policy="push_now",
         )
         notif = _notification(
             session=cn_session,
@@ -595,7 +623,6 @@ class TestDeltaDrivenNotification:
             changes=[],
             first_in_session=False,
             priority="normal",
-            notification_policy="archive_only",
         )
         notif = _notification(
             session=cn_open_watch_session,
@@ -607,10 +634,29 @@ class TestDeltaDrivenNotification:
         assert notif["policy"] == "archive_only"
         assert notif["recommended"] is False
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 4. Same-market previous window lookup
+    # ═══════════════════════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 4. Same-market previous window lookup
-# ═══════════════════════════════════════════════════════════════════════════
+    def test_critical_overrides_unchanged_archive(self, cn_session, now):
+        delta = WindowDelta(
+            session_id=cn_session.id,
+            market="cn",
+            previous_run_id="r1",
+            current_run_id="r2",
+            material=False,
+            changes=[],
+            first_in_session=False,
+        )
+        result = _notification(
+            session=cn_session,
+            priority="critical",
+            now=now,
+            quiet_hours={"enabled": False},
+            window_delta=delta,
+        )
+        assert result["policy"] == "push_now"
+        assert result["recommended"] is True
 
 
 class TestSameMarketPrevious:
@@ -699,9 +745,7 @@ class TestSameMarketPrevious:
         (store.latest_dir / f"{latest['session']}.json").write_text(
             json.dumps(latest), encoding="utf-8"
         )
-        found = store.find_previous_for_session(
-            "cn_pre_close", "cn", market_date="2026-07-15"
-        )
+        found = store.find_previous_for_session("cn_pre_close", "cn", market_date="2026-07-15")
         assert found is not None
         assert found["session"] == "cn_pre_close"
 
@@ -960,7 +1004,6 @@ class TestScheduledSessionNewField:
             changes=[],
             first_in_session=False,
             priority="normal",
-            notification_policy="archive_only",
         )
         assert delta.session_id == "cn_pre_close"
         assert delta.market == "cn"
@@ -970,7 +1013,6 @@ class TestScheduledSessionNewField:
         assert delta.changes == []
         assert delta.first_in_session is False
         assert delta.priority == "normal"
-        assert delta.notification_policy == "archive_only"
 
     def test_window_delta_to_dict(self):
         delta = WindowDelta(
@@ -982,7 +1024,6 @@ class TestScheduledSessionNewField:
             changes=[{"field": "risk_state.level", "old": None, "new": "normal"}],
             first_in_session=True,
             priority="normal",
-            notification_policy="push_now",
         )
         d = delta.to_dict()
         assert d["session_id"] == "cn_pre_close"
@@ -995,48 +1036,3 @@ class TestScheduledSessionNewField:
 # ═══════════════════════════════════════════════════════════════════════════
 # 7. WindowDelta dataclass structure
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestWindowDeltaStructure:
-    """WindowDelta dataclass has correct fields."""
-
-    def test_window_delta_fields(self):
-        delta = WindowDelta(
-            session_id="cn_pre_close",
-            market="cn",
-            previous_run_id="run-1",
-            current_run_id="run-2",
-            material=False,
-            changes=[],
-            first_in_session=False,
-            priority="normal",
-            notification_policy="archive_only",
-        )
-        assert delta.session_id == "cn_pre_close"
-        assert delta.market == "cn"
-        assert delta.previous_run_id == "run-1"
-        assert delta.current_run_id == "run-2"
-        assert delta.material is False
-        assert delta.changes == []
-        assert delta.first_in_session is False
-        assert delta.priority == "normal"
-        assert delta.notification_policy == "archive_only"
-
-    def test_window_delta_to_dict(self):
-        delta = WindowDelta(
-            session_id="cn_pre_close",
-            market="cn",
-            previous_run_id=None,
-            current_run_id="run-1",
-            material=True,
-            changes=[{"field": "risk_state.level", "old": None, "new": "normal"}],
-            first_in_session=True,
-            priority="normal",
-            notification_policy="push_now",
-        )
-        d = delta.to_dict()
-        assert d["session_id"] == "cn_pre_close"
-        assert d["material"] is True
-        assert d["first_in_session"] is True
-        assert d["previous_run_id"] is None
-        assert len(d["changes"]) == 1

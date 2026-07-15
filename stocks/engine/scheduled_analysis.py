@@ -1927,6 +1927,7 @@ def _build_position_reviews(
                 },
                 "proxy": item.get("proxy"),
                 "flags": flags,
+                "evidence": item.get("evidence") or {},
                 "missing_fields": item.get("missing_fields") or [],
                 "session_facts": facts,
                 "loss_level": loss_level,
@@ -2537,7 +2538,8 @@ def _notification(
 ) -> dict:
     # Delta-driven: if no material change and session is silent-when-unchanged, archive_only
     if (
-        window_delta is not None
+        priority != "critical"
+        and window_delta is not None
         and not window_delta.material
         and not window_delta.first_in_session
         and session.delta_silent_when_unchanged
