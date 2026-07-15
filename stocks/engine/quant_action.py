@@ -19,6 +19,7 @@ from typing import Optional
 
 import pandas as pd
 
+from stocks.engine.data_quality_gate import compute_action_eligible
 from stocks.engine.exchange_rate import get_usd_cny_rate
 from stocks.engine.factor_rules import adjudicate, collect_votes
 
@@ -169,7 +170,12 @@ class QuantReview:
 
 @dataclass
 class FinalDecision:
-    """一次调用确定所有输出 — 无 mutation 管道。"""
+    """一次调用确定所有输出 — 无 mutation 管道。
+
+    新增字段（Task 2）：
+      raw_signal / raw_ratio / raw_action — 原始技术面信号（异常阻断时保留）
+      evidence_status — 证据态: ok / blocked_by_anomaly / partial
+    """
     position_id: str
     signal: str
     action: str
@@ -186,6 +192,11 @@ class FinalDecision:
     drivers: list[dict] = field(default_factory=list)
     dissent: Optional[dict] = None
     confidence: str = "medium"
+    # ── Task 2: 数据异常守门 ──
+    raw_signal: str = ""
+    raw_ratio: float = 0.0
+    raw_action: str = ""
+    evidence_status: str = "ok"
 
 # ---------------------------------------------------------------------------
 # QuantActionEngine — 纯技术面
@@ -680,6 +691,35 @@ def finalize_decision(
             intelligence_conflict="none", constraint_conflict="none",
         )
 
+    # ── 0.5 数据异常守门（Task 2）──
+    # 优先级高于技术面动作，但低于锁定/已清仓
+    evidence = position.get("evidence") or {}
+    raw_anomalies = evidence.get("data_anomalies", [])
+    # 保存原始技术信号以备审计（Task 4 将使用）
+    raw_signal = signal
+    raw_ratio = ratio
+    raw_action = action
+    evidence_status = "ok"
+    if raw_anomalies:
+        eligible, reasons = compute_action_eligible(raw_anomalies)
+        if not eligible:
+            evidence_status = "blocked"
+            block_reason = "；".join(reasons[:2])  # 取前两个原因
+            facts.append(f"数据异常阻断: {block_reason}")
+            return FinalDecision(
+                position_id=tech.position_id, signal="hold",
+                action=f"数据异常，暂停技术动作（{block_reason[:60]}）",
+                ratio=0.0, facts=facts,
+                stop_price=tech.stop_price, target_prices=tech.target_prices,
+                position_limit_pct=tech.position_limit_pct,
+                current_weight_pct=tech.current_weight_pct,
+                risk_to_stop_pct=tech.risk_to_stop_pct,
+                risk_amount_cny=tech.risk_amount_cny,
+                intelligence_conflict="none", constraint_conflict="none",
+                raw_signal=raw_signal, raw_ratio=raw_ratio, raw_action=raw_action,
+                evidence_status=evidence_status,
+            )
+
     # ── 2-7. 因子覆盖层（替代原顺序 mutation 管道）──
     # 收集所有因子的投票，按优先级裁决
     votes = collect_votes(
@@ -794,6 +834,9 @@ def finalize_decision(
         drivers=drivers,
         dissent=dissent,
         confidence=confidence,
+        # ── Task 2: 数据异常守门 ──
+        raw_signal=raw_signal, raw_ratio=raw_ratio, raw_action=raw_action,
+        evidence_status=evidence_status,
     )
 
 

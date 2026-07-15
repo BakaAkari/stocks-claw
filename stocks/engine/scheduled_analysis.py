@@ -1786,6 +1786,8 @@ def _build_action_cards(
                 "risk_to_stop_pct": None, "risk_amount_cny": None,
                 "intelligence_conflict": "none",
                 "drivers": [], "dissent": None, "confidence": "high",
+                "raw_signal": "", "raw_ratio": 0.0, "raw_action": "",
+                "evidence_status": "ok",
             })
             continue
 
@@ -1880,6 +1882,11 @@ def _build_action_cards(
             "drivers": decision.drivers,
             "dissent": decision.dissent,
             "confidence": decision.confidence,
+            # ── Task 2: 数据异常守门 ──
+            "raw_signal": getattr(decision, 'raw_signal', ''),
+            "raw_ratio": getattr(decision, 'raw_ratio', 0.0),
+            "raw_action": getattr(decision, 'raw_action', ''),
+            "evidence_status": getattr(decision, 'evidence_status', 'ok'),
         })
 
     return cards

@@ -22,6 +22,7 @@ from stocks.domain.models import (
 )
 from stocks.engine.action_signals import compute_action_signals
 from stocks.engine.advice_review import attach_advice_performance, attach_execution_review
+from stocks.engine.data_quality_gate import compute_action_eligible, detect_price_anomalies
 from stocks.engine.event_calendar import EventCalendar
 from stocks.engine.exchange_rate import convert_to_cny
 from stocks.engine.fetchers import DataFetcher
@@ -622,6 +623,18 @@ class ContextBuilder:
         ind = indicators or {}
         if not ind.get("data_points") or ind.get("data_points") < 15:
             evidence["indicator_freshness"] = "missing"
+
+        # ── 数据异常守门（Task 2）──
+        raw_anomalies = ind.get("_data_anomalies", []) if isinstance(ind, dict) else []
+        if raw_anomalies:
+            evidence["data_anomalies"] = raw_anomalies
+            eligible, reasons = compute_action_eligible(raw_anomalies)
+            evidence["action_eligible"] = eligible
+            evidence["blocked_reasons"] = reasons
+        else:
+            evidence["data_anomalies"] = []
+            evidence["action_eligible"] = True
+            evidence["blocked_reasons"] = []
 
         return {
             "position_id": position.position_id,
@@ -1646,6 +1659,14 @@ class ContextBuilder:
                 # 获取历史数据计算指标
                 df = await self.history_cache.get_history(q.instrument, lookback_bars=60)
                 indicators = TechnicalIndicators.calculate(df)
+                # ── 数据异常检测（Task 2）──
+                current_price = q.price
+                ma20 = indicators.get('ma_20') if indicators else None
+                data_anomalies = detect_price_anomalies(
+                    df, current_price=current_price, ma20=ma20,
+                )
+                if data_anomalies:
+                    indicators['_data_anomalies'] = data_anomalies
                 # 使用 dataclasses.replace 创建带指标的新 Quote（frozen dataclass）
                 enriched_q = replace(q, indicators=indicators)
                 enriched_quotes.append(enriched_q)

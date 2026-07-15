@@ -9,6 +9,7 @@ from stocks.adapters.cli import CLIAdapter
 from stocks.engine.scheduled_analysis import (
     MarketSessionCalendar,
     ScheduledAnalysisRunner,
+    _build_action_cards,
     build_scheduled_run,
 )
 
@@ -284,6 +285,77 @@ def test_cli_exposes_scheduled_due_and_latest(capsys):
     adapter.run(["--scheduled-run-latest", "cn_pre_close"])
     latest = json.loads(capsys.readouterr().out)
     assert latest["data"]["session"] == "cn_pre_close"
+
+
+def _tradable_position(
+    position_id: str,
+    instrument_key: str,
+    *,
+    freshness: str,
+    evidence: dict | None = None,
+) -> dict:
+    return {
+        "position_id": position_id,
+        "display_name": position_id,
+        "instrument_key": instrument_key,
+        "market_value_cny": 10_000.0,
+        "price": 90.0,
+        "cost_amount": 100.0,
+        "pnl_pct": -10.5,
+        "portfolio_weight": 1.0,
+        "indicators": {},
+        "classification": {"product_type": "stock", "exposure_tags": []},
+        "liquidity": {"rebalance_eligible": True, "tradable": True},
+        "holding": {"quantity": None},
+        "evidence": {"price_freshness": freshness, **(evidence or {})},
+    }
+
+
+def test_action_cards_apply_freshness_per_position_in_mixed_market_portfolio():
+    cards = _build_action_cards([
+        _tradable_position("cn_current", "a:512480", freshness="current"),
+        _tradable_position("us_previous_close", "us:ITA", freshness="previous_close"),
+    ])
+
+    by_id = {card["position_id"]: card for card in cards}
+    assert by_id["cn_current"]["signal"] == "reduce"
+    assert by_id["cn_current"]["ratio"] == 0.3
+    assert by_id["us_previous_close"]["signal"] == "reduce"
+    assert by_id["us_previous_close"]["ratio"] == 0.15
+
+
+def test_action_card_blocks_anomalous_technical_action_but_keeps_raw_result():
+    position = _tradable_position(
+        "a_512480",
+        "a:512480",
+        freshness="current",
+        evidence={
+            "action_eligible": False,
+            "data_anomalies": [{
+                "code": "mixed_adjustment_regime",
+                "severity": "high",
+                "description": "价格序列混用复权口径",
+                "bar_index": 7,
+                "evidence": {},
+            }],
+            "blocked_reasons": ["mixed_adjustment_regime: 价格序列混用复权口径"],
+        },
+    )
+    position.update({
+        "price": 97.0,
+        "cost_amount": 97.0,
+        "pnl_pct": 0.0,
+        "indicators": {"ma_20": 100.0, "macd": {"hist": -0.1}},
+    })
+
+    card = _build_action_cards([position])[0]
+
+    assert card["signal"] == "hold"
+    assert card["ratio"] == 0.0
+    assert card["action"].startswith("数据异常，暂停技术动作")
+    assert card["raw_signal"] == "reduce"
+    assert card["raw_ratio"] == 0.5
+    assert card["evidence_status"] == "blocked"
 
 
 def _run(awaitable):
