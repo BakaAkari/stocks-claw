@@ -1345,17 +1345,27 @@ def _compute_coverage(matched: list[MatchedSignal]) -> dict:
     - padding: signals from category_padding only
     - exact / proxy / category: by match_method
     """
-    field = len(matched)
+    unique = list({
+        (
+            m.matched_symbol, m.direction, m.generation_method,
+            m.match_method, m.source_as_of.isoformat(),
+        ): m
+        for m in matched
+    }.values())
+    field = len(unique)
     directional = sum(
-        1 for m in matched
+        1 for m in unique
         if m.generation_method != "category_padding"
-        and m.direction in ("buy", "sell", "bullish", "bearish", "positive", "negative")
+        and m.direction in (
+            "buy", "sell", "reduce", "bullish", "bearish",
+            "positive", "negative",
+        )
     )
-    padding = sum(1 for m in matched if m.generation_method == "category_padding")
-    exact = sum(1 for m in matched if m.match_method == "exact")
-    proxy = sum(1 for m in matched if m.match_method == "proxy")
-    exposure_tag = sum(1 for m in matched if m.match_method == "exposure_tag")
-    category = sum(1 for m in matched if m.match_method == "category")
+    padding = sum(1 for m in unique if m.generation_method == "category_padding")
+    exact = sum(1 for m in unique if m.match_method == "exact")
+    proxy = sum(1 for m in unique if m.match_method == "proxy")
+    exposure_tag = sum(1 for m in unique if m.match_method == "exposure_tag")
+    category = sum(1 for m in unique if m.match_method == "category")
     return {
         "field": field,
         "directional": directional,

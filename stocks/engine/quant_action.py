@@ -445,9 +445,9 @@ def _build_drivers(*, tech, signal, action, votes, intelligence_signals, positio
             "reasons": ["未匹配到可用方向情报信号"],
             "provenance": {
                 "match_count": 0,
-                "padding_count": len(matched),
-                "generation_methods": sorted({m.generation_method for m in matched}),
-                "match_methods": sorted({m.match_method for m in matched}),
+                "padding_count": 0,
+                "generation_methods": [],
+                "match_methods": [],
             },
         })
 

@@ -19,10 +19,7 @@ from stocks.engine.hypothesis_tracker import (
     auto_check_hypotheses,
     format_hypothesis_report,
 )
-from stocks.engine.intelligence_analyzer import (
-    LLMIntelligenceAnalyzer,
-    _compute_brief_health,
-)
+from stocks.engine.intelligence_analyzer import LLMIntelligenceAnalyzer
 from stocks.engine.intelligence_harvester import IntelligenceHarvester
 from stocks.engine.news_intelligence_store import (
     IntelligenceSnapshot,
@@ -1057,33 +1054,12 @@ def build_intelligence_run(
     data_quality = analysis.get("data_quality") or harvest_result.get("data_quality") or {}
     status = "ok" if data_quality.get("status") == "ok" else "degraded"
 
-    # ── Intelligence health check (Task 3) ──
-    intel_health = _compute_brief_health(
-        generated_at, occurrence.scheduled_for,
-    )
-    health_stale = intel_health["status"] == "stale"
-
-    # ── Stale guard: stale intelligence must not feed into Risk State ──
-    if health_stale:
-        from stocks.engine.risk_warning import RiskAssessment
-        risk = RiskAssessment(
-            level="normal",
-            triggers=[],
-            recommended_actions=["情报已过期（≥48h 无更新），风险评警告停。等待下次情报巡逻"],
-            suspend_accumulation=False,
-            cash_target_pct=None,
-        )
-        # Override status to reflect stale
-        status = "degraded"
-        # Clear stale clusters/signals from risk assessment inputs
-        # Risk assessment below will be skipped
-        skip_risk = True
-    else:
-        skip_risk = False
+    # Producer-side intelligence is generated in this run. Staleness is
+    # evaluated later by trading-session consumers against latest_brief provenance.
+    intel_health = {"status": "ok", "age_minutes": 0.0, "risk_eligible": True}
 
     # Risk assessment
-    if not skip_risk:
-        risk = assess_risk(
+    risk = assess_risk(
             vix=macro.get("vix"),
             cluster_urgencies=[c.get("urgency") for c in clusters],
             negative_cluster_count=sum(1 for c in clusters if c.get("sentiment") == "negative"),
@@ -1091,8 +1067,8 @@ def build_intelligence_run(
                 c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
                 for c in clusters
             ),
-            config=engine_config.get("risk_warning") if engine_config else None,
-        )
+        config=engine_config.get("risk_warning") if engine_config else None,
+    )
 
     # Non-trading-day downgrade: weekends can't act on signals,
     # so reduce alarm level to avoid unnecessary anxiety.

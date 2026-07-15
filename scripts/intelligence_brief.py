@@ -141,8 +141,8 @@ def build_brief(data: dict, *, now: datetime | None = None) -> dict:
         "data_quality_notes": analysis_errors,
         # ── Task 3 provenance ──
         "source_run_id": data.get("run_id", "")[:32],
-        "source_generated_at": data.get("scheduled_for", "")[:19],
-        "brief_generated_at": now_utc[:19],
+        "source_generated_at": data.get("scheduled_for", ""),
+        "brief_generated_at": now_utc,
     }
 
 

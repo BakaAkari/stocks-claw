@@ -203,6 +203,25 @@ class TestComputeCoverage:
         assert coverage["category"] == 2
         assert coverage["proxy"] == 0
 
+    def test_duplicate_evidence_is_counted_once(self):
+        now = datetime.now(timezone.utc)
+        item = MatchedSignal(
+            "GLD", "buy", "gold", "llm", "proxy", now, "medium"
+        )
+        coverage = _compute_coverage([item, item])
+        assert coverage["field"] == 1
+        assert coverage["directional"] == 1
+        assert coverage["proxy"] == 1
+
+    def test_reduce_is_directional(self):
+        now = datetime.now(timezone.utc)
+        item = MatchedSignal(
+            "USO", "reduce", "oil weakness", "rule_fallback",
+            "exact", now, "medium"
+        )
+        coverage = _compute_coverage([item])
+        assert coverage["directional"] == 1
+
 
 # ============================================================
 # 3. _compute_brief_health — stale at 48h, ok before
@@ -410,7 +429,23 @@ class TestBuildBrief:
         assert "brief_generated_at" in brief
         assert brief["source_run_id"] == "test_run_001"
         assert brief["source_generated_at"] == "2026-07-15T11:00:00"
-        assert brief["brief_generated_at"] == "2026-07-15T12:00:00"
+        assert brief["brief_generated_at"] == "2026-07-15T12:00:00+00:00"
+
+    def test_source_generated_at_preserves_timezone(self):
+        from scripts.intelligence_brief import build_brief
+
+        now = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "run_id": "test",
+            "scheduled_for": "2026-07-15T19:00:00+08:00",
+            "context_digest": {
+                "clusters": [], "signals": [], "macro": {}, "quotes": {},
+                "intelligence_digest": {"metadata": {}},
+            },
+            "data_quality": {"status": "ok", "errors": []},
+        }
+        brief = build_brief(data, now=now)
+        assert brief["source_generated_at"] == "2026-07-15T19:00:00+08:00"
 
     def test_default_now_when_not_injected(self):
         """When now is not passed, build_brief should still work."""
@@ -477,8 +512,8 @@ class TestBuildIntelligenceRun:
         assert "intelligence_coverage" in run
         assert run["intelligence_coverage"]["total"] == 0
 
-    def test_stale_guard_bypasses_risk_state(self):
-        """When scheduled_for is 48h+ before generated_at, risk is downgraded to normal."""
+    def test_global_watch_health_is_fresh_even_when_scheduler_runs_late(self):
+        """Producer health describes newly generated intelligence, not scheduler delay."""
         from stocks.engine.scheduled_analysis import (
             ScheduledSession,
             SessionOccurrence,
@@ -520,10 +555,10 @@ class TestBuildIntelligenceRun:
             occurrence=occurrence, generated_at=now,
             config={"user_timezone": "Asia/Shanghai"},
         )
-        assert run["intelligence_health"]["status"] == "stale"
-        assert run["intelligence_health"]["risk_eligible"] is False
-        assert run["risk_assessment"]["level"] == "normal"
-        assert "过期" in run["risk_assessment"]["recommended_actions"][0]
+        assert run["intelligence_health"] == {
+            "status": "ok", "age_minutes": 0.0, "risk_eligible": True
+        }
+        assert run["risk_assessment"]["level"] != "normal"
 
 
 # ============================================================
