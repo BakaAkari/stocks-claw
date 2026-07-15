@@ -166,32 +166,46 @@ class IntelConflictRule(FactorRule):
 
     def evaluate(self, position, *, current_signal, current_ratio,
                  intelligence_signals=None, **kwargs):
-        from stocks.engine.quant_action import _INTEL_SIGNAL_PROXY
-        intel_sigs = intelligence_signals or {}
-        inst_key = position.get("instrument_key") or ""
-        raw = inst_key.split(":")[-1] if ":" in inst_key else ""
-        intel_sym = raw if raw and raw in intel_sigs else None
-        if not intel_sym:
-            for proxy, target in _INTEL_SIGNAL_PROXY.items():
-                if target == raw and proxy in intel_sigs:
-                    intel_sym = proxy
-                    break
-        if not intel_sym:
+        from stocks.engine.intelligence_analyzer import (
+            _intel_consensus_direction_from_matched,
+            coerce_intelligence_signals,
+            match_intelligence,
+        )
+
+        intel_sigs_raw = intelligence_signals or {}
+        parsed_signals = coerce_intelligence_signals(intel_sigs_raw)
+        matched = match_intelligence(position, parsed_signals)
+        # Filter out category_padding for conflict detection
+        significant = [m for m in matched
+                       if m.generation_method != "category_padding"]
+        if not significant:
             return FactorVote("intel_conflict", current_signal)
-        intel = intel_sigs.get(intel_sym, {})
-        intel_dir = intel.get("direction", "")
-        intel_urgency = intel.get("urgency", "medium")
+
+        # Check for directional conflict between intelligence and tech signal
+        intel_dir = _intel_consensus_direction_from_matched(significant)
         tech_bullish = current_signal in ("add", "accumulate", "take_profit")
         tech_bearish = current_signal in ("reduce", "stop_loss", "reduce_risk")
-        if not ((tech_bullish and intel_dir == "sell") or (tech_bearish and intel_dir == "buy")):
+        is_conflict = (tech_bullish and intel_dir == "bearish") or (tech_bearish and intel_dir == "bullish")
+        if not is_conflict:
             return FactorVote("intel_conflict", current_signal)
-        if intel_urgency == "critical":
+
+        # Check urgency for severity
+        max_urgency = "low"
+        urgency_order = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+        for item in significant:
+            if urgency_order.get(item.urgency, 0) > urgency_order.get(max_urgency, 0):
+                max_urgency = item.urgency
+
+        matched_symbols = [m.matched_symbol for m in significant[:2]]
+        sym_str = ", ".join(matched_symbols)
+
+        if max_urgency == "critical":
             return FactorVote("intel_conflict", "hold", 0.0, signal_override="hold",
-                              action_text=f"暂停：技术面与情报面反向（{intel_sym}），等待确认",
-                              facts=[f"情报冲突（{intel_sym} {intel_dir}），暂停执行"],
+                              action_text=f"暂停：技术面与情报面反向（{sym_str}），等待确认",
+                              facts=[f"情报冲突（{sym_str} {intel_dir}），暂停执行"],
                               priority=self.priority, conflict_type="override")
         return FactorVote("intel_conflict", current_signal, 0.5,
-                          facts=[f"情报面 {intel_dir} {intel_sym} — 非 critical，信号降权"],
+                          facts=[f"情报面 {intel_dir} {sym_str} — 非 critical，信号降权"],
                           priority=self.priority, conflict_type="caution")
 
 

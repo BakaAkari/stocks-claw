@@ -400,49 +400,56 @@ class QuantActionEngine:
 
 
 def _build_drivers(*, tech, signal, action, votes, intelligence_signals, position):
-    """构建多源信号驱动向量 — 每个信号源独立标注方向和理由。"""
+    """构建多源信号驱动向量 — 每个信号源独立标注方向和理由。
+
+    Task 3: Intelligence driver now uses unified match_intelligence() result
+    with provenance fields (generation_method, match_method, source_as_of).
+    """
     drivers = []
     tech_dir = _signal_direction(signal)
     tech_reasons = tech.facts[:2] if tech.facts else [f"最终信号: {signal}"]
     drivers.append({"source": "technical", "signal": signal, "direction": tech_dir, "reasons": tech_reasons})
 
-    intel_sigs = intelligence_signals or {}
-    inst_key = position.get("instrument_key", "")
-    classification = position.get("classification") or {}
-    exposure_tags = classification.get("exposure_tags") or []
-    tags_lower = [t.lower() for t in exposure_tags]
-
-    intel_signals_for_position = []
-    inst_lower = (inst_key or "").lower()
-    for key, sig in intel_sigs.items():
-        key_lower = key.lower()
-        proxy = _INTEL_SIGNAL_PROXY.get(key, key)
-        proxy_lower = proxy.lower()
-        # Match: exact, suffix, proxy suffix (GLD→NEM→us:NEM),
-        # or exposure tag match
-        if (key == inst_key
-                or inst_lower.endswith(f":{key_lower}")
-                or inst_lower.endswith(f":{proxy_lower}")
-                or key_lower in [t.lower() for t in tags_lower]
-                or sig.get("symbol", "").lower() in [t.lower() for t in tags_lower]
-                or proxy_lower in [t.lower() for t in tags_lower]):
-            intel_signals_for_position.append(sig)
-    if not intel_signals_for_position:
-        for key, sig in intel_sigs.items():
-            sym = sig.get("symbol", "").lower()
-            rationale = (sig.get("rationale", "") or "").lower()
-            if sym and any(t in sym for t in tags_lower):
-                intel_signals_for_position.append(sig)
-            elif rationale and any(t in rationale for t in tags_lower):
-                # Subject match: signal mentions "gold" → match position tagged "gold"
-                intel_signals_for_position.append(sig)
-
-    if intel_signals_for_position:
-        intel_dir = _intel_consensus_direction(intel_signals_for_position)
-        intel_reasons = [f"{s.get('symbol','?')}: {s.get('direction','?')} ({s.get('rationale','')[:80]})" for s in intel_signals_for_position[:2]]
-        drivers.append({"source": "intelligence", "signal": intel_dir, "direction": intel_dir, "reasons": intel_reasons})
+    # Task 3: Use unified matcher
+    from stocks.engine.intelligence_analyzer import (
+        _intel_consensus_direction_from_matched,
+        coerce_intelligence_signals,
+        match_intelligence,
+    )
+    intel_sigs_raw = intelligence_signals or {}
+    parsed_signals = coerce_intelligence_signals(intel_sigs_raw)
+    matched = match_intelligence(position, parsed_signals)
+    if matched:
+        intel_dir = _intel_consensus_direction_from_matched(matched)
+        intel_reasons = [
+            f"{m.matched_symbol}: {m.direction} ({m.rationale[:80]}) [{m.generation_method}]"
+            for m in matched[:2]
+        ]
+        provenance = {
+            "match_count": len(matched),
+            "generation_methods": sorted({m.generation_method for m in matched}),
+            "match_methods": sorted({m.match_method for m in matched}),
+        }
+        drivers.append({
+            "source": "intelligence",
+            "signal": intel_dir,
+            "direction": intel_dir,
+            "reasons": intel_reasons,
+            "provenance": provenance,
+        })
     else:
-        drivers.append({"source": "intelligence", "signal": "unavailable", "direction": "unavailable", "reasons": ["未匹配到该持仓的情报信号"]})
+        drivers.append({
+            "source": "intelligence",
+            "signal": "unavailable",
+            "direction": "unavailable",
+            "reasons": ["未匹配到可用方向情报信号"],
+            "provenance": {
+                "match_count": 0,
+                "padding_count": len(matched),
+                "generation_methods": sorted({m.generation_method for m in matched}),
+                "match_methods": sorted({m.match_method for m in matched}),
+            },
+        })
 
     factor_dirs = []
     factor_items = []
@@ -1026,4 +1033,3 @@ def backtest_action_signals(
         "avg_score": round(avg_score, 4),
         "details": results,
     }
-

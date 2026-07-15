@@ -19,7 +19,10 @@ from stocks.engine.hypothesis_tracker import (
     auto_check_hypotheses,
     format_hypothesis_report,
 )
-from stocks.engine.intelligence_analyzer import LLMIntelligenceAnalyzer
+from stocks.engine.intelligence_analyzer import (
+    LLMIntelligenceAnalyzer,
+    _compute_brief_health,
+)
 from stocks.engine.intelligence_harvester import IntelligenceHarvester
 from stocks.engine.news_intelligence_store import (
     IntelligenceSnapshot,
@@ -726,6 +729,13 @@ def build_scheduled_run(
     )
     # 提取情报信号供 action_card 冲突检测
     intel_digest = context.get("intelligence_digest") or {}
+    intelligence_health = intel_digest.get("intelligence_health") or {
+        "status": "missing", "age_minutes": None, "risk_eligible": False
+    }
+    intelligence_coverage = intel_digest.get("intelligence_coverage") or {
+        "field": 0, "directional": 0, "padding": 0,
+        "exact": 0, "proxy": 0, "category": 0,
+    }
     intel_signals: dict[str, dict] = {
         s.get("symbol", ""): {
             "symbol": s.get("symbol", ""),
@@ -806,6 +816,8 @@ def build_scheduled_run(
         "scheduled_for": occurrence.scheduled_for.isoformat(),
         "status": status,
         "status_reason": _status_reason(status, context_quality),
+        "intelligence_health": intelligence_health,
+        "intelligence_coverage": intelligence_coverage,
         "source_context": {
             "schema_version": context.get("schema_version"),
             "generated_at": context.get("generated_at"),
@@ -863,6 +875,15 @@ def _compute_risk_assessment(context: dict) -> dict:
 
     macro = (context.get("market_state") or {}).get("macro") or context.get("macro") or {}
     intel_digest = context.get("intelligence_digest") or {}
+    health = intel_digest.get("intelligence_health") or {}
+    if health and not health.get("risk_eligible", False):
+        return {
+            "level": "normal",
+            "triggers": [],
+            "recommended_actions": ["情报过期或缺失，不参与风险升级"],
+            "suspend_accumulation": False,
+            "cash_target_pct": None,
+        }
     clusters = intel_digest.get("top_clusters") or []
 
     geopolitical_crisis = any(
@@ -1035,17 +1056,43 @@ def build_intelligence_run(
     signals = analysis.get("signals") or []
     data_quality = analysis.get("data_quality") or harvest_result.get("data_quality") or {}
     status = "ok" if data_quality.get("status") == "ok" else "degraded"
-    # Risk assessment
-    risk = assess_risk(
-        vix=macro.get("vix"),
-        cluster_urgencies=[c.get("urgency") for c in clusters],
-        negative_cluster_count=sum(1 for c in clusters if c.get("sentiment") == "negative"),
-        geopolitical_crisis=any(
-            c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
-            for c in clusters
-        ),
-        config=engine_config.get("risk_warning") if engine_config else None,
+
+    # ── Intelligence health check (Task 3) ──
+    intel_health = _compute_brief_health(
+        generated_at, occurrence.scheduled_for,
     )
+    health_stale = intel_health["status"] == "stale"
+
+    # ── Stale guard: stale intelligence must not feed into Risk State ──
+    if health_stale:
+        from stocks.engine.risk_warning import RiskAssessment
+        risk = RiskAssessment(
+            level="normal",
+            triggers=[],
+            recommended_actions=["情报已过期（≥48h 无更新），风险评警告停。等待下次情报巡逻"],
+            suspend_accumulation=False,
+            cash_target_pct=None,
+        )
+        # Override status to reflect stale
+        status = "degraded"
+        # Clear stale clusters/signals from risk assessment inputs
+        # Risk assessment below will be skipped
+        skip_risk = True
+    else:
+        skip_risk = False
+
+    # Risk assessment
+    if not skip_risk:
+        risk = assess_risk(
+            vix=macro.get("vix"),
+            cluster_urgencies=[c.get("urgency") for c in clusters],
+            negative_cluster_count=sum(1 for c in clusters if c.get("sentiment") == "negative"),
+            geopolitical_crisis=any(
+                c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
+                for c in clusters
+            ),
+            config=engine_config.get("risk_warning") if engine_config else None,
+        )
 
     # Non-trading-day downgrade: weekends can't act on signals,
     # so reduce alarm level to avoid unnecessary anxiety.
@@ -1092,6 +1139,8 @@ def build_intelligence_run(
         "scheduled_for": occurrence.scheduled_for.isoformat(),
         "status": status,
         "status_reason": _intelligence_status_reason(status, data_quality),
+        "intelligence_health": intel_health,
+        "intelligence_coverage": _compute_signal_coverage_summary(signals),
         "source_context": {
             "sources": harvest_result.get("source_status", {}),
             "article_count": len(harvest_result.get("articles", [])),
@@ -1214,6 +1263,32 @@ def _intelligence_status_reason(status: str, data_quality: dict) -> str:
     if status == "ok":
         return "Intelligence harvest and analysis completed successfully"
     return "; ".join(data_quality.get("errors", [])) or "Degraded without explicit error"
+
+
+def _compute_signal_coverage_summary(signals: list[dict]) -> dict:
+    """Compute intelligence coverage at the artifact summary level.
+
+    Returns a breakdown of signal origin (generation_method) and direction
+    distribution — a summary-level view of intelligence coverage before
+    per-position matching.
+    """
+    total = len(signals)
+    by_gen: dict[str, int] = {}
+    by_direction: dict[str, int] = {}
+    urgency_count: dict[str, int] = {}
+    for s in signals:
+        gm = s.get("generation_method", "rule_fallback")
+        by_gen[gm] = by_gen.get(gm, 0) + 1
+        d = s.get("direction", "watch")
+        by_direction[d] = by_direction.get(d, 0) + 1
+        u = s.get("urgency", "medium")
+        urgency_count[u] = urgency_count.get(u, 0) + 1
+    return {
+        "total": total,
+        "by_generation_method": by_gen,
+        "by_direction": by_direction,
+        "by_urgency": urgency_count,
+    }
 
 
 def _intelligence_priority(signals: list[dict]) -> str:

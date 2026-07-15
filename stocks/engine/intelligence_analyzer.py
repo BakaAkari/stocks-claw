@@ -538,6 +538,8 @@ class IntelligenceAnalyzer:
             confidence=confidence,
             urgency=urgency,
             generated_at=datetime.now(timezone.utc),
+            generation_method="rule_fallback",
+            source_as_of=datetime.now(timezone.utc),
         )
 
     # ------------------------------------------------------------------
@@ -1093,6 +1095,9 @@ class LLMIntelligenceAnalyzer:
                     confidence=conf,
                     urgency=urgency,
                     generated_at=datetime.now(timezone.utc),
+                    generation_method="category_padding",
+                    match_method="category",
+                    source_as_of=datetime.now(timezone.utc),
                 ))
         return padded
 
@@ -1111,6 +1116,8 @@ class LLMIntelligenceAnalyzer:
                 confidence=s.get("confidence", 0.5),
                 urgency=s.get("urgency", "medium"),
                 generated_at=datetime.now(timezone.utc),
+                generation_method="llm",
+                source_as_of=datetime.now(timezone.utc),
             ))
         return signals
 
@@ -1190,3 +1197,224 @@ class LLMIntelligenceAnalyzer:
             "analysis_mode": "llm",
             "dedup_articles": len(llm_result.get("dedup_articles", [])),
         }
+
+
+
+# =======================================================================
+# Task 3: MatchedSignal, unified matching, coverage, brief health
+# =======================================================================
+
+
+@dataclass(frozen=True)
+class MatchedSignal:
+    """A single matched intelligence signal for a position.
+
+    Produced by match_intelligence() and consumed by _build_drivers,
+    _detect_dissent, and IntelConflictRule — all three consumers get the
+    same standardized result.
+    """
+
+    matched_symbol: str
+    direction: str          # buy / sell / hold / neutral
+    rationale: str
+    generation_method: str  # llm / rule_fallback / category_padding
+    match_method: str       # exact / proxy / exposure_tag / category
+    source_as_of: datetime
+    urgency: str = "medium"
+
+
+def coerce_intelligence_signals(raw_signals) -> list[IntelligenceSignal]:
+    """Normalize persisted dicts or model objects into IntelligenceSignal objects."""
+    if isinstance(raw_signals, dict):
+        values = raw_signals.values()
+    else:
+        values = raw_signals or []
+    result = []
+    for item in values:
+        if isinstance(item, IntelligenceSignal):
+            result.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        payload = dict(item)
+        payload.setdefault("symbol", "?")
+        payload.setdefault("name", payload["symbol"])
+        payload.setdefault("direction", "watch")
+        payload.setdefault("horizon", "short_term")
+        payload.setdefault("rationale", "")
+        payload.setdefault("falsification", "")
+        payload.setdefault("risk_source", "")
+        payload.setdefault("confidence", 0.0)
+        payload.setdefault("urgency", "medium")
+        payload.setdefault("generated_at", datetime.now(timezone.utc).isoformat())
+        result.append(IntelligenceSignal.from_dict(payload))
+    return result
+
+
+def match_intelligence(
+    position: dict,
+    signals: list[IntelligenceSignal],
+) -> list[MatchedSignal]:
+    """Unified intelligence matcher — produces standardized MatchedSignal list
+    consumed by _build_drivers, _detect_dissent, and IntelConflictRule.
+
+    Matching priority: exact suffix → proxy → exposure_tag → category_padding.
+    Category padding only fires when no direct match exists for an exposure tag.
+    """
+    inst_key = str(position.get("instrument_key", "")).lower()
+    classification = position.get("classification") or {}
+    exposure_tags = [t.lower() for t in (classification.get("exposure_tags") or [])]
+    matched: list[MatchedSignal] = []
+    seen_symbols: set[str] = set()
+
+    for sig in signals:
+        sym = sig.symbol
+        sym_lower = sym.lower()
+        proxy = _INTEL_SIGNAL_PROXY.get(sym, sym)
+        proxy_lower = proxy.lower()
+
+        # 1. Exact match: instrument_key ends with :symbol
+        if inst_key.endswith(f":{sym_lower}") or inst_key == sym_lower:
+            matched.append(MatchedSignal(
+                matched_symbol=sym,
+                direction=sig.direction,
+                rationale=sig.rationale,
+                generation_method=sig.generation_method,
+                match_method="exact",
+                source_as_of=sig.source_as_of or sig.generated_at,
+                urgency=sig.urgency,
+            ))
+            seen_symbols.add(sym_lower)
+            continue
+
+        # 2. Proxy match: proxy target matches position key
+        if (inst_key.endswith(f":{proxy_lower}")
+                or proxy_lower == inst_key):
+            matched.append(MatchedSignal(
+                matched_symbol=sym,
+                direction=sig.direction,
+                rationale=sig.rationale,
+                generation_method=sig.generation_method,
+                match_method="proxy",
+                source_as_of=sig.source_as_of or sig.generated_at,
+                urgency=sig.urgency,
+            ))
+            seen_symbols.add(sym_lower)
+            continue
+
+        # 3. Exposure tag match
+        if (sym_lower in exposure_tags
+                or sig.name.lower() in exposure_tags
+                or proxy_lower in exposure_tags):
+            matched.append(MatchedSignal(
+                matched_symbol=sym,
+                direction=sig.direction,
+                rationale=sig.rationale,
+                generation_method=sig.generation_method,
+                match_method="exposure_tag",
+                source_as_of=sig.source_as_of or sig.generated_at,
+                urgency=sig.urgency,
+            ))
+            seen_symbols.add(sym_lower)
+
+    # 4. Category padding: only when an intelligence payload exists.
+    # Empty/stale signal sets must remain unavailable, not synthetic-neutral.
+    if not signals:
+        return matched
+    for tag in exposure_tags:
+        if tag not in seen_symbols:
+            matched.append(MatchedSignal(
+                matched_symbol=tag,
+                direction="neutral",
+                rationale=f"Category padding — no direct signal for {tag}",
+                generation_method="category_padding",
+                match_method="category",
+                source_as_of=datetime.now(timezone.utc),
+            ))
+            seen_symbols.add(tag)
+
+    return matched
+
+
+def _compute_coverage(matched: list[MatchedSignal]) -> dict:
+    """Compute 6-dimension coverage breakdown.
+
+    - field: total matched signals with populated fields
+    - directional: signals with non-neutral direction AND not from
+      category_padding (padding == coverage by field only, not direction)
+    - padding: signals from category_padding only
+    - exact / proxy / category: by match_method
+    """
+    field = len(matched)
+    directional = sum(
+        1 for m in matched
+        if m.generation_method != "category_padding"
+        and m.direction in ("buy", "sell", "bullish", "bearish", "positive", "negative")
+    )
+    padding = sum(1 for m in matched if m.generation_method == "category_padding")
+    exact = sum(1 for m in matched if m.match_method == "exact")
+    proxy = sum(1 for m in matched if m.match_method == "proxy")
+    exposure_tag = sum(1 for m in matched if m.match_method == "exposure_tag")
+    category = sum(1 for m in matched if m.match_method == "category")
+    return {
+        "field": field,
+        "directional": directional,
+        "padding": padding,
+        "exact": exact,
+        "proxy": proxy,
+        "exposure_tag": exposure_tag,
+        "category": category,
+    }
+
+
+
+def _intel_consensus_direction_from_matched(matched: list) -> str:
+    """Determine consensus direction from matched signals.
+    Category-padding signals are ignored for direction consensus.
+
+    Shared by _build_drivers and IntelConflictRule so both consumers
+    get the same opinion from the same matched signals.
+    """
+    dirs = []
+    for m in matched:
+        if m.generation_method == "category_padding" and m.direction == "neutral":
+            continue
+        d = m.direction.lower()
+        if d in ("buy", "bullish", "positive"):
+            dirs.append("bullish")
+        elif d in ("sell", "bearish", "negative", "reduce"):
+            dirs.append("bearish")
+        else:
+            dirs.append("neutral")
+    b = dirs.count("bullish")
+    s = dirs.count("bearish")
+    if b > s:
+        return "bullish"
+    if s > b:
+        return "bearish"
+    return "neutral"
+
+
+def _compute_brief_health(
+    watch_collected_at: datetime,
+    brief_generated_at: datetime,
+    *,
+    max_age_hours: float = 48.0,
+) -> dict:
+    """Evaluate brief health by comparing its generation time against the
+    latest global watch collection time.
+
+    Returns dict with:
+      status: "ok" | "stale"
+      age_minutes: age in minutes
+      risk_eligible: False when stale (brief must not participate in
+                     risk state upgrades)
+    """
+    age = watch_collected_at - brief_generated_at
+    age_minutes = max(0.0, age.total_seconds() / 60.0)
+    stale = age_minutes >= max_age_hours * 60.0
+    return {
+        "status": "stale" if stale else "ok",
+        "age_minutes": round(age_minutes, 1),
+        "risk_eligible": not stale,
+    }

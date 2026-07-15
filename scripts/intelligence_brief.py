@@ -10,6 +10,7 @@
 import json
 import os
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path("/mnt/user/code-project/stocks-claw")
@@ -64,7 +65,9 @@ def _dedup_articles(articles: list) -> list:
     return result
 
 
-def build_brief(data: dict) -> dict:
+def build_brief(data: dict, *, now: datetime | None = None) -> dict:
+    if now is None:
+        now = datetime.now(timezone.utc)
     digest = data.get("context_digest", {})
     clusters = digest.get("clusters", []) or []
     signals = digest.get("signals", []) or []
@@ -124,6 +127,7 @@ def build_brief(data: dict) -> dict:
             "confidence": s.get("confidence", 0.0),
         })
 
+    now_utc = now.isoformat()
     return {
         "collected_at": data.get("scheduled_for", "")[:19],
         "macro": macro_compact,
@@ -135,6 +139,10 @@ def build_brief(data: dict) -> dict:
         "run_id": data.get("run_id", "")[:24],
         "cross_cluster_synthesis_cn": intel_meta.get("cross_cluster", ""),
         "data_quality_notes": analysis_errors,
+        # ── Task 3 provenance ──
+        "source_run_id": data.get("run_id", "")[:32],
+        "source_generated_at": data.get("scheduled_for", "")[:19],
+        "brief_generated_at": now_utc[:19],
     }
 
 

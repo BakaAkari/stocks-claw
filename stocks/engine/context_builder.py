@@ -1,5 +1,6 @@
 """AnalysisContext 组装器 — 编排数据获取与脚手架计算，生成统一分析上下文"""
 
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +31,7 @@ from stocks.engine.history_cache import HistoryCache
 from stocks.engine.indicators import TechnicalIndicators
 from stocks.engine.macro_data import MacroProvider
 from stocks.engine.market_events import MarketEventExtractor
-from stocks.engine.news_intelligence_store import NewsIntelligenceStore
+from stocks.engine.news_intelligence_store import IntelligenceSignal, NewsIntelligenceStore
 from stocks.engine.rotation import compute_rotation
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.logging_utils import get_logger
@@ -230,6 +231,8 @@ class ContextBuilder:
         # 7.65 加载全局情报巡逻聚合结果（时间事实源）
         intelligence_digest = self._build_intelligence_digest(
             repo_root=Path(__file__).resolve().parents[2],
+            generated_at=generated_at,
+            positions=[position.to_dict() for position in positions],
         )
 
         # 7.7 引擎动作信号（方向性候选动作，2026-07-02 用户裁决启用）
@@ -1735,8 +1738,16 @@ class ContextBuilder:
         self,
         *,
         repo_root: Path,
+        generated_at: Optional[str] = None,
+        positions: Optional[list[dict]] = None,
     ) -> dict:
-        """Load latest global_intelligence_watch aggregated facts for trading sessions."""
+        """Load auditable intelligence facts for trading-session consumption."""
+        from stocks.engine.intelligence_analyzer import (
+            _compute_brief_health,
+            _compute_coverage,
+            match_intelligence,
+        )
+
         intelligence_dir = self._config.get("intelligence_dir")
         if not intelligence_dir:
             return {"status": "not_configured"}
@@ -1748,16 +1759,48 @@ class ContextBuilder:
         try:
             store = NewsIntelligenceStore(path)
             snapshot = store.latest_snapshot()
-            clusters = store.latest_clusters()
-            signals = store.latest_signals()
-            if snapshot is None and clusters is None and signals is None:
+            clusters_payload = store.latest_clusters()
+            signals_payload = store.latest_signals()
+            if snapshot is None and clusters_payload is None and signals_payload is None:
                 return {"status": "empty"}
+
+            raw_signals = (signals_payload or {}).get("signals", [])
+            parsed_signals = [IntelligenceSignal.from_dict(item) for item in raw_signals]
+            matched = []
+            for position in positions or []:
+                matched.extend(match_intelligence(position, parsed_signals))
+            coverage = _compute_coverage(matched)
+
+            brief_path = repo_root / ".local" / "intelligence" / "latest_brief.json"
+            brief = {}
+            if brief_path.exists():
+                brief = json.loads(brief_path.read_text(encoding="utf-8"))
+            source_at = (
+                brief.get("source_generated_at")
+                or (signals_payload or {}).get("generated_at")
+                or (clusters_payload or {}).get("formed_at")
+                or (snapshot.collected_at.isoformat() if snapshot else None)
+            )
+            now_dt = self._parse_iso_datetime(generated_at) or datetime.now(timezone.utc)
+            source_dt = self._parse_iso_datetime(source_at)
+            if source_dt is None:
+                health = {"status": "missing", "age_minutes": None, "risk_eligible": False}
+            else:
+                health = _compute_brief_health(now_dt, source_dt)
+
+            clusters = (clusters_payload or {}).get("clusters", [])
+            risk_eligible = bool(health.get("risk_eligible"))
             return {
-                "status": "ok",
+                "status": "ok" if risk_eligible else health["status"],
                 "snapshot_at": snapshot.collected_at.isoformat() if snapshot else None,
+                "source_run_id": brief.get("source_run_id"),
+                "source_generated_at": source_at,
+                "brief_generated_at": brief.get("brief_generated_at"),
                 "article_count": len(snapshot.articles) if snapshot else 0,
-                "cluster_count": len(clusters.get("clusters", [])) if clusters else 0,
-                "signal_count": len(signals.get("signals", [])) if signals else 0,
+                "cluster_count": len(clusters),
+                "signal_count": len(raw_signals),
+                "intelligence_health": health,
+                "intelligence_coverage": coverage,
                 "top_clusters": [
                     {
                         "theme": c.get("theme"),
@@ -1768,17 +1811,15 @@ class ContextBuilder:
                         "urgency": c.get("urgency"),
                         "confidence": c.get("confidence"),
                     }
-                    for c in (clusters.get("clusters", []) if clusters else [])[:5]
-                ],
-                "top_signals": [
-                    dict(signal)
-                    for signal in (signals.get("signals", []) if signals else [])
-                ],
+                    for c in clusters[:5]
+                ] if risk_eligible else [],
+                "top_signals": [dict(signal) for signal in raw_signals] if risk_eligible else [],
             }
         except Exception as exc:  # noqa: BLE001
             logger = get_logger("context_builder")
             logger.warning(f"Intelligence digest load failed: {exc}")
             return {"status": "error", "error": str(exc)}
+
 
     def _build_raw_prompt(
         self,

@@ -97,7 +97,13 @@ class EventCluster:
 
 @dataclass(frozen=True)
 class IntelligenceSignal:
-    """Action-oriented signal generated from event clusters and market data."""
+    """Action-oriented signal generated from event clusters and market data.
+
+    Task 3 provenance fields:
+      generation_method - llm / rule_fallback / category_padding
+      match_method      - unmatched until a position matcher resolves exact/proxy/exposure_tag/category
+      source_as_of      - when the source data was observed
+    """
 
     symbol: str
     name: str
@@ -109,9 +115,12 @@ class IntelligenceSignal:
     confidence: float
     urgency: str
     generated_at: datetime
+    generation_method: str = "rule_fallback"
+    match_method: str = "unmatched"
+    source_as_of: "Optional[datetime]" = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "symbol": self.symbol,
             "name": self.name,
             "direction": self.direction,
@@ -122,10 +131,19 @@ class IntelligenceSignal:
             "confidence": self.confidence,
             "urgency": self.urgency,
             "generated_at": self.generated_at.isoformat(),
+            "generation_method": self.generation_method,
+            "match_method": self.match_method,
         }
+        if self.source_as_of is not None:
+            d["source_as_of"] = self.source_as_of.isoformat()
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "IntelligenceSignal":
+        source_as_of = None
+        raw = data.get("source_as_of")
+        if raw:
+            source_as_of = _parse_iso(raw)
         return cls(
             symbol=data["symbol"],
             name=data["name"],
@@ -137,6 +155,9 @@ class IntelligenceSignal:
             confidence=data.get("confidence", 0.0),
             urgency=data.get("urgency", "medium"),
             generated_at=_parse_iso(data.get("generated_at", "")),
+            generation_method=data.get("generation_method", "rule_fallback"),
+            match_method=data.get("match_method", "unmatched"),
+            source_as_of=source_as_of,
         )
 
 
