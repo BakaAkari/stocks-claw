@@ -133,6 +133,7 @@ class QuantReview:
     risk_to_stop_pct: Optional[float]
     risk_amount_cny: Optional[float]
     intelligence_conflict: str = "none"
+    technical_evidence: float = 0.0  # 0.0-1.0, 触发条件本身的信号强度
 
 
 @dataclass
@@ -184,6 +185,7 @@ class QuantActionEngine:
 
         # 1. 硬止损
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= c["stop_loss_pct"]:
+            technical_evidence = 0.90
             return self._build(position_id, "stop_loss", "止损清仓", 1.0,
                 [f"浮亏 {pnl_pct:.2f}% 已超过硬止损 {c['stop_loss_pct']}%"],
                 round(cost * (1 + c["stop_loss_pct"] / 100), 4) if cost else None,
@@ -191,6 +193,7 @@ class QuantActionEngine:
 
         # 2. 中间减仓
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= c["mid_stop_pct"]:
+            technical_evidence = 0.75
             return self._build(position_id, "reduce",
                 f"浮亏超出中间阈值 {c['mid_stop_pct']}%，减仓 {int(c['mid_stop_ratio']*100)}%",
                 c["mid_stop_ratio"],
@@ -226,11 +229,15 @@ class QuantActionEngine:
                         f"趋势确认模式（{confirm_days}天）：跌破阈值收紧至 {adjusted_cutoff:.3f}"
                         f"（默认 {c['trend_ma20_break_cutoff']:.3f}），要求偏离 ≥{((1-adjusted_cutoff)*100):.1f}% 才触发"
                     )
+                # evidence: deeper deviation → stronger signal (0.3 base + deviation depth)
+                evidence_from_deviation = min(0.9, 0.3 + deviation * 3.0)
+                technical_evidence = round(evidence_from_deviation, 2)
                 return self._build(position_id, "reduce",
                     f"趋势走弱（MA20偏离 {deviation:.1%}），减仓 {int(ratio*100)}%",
                     ratio,
                     facts_list,
-                    round(float(trigger_price), 4), [], current_weight_pct, price, quantity)
+                    round(float(trigger_price), 4), [], current_weight_pct, price, quantity,
+                    technical_evidence=technical_evidence)
 
         # 5. 止盈阶梯
         if isinstance(pnl_pct, (int, float)) and pnl_pct > 0 and cost is not None:
@@ -242,20 +249,24 @@ class QuantActionEngine:
                 if triggered:
                     total_reduce = min(sum(r for _, r in triggered), 0.75)
                     max_level = triggered[-1][0]
+                    evidence_from_pnl = min(1.0, pnl_pct / 50.0)
+                    technical_evidence = round(evidence_from_pnl, 2)
                     return self._build(position_id, "take_profit",
                         f"触发 {max_level}% 止盈，减仓 {int(total_reduce*100)}%",
                         total_reduce, [f"浮盈 {pnl_pct:.2f}% 触发止盈"],
-                        stop_price, target_prices, current_weight_pct, price, quantity)
+                        stop_price, target_prices, current_weight_pct, price, quantity,
+                        technical_evidence=technical_evidence)
 
         # 6. 单日浮盈回撤
         if (isinstance(one_day_change_pct, (int, float))
                 and one_day_change_pct <= c["profit_pullback_pct"]
                 and isinstance(pnl_pct, (int, float))
                 and pnl_pct >= c["profit_pullback_min_pnl"]):
+            technical_evidence = 0.55
             return self._build(position_id, "reduce",
                 f"单日回撤 {one_day_change_pct:.2f}%，减仓 25% 锁定浮盈", 0.25,
                 [f"单日下跌 {one_day_change_pct:.2f}%，浮盈 {pnl_pct:.2f}%"],
-                stop_price, [], current_weight_pct, price, quantity)
+                stop_price, [], current_weight_pct, price, quantity, technical_evidence=technical_evidence)
 
         # 7. 回踩加仓（MA20 偏离驱动档位 + 仓位上限门）
         if isinstance(price, (int, float)) and ma20 is not None and cost is not None:
@@ -287,10 +298,12 @@ class QuantActionEngine:
                         facts_extras.append(
                             f"加仓阶梯({tier_label} {add_pct}%)：偏离扩大后→ {', '.join(remaining)}"
                         )
+                evidence_from_retrace = min(0.8, 0.35 + deviation_ma20 * 15.0)
+                technical_evidence = round(evidence_from_retrace, 2)
                 return self._build(position_id, "add",
                     f"回踩 MA20（偏离 {deviation_ma20:.1%}），加仓 {add_pct}%（{tier_label}）", -add_size,
                     facts_extras,
-                    stop_price, [], current_weight_pct, price, quantity)
+                    stop_price, [], current_weight_pct, price, quantity, technical_evidence=technical_evidence)
             # 仓位已满，记录但不生成 add 信号
             if near_ma20 and rsi_ok and macd_ok and not weight_ok                     and pnl_pct is not None and pnl_pct < 5.0:
                 facts.append(
@@ -299,11 +312,13 @@ class QuantActionEngine:
 
         if not facts:
             facts.append("未触发任何规则")
+        technical_evidence = 0.0
         return self._build(position_id, signal, action, ratio, facts,
-                           stop_price, target_prices, current_weight_pct, price, quantity)
+                           stop_price, target_prices, current_weight_pct, price, quantity, technical_evidence=technical_evidence)
 
     def _build(self, position_id, signal, action, ratio, facts,
-               stop_price, target_prices, current_weight_pct, price, quantity) -> QuantReview:
+               stop_price, target_prices, current_weight_pct, price, quantity,
+               technical_evidence: float = 0.0) -> QuantReview:
         c = self._c
         limit = c["default_position_limit_pct"]
         ma20 = self.indicators.get("ma_20")
@@ -333,6 +348,7 @@ class QuantActionEngine:
             ratio=ratio, facts=facts, stop_price=stop_price, target_prices=target_prices,
             position_limit_pct=limit, current_weight_pct=current_weight_pct,
             risk_to_stop_pct=risk_to_stop_pct, risk_amount_cny=risk_amount_cny,
+            technical_evidence=technical_evidence,
         )
 
 
@@ -399,30 +415,37 @@ def _detect_dissent(drivers: list[dict], final_signal: str) -> Optional[dict]:
     return None
 
 
-def _compute_confidence(drivers: list[dict]) -> str:
-    """基于信号源一致度与可用性计算置信度。
+def _compute_confidence(
+    drivers: list[dict], technical_evidence: float, data_freshness: str = "fresh"
+) -> str:
+    """基于信号强度 × 数据新鲜度计算置信度。
 
-    - 任一源 unavailable → 上限 medium（信息不完整）
-    - 两个活跃源方向一致 → medium（缺第三源验证）
-    - 活跃源方向分歧 → low
-    - 仅当三源全可用且一致 → high
+    技术信号强度来自触发条件本身（偏离深度、浮盈幅度、阈值超越程度），
+    不受 intelligence 匹配状态影响。intelligence 作为独立方向标注（dissent/agree）。
+
+    置信度阈值：
+    - ≥0.70 → high（强信号 × 新鲜数据）
+    - ≥0.40 → medium
+    - <0.40 → low（弱信号 或 数据陈旧）
     """
-    dirs = [d.get("direction", "neutral") for d in drivers]
-    unavailable_count = dirs.count("unavailable")
-    active = [d for d in dirs if d not in ("neutral", "unavailable")]
-    unique = set(active) if active else set()
+    recency_map = {"fresh": 1.0, "stale": 0.75, "delayed": 0.5, "error": 0.3}
+    recency_factor = recency_map.get(data_freshness, 0.7)
+    score = technical_evidence * recency_factor
 
-    if unavailable_count >= 2:
-        return "low"
-    if not active:
-        return "low"
-    if unavailable_count == 1:
-        if len(unique) == 1 and len(active) >= 1:
+    # 无有效技术信号 → 退化为源可用性判断
+    if technical_evidence <= 0:
+        dirs = [d.get("direction", "neutral") for d in drivers]
+        unavailable = dirs.count("unavailable")
+        active = [d for d in dirs if d not in ("neutral", "unavailable")]
+        if unavailable >= 2 or not active:
+            return "low"
+        if unavailable == 1 and len(set(active)) == 1:
             return "medium"
-        return "low"
-    if len(unique) == 1:
+        return "high" if len(set(active)) == 1 and unavailable == 0 else "medium"
+
+    if score >= 0.7:
         return "high"
-    if len(unique) == 2 and len(active) == 3:
+    if score >= 0.4:
         return "medium"
     return "low"
 
@@ -697,12 +720,19 @@ def finalize_decision(
         position=position,
     )
     dissent = _detect_dissent(drivers, signal)
-    confidence = _compute_confidence(drivers)
+    confidence = _compute_confidence(drivers, tech.technical_evidence, data_freshness)
 
     # ── 低置信度警告 ──
     if confidence == "low":
         unavailable_sources = [d["source"] for d in drivers if d.get("direction") == "unavailable"]
-        warn = "⚠️ 低置信度" + (f'（{"、".join(unavailable_sources)} 数据缺失）' if unavailable_sources else '')
+        parts = []
+        if unavailable_sources:
+            parts.append(f'{"、".join(unavailable_sources)} 缺失')
+        tech_ev = getattr(tech, 'technical_evidence', 0)
+        if tech_ev < 0.4:
+            parts.append(f'信号强度 {tech_ev:.1f}')
+        reason = '（' + '；'.join(parts) + '）' if parts else ''
+        warn = f'⚠️ 低置信度{reason}'
         facts.insert(0, warn)
 
     return FinalDecision(
