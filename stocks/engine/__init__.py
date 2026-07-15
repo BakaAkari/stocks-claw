@@ -61,6 +61,10 @@ from stocks.engine.macro_data import (
     YahooFinanceMacroProvider,
 )
 from stocks.engine.news_sources import NewsAggregator, WatchlistGoogleNewsProvider
+from stocks.engine.outcome_attribution import (
+    load_decision_snapshots,
+    run_settlement,
+)
 from stocks.engine.persistence import DataPersistence
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.engine.scheduled_analysis import (
@@ -787,6 +791,19 @@ class StocksEngine:
     def find_executions_by_run_id(self, run_id: str) -> list[dict]:
         """按 run_id 查找执行记录（decision_id 前缀匹配）。"""
         return self.persistence.find_executions_by_run_id(run_id)
+
+    def decision_attribution(self) -> list[dict]:
+        """返回所有存量决策快照。"""
+        return [s.to_dict() if hasattr(s, "to_dict") else s for s in load_decision_snapshots()]
+
+    def decision_attribution_settle(self, *, now: str | None = None) -> dict:
+        """结算到期决策快照，返回结构化 JSON。"""
+        as_of = datetime.now(timezone.utc) if now is None else parse_datetime(now)
+        return run_settlement(
+            as_of=as_of,
+            executions=self.list_executions(),
+            repo_root=self._repo_root,
+        )
 
     def save_forecast(self, payload: dict) -> dict:
         """保存用户确认过的预测记录。"""

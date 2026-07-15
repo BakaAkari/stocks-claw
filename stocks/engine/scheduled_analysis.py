@@ -25,6 +25,7 @@ from stocks.engine.news_intelligence_store import (
     IntelligenceSnapshot,
     NewsIntelligenceStore,
 )
+from stocks.engine.outcome_attribution import save_portfolio_snapshots
 from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
 from stocks.engine.quant_action import (
     _TAG_TO_BUCKET,
@@ -430,6 +431,18 @@ class ScheduledAnalysisRunner:
             if shadow:
                 mb = run.setdefault("mandatory_blocks", {})
                 mb["shadow_account"] = shadow
+
+        # Decision Attribution: save snapshots for each approved/suppressed action
+        portfolio_decision = run.get("portfolio_decision") or {}
+        if portfolio_decision.get("approved_actions") and self._repo_root:
+            try:
+                save_portfolio_snapshots(
+                    portfolio_decision,
+                    generated_at=run.get("generated_at", ""),
+                    repo_root=self._repo_root,
+                )
+            except Exception:
+                logger.exception("Failed to save decision snapshots")
 
         # Hypothesis Tracker: 自动关联本期 action_cards 到相关论点
         if action_cards and self._repo_root:

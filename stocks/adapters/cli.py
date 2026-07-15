@@ -132,6 +132,16 @@ class CLIAdapter:
             help="保存一条预测记录；值为 ForecastRecord 字段的 JSON 对象",
         )
         asset_actions.add_argument(
+            "--decision-attribution",
+            action="store_true",
+            help="输出所有决策快照的结构化 JSON",
+        )
+        asset_actions.add_argument(
+            "--decision-attribution-settle",
+            nargs="?", const="now", default=None,
+            help="结算到期的决策快照。可指定 ISO 时间或留空（默认 now）",
+        )
+        asset_actions.add_argument(
             "--check-event-triggers",
             action="store_true",
             help="检查是否有经济日历事件触发（仅检查，不执行采集）",
@@ -236,6 +246,13 @@ class CLIAdapter:
             print(output_text)
 
     async def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
+        if args.decision_attribution:
+            return {"success": True, "data": self.engine.decision_attribution()}
+        if args.decision_attribution_settle is not None:
+            settle = self.engine.decision_attribution_settle(
+                now=args.now if args.decision_attribution_settle == "now" else args.decision_attribution_settle
+            )
+            return {"success": True, "data": settle}
         if args.check_event_triggers:
             return await self.engine.check_event_triggers(now=args.now)
         if args.scheduled_run_due:
@@ -267,6 +284,12 @@ class CLIAdapter:
             return {"success": True, "data": pending, "run_id": run_id}
         if args.forecast_list:
             return {"success": True, "data": self.engine.list_forecasts()}
+        if args.decision_attribution:
+            return self.engine.decision_attribution()
+        if args.decision_attribution_settle:
+            settle_arg = args.decision_attribution_settle
+            now_val = None if settle_arg == "now" else settle_arg
+            return self.engine.decision_attribution_settle(now=now_val)
         if args.assets_list:
             return {
                 "success": True,
