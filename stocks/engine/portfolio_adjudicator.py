@@ -137,6 +137,8 @@ class PortfolioDecision:
     suppressed_actions: list[PortfolioAction] = field(default_factory=list)
     replacement_chains: list[ReplacementChain] = field(default_factory=list)
     unresolved_conflicts: list[dict] = field(default_factory=list)
+    post_trade_projection: dict = field(default_factory=dict)
+    cash_schedule: dict = field(default_factory=dict)
     rule_version: str = _DEFAULT_RULE_VERSION
 
     def to_dict(self) -> dict:
@@ -148,6 +150,8 @@ class PortfolioDecision:
             "suppressed_actions": [a.to_dict() for a in self.suppressed_actions],
             "replacement_chains": [c.to_dict() for c in self.replacement_chains],
             "unresolved_conflicts": self.unresolved_conflicts,
+            "post_trade_projection": self.post_trade_projection,
+            "cash_schedule": self.cash_schedule,
         }
 
 
@@ -573,9 +577,10 @@ def adjudicate_portfolio(
                         position_id=reduce_pid, signal=card["signal"],
                         action_description=card.get("action", ""),
                         ratio=card.get("ratio", 0.0), decision_id=did,
-                        reason="\u786c\u6b62\u635f\u4e0d\u53d7\u7ea6\u675f\u9650\u5236\uff0c\u4f46\u6743\u76ca\u4f4e\u914d\u9700\u590d\u6838",
+                        reason="硬止损不受约束限制，但权益低配需复核",
                         settlement_timing="T+0",
                     ))
+                    suppressed_pids.add(reduce_pid)
                 else:
                     suppressed_pids.add(reduce_pid)
                     suppressed.append(PortfolioAction(
@@ -617,11 +622,64 @@ def adjudicate_portfolio(
     if conflicts and status == "approved":
         status = "review_required"
 
-    portfolio_did = make_decision_id(run_id, "portfolio", status, len(approved), rule_version)
+    portfolio_did = make_decision_id(
+        run_id, "portfolio", status, len(approved), rule_version
+    )
+
+    before_ratios = _build_bucket_ratios_from_evidences(evidences)
+    projected_values: dict[str, float] = {}
+    total_value = sum(
+        ev.get("market_value_cny", 0.0) or 0.0
+        for ev in evidences.values()
+    )
+    for ev in evidences.values():
+        value = ev.get("market_value_cny", 0.0) or 0.0
+        for bucket in _get_exposure_buckets(ev):
+            projected_values[bucket] = projected_values.get(bucket, 0.0) + value
+
+    approved_sales: list[dict] = []
+    for action in approved:
+        ev = evidences.get(action.position_id, {})
+        buckets = _get_exposure_buckets(ev)
+        if action.signal in _REDUCE_SIGNALS:
+            proceeds = (ev.get("market_value_cny", 0.0) or 0.0) * abs(action.ratio)
+            for bucket in buckets:
+                projected_values[bucket] = max(
+                    0.0, projected_values.get(bucket, 0.0) - proceeds
+                )
+            approved_sales.append({
+                "position_id": action.position_id,
+                "ratio": abs(action.ratio),
+                "settlement": {"timing": action.settlement_timing or "T+1"},
+            })
+        elif action.signal in _ADD_SIGNALS:
+            added_value = total_value * abs(action.ratio)
+            for bucket in buckets:
+                projected_values[bucket] = projected_values.get(bucket, 0.0) + added_value
+
+    after_ratios = {
+        bucket: value / total_value
+        for bucket, value in projected_values.items()
+        if total_value > 0
+    }
+    post_trade_projection = {
+        "before_ratios": before_ratios,
+        "after_ratios": after_ratios,
+        "total_value_cny": round(total_value, 2),
+    }
+    valuations = [
+        {"position_id": pid, **ev}
+        for pid, ev in evidences.items()
+    ]
+    decision_cash_schedule = build_cash_schedule(
+        valuations, approved_sales, total_value
+    )
 
     return PortfolioDecision(
         status=status, decision_id=portfolio_did,
         approved_actions=approved, suppressed_actions=suppressed,
         replacement_chains=chains, unresolved_conflicts=conflicts,
+        post_trade_projection=post_trade_projection,
+        cash_schedule=decision_cash_schedule,
         rule_version=rule_version,
     )

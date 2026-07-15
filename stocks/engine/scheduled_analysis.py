@@ -821,9 +821,18 @@ def build_scheduled_run(
             run_id=occurrence.run_id,
         )
     except Exception:
-        import logging
-        logging.getLogger(__name__).exception("Portfolio adjudication failed")
-        portfolio_decision = None
+        from stocks.engine.portfolio_adjudicator import PortfolioDecision
+
+        logger.exception("Portfolio adjudication failed")
+        portfolio_decision = PortfolioDecision(
+            status="review_required",
+            decision_id=f"{occurrence.run_id}:adjudication_failed",
+            unresolved_conflicts=[{
+                "code": "adjudication_failed",
+                "message": "组合裁决失败，所有动作均未获批，需人工复核",
+            }],
+            cash_schedule=cash_schedule,
+        )
     session_intent_props = _session_intent_props(session.id)
     filtered_action_signals = _filter_action_signals_by_market(
         context.get("action_signals") or {}, session.primary_market

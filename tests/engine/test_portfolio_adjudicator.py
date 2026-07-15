@@ -526,6 +526,54 @@ class TestScheduledCashScheduleIntegration:
         assert "cn_588000" not in run["cash_schedule"]["immediate_cash_position_ids"]
 
 
+class TestScheduledAdjudicationFailure:
+    def test_adjudicator_exception_fails_closed(self, sample_portfolio, monkeypatch):
+        from stocks.engine import portfolio_adjudicator
+        from stocks.engine.scheduled_analysis import (
+            ScheduledSession,
+            SessionOccurrence,
+            build_scheduled_run,
+        )
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("forced adjudication failure")
+
+        monkeypatch.setattr(portfolio_adjudicator, "adjudicate_portfolio", fail)
+        positions, _ = sample_portfolio
+        now = datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc)
+        occurrence = SessionOccurrence(
+            session=ScheduledSession(
+                id="cn_pre_close", market="cn", exchange_timezone="Asia/Shanghai",
+                user_timezone="Asia/Shanghai", time="14:35",
+                intent="pre_close_decision", push="normal", enabled=True,
+                duplicate_window_minutes=90, holidays=frozenset(), primary_market="cn",
+            ),
+            market_date=now.date(), scheduled_for=now,
+        )
+        context = {
+            "schema_version": 12, "generated_at": now.isoformat(),
+            "data_quality": {"quotes": {"freshness": "current"}},
+            "position_valuations": positions,
+            "intelligence_digest": {
+                "intelligence_health": {
+                    "status": "missing", "age_minutes": None, "risk_eligible": False,
+                },
+                "intelligence_coverage": {}, "top_signals": [], "top_clusters": [],
+            },
+            "market_state": {}, "rotation": {},
+            "portfolio_mapping": {"ratios": {}},
+            "liquidity_summary": _liquidity_summary(), "action_signals": {},
+        }
+        run = build_scheduled_run(
+            context, occurrence=occurrence, generated_at=now,
+            config={"quiet_hours": {"enabled": False}},
+        )
+        decision = run["portfolio_decision"]
+        assert decision["status"] == "review_required"
+        assert decision["approved_actions"] == []
+        assert decision["unresolved_conflicts"][0]["code"] == "adjudication_failed"
+
+
 # =====================================================================
 # Task 5: PortfolioAdjudicator tests
 # =====================================================================
@@ -1230,6 +1278,63 @@ class TestDecisionIdDeterminism:
             for action in decision.approved_actions:
                 assert len(action.decision_id) == 16
                 assert isinstance(action.decision_id, str)
+
+
+class TestDecisionCompleteness:
+    def test_stop_loss_is_approved_exactly_once_during_review(self):
+        cards = [_make_card("stop", signal="stop_loss", ratio=1.0,
+                            raw_signal="stop_loss", raw_ratio=1.0)]
+        positions = [
+            _make_position("stop", exposure_tags=["a_share"], market_value_cny=100_000.0),
+            _make_position("fixed", product_type="fixed_income_plus_fund",
+                           exposure_tags=["fixed_income"], market_value_cny=900_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(equity_min=0.25),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        approved = [a for a in decision.approved_actions if a.position_id == "stop"]
+        assert decision.status == "review_required"
+        assert len(approved) == 1
+
+    def test_decision_contains_post_trade_projection(self):
+        cards = [_make_card("gold", signal="reduce", ratio=0.5,
+                            raw_signal="reduce", raw_ratio=0.5,
+                            product_type="precious_metal_account")]
+        positions = [
+            _make_position("gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], market_value_cny=200_000.0),
+            _make_position("cash", product_type="cash", exposure_tags=["cash_like"],
+                           liquidity_tier="cash", market_value_cny=800_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(gold_max=0.15),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        projection = decision.to_dict()["post_trade_projection"]
+        assert projection["before_ratios"]["黄金"] == 0.2
+        assert projection["after_ratios"]["黄金"] == 0.1
+
+    def test_approved_sale_updates_decision_cash_schedule(self):
+        cards = [_make_card("gold", signal="reduce", ratio=0.5,
+                            raw_signal="reduce", raw_ratio=0.5,
+                            product_type="precious_metal_account")]
+        positions = [
+            _make_position("gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], liquidity_tier="t1",
+                           market_value_cny=200_000.0),
+            _make_position("cash", product_type="cash", exposure_tags=["cash_like"],
+                           liquidity_tier="cash", market_value_cny=800_000.0),
+        ]
+        initial = build_cash_schedule(positions, [], 1_000_000.0)
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(gold_max=0.15),
+            _risk_state(), initial, run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        schedule = decision.to_dict()["cash_schedule"]
+        assert schedule["settling_cash_cny"] == 100_000.0
+        assert "gold" in schedule["settling_cash_position_ids"]
+        assert schedule["strategic_exit_value_cny"] == 100_000.0
 
 
 # ── Status mutual exclusion ──────────────────────────────────────────
