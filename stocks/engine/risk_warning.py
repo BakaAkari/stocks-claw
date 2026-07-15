@@ -160,3 +160,23 @@ def assess_risk(
         suspend_accumulation=suspend,
         cash_target_pct=cash_target,
     )
+
+
+def assessment_to_observation(
+    assessment: RiskAssessment,
+    *,
+    observed_at,
+    evidence_keys: list[str] | tuple[str, ...],
+    ttl_minutes: int = 360,
+):
+    """Convert a stateless assessment into a persistent risk observation."""
+    from datetime import timedelta
+
+    from stocks.engine.risk_state import RiskObservation
+
+    return RiskObservation(
+        candidate_level=assessment.level,
+        evidence_keys=tuple(sorted(set(evidence_keys))),
+        observed_at=observed_at,
+        expires_at=observed_at + timedelta(minutes=ttl_minutes),
+    )

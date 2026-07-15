@@ -65,6 +65,13 @@ DEFAULT_ENGINE_CONFIG = {
         "base_url_env": "OPENAI_BASE_URL",
         "fallback_base_url": "http://100.121.167.1:8317/v1",
     },
+    "risk_state": {
+        "critical_ttl_minutes": 360,
+        "hedge_independent_evidence": 2,
+        "hedge_confirmations": 2,
+        "deescalation_confirmations": 2,
+        "state_path": ".local/risk_state.json",
+    },
     "risk_warning": {
         # VIX 阈值
         "vix_hedge": 35,

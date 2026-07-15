@@ -709,6 +709,45 @@ def _merge_profile_config(base_config):
     return merged
 
 
+def _risk_evidence_keys(*, vix, clusters: list[dict], geopolitical_crisis: bool) -> list[str]:
+    keys: list[str] = []
+    if isinstance(vix, (int, float)):
+        if vix > 35:
+            keys.append("macro:vix_hedge")
+        elif vix > 25:
+            keys.append("macro:vix_reduce")
+        elif vix > 20:
+            keys.append("macro:vix_watch")
+    for index, cluster in enumerate(clusters):
+        if cluster.get("urgency") not in {"critical", "high"}:
+            continue
+        identity = (cluster.get("cluster_id") or cluster.get("id") or cluster.get("url")
+                    or cluster.get("theme") or index)
+        keys.append(f"cluster:{identity}")
+    return sorted(set(keys))
+
+
+def _persist_risk_state(assessment: dict, *, generated_at: datetime, config: dict) -> dict:
+    from stocks.engine.risk_state import RiskObservation, RiskStateStore
+
+    risk_cfg = (config or {}).get("risk_state") or {}
+    observation = RiskObservation(
+        candidate_level=assessment.get("level", "normal"),
+        evidence_keys=tuple(assessment.get("evidence_keys") or ()),
+        observed_at=generated_at,
+        expires_at=generated_at + timedelta(
+            minutes=int(risk_cfg.get("critical_ttl_minutes", 360))
+        ),
+    )
+    state = RiskStateStore(
+        path=risk_cfg.get("state_path", ".local/risk_state.json"), config=risk_cfg
+    ).update(observation)
+    result = state.to_dict()
+    result["recommended_actions"] = assessment.get("recommended_actions", [])
+    result["triggers"] = assessment.get("triggers", [])
+    return result
+
+
 def build_scheduled_run(
     context: dict,
     *,
@@ -808,15 +847,18 @@ def build_scheduled_run(
                 "evidence": pv.get("evidence", {}),
                 "product_type": (pv.get("classification") or {}).get("product_type", ""),
             }
-    # Adjudicate portfolio actions using the current risk assessment.
-    # Task 7 will replace this stateless assessment with persistent RiskState.
+    # Adjudicate portfolio actions against the persistent risk state.
     risk_assessment = _compute_risk_assessment(context)
+    risk_state = _persist_risk_state(
+        risk_assessment, generated_at=generated_at,
+        config=context.get("engine_config") or config,
+    )
     try:
         portfolio_decision = adjudicate_portfolio(
             action_cards,
             evidences,
             context.get("portfolio_constraints") or {},
-            risk_assessment,
+            risk_state,
             cash_schedule,
             run_id=occurrence.run_id,
         )
@@ -901,8 +943,9 @@ def build_scheduled_run(
         },
         "notification": notification,
         "risk_assessment": risk_assessment,
+        "risk_state": risk_state,
         "mandatory_blocks": build_mandatory_blocks(
-            risk_assessment,
+            risk_state,
             capital_allocation.get("constraint_alerts", []),
             context.get("upcoming_events") or [],
             capital_allocation=capital_allocation,
@@ -931,15 +974,8 @@ def _compute_risk_assessment(context: dict) -> dict:
     macro = (context.get("market_state") or {}).get("macro") or context.get("macro") or {}
     intel_digest = context.get("intelligence_digest") or {}
     health = intel_digest.get("intelligence_health") or {}
-    if health and not health.get("risk_eligible", False):
-        return {
-            "level": "normal",
-            "triggers": [],
-            "recommended_actions": ["情报过期或缺失，不参与风险升级"],
-            "suspend_accumulation": False,
-            "cash_target_pct": None,
-        }
-    clusters = intel_digest.get("top_clusters") or []
+    intelligence_eligible = not health or health.get("risk_eligible", False)
+    clusters = (intel_digest.get("top_clusters") or []) if intelligence_eligible else []
 
     geopolitical_crisis = any(
         c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
@@ -955,6 +991,10 @@ def _compute_risk_assessment(context: dict) -> dict:
 
     return {
         "level": risk.level,
+        "evidence_keys": _risk_evidence_keys(
+            vix=macro.get("vix"), clusters=clusters,
+            geopolitical_crisis=geopolitical_crisis,
+        ),
         "triggers": [{"condition": t.condition, "value": t.value} for t in risk.triggers],
         "recommended_actions": risk.recommended_actions,
         "suspend_accumulation": risk.suspend_accumulation,
@@ -1145,6 +1185,26 @@ def build_intelligence_run(
                 cash_target_pct=risk.cash_target_pct,
             )
 
+    geopolitical_crisis = any(
+        c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
+        for c in clusters
+    )
+    risk_assessment = {
+        "level": risk.level,
+        "evidence_keys": _risk_evidence_keys(
+            vix=macro.get("vix"), clusters=clusters,
+            geopolitical_crisis=geopolitical_crisis,
+        ),
+        "triggers": [{"condition": item.condition, "value": item.value}
+                     for item in risk.triggers],
+        "recommended_actions": risk.recommended_actions,
+        "suspend_accumulation": risk.suspend_accumulation,
+        "cash_target_pct": risk.cash_target_pct,
+    }
+    risk_state = _persist_risk_state(
+        risk_assessment, generated_at=generated_at, config=engine_config or config
+    )
+
     # Silent mode: no signals + no critical clusters + low priority → archive only
     has_critical = any(c.get("urgency") == "critical" for c in clusters)
     has_signals = len(signals) > 0
@@ -1201,13 +1261,8 @@ def build_intelligence_run(
             "requires_user_confirmation": True,
         },
         "notification": notification,
-        "risk_assessment": {
-            "level": risk.level,
-            "triggers": [{"condition": t.condition, "value": t.value} for t in risk.triggers],
-            "recommended_actions": risk.recommended_actions,
-            "suspend_accumulation": risk.suspend_accumulation,
-            "cash_target_pct": risk.cash_target_pct,
-        },
+        "risk_assessment": risk_assessment,
+        "risk_state": risk_state,
         "context_digest": {
             "market_state_summary": {
                 "risk_appetite": _risk_appetite_from_macro(macro),

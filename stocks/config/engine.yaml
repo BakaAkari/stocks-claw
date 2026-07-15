@@ -89,6 +89,13 @@ llm:
   api_key_env: OPENAI_API_KEY
   base_url_env: OPENAI_BASE_URL
 
+risk_state:
+  critical_ttl_minutes: 360
+  hedge_independent_evidence: 2
+  hedge_confirmations: 2
+  deescalation_confirmations: 2
+  state_path: .local/risk_state.json
+
 logging:
   # 日志级别：DEBUG, INFO, WARNING, ERROR
   level: INFO
