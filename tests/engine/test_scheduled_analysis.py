@@ -106,6 +106,8 @@ def _context(*, fired: bool = False) -> dict:
                 "trigger_review": [
                     {
                         "target": "a:588000",
+                        "instrument": "a:588000",
+                        "type": "stop_loss" if fired else "price_watch",
                         "status": trigger_status,
                         "observed": {"pnl_pct": 31.25},
                     }

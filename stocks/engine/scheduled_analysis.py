@@ -34,6 +34,7 @@ from stocks.engine.quant_action import (
 from stocks.engine.risk_warning import assess_risk
 from stocks.engine.shadow_account import build_shadow_block, save_snapshot
 from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
+from stocks.engine.window_delta import WindowDelta, compute_window_delta
 from stocks.logging_utils import get_logger
 
 logger = get_logger("scheduled_analysis")
@@ -55,6 +56,7 @@ class ScheduledSession:
     holidays: frozenset[str]
     primary_market: str
     run_every_minutes: Optional[int] = None
+    delta_silent_when_unchanged: bool = False
 
     @property
     def exchange_tz(self) -> ZoneInfo:
@@ -187,6 +189,9 @@ class MarketSessionCalendar:
                         holidays=holidays,
                         primary_market=str(item.get("primary_market") or market),
                         run_every_minutes=item.get("run_every_minutes"),
+                        delta_silent_when_unchanged=bool(
+                            item.get("delta_silent_when_unchanged", False)
+                        ),
                     )
                 )
         return sessions
@@ -235,6 +240,35 @@ class RunArtifactStore:
         if latest and latest.get("market_date") == market_date:
             return latest
         return None
+
+    def find_previous_for_session(
+        self, session_id: str, market: str, *, market_date: str = ""
+    ) -> Optional[dict]:
+        """Return prior same-session artifact, else latest same-market window."""
+        same_session = self.latest(session_id)
+        if (
+            same_session
+            and same_session.get("market") == market
+            and (not market_date or same_session.get("market_date") == market_date)
+        ):
+            return same_session
+        best: Optional[dict] = None
+        best_generated = ""
+        for path in self.latest_dir.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict) or data.get("market") != market:
+                continue
+            if market_date and data.get("market_date") != market_date:
+                continue
+            generated = data.get("generated_at") or ""
+            if generated > best_generated:
+                best = data
+                best_generated = generated
+        return best
+
 
     def _artifact_path(self, run: dict, *, suffix: str) -> Path:
         return (
@@ -369,11 +403,16 @@ class ScheduledAnalysisRunner:
             include_quotes=True,
             include_history=True,
         )
+        previous_run = self.store.find_previous_for_session(
+            occurrence.session.id, occurrence.session.market,
+            market_date=market_date,
+        )
         run = build_scheduled_run(
             context.to_dict(),
             occurrence=occurrence,
             generated_at=now,
             config=self.config,
+            previous_run=previous_run,
         )
 
         # Shadow Account: 保存本期建议快照 + 注入诊断
@@ -739,9 +778,11 @@ def _persist_risk_state(assessment: dict, *, generated_at: datetime, config: dic
             minutes=int(risk_cfg.get("critical_ttl_minutes", 360))
         ),
     )
-    state = RiskStateStore(
-        path=risk_cfg.get("state_path", ".local/risk_state.json"), config=risk_cfg
-    ).update(observation)
+    state_path = risk_cfg.get("state_path")
+    if not state_path:
+        artifact_dir = Path((config or {}).get("artifact_dir") or ".local/scheduled_runs")
+        state_path = artifact_dir.parent / "risk_state.json"
+    state = RiskStateStore(path=state_path, config=risk_cfg).update(observation)
     result = state.to_dict()
     result["recommended_actions"] = assessment.get("recommended_actions", [])
     result["triggers"] = assessment.get("triggers", [])
@@ -754,6 +795,7 @@ def build_scheduled_run(
     occurrence: SessionOccurrence,
     generated_at: datetime,
     config: dict,
+    previous_run: Optional[dict] = None,
 ) -> dict:
     session = occurrence.session
     generated_at_iso = _iso_utc(generated_at)
@@ -891,15 +933,19 @@ def build_scheduled_run(
         max_cross=2,
         can_recommend_new=session_intent_props.get("can_recommend_new", True),
     )
-    priority = _priority(trigger_reviews, position_reviews)
-    notification = _notification(
-        session=session,
-        priority=priority,
-        now=generated_at,
-        quiet_hours=config.get("quiet_hours") or {},
+    fired_triggers = [
+        f"{item.get('type', '')}:{item.get('instrument', '')}"
+        for item in trigger_reviews if item.get("status") == "fired"
+    ]
+    priority = _priority(
+        risk_state=risk_state,
+        portfolio_decision=portfolio_decision.to_dict(),
+        fired_triggers=fired_triggers,
+        trigger_reviews=trigger_reviews,
+        position_reviews=position_reviews,
     )
     status = _run_status(context_quality)
-    return {
+    run = {
         "schema_version": SCHEDULED_RUN_SCHEMA_VERSION,
         "run_id": occurrence.run_id,
         "generated_at": generated_at_iso,
@@ -920,8 +966,8 @@ def build_scheduled_run(
         "portfolio_scope": _portfolio_scope(context, session.primary_market),
         "session_summary": {
             "headline": _headline(session.id),
-            "priority": priority,
-            "push_policy": notification["policy"],
+            "priority": "normal",
+            "push_policy": "push_now",
             "intent_props": session_intent_props,
             "market_state_summary": _market_state_summary(context.get("market_state") or {}),
         },
@@ -941,7 +987,6 @@ def build_scheduled_run(
             "may_write_financial_memory": False,
             "requires_user_confirmation": True,
         },
-        "notification": notification,
         "risk_assessment": risk_assessment,
         "risk_state": risk_state,
         "mandatory_blocks": build_mandatory_blocks(
@@ -965,6 +1010,18 @@ def build_scheduled_run(
             "upcoming_events": context.get("upcoming_events") or [],
         },
     }
+    window_delta = compute_window_delta(
+        previous_run, run, session_id=session.id, market=session.market
+    )
+    notification = _notification(
+        session=session, priority=priority, now=generated_at,
+        quiet_hours=config.get("quiet_hours") or {}, window_delta=window_delta,
+    )
+    run["window_delta"] = window_delta.to_dict()
+    run["notification"] = notification
+    run["session_summary"]["priority"] = priority
+    run["session_summary"]["push_policy"] = notification["policy"]
+    return run
 
 
 def _compute_risk_assessment(context: dict) -> dict:
@@ -2407,14 +2464,66 @@ def _symbol_matches_market(symbol: str, market: str) -> bool:
     return False
 
 
-def _priority(trigger_reviews: list[dict], position_reviews: list[dict]) -> str:
-    if any(item.get("status") == "fired" for item in trigger_reviews):
+def _priority(
+    risk_state: Optional[dict] = None,
+    portfolio_decision: Optional[dict] = None,
+    fired_triggers: Optional[list[str]] = None,
+    trigger_reviews: Optional[list[dict]] = None,
+    position_reviews: Optional[list[dict]] = None,
+) -> str:
+    """Compute session priority based on risk state, portfolio decision, and triggers.
+
+    Priority rules:
+    - Critical: risk hedge/escalation, approved stop_loss/urgent actions, fired stop-loss triggers
+    - High: risk reduce/watch, review_required portfolio decision
+    - Normal: everything else (normal risk + no approved urgent, even if manual gold high loss)
+    """
+    risk_state = risk_state or {}
+    portfolio_decision = portfolio_decision or {}
+    fired_triggers = fired_triggers or []
+    trigger_reviews = trigger_reviews or []
+    position_reviews = position_reviews or []
+
+    # 1. Only a new hedge escalation is critical; a persistent unchanged hedge
+    # remains high and is handled by WindowDelta without repeated alarm spam.
+    risk_level = risk_state.get("level", "normal")
+    risk_transition = risk_state.get("transition", "")
+    if risk_level == "hedge" and risk_transition == "escalated":
         return "critical"
+
+    # 2. Approved stop_loss or urgent reduce -> critical
+    for action in portfolio_decision.get("approved_actions") or []:
+        sig = action.get("signal", "")
+        ratio = abs(action.get("ratio", 0.0) or 0.0)
+        if sig in ("stop_loss",) or (sig == "reduce" and ratio >= 0.5):
+            return "critical"
+
+    # 3. Only stop-loss / urgent fired triggers are critical.
+    for item in trigger_reviews:
+        if item.get("status") != "fired":
+            continue
+        trigger_type = str(item.get("type") or item.get("trigger_type") or "")
+        urgency = str(item.get("urgency") or "")
+        if "stop_loss" in trigger_type or urgency == "critical":
+            return "critical"
+    if any(str(item).startswith("stop_loss") for item in fired_triggers):
+        return "critical"
+
+    # 4. Persistent hedge/reduce risk -> high
+    if risk_level in ("hedge", "reduce"):
+        return "high"
+
+    # 5. review_required -> high
+    if portfolio_decision.get("status") == "review_required":
+        return "high"
+
+    # 6. High/severe loss with rebalance eligibility (from position_reviews)
     for item in position_reviews:
         loss_level = item.get("loss_level", "normal")
         liquidity = item.get("liquidity") or {}
         if loss_level in {"high", "severe"} and liquidity.get("rebalance_eligible") is not False:
-            return "critical"
+            return "high"
+
     return "normal"
 
 
@@ -2424,7 +2533,22 @@ def _notification(
     priority: str,
     now: datetime,
     quiet_hours: dict,
+    window_delta: Optional[WindowDelta] = None,
 ) -> dict:
+    # Delta-driven: if no material change and session is silent-when-unchanged, archive_only
+    if (
+        window_delta is not None
+        and not window_delta.material
+        and not window_delta.first_in_session
+        and session.delta_silent_when_unchanged
+    ):
+        return {
+            "recommended": False,
+            "urgency": priority,
+            "quiet_hours_blocked": False,
+            "policy": "archive_only",
+            "delta_driven": True,
+        }
     quiet_blocked = _quiet_hours_blocked(now, quiet_hours) and priority != "critical"
     if session.push == "disabled":
         recommended = False

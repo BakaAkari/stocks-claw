@@ -28,7 +28,8 @@
           "time": "10:00",
           "intent": "open_watch",
           "push": "normal",
-          "primary_market": "cn"
+          "primary_market": "cn",
+          "delta_silent_when_unchanged": true
         },
         {
           "id": "cn_morning_close",
@@ -49,7 +50,8 @@
           "time": "14:35",
           "intent": "pre_close_decision",
           "push": "normal",
-          "primary_market": "cn"
+          "primary_market": "cn",
+          "delta_silent_when_unchanged": true
         },
         {
           "id": "cn_after_close",
@@ -77,7 +79,8 @@
           "time": "10:00",
           "intent": "open_watch",
           "push": "normal",
-          "primary_market": "us"
+          "primary_market": "us",
+          "delta_silent_when_unchanged": true
         },
         {
           "id": "us_mid_session",
@@ -92,7 +95,8 @@
           "time": "15:30",
           "intent": "pre_close_decision",
           "push": "digest",
-          "primary_market": "us"
+          "primary_market": "us",
+          "delta_silent_when_unchanged": true
         },
         {
           "id": "us_after_close",
