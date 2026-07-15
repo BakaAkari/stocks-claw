@@ -21,6 +21,7 @@ from stocks.engine.news_intelligence_store import (
     IntelligenceSignal,
     IntelligenceSnapshot,
 )
+from stocks.engine.quant_action import _INTEL_SIGNAL_PROXY
 from stocks.logging_utils import get_logger
 
 logger = get_logger("intelligence_analyzer")
@@ -753,6 +754,7 @@ class LLMIntelligenceAnalyzer:
         self.timeout = timeout
         self.max_input_articles = max_input_articles
         self.fallback_to_rules = fallback_to_rules
+        self._target_signal_count = 8  # minimum signals per run
         self._env_file_path = env_file_path
         self._base_url_override = base_url
         self._fallback = IntelligenceAnalyzer(lookback_hours=6, holdings=list(self.holdings))
@@ -844,6 +846,9 @@ class LLMIntelligenceAnalyzer:
                         formed_at=cluster.formed_at,
                     ))
                 clusters = backfilled
+
+            # Pad missing categories with hold signals
+            signals = self._pad_category_signals(signals, clusters)
 
             return AnalysisResult(
                 analyzed_at=analyzed_at,
@@ -1004,6 +1009,85 @@ class LLMIntelligenceAnalyzer:
                 formed_at=datetime.now(timezone.utc),
             ))
         return clusters
+
+    def _pad_category_signals(
+        self, signals: list[IntelligenceSignal], clusters: list[EventCluster]
+    ) -> list[IntelligenceSignal]:
+        """Ensure every holding category has at least one signal.
+
+        If the LLM didn't cover a category, add a hold signal with the
+        reasoning sourced from the most relevant cluster.
+        """
+        # Category → target symbol mapping
+        categories = {
+            'gold': ['us:NEM', 'a:518880', 'ccb_gold'],
+            'us_tech': ['us:NVDA', 'us:QQQ'],
+            'us_energy': ['us:XLE'],
+            'us_defense': ['us:ITA'],
+            'china_broad': ['a:510300', 'a:512890', 'a:511880'],
+            'china_sci': ['a:588000', 'a:512480', 'a:561560'],
+            'qdii': ['alipay_gf_nasdaq', 'alipay_dc_nasdaq'],
+            'active': ['alipay_info'],
+            'bonds': ['us:SGOV'],
+        }
+        # Category → cluster theme mapping for rationale sourcing
+        category_theme = {
+            'gold': ['geopolitics', 'monetary_policy', 'macro_data'],
+            'us_energy': ['geopolitics', 'energy'],
+            'us_tech': ['technology', 'earnings', 'monetary_policy'],
+            'us_defense': ['geopolitics'],
+            'china_broad': ['macro_data', 'monetary_policy', 'china_policy'],
+            'china_sci': ['technology', 'china_policy'],
+            'qdii': ['technology', 'monetary_policy'],
+            'active': ['technology', 'earnings'],
+            'bonds': ['monetary_policy', 'macro_data'],
+        }
+
+        # Build reverse proxy: for each signal symbol, what position symbols does it cover?: for each signal symbol, what position symbols does it cover?
+        # E.g. GLD → {"NEM", "a:518880", "ccb_gold"}
+        proxy_covered = set()
+        for s in signals:
+            proxy_covered.add(s.symbol)  # direct match
+            if s.symbol in _INTEL_SIGNAL_PROXY:
+                proxy_covered.add(_INTEL_SIGNAL_PROXY[s.symbol])
+            # Also check if any category symbol contains this signal symbol
+            # E.g. "NVDA" signal → "us:NVDA" position
+            for cat_syms in categories.values():
+                for pos in cat_syms:
+                    if pos.lower().endswith(f":{s.symbol.lower()}") or pos == s.symbol:
+                        proxy_covered.add(pos)
+
+        padded = list(signals)
+        for cat, syms in categories.items():
+            if any(s in proxy_covered for s in syms):
+                continue
+            # Find relevant cluster for rationale
+            themes = category_theme.get(cat, ['general'])
+            relevant_clusters = [c for c in clusters if c.theme in themes]
+            if relevant_clusters:
+                best = max(relevant_clusters, key=lambda c: c.confidence)
+                rationale = f"主题[{best.theme}]无直接利空：{best.summary[:60]}"
+                urgency = best.urgency
+                conf = min(0.65, best.confidence)
+            else:
+                rationale = "无相关重大事件，维持持有"
+                urgency = "low"
+                conf = 0.55
+            # Pick the primary holding symbol for this category
+            target = syms[0]
+            padded.append(IntelligenceSignal(
+                symbol=target,
+                name=cat,
+                direction="hold",
+                horizon="short_term",
+                rationale=rationale,
+                falsification="重大事件改变基本面格局",
+                risk_source="主题切换或突发事件",
+                confidence=conf,
+                urgency=urgency,
+                generated_at=datetime.now(timezone.utc),
+            ))
+        return padded
 
     def _parse_signals(self, llm_result: dict) -> list[IntelligenceSignal]:
         signals = []
