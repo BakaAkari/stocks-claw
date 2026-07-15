@@ -62,6 +62,9 @@ class MacroSnapshot:
     official_stats: dict[str, Optional[float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        market_as_of = _compute_tier_as_of(self.field_sources, _MARKET_FIELDS)
+        official_as_of = _compute_tier_as_of(self.field_sources,
+            [f"official_stats.{f}" for f in _OFFICIAL_FIELDS])
         return {
             "usd_cny": self.usd_cny,
             "vix": self.vix,
@@ -74,7 +77,36 @@ class MacroSnapshot:
             "errors": self.errors,
             "field_sources": self.field_sources,
             "official_stats": self.official_stats,
+            "market_as_of": market_as_of,
+            "official_as_of": official_as_of,
+            "next_official_release": _next_cpi_release_estimate(),
         }
+
+
+def _compute_tier_as_of(field_sources: dict, fields: tuple[str, ...]) -> Optional[str]:
+    """从 field_sources 提取指定字段的最旧 as_of（用于分层新鲜度）。"""
+    dates = []
+    for fld in fields:
+        meta = field_sources.get(fld, {})
+        as_of = meta.get("as_of")
+        if as_of:
+            dates.append(as_of)
+    return min(dates) if dates else None
+
+
+def _next_cpi_release_estimate() -> str:
+    """估算下一次 CPI 发布日期（每月 10-14 号）。"""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    # CPI 通常在每月 10-14 日发布前月数据
+    # 当前月 >= 15 号 → 下月 12 号发布；否则本月 12 号可能尚未发布
+    year, month = now.year, now.month
+    if now.day >= 15:
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return f"{year}-{month:02d}-12"
 
 
 # ------------------------------------------------------------------

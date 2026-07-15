@@ -1395,6 +1395,8 @@ class ContextBuilder:
             "official_stats.fed_funds_rate",
         ]
         official_stats = macro_snapshot.get("official_stats") or {}
+        field_sources = macro_snapshot.get("field_sources") or {}
+
         filled = [field for field in market_fields if macro_snapshot.get(field) is not None]
         filled.extend(
             field for field in official_fields
@@ -1413,14 +1415,27 @@ class ContextBuilder:
         else:
             status = "ok"
 
-        field_sources = macro_snapshot.get("field_sources") or {}
+        # ── 分层 as_of：市场数据(日频) vs 官方统计(月频) ──
+        market_as_of_raw = macro_snapshot.get("market_as_of")
+        official_as_of_raw = macro_snapshot.get("official_as_of")
+        market_dt = self._parse_iso_datetime(market_as_of_raw) if market_as_of_raw else None
+        official_dt = self._parse_iso_datetime(official_as_of_raw) if official_as_of_raw else None
+
+        # 市场数据新鲜度
+        market_fresh = self._freshness_from_datetime(market_dt, generated_at) if market_dt else {
+            "freshness": "unknown", "age_seconds": None}
+        # 官方统计新鲜度
+        official_fresh = self._freshness_from_datetime(official_dt, generated_at) if official_dt else {
+            "freshness": "unknown", "age_seconds": None}
+
+        # 整体 as_of 仍保留为市场数据 as_of（兼容旧引用）
         as_of_values = [
             parsed
             for metadata in field_sources.values()
             if (parsed := self._parse_iso_datetime(metadata.get("as_of"))) is not None
         ]
         oldest_as_of = min(as_of_values) if as_of_values else None
-        freshness_info = self._freshness_from_datetime(oldest_as_of, generated_at)
+
         sources = sorted({
             metadata.get("source")
             for metadata in field_sources.values()
@@ -1433,13 +1448,27 @@ class ContextBuilder:
             "status": status,
             "source": macro_snapshot.get("source", "unknown"),
             "as_of": oldest_as_of.isoformat() if oldest_as_of else None,
-            "freshness": freshness_info["freshness"],
-            "age_seconds": freshness_info["age_seconds"],
+            "freshness": market_fresh["freshness"],
+            "age_seconds": market_fresh["age_seconds"],
             "filled_fields": len(filled),
             "missing_fields": missing,
             "missing_as_of": missing_as_of,
             "sources": sources,
             "field_sources": field_sources,
+            # 分层新鲜度
+            "market": {
+                "as_of": market_as_of_raw,
+                "freshness": market_fresh["freshness"],
+                "age_seconds": market_fresh["age_seconds"],
+                "fields": market_fields,
+            },
+            "official": {
+                "as_of": official_as_of_raw,
+                "freshness": official_fresh["freshness"],
+                "age_seconds": official_fresh["age_seconds"],
+                "fields": official_fields,
+                "next_release": macro_snapshot.get("next_official_release"),
+            },
             "errors": errors,
         }
 

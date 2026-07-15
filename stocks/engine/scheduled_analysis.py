@@ -1166,14 +1166,14 @@ def build_intelligence_agent_task(session: ScheduledSession) -> dict:
             "不得忽略 data_quality",
             "不得自动保存建议、执行或预测",
             "事件描述必须引用 intelligence_digest.top_clusters 中的实际 summary，不得编造新闻",
-            "宏观数据引用 macro 快照的实际数值，不得猜测",
+            "宏观数据：市场数据(VIX/美债/美元/汇率/黄金/原油)引用 market 层，官方统计(CPI/失业率/联邦基金利率)引用 official 层并标注数据月份。区分日频 vs 月频数据的时效性差异",
             "严禁使用 # | ``` > --- -[ ] HTML 等飞书不兼容的 Markdown 语法",
             "标题用**加粗**，代码用`行内代码`，分隔用空行",
         ],
         "data_reference": {
             "事件": "intelligence_digest.top_clusters[] — theme, summary, sentiment, urgency, affected_markets",
             "信号": "intelligence_digest.top_signals[] — direction, symbol, rationale",
-            "宏观": "macro — vix, us_10y_yield, dxy, usd_cny, gold, crude_oil",
+            "宏观": "macro — market(日频: VIX/美债10Y/美元指数/汇率/黄金/原油, 见 data_quality.macro.market) + official(月频: CPI/失业率/联邦基金利率, 见 data_quality.macro.official, 含 next_release 预估)",
             "行情": "quotes — SPY, QQQ, VIXY, GLD, USO, UUP, NVDA 等 ETF/个股报价",
         },
         "output_structure": {
@@ -1422,7 +1422,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "情报分析只能基于 intelligence_digest 和 .local/intelligence/latest_brief.json 中已有的事实数据",
             # 数据缺口时效
             "数据缺口首次出现时标注'新增'；连续出现时注明'持续N次'；超过7天的缺口降级为脚注，超过30天不再显示",
-            "场外基金手工估值、宏观数据滞后等结构性缺口只在一处集中说明，不在每笔持仓下重复标注",
+            "场外基金手工估值等结构性缺口只在一处集中说明。市场宏观数据(VIX/美债/汇率)为日频，官方统计(CPI/失业率)为月频——引用时区分标注各自的 as_of，不混为一谈",
             # 资产分层报告（硬性）
             "action_cards 的 routing 字段决定报告层级: full→可操作, fund→高门槛(T+2/更高阈值), precious→有价差, info_only→只读, skip→跳过",
             "routing=fund 的资产可以报告止盈/止损建议，但必须标注'T+2到账'、'以收盘净值为准'、'登录平台操作'，不得用'一键操作'语气",

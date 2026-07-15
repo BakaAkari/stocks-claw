@@ -516,6 +516,9 @@ class TestMacroData:
                 "field_sources": field_sources,
                 "source": "composite",
                 "errors": {},
+                "market_as_of": "2026-07-02T00:00:00+00:00",
+                "official_as_of": "2026-05-01T00:00:00+00:00",
+                "next_official_release": "2026-07-12",
             },
             None,
         )
@@ -525,6 +528,11 @@ class TestMacroData:
         assert quality["freshness"] == "old"
         assert quality["filled_fields"] == 9
         assert quality["missing_as_of"] == 0
+        # New: tiered freshness
+        assert quality["market"]["as_of"] == "2026-07-02T00:00:00+00:00"
+        assert quality["market"]["freshness"] == "old"
+        assert quality["official"]["as_of"] == "2026-05-01T00:00:00+00:00"
+        assert quality["official"]["next_release"] == "2026-07-12"
 
 
 class TestEarningsEventProjection:
