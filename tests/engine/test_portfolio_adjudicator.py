@@ -5,6 +5,7 @@ Strict TDD — these tests must fail RED before implementation.
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timezone
 
 import pytest
 
@@ -257,13 +258,14 @@ class TestCashSchedule:
         # safety = 1,045,000 * 0.05 = 52,250 > cash 50,000  immediate = 0
         imm_ids = schedule.get("immediate_cash_position_ids", [])
         for pid in ["cn_588000", "us_qqq", "cn_512480", "alipay_nasdaq",
-                    "alipay_gold", "ccb_wmp_no1", "boc_insurance", "alipay_mmf"]:
+                    "alipay_gold", "ccb_wmp_no1", "boc_insurance"]:
             assert pid not in imm_ids, (
                 f"Unsold {pid} must not be in immediate_cash position_ids"
             )
         # Cash items should be in immediate_cash_position_ids
         assert "cash_hkd" in imm_ids
         assert "cash_usd" in imm_ids
+        assert "alipay_mmf" in imm_ids
 
 
     def test_unsold_etf_goes_to_strategic_exit_not_immediate(self):
@@ -311,6 +313,55 @@ class TestCashSchedule:
         assert locked == 300_000.0, f"expected 300k locked, got {locked}"
 
 
+    def test_exchange_traded_fund_t0_is_not_immediate_cash(self):
+        positions = [
+            _make_position(
+                "t0_etf", product_type="exchange_traded_fund",
+                liquidity_tier="t0", market_value_cny=100_000.0,
+            ),
+            _make_position(
+                "cash_1", product_type="cash", liquidity_tier="cash",
+                market_value_cny=20_000.0,
+            ),
+        ]
+        schedule = build_cash_schedule(positions, [], 120_000.0)
+        assert "t0_etf" not in schedule["immediate_cash_position_ids"]
+        assert schedule["strategic_exit_value_cny"] == 100_000.0
+
+    def test_money_market_t0_is_immediate_cash(self):
+        positions = [
+            _make_position(
+                "mmf", product_type="money_market_fund",
+                liquidity_tier="t0", market_value_cny=50_000.0,
+            ),
+        ]
+        schedule = build_cash_schedule(positions, [], 50_000.0)
+        assert "mmf" in schedule["immediate_cash_position_ids"]
+        assert schedule["immediate_cash_cny"] == 47_500.0
+
+    def test_approved_sale_moves_value_out_of_strategic_exit(self):
+        positions = [
+            _make_position(
+                "cn_588000", product_type="exchange_traded_fund",
+                liquidity_tier="t1", market_value_cny=100_000.0,
+            ),
+        ]
+        sales = [{
+            "position_id": "cn_588000", "ratio": 0.3,
+            "settlement": {"timing": "T+1"},
+        }]
+        schedule = build_cash_schedule(positions, sales, 100_000.0)
+        assert schedule["strategic_exit_value_cny"] == 70_000.0
+        assert schedule["strategic_exit_position_ids"] == ["cn_588000"]
+        assert schedule["settling_cash_cny"] == 30_000.0
+        assert (
+            schedule["strategic_exit_value_cny"]
+            + schedule["settling_cash_cny"]
+            + schedule["locked_value_cny"]
+            + schedule["immediate_cash_cny"]
+            + schedule["safety_buffer_cny"]
+        ) == 100_000.0
+
     def test_approved_sale_goes_to_settling_cash(self, sample_portfolio, approved_sales_fixture):
         """Approved sales with settlement appear in settling_cash."""
         positions, total_value = sample_portfolio
@@ -342,6 +393,7 @@ class TestCashSchedule:
         for key in ("immediate_cash_cny", "settling_cash_cny",
                     "strategic_exit_value_cny", "locked_value_cny",
                     "immediate_cash_position_ids", "settling_cash_position_ids",
+                    "strategic_exit_position_ids", "locked_position_ids",
                     "safety_buffer_cny"):
             assert key in schedule, f"Missing key: {key}"
 
@@ -359,6 +411,7 @@ class TestCashSchedule:
 
         # safety = 130k * 0.05 = 6500, immediate = 30k - 6.5k = 23.5k
         assert schedule["locked_value_cny"] >= 100_000
+        assert schedule["locked_position_ids"] == ["boc_insurance"]
         assert schedule["immediate_cash_cny"] == 23_500.0
 
 
@@ -379,3 +432,54 @@ class TestLegacyCompatibility:
         _build_capital_allocation(cards, positions, mapping, _liquidity_summary())
 
         assert cards == cards_copy
+
+
+class TestScheduledCashScheduleIntegration:
+    def test_scheduled_run_exposes_cash_schedule_and_suppressions(self, sample_portfolio):
+        from stocks.engine.scheduled_analysis import (
+            ScheduledSession,
+            SessionOccurrence,
+            build_scheduled_run,
+        )
+
+        positions, _ = sample_portfolio
+        cards_context = []
+        for item in positions:
+            item = copy.deepcopy(item)
+            item.setdefault("display_name", item["position_id"])
+            item.setdefault("evidence", {"price_freshness": "current"})
+            cards_context.append(item)
+        now = datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc)
+        occurrence = SessionOccurrence(
+            session=ScheduledSession(
+                id="cn_pre_close", market="cn", exchange_timezone="Asia/Shanghai",
+                user_timezone="Asia/Shanghai", time="14:35",
+                intent="pre_close_decision", push="normal", enabled=True,
+                duplicate_window_minutes=90, holidays=frozenset(), primary_market="cn",
+            ),
+            market_date=now.date(), scheduled_for=now,
+        )
+        context = {
+            "schema_version": 12, "generated_at": now.isoformat(),
+            "data_quality": {"quotes": {"freshness": "current"}},
+            "position_valuations": cards_context,
+            "intelligence_digest": {
+                "intelligence_health": {"status": "missing", "age_minutes": None, "risk_eligible": False},
+                "intelligence_coverage": {}, "top_signals": [], "top_clusters": [],
+            },
+            "market_state": {}, "rotation": {},
+            "portfolio_mapping": {"ratios": {}},
+            "liquidity_summary": _liquidity_summary(), "action_signals": {},
+        }
+        original_positions = copy.deepcopy(context["position_valuations"])
+        run = build_scheduled_run(
+            context, occurrence=occurrence, generated_at=now,
+            config={"quiet_hours": {"enabled": False}},
+        )
+        assert context["position_valuations"] == original_positions
+        assert "cash_schedule" in run
+        assert "suppressed_adds" in run["capital_allocation"]
+        assert set(run["cash_schedule"]["immediate_cash_position_ids"]) == {
+            "cash_hkd", "cash_usd", "alipay_mmf"
+        }
+        assert "cn_588000" not in run["cash_schedule"]["immediate_cash_position_ids"]

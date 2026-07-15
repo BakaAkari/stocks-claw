@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 _NON_IMMEDIATE_PRODUCT_TYPES = frozenset({
     "stock",
     "etf",
+    "exchange_traded_fund",
+    "short_treasury_etf",
     "qdii_fund",
     "feeder_fund",
     "mixed_fund",
@@ -25,7 +27,6 @@ _NON_IMMEDIATE_PRODUCT_TYPES = frozenset({
     "precious_metal_account",
     "precious_metal",
     "bank_wealth_management",
-    "money_market_fund",
     "insurance_policy",
 })
 
@@ -53,6 +54,8 @@ class CashSchedule:
     safety_buffer_cny: float = 0.0
     immediate_cash_position_ids: list[str] = field(default_factory=list)
     settling_cash_position_ids: list[str] = field(default_factory=list)
+    strategic_exit_position_ids: list[str] = field(default_factory=list)
+    locked_position_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Serialize to the dict format expected by downstream consumers."""
@@ -64,6 +67,8 @@ class CashSchedule:
             "safety_buffer_cny": round(self.safety_buffer_cny, 2),
             "immediate_cash_position_ids": self.immediate_cash_position_ids,
             "settling_cash_position_ids": self.settling_cash_position_ids,
+            "strategic_exit_position_ids": self.strategic_exit_position_ids,
+            "locked_position_ids": self.locked_position_ids,
         }
 
 
@@ -87,10 +92,14 @@ def build_cash_schedule(
       6. Safety buffer (5% of total_value) deducted from immediate_cash only
     """
     total_value = total_value or 0.0
-
-    # --- Classify positions ---
     schedule = CashSchedule()
 
+    # --- Index approved sale ratios by position ---
+    sales_by_position: dict[str, list[dict]] = {}
+    for sale in approved_sales:
+        sales_by_position.setdefault(sale.get("position_id", ""), []).append(sale)
+
+    # --- Classify positions and move approved fractions to settlement buckets ---
     for item in position_valuations:
         pid = item.get("position_id", "")
         value = item.get("market_value_cny") or 0.0
@@ -98,55 +107,45 @@ def build_cash_schedule(
         tier = liq.get("tier", "unknown")
         classification = item.get("classification") or {}
         product_type = classification.get("product_type", "")
+        sales = sales_by_position.get(pid, [])
+        sold_ratio = min(1.0, sum(abs(sale.get("ratio", 0) or 0) for sale in sales))
+        residual_value = value * (1.0 - sold_ratio)
 
-        # 1. Locked / periodic-open → locked_value
+        for sale in sales:
+            ratio = min(abs(sale.get("ratio", 0) or 0), 1.0)
+            sale_value = value * ratio
+            timing = (sale.get("settlement") or {}).get("timing", "T+1")
+            if timing in ("T+0", "cash", "same_day"):
+                schedule.immediate_cash_cny += sale_value
+                schedule.immediate_cash_position_ids.append(pid)
+            else:
+                schedule.settling_cash_cny += sale_value
+                schedule.settling_cash_position_ids.append(pid)
+
+        if residual_value <= 0:
+            continue
         if (
             tier in _LOCKED_LIQUIDITY_TIERS
             or liq.get("tradable") is False
             or liq.get("rebalance_eligible") is False
         ):
-            schedule.locked_value_cny += value
-            continue
-
-        # 2. Unsold non-immediate products → strategic_exit
-        if product_type in _NON_IMMEDIATE_PRODUCT_TYPES:
-            schedule.strategic_exit_value_cny += value
-            continue
-
-        # 3. Immediate cash (cash/t0 tier, non-excluded product)
-        if tier in _IMMEDIATE_LIQUIDITY_TIERS:
-            schedule.immediate_cash_cny += value
-            schedule.immediate_cash_position_ids.append(pid)
-            continue
-
-        # 4. Everything else → strategic_exit
-        schedule.strategic_exit_value_cny += value
-
-    # --- Classify approved sales ---
-    for sale in approved_sales:
-        pid = sale.get("position_id", "")
-        ratio = abs(sale.get("ratio", 0))
-        settlement = sale.get("settlement", {})
-        timing = settlement.get("timing", "T+1")
-
-        # Find position value
-        sale_value = 0.0
-        for item in position_valuations:
-            if item.get("position_id") == pid:
-                sale_value = (item.get("market_value_cny") or 0.0) * ratio
-                break
-
-        if timing in ("T+0", "cash", "same_day"):
-            schedule.immediate_cash_cny += sale_value
+            schedule.locked_value_cny += residual_value
+            schedule.locked_position_ids.append(pid)
+        elif product_type in _NON_IMMEDIATE_PRODUCT_TYPES:
+            schedule.strategic_exit_value_cny += residual_value
+            schedule.strategic_exit_position_ids.append(pid)
+        elif tier in _IMMEDIATE_LIQUIDITY_TIERS:
+            schedule.immediate_cash_cny += residual_value
             schedule.immediate_cash_position_ids.append(pid)
         else:
-            schedule.settling_cash_cny += sale_value
-            schedule.settling_cash_position_ids.append(pid)
+            schedule.strategic_exit_value_cny += residual_value
+            schedule.strategic_exit_position_ids.append(pid)
 
     # --- Safety buffer (5% of total, from immediate_cash only) ---
-    safety = total_value * 0.05
-    schedule.safety_buffer_cny = safety
-    schedule.immediate_cash_cny = max(0.0, schedule.immediate_cash_cny - safety)
+    safety_target = total_value * 0.05
+    applied_safety = min(schedule.immediate_cash_cny, safety_target)
+    schedule.safety_buffer_cny = applied_safety
+    schedule.immediate_cash_cny -= applied_safety
 
     return schedule.to_dict()
 

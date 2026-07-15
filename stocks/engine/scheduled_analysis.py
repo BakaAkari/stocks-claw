@@ -773,7 +773,12 @@ def build_scheduled_run(
         action_cards=action_cards,
     )
     rotation_leaders_data = context.get("rotation", {}).get("items", [])
-    capital_allocation = _build_capital_allocation(
+    from stocks.engine.portfolio_adjudicator import (
+        build_capital_allocation_with_suppression,
+        build_cash_schedule,
+    )
+
+    capital_allocation = build_capital_allocation_with_suppression(
         action_cards,
         context.get("position_valuations") or [],
         context.get("portfolio_mapping") or {},
@@ -781,6 +786,13 @@ def build_scheduled_run(
         constraints=context.get("portfolio_constraints"),
         rotation_ranks=rotation_ranks if rotation_ranks else None,
         rotation_leaders=rotation_leaders_data,
+    )
+    total_value = sum(
+        item.get("market_value_cny") or 0.0
+        for item in (context.get("position_valuations") or [])
+    )
+    cash_schedule = build_cash_schedule(
+        context.get("position_valuations") or [], [], total_value
     )
     session_intent_props = _session_intent_props(session.id)
     filtered_action_signals = _filter_action_signals_by_market(
@@ -831,6 +843,7 @@ def build_scheduled_run(
         "action_cards": action_cards,
         "portfolio_risk": portfolio_risk,
         "capital_allocation": capital_allocation,
+        "cash_schedule": cash_schedule,
         "trigger_reviews": trigger_reviews,
         "action_signal_reviews": action_signal_reviews,
         "action_signals": filtered_action_signals,
