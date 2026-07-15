@@ -72,6 +72,16 @@ must_answer(必答问题)、must_not_do(硬性约束,含飞书格式)、persona(
 adaptability(自适应输出)、data_reference(数据字段定位)和 output_structure(分节模板)。
 Agent 不需要任何外部 prompt。
 
+### 定时报告可信契约（v5）
+
+交易窗口 Agent 只以五个结构字段形成报告：`window_delta`、`portfolio_decision`、
+`risk_state`、`data_boundaries`、`research_candidates`。输出固定五段：变化摘要、
+今日动作（最多 3 个获批动作）、禁止待确认、资金到账与边界、研究候选。
+研究候选不得进入今日动作；风险暂停时只能写解除后再评估。每个获批动作必须
+展示结构化比例、取消条件、结算时间和下一检查点。禁止从 rationale、facts 或其他
+自由文本提取数字作为动作金额或比例。Markdown 是确定性 Artifact renderer，不再输出
+完整 Agent Task、全扫描信号或旧 mandatory_blocks。
+
 可选内部 LLM 报告：
 
 ```bash

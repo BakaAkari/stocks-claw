@@ -89,6 +89,8 @@ class PortfolioAction:
     settlement_timing: Optional[str] = None
     post_trade_ratio: Optional[float] = None
     alternative_position_id: Optional[str] = None
+    cancel_condition: str = ""
+    next_checkpoint: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -101,6 +103,8 @@ class PortfolioAction:
             "settlement_timing": self.settlement_timing,
             "post_trade_ratio": self.post_trade_ratio,
             "alternative_position_id": self.alternative_position_id,
+            "cancel_condition": self.cancel_condition or "若触发条件或组合约束不再成立，取消执行",
+            "next_checkpoint": self.next_checkpoint or "下一交易窗口复核",
         }
 
 

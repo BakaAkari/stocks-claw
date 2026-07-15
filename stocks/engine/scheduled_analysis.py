@@ -989,6 +989,19 @@ def build_scheduled_run(
         },
         "risk_assessment": risk_assessment,
         "risk_state": risk_state,
+        "data_boundaries": {
+            "data_quality": context_quality,
+            "source_context": {
+                "schema_version": context.get("schema_version"),
+                "generated_at": context.get("generated_at"),
+            },
+        },
+        "research_candidates": _build_research_candidates(
+            context.get("action_signals") or {},
+            risk_state,
+            session,
+            blocked_symbols=_blocked_symbols(context.get("position_valuations") or []),
+        ),
         "mandatory_blocks": build_mandatory_blocks(
             risk_state,
             capital_allocation.get("constraint_alerts", []),
@@ -1533,108 +1546,148 @@ def _build_persona() -> dict:
     return base
 
 
-def build_agent_task(session: ScheduledSession) -> dict:
-    """构建自包含的 Agent 任务说明书。
+def _blocked_symbols(position_valuations: list[dict]) -> set[str]:
+    """Collect instrument_keys whose position-level data anomaly blocks action."""
+    blocked = set()
+    for item in position_valuations:
+        if (item.get("evidence") or {}).get("data_anomalies"):
+            key = item.get("instrument_key") or ""
+            if key:
+                blocked.add(key)
+    return blocked
 
-    产出的 agent_task 对象包含 Agent 所需的全部指令，
-    不依赖任何外部 prompt。任何 Agent 读取 JSON 后，
-    严格按此任务说明书执行即可生成完整分析推送。
+
+def _build_research_candidates(
+    action_signals: dict,
+    risk_state: dict,
+    session: ScheduledSession,
+    *,
+    blocked_symbols: set[str] | None = None,
+) -> list[dict]:
+    """Build research_candidates from action_signals, filtered by risk state.
+
+    research_only signals go here, never into the action section.
+    When suspend_accumulation is active, candidates must note reassessment condition.
     """
-    # ── 情报 brief 读取指令（所有 session 类型共用） ──
-    _intel_brief_task = (
-        "【情报要点】读取 .local/intelligence/latest_brief.json"
-        " — 提取 2-3 条与用户持仓最相关的事件，每条标注来源标题和发布时间。"
-        "结合 clusters.portfolio_relevance 字段判断哪些事件影响用户组合"
-    )
+    suspend = risk_state.get("suspend_accumulation", False)
+    risk_level = risk_state.get("level", "normal")
 
+    candidates = []
+    for item in (action_signals.get("items") or []):
+        signal = item.get("signal", "")
+        # Only research-only signals go here (not actionable signals)
+        if signal in {
+            "neutral_hold", "no_data", None, "reduce", "stop_loss", "take_profit",
+            "add", "accumulate", "hard_stop_loss", "mid_stop_loss", "lock_profit",
+        }:
+            continue
+        symbol = str(item.get("symbol") or "")
+        if symbol and (blocked_symbols and symbol in blocked_symbols):
+            continue
+        candidate = {
+            "symbol": symbol,
+            "name": item.get("name"),
+            "signal": signal,
+            "action_hint": item.get("action_hint"),
+            "reasons": (item.get("reasons") or [])[:2],
+            "priority": "research_only",
+        }
+        if suspend:
+            candidate["reassess_after"] = f"风险解除后再评估（当前状态: {risk_level}）"
+            candidate["condition"] = "risk_suspend_accumulation"
+        candidates.append(candidate)
+
+    # Max 8 candidates
+    return candidates[:8]
+
+
+def build_agent_task(session: ScheduledSession) -> dict:
+    """Report contract v2: Agent reads exactly 5 artifact fields.
+
+    The 5 contract fields are: window_delta, portfolio_decision, risk_state,
+    data_boundaries, research_candidates.  No other artifact fields are
+    referenced in data_reference.
+
+    Output: 5 fixed sections (变化摘要, 今日动作, 禁止/待确认, 资金到账与边界, 研究候选).
+    """
     must_answer_by_intent = {
         "pre_open_plan": [
-            "今天重点盯哪些已有持仓和触发器",
-            _intel_brief_task,
-            "【前瞻展望】综合分析以下四层信息，给出未来1-2周最值得关注的板块和方向（不少于3个）：",
-            "  (a) intelligence_digest.top_clusters — 情报管道识别到的事件主题和影响",
-            "  (b) intelligence_digest.top_signals — 情报管道给出的方向性信号",
-            "  (c) rotation_leaders — 轮动排名领涨的板块和标的",
-            "  (d) exposure_summary.top — 组合当前暴露分布和潜在缺口",
-            "每个方向写明：依据（引用具体数据）→ 对应标的 → 与现有组合的关系",
-            "哪些候选方向只适合观察,不能追",
-            "数据质量是否足以形成盘前计划",
-            "【资金部署】读取 mandatory_blocks.capital_facts 和 capital_allocation 全文：基于约束偏离、净可动用金额、回收预估、加仓候选和轮动参考，结合 persona 风格和 intelligence_digest 方向，给出'今天钱往哪放'的具体判断——是保持现金、等回收后补特定板块，还是有可立即执行的加仓方向。必须引用 capital_facts 中的具体数字，不笼统说'关注'或'观望'",
-            "【风险边界】读取 risk_assessment：如果 level 不是 normal，显式报告。如果 suspend_accumulation=true，盘前计划必须标注'暂停开新仓'",
+            "【变化摘要】读取 window_delta.changes，列出本窗口相比上一窗口的关键变化；无变化时写'无实质变化'",
+            "【今日动作】读取 portfolio_decision.approved_actions（最多3个），每个动作写明 position_id、signal、ratio、cancel_condition、settlement_timing、next_checkpoint；如果无 approved_actions，写'今日无需操作'",
+            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 列出被禁止的动作及原因；读取 portfolio_decision.unresolved_conflicts 列出待人工确认的冲突；读取 risk_state，如果 suspend_accumulation=true 标注'暂停加仓，研究候选待解除后评估'",
+            "【资金到账与边界】读取 portfolio_decision.cash_schedule 列出立刻可用/在途/锁定金额；读取 risk_state 列出当前风险等级和解除条件；读取 data_boundaries.data_quality 列出数据缺口和时效降级",
+            "【研究候选】读取 research_candidates 列出观察标的；research_only 信号绝不写入今日动作段；风险暂停时标注解除条件后再评估",
         ],
         "open_watch": [
-            "开盘后已有持仓是否出现异常跳空、破位或过热",
-            _intel_brief_task,
-            "是否需要等待收盘确认",
-            "数据质量是否足以支持盘中判断",
+            "【变化摘要】读取 window_delta.changes，列出关键变化",
+            "【今日动作】最多3个 approved_actions；无则写'无需操作'",
+            "【禁止/待确认】读取 portfolio_decision 中的 suppressed_actions 和 unresolved_conflicts",
+            "【资金到账与边界】读取 cash_schedule 和 risk_state",
+            "【研究候选】读取 research_candidates",
         ],
         "pre_close_decision": [
-            "收盘前已有持仓是否需要动",
-            "哪些触发器已经触发或接近触发",
-            _intel_brief_task,
-            "【前瞻展望】综合分析 intelligence_digest + rotation_leaders + exposure_summary，给出未来1-2周最值得关注的板块和方向（不少于3个），每个方向写明依据和对应标的",
-            "是否有不应追高或不应补弱的标的",
-            "【资金部署】读取 mandatory_blocks.capital_facts 和 capital_allocation 全文：基于约束偏离、净可动用金额、回收预估、加仓候选和轮动参考，结合 persona 风格和 intelligence_digest 方向，给出'今天钱往哪放'的具体判断——是保持现金、等回收后补特定板块，还是有可立即执行的加仓方向。必须引用 capital_facts 中的具体数字，不笼统说'关注'或'观望'",
+            "【变化摘要】读取 window_delta.changes，列出关键变化",
+            "【今日动作】最多3个 approved_actions；每个动作附带 cancel_condition、settlement、next_checkpoint",
+            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；若 suspend_accumulation=true 标注暂停加仓",
+            "【资金到账与边界】读取 portfolio_decision.cash_schedule（立即现金/在途/锁定）和 risk_state（等级与解除条件）和 data_boundaries（数据时效缺口）",
+            "【研究候选】读取 research_candidates；research_only 信号绝不写入今日动作段；暂停期间标注'risk解除后再评估'",
         ],
         "after_close_review": [
-            "今天触发器和持仓事实如何复盘",
-            _intel_brief_task,
-            "明天开盘前重点看什么",
-            "【资金部署】读取 mandatory_blocks.capital_facts 和 capital_allocation 全文：基于约束偏离、净可动用金额、回收预估、加仓候选和轮动参考，结合 persona 风格和 intelligence_digest 方向，给出'今天钱往哪放'的具体判断——是保持现金、等回收后补特定板块，还是有可立即执行的加仓方向。必须引用 capital_facts 中的具体数字，不笼统说'关注'或'观望'",
-            "是否需要让用户补录数据或确认长期记录",
-            "【风险边界】读取 risk_assessment 和 mandatory_blocks.risk_boundary：如果 mandatory_blocks.risk_boundary 存在，必须原样嵌入报告末尾（用**加粗**标题，- 列表）。不得改写、省略或合并到其他段。情报管道中的地缘政治事件，如果触发了 risk_assessment，必须在风险边界段报告",
+            "【变化摘要】读取 window_delta.changes",
+            "【今日动作】最多3个 approved_actions；无则写'今日无执行动作'",
+            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts",
+            "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
+            "【研究候选】读取 research_candidates",
         ],
         "morning_close_check": [
-            "上午走势小结：哪些持仓触发了信号或接近触发",
-            _intel_brief_task,
-            "午间休市前是否需要提前减仓或止盈",
-            "午后重点关注哪些持仓和方向",
-            "数据质量是否足以支持午间判断",
+            "【变化摘要】读取 window_delta.changes",
+            "【今日动作】读取 approved_actions（最多3个）",
+            "【禁止/待确认】读取 suppressed_actions 和 unresolved_conflicts",
+            "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
+            "【研究候选】读取 research_candidates",
         ],
         "afternoon_open_check": [
-            "午间有无重大消息改变上午盘前计划",
-            "下午开盘是否有跳空或异常波动",
-            _intel_brief_task,
-            "是否需要在收盘前提前行动",
-            "上午未触发但下午可能触发的持仓",
+            "【变化摘要】读取 window_delta.changes",
+            "【今日动作】读取 approved_actions（最多3个）",
+            "【禁止/待确认】读取 suppressed_actions 和 unresolved_conflicts",
+            "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
+            "【研究候选】读取 research_candidates",
         ],
         "mid_session_check": [
-            "盘中波动是否改变已有计划",
-            _intel_brief_task,
-            "是否存在 critical 风险",
-            "是否应保持只生成不推送",
+            "【变化摘要】读取 window_delta.changes",
+            "【今日动作】读取 approved_actions（最多3个）",
+            "【禁止/待确认】读取 suppressed_actions 和 unresolved_conflicts",
+            "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
+            "【研究候选】读取 research_candidates",
         ],
     }
 
     return {
-        "task_version": 4,
+        "task_version": 5,
         "language": "zh-CN",
         "audience": "single_user",
         "session_intent": session.intent,
         "primary_market": session.primary_market,
 
-        # ── Agent 必须回答的问题 ──
+        # -- Agent 必须回答的问题（对应5个固定报告段）--
         "must_answer": must_answer_by_intent.get(
             session.intent,
-            ["已有持仓是否需要动", "数据质量是否足以支持动作"],
+            [
+                "【变化摘要】读取 window_delta.changes",
+                "【今日动作】最多3个 approved_actions",
+                "【禁止/待确认】读取 suppressed_actions 和 unresolved_conflicts",
+                "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
+                "【研究候选】读取 research_candidates",
+            ],
         ),
 
-        # ── 硬性禁止（违反 = 错误） ──
+        # -- 硬性禁止（违反 = 错误） --
         "must_not_do": [
             "不得承诺收益",
-            "不得忽略 data_quality",
-            "不得建议动用 rebalance_eligible=false 的资产",
-            "不得把代理 ETF 价格触发器套到场外基金",
+            "不得忽略 data_boundaries.data_quality",
+            "research_only 信号不得写入今日动作段",
+            "不得从 rationale/facts/free text 中正则抽取数字作为动作金额或比例——所有金额比例必须来自 artifact 结构字段",
             "不得自动保存建议、执行或预测",
-            # 数据忠实性
-            "market_state.risk_appetite 写什么报什么，严禁自编'避险情绪升温''风险偏好回升'",
-            "risk_appetite 缺失时写'系统未判断风险偏好'，不得填空",
-            "valuation_input.method=manual_amount 的持仓必须标注'手工估值（非实时）'，严禁说'无浮动'",
-            # 触发器完整性
-            "action_cards 中 signal=stop_loss 的持仓必须出现在推送最前，标注'硬止损触发'",
-            "loss_level=severe 的持仓必须标注'严重亏损阈值'",
-            "触发器必须按严重度从高到低列出，不得只报轻的漏重的",
-            # 飞书格式（违反会导致整条消息变成纯文本）"
             "严禁使用 # 号标题（用**加粗**代替）",
             "严禁使用 | 表格",
             "严禁使用 ``` 代码块（用`行内代码`代替）",
@@ -1642,193 +1695,206 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "严禁使用 --- 分隔线",
             "严禁使用 - [ ] 任务列表",
             "严禁使用任何 HTML 标签",
-            # 情报来源约束
             "情报引用必须标注来源标题和发布时间，严禁自编'市场传闻''据悉''有消息称'",
-            "情报分析只能基于 intelligence_digest 和 .local/intelligence/latest_brief.json 中已有的事实数据",
-            # 数据缺口时效
-            "数据缺口首次出现时标注'新增'；连续出现时注明'持续N次'；超过7天的缺口降级为脚注，超过30天不再显示",
-            "场外基金手工估值等结构性缺口只在一处集中说明。市场宏观数据(VIX/美债/汇率)为日频，官方统计(CPI/失业率)为月频——引用时区分标注各自的 as_of，不混为一谈",
-            # 资产分层报告（硬性）
-            "action_cards 的 routing 字段决定报告层级: full→可操作, fund→高门槛(T+2/更高阈值), precious→有价差, info_only→只读, skip→跳过",
-            "routing=fund 的资产可以报告止盈/止损建议，但必须标注'T+2到账'、'以收盘净值为准'、'登录平台操作'，不得用'一键操作'语气",
-            "routing=precious 的资产可以报告止盈/止损建议，但必须标注'有买卖价差'、'登录平台确认后操作'",
-            "routing=info_only 的资产的唯一合法操作是'持有，有开放期限制'，不得建议减仓/加仓",
-            "routing=full 的资产正常报告操作建议",
-            "routing=skip 的资产不在报告中出现",
-            # 扫描池完整性（硬性）
-            "action_signals 中 signal=accumulate_candidate 的标的必须全部在前瞻展望段列出，标注当前价格和触发理由",
-            "action_signals 中 signal=wait_for_pullback 的标的至少列出前 3 个",
-            "accumulate_candidate 必须按综合得分分三档展示：≥0.4 强推荐（最多3个）、0.2-0.4 可关注（最多3个）、<0.2 弱信号（仅列名），不得平铺10个",
-            "若 capital_allocation.constraint_alerts 中某大类超限，标注'等减仓后再考虑'；低于下限则标注'优先填补缺口'",
-            "不得只挑自己喜欢的板块展示——必须按系统给出的信号原样报告",
-            # 分歧处理
-            "若 action_cards 中任一卡的 dissent 非空，必须在持仓动作段单独讨论分歧场景：说明哪个信号源（技术/情报/因子）与最终结论方向相反、可能的影响、用户应关注什么信号来裁决",
         ],
 
-        # ── 数据字段引用指南 ──
+        # -- 数据字段引用指南（严格5个字段） --
         "data_reference": {
-            "持仓动作": "action_cards[] — 逐持仓的动作信号。routing: full=可操作, fund=场外基金(T+2/高阈值), precious=贵金属(有价差), info_only=银行理财(只读), skip=跳过。所有非full持仓标注操作约束",
-            "驱动向量": "action_cards 中每卡的 drivers[] — 技术面/情报/因子各自的独立信号，dissent=非空表示有信号源与最终结论冲突，confidence=high/medium/low",
-            "方向信号": "action_signals — items[] 全量扫描池(61个标的)及 counts 汇总；ranked 是排序结果。accumulate_candidate=可加仓, wait_for_pullback=等回调, neutral_hold=观望, avoid_catching_falling_knife=勿抄底",
-            "风险仪表盘": "portfolio_risk.scenario — global_risk_off / china_shock / inflation_commodity 三个多因子情景",
-            "持仓事实": "position_reviews[] — 逐持仓估值、盈亏、session_facts（含 severe_loss 标注）",
-            "情报": "intelligence_digest — top_clusters（事件聚类）、top_signals（方向信号）",
-            "情报brief": ".local/intelligence/latest_brief.json — clusters（含portfolio_relevance）、signals、macro（每小时更新）",
-            "事件日历": "upcoming_events[] — 未来72小时内的重大数据发布时间（CPI/FOMC/NFP等），每个事件标注距现在的剩余小时数。如果72小时内有事件，风险边界段必须显式标注'X小时后CPI发布，当前通胀交易逻辑可能单日逆转'",
-            "轮动": "rotation_leaders — 轮动排名领涨的板块和标的",
-            "组合": "exposure_summary.top — 组合暴露分布和潜在缺口",
-            "资金部署": "capital_facts(mandatory_blocks) + capital_allocation — constraint_alerts(大类超限)、conflicts(信号方向冲突)、reduce_items(减仓回收)、add_candidates(加仓优先级)、net_deployable_cny(净可动用)、idle_cash_suggestions(轮动参考)。capital_facts 是系统计算的确定事实，资金部署建议必须在报告中独立成段",
-            "风险等级": "risk_assessment — level(hedge/reduce/watch/normal)、triggers(触发条件)、recommended_actions(建议操作)、suspend_accumulation(是否暂停加仓)、cash_target_pct(现金目标比例)",
-            "必修文本": "mandatory_blocks — risk_boundary(风险边界)、constraint_alerts(约束偏离)和capital_facts(资金状况事实)是系统计算的确定事实，必须原样嵌入报告末尾，不得改写或省略。基于 capital_facts 在报告前半部独立成段给出资金部署建议",
+            "window_delta": "window_delta -- changes[]（变化列表）、material（是否有实质变化）、first_in_session",
+            "portfolio_decision": "portfolio_decision -- status（approved/suppressed/review_required）、approved_actions[]（每个含position_id, signal, ratio, action_description, cancel_condition, settlement_timing, next_checkpoint）、suppressed_actions[]、unresolved_conflicts[]、cash_schedule",
+            "risk_state": "risk_state -- level、suspend_accumulation、cash_target_pct、transition",
+            "data_boundaries": "data_boundaries -- data_quality（各子项状态和时效）、source_context",
+            "research_candidates": "research_candidates[] -- symbol, name, signal（research_only）、action_hint、reassess_after（暂停期间）",
         },
 
-        # ── 输出格式 ──
+        # -- 输出格式：5个固定段 --
         "output_structure": {
-            "max_words": 1200,
+            "max_words": 1000,
             "platform": "feishu",
             "format_rules": "仅使用**加粗**、`行内代码`、- 列表、[链接](url) 四种格式。用空行分隔段落。禁用 # | ``` > --- -[ ] HTML。",
             "sections": [
                 {
-                    "name": "标题",
-                    "content": "{session_display_name} · {market_date}",
+                    "name": "变化摘要",
+                    "content": "读取 window_delta.changes 列出变化；无变化写'无实质变化'",
                 },
                 {
-                    "name": "一句话执行结论",
-                    "content": "以 action_cards 的止损/止盈信号为最高优先级，给出当前最关键的 1 个动作判断",
+                    "name": "今日动作",
+                    "content": "列出 portfolio_decision.approved_actions（最多3个）。每项格式: **{position_id}** `{signal}` {ratio*100}% -- {action_description}。取消条件: {cancel_condition} . 到账: {settlement_timing} . 下个检查点: {next_checkpoint}。无 approved_actions 时写'今日无需操作'",
                 },
                 {
-                    "name": "风险边界",
-                    "content": "读取 risk_assessment。如果 level!=normal，必须显式报告风险等级、触发原因和系统建议操作。如果 suspend_accumulation=true，必须标注'暂停加仓'。如果 72 小时内有 CPI/FOMC/NFP，显式警告'X小时后CPI发布，当前交易逻辑可能单日逆转'",
+                    "name": "禁止/待确认",
+                    "content": "列出 portfolio_decision.suppressed_actions（每项原因）和 unresolved_conflicts。如果 risk_state.suspend_accumulation=true 标注暂停加仓。research_only 不在此段",
                 },
                 {
-                    "name": "持仓动作",
-                    "content": "列出所有触发动作的持仓，按优先级: stop_loss > take_profit > reduce > add。routing=full 的资产正常写操作建议；routing=fund 的资产标注'T+2到账，以收盘净值为准，登录平台操作'；routing=precious 的资产标注'有买卖价差，登录平台确认后操作'。routing=info_only/skip 不写入此段。",
+                    "name": "资金到账与边界",
+                    "content": "读取 portfolio_decision.cash_schedule（立刻可用/在途/锁定）+ risk_state（等级+解除条件）+ data_boundaries.data_quality（数据缺口）。格式: - 立即现金: ¥XXX . 在途: ¥XXX . 锁定: ¥XXX。风险等级: {level}（{transition}）。数据缺口: {列举}",
                 },
                 {
-                    "name": "非可操作持仓",
-                    "content": "列出 routing=info_only 的持仓（仅有银行理财等），只报告状态不输出操作。routing=skip 的不出现。",
-                },
-                {
-                    "name": "资金部署",
-                    "content": "基于 mandatory_blocks.capital_facts 的事实（约束偏离、净可动用、回收预估、轮动参考），生成资金部署判断：现金层建议（持有/部署/等回收）、可操作方向（按约束优先级 + 轮动 + persona 过滤）、需等待的条件（什么信号出现后才能动）。必须引用具体数字，不笼统说'关注'",
-                },
-                {
-                    "name": "情报要点",
-                    "content": "引用 .local/intelligence/latest_brief.json 中 2-3 条与用户持仓最相关的事件，每条标注来源和发布时间",
-                },
-                {
-                    "name": "前瞻展望",
-                    "content": "第一部分：扫描池分级展示。accumulate_candidate 按综合得分分三档：≥0.4 强推荐（可分批布局）| 0.2-0.4 可关注（回踩再确认）| <0.2 弱信号（仅供参考）。每档不超过 3 个，超出部分只列名字不加详述。wait_for_pullback 只列出前 3 个。第二部分：结合 capital_facts.constraint_alerts + 资金部署段的结论——如果某大类超限标注'等减仓后再考虑'；低于下限标注'优先填补缺口'。第三部分：综合 intelligence_digest + exposure_summary 的方向判断",
-                },
-                {
-                    "name": "风险与数据边界",
-                    "content": "引用 portfolio_risk.scenario 的多因子情景；标注 data_quality 的缺口（stale 行情、手工估值、单源风险）",
-                },
-                {
-                    "name": "尾部",
-                    "content": "以上仅为数据摘要，不构成投资建议",
+                    "name": "研究候选",
+                    "content": "读取 research_candidates。research_only 信号绝不写入今日动作段。暂停期间标注解除条件后再评估。每项: **{symbol}** {action_hint}。最多8个",
                 },
             ],
         },
 
-        # ── 分析师人格（塑造输出风格，由 computed_profile 驱动） ──
+        # -- 分析师人格 --
         "persona": _build_persona(),
 
-        # ── 自适应输出（根据内容调整篇幅） ──
+        # -- 自适应输出 --
         "adaptability": {
-            "silent_when_nothing": "如果 action_cards 全部是 hold + 无触发器 fired + 无情报变化 → 输出可缩至 3-5 句话，不强制展开所有六节",
-            "loud_when_critical": "如果有 stop_loss 或 loss_level=severe 或 intelligence urgency=critical → 把这些放在最前面，篇幅可扩展到 1500 字",
-            "forward_outlook_minimum": "即使当日无持仓动作，前瞻展望段仍必须给出至少 1-2 个方向（基于 intelligence_digest + rotation_leaders）",
+            "silent_when_nothing": "如果 window_delta.material=false + 无 approved_actions + 无 suppressed_actions -> 输出可缩至 3-5 句话，不强制展开所有五节",
+            "loud_when_critical": "如果有 stop_loss 或 risk_state.transition=escalated -> 这些放在最前面，篇幅可扩展到 1200 字",
+            "no_research_only_in_actions": "research_only 信号必须严格限制在研究候选段，禁止出现在今日动作段",
         },
 
-        # ── 最终指令（一行总结，Agent 也可只读此字段快速理解任务） ──
+        # -- 最终指令 --
         "final_analysis_instructions": (
             "阅读 persona 理解你的角色。根据 adaptability 决定输出篇幅。"
-            "输出通常含六节（标题→执行结论→持仓动作→前瞻展望→风险边界→免责），"
-            "但当无变化时可大幅压缩。严格遵守 must_not_do。数据引用以 data_reference 为准。"
+            "输出固定五节：变化摘要 -> 今日动作 -> 禁止/待确认 -> 资金到账与边界 -> 研究候选。"
+            "严格遵守 must_not_do。所有金额比例必须来自 artifact 结构字段。"
+            "严格遵守数据引用以 data_reference 为准。"
         ),
     }
 
 
 def format_run_markdown(run: dict) -> str:
-    lines = [
-        f"# {run['session']} {run['market_date']}",
+    """5-section human-readable report markdown.
+
+    All monetary values and ratios are rendered directly from structured
+    artifact fields - never from free text rationale/facts.
+    """
+    session = run.get("session", "")
+    market_date = run.get("market_date", "")
+    rlines = [
+        f"# {session} {market_date}",
         "",
-        f"- run_id: `{run['run_id']}`",
-        f"- status: `{run['status']}`",
-        f"- priority: `{run['session_summary']['priority']}`",
-        f"- push_policy: `{run['session_summary']['push_policy']}`",
-        f"- headline: {run['session_summary']['headline']}",
-        "",
-        "## Market Focus",
-        f"- primary_market: `{run['portfolio_scope'].get('primary_market')}`",
-        f"- included_markets: {run['portfolio_scope'].get('included_markets', [])}",
-        "",
-        "## Market State Summary",
+        f"- run_id: `{run.get('run_id', '')}`",
+        f"- status: `{run.get('status', '')}`",
     ]
-    summary = run.get("session_summary", {}).get("market_state_summary") or {}
-    if summary:
-        lines.append(f"- 风险偏好: {summary.get('risk_appetite', 'unknown')}")
-        lines.append(f"- {summary.get('vix', 'VIX unknown')}")
-        lines.append(f"- 龙头动作: {summary.get('top_move', 'none')}")
+
+    ss = run.get("session_summary") or {}
+    rlines.append(f"- priority: `{ss.get('priority', 'normal')}`")
+    rlines.append(f"- push_policy: `{ss.get('push_policy', '')}`")
+    rlines.append("")
+
+    # -- Section 1: Change Summary --
+    rlines.append("## 变化摘要")
+    wd = run.get("window_delta") or {}
+    changes = wd.get("changes") or []
+    if changes:
+        for c in changes[:8]:
+            field = c.get("field", "?")
+            old_v = c.get("old")
+            new_v = c.get("new")
+            if old_v is not None and new_v is not None:
+                rlines.append(f"- {field}: {old_v} -> {new_v}")
+            elif new_v is not None:
+                rlines.append(f"- {field}: {new_v} (新)")
+            else:
+                rlines.append(f"- {field}: 有变化")
+        if len(changes) > 8:
+            rlines.append(f"- ... 还有 {len(changes)-8} 项变化")
     else:
-        lines.append("- 本轮无市场状态摘要")
-    lines.append("")
-    lines.append("## Agent Task")
-    for item in run.get("agent_task", {}).get("must_answer", []):
-        lines.append(f"- {item}")
-    lines.append("")
-    lines.append("## Action Signals")
-    for item in run.get("action_signal_reviews", [])[:10]:
-        scope = "*本地" if item.get("scope") == "primary" else "跨市场"
-        lines.append(
-            f"- {scope} {item.get('symbol')} {item.get('signal')}: {item.get('action_hint')}"
-        )
-    lines.append("")
-    lines.append("## Trigger Reviews")
-    trigger_reviews = run.get("trigger_reviews", [])
-    if trigger_reviews:
-        for item in trigger_reviews[:12]:
-            status = item.get("status", "unknown")
-            target = item.get("instrument", item.get("target", "unknown"))
-            ttype = item.get("type", "unknown")
-            level = item.get("level")
-            lines.append(f"- {target} {ttype}={level} status={status}")
+        rlines.append("- 无实质变化")
+    if wd.get("first_in_session"):
+        rlines.append("- 本 session 首次运行（无前一窗口可对比）")
+    rlines.append("")
+
+    # -- Section 2: Today Actions --
+    rlines.append("## 今日动作")
+    pd = run.get("portfolio_decision") or {}
+    approved = pd.get("approved_actions") or []
+    if approved:
+        for action in approved[:3]:
+            pid = action.get("position_id", "?")
+            sig = action.get("signal", "hold")
+            ratio = action.get("ratio", 0.0)
+            desc = action.get("action_description", "")
+            cancel = action.get("cancel_condition") or "需人工复核取消条件"
+            settlement = action.get("settlement_timing") or "待确认结算规则"
+            checkpoint = action.get("next_checkpoint") or "下一交易窗口复核"
+            rlines.append(f"- **{pid}** {sig} {abs(ratio)*100:.0f}% -- {desc}")
+            rlines.append(f"  - 取消条件: {cancel} | 到账: {settlement} | 下个检查点: {checkpoint}")
+        if len(approved) > 3:
+            rlines.append(f"- ... 还有 {len(approved)-3} 个动作")
     else:
-        lines.append("- 本轮没有已存档建议的触发器可核对")
-    lines.append("")
+        rlines.append("- 今日无需操作")
+    rlines.append("")
 
-    lines.append("## Position Reviews")
-    for item in run.get("position_reviews", [])[:12]:
-        pnl = item.get("pnl", {}).get("pnl_pct")
-        pnl_text = f", pnl={pnl:+.2f}%" if isinstance(pnl, (int, float)) else ""
-        level = item.get("loss_level", "normal")
-        level_tag = {
-            "severe": " [SEVERE_LOSS]",
-            "high": " [HIGH_LOSS]",
-            "warn": " [WARN_LOSS]",
-        }.get(level, "")
-        lines.append(
-            f"- {item.get('display_name')} ({item.get('instrument_key') or 'manual'})"
-            f"{pnl_text}{level_tag}"
-        )
-    # ── Mandatory blocks ──
-    mb = run.get("mandatory_blocks") or {}
-    if mb.get("risk_boundary"):
-        lines.append("")
-        lines.append(mb["risk_boundary"])
-    if mb.get("constraint_alerts"):
-        lines.append("")
-        lines.append(mb["constraint_alerts"])
-    if mb.get("shadow_account"):
-        lines.append("")
-        lines.append(mb["shadow_account"])
-    if mb.get("hypothesis_tracker"):
-        lines.append("")
-        lines.append(mb["hypothesis_tracker"])
-    return "\n".join(lines)
+    # -- Section 3: Forbidden/Pending --
+    rlines.append("## 禁止待确认")
+    suppressed = pd.get("suppressed_actions") or []
+    if suppressed:
+        for sa in suppressed:
+            pid = sa.get("position_id", "?")
+            reason = sa.get("reason", "")
+            rlines.append(f"- **{pid}** 禁止: {reason}")
+    else:
+        rlines.append("- 无被禁止动作")
 
+    conflicts = pd.get("unresolved_conflicts") or []
+    if conflicts:
+        rlines.append("")
+        rlines.append("**待人工确认的冲突:**")
+        for cf in conflicts[:5]:
+            msg = cf.get("message", cf.get("conflict", ""))
+            rlines.append(f"- {msg}")
 
+    risk_state = run.get("risk_state") or {}
+    if risk_state.get("suspend_accumulation"):
+        rlines.append("- **暂停加仓**: 风险状态要求暂停新开仓位")
+    rlines.append("")
+
+    # -- Section 4: Cash and Risk Boundaries --
+    rlines.append("## 资金到账与边界")
+    cs = pd.get("cash_schedule") or {}
+    if cs:
+        immediate = cs.get("immediate_cash_cny", 0)
+        settling = cs.get("settling_cash_cny", 0)
+        locked = cs.get("locked_value_cny", 0)
+        strategic = cs.get("strategic_exit_value_cny", 0)
+        rlines.append(f"- 立即现金: {immediate:,.0f}")
+        rlines.append(f"- 在途结算: {settling:,.0f}")
+        rlines.append(f"- 策略退出值: {strategic:,.0f}")
+        rlines.append(f"- 锁定资产: {locked:,.0f}")
+
+    level = risk_state.get("level", "normal")
+    transition = risk_state.get("transition", "")
+    if level != "normal":
+        rlines.append(f"- 风险等级: **{level}** (过渡: {transition})")
+    else:
+        rlines.append(f"- 风险等级: {level}")
+
+    db = run.get("data_boundaries") or {}
+    dq = db.get("data_quality") or {}
+    degraded_keys = []
+    for key in ("quotes", "news", "rotation", "action_signals", "history_backfill"):
+        sub = dq.get(key) or {}
+        if sub.get("status") not in (None, "ok", "fresh"):
+            degraded_keys.append(key + ":" + str(sub.get("status")))
+    if degraded_keys:
+        rlines.append("- 数据缺口: " + ", ".join(degraded_keys))
+    else:
+        rlines.append("- 数据质量: 正常")
+    rlines.append("")
+
+    # -- Section 5: Research Candidates --
+    rlines.append("## 研究候选")
+    rc = run.get("research_candidates") or []
+    if rc:
+        for candidate in rc[:8]:
+            symbol = candidate.get("symbol", "?")
+            hint = candidate.get("action_hint", "")
+            cond = candidate.get("reassess_after")
+            if cond:
+                rlines.append(f"- **{symbol}** {hint} ({cond})")
+            else:
+                rlines.append(f"- **{symbol}** {hint}")
+    else:
+        rlines.append("- 无待研究候选")
+    rlines.append("")
+
+    rlines.append("_generated_at: " + str(run.get("generated_at", "")) + "_")
+    return "\n".join(rlines)
 def resolve_artifact_dir(config: dict, *, repo_root: Path) -> Path:
     raw = str(config.get("artifact_dir") or ".local/scheduled_runs")
     path = Path(raw)

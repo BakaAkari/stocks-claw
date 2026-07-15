@@ -364,3 +364,18 @@ def _run(awaitable):
     import asyncio
 
     return asyncio.run(awaitable)
+
+
+def test_report_contract_artifact_has_five_trusted_fields(tmp_path):
+    calendar = MarketSessionCalendar(_config(tmp_path))
+    occurrence = calendar.occurrence_for(
+        "cn_pre_close", datetime.fromisoformat("2026-07-06T14:35:00+08:00")
+    )
+    run = build_scheduled_run(
+        _context(), occurrence=occurrence,
+        generated_at=datetime.fromisoformat("2026-07-06T14:35:00+08:00"),
+        config=_config(tmp_path),
+    )
+    trusted = {"window_delta", "portfolio_decision", "risk_state", "data_boundaries", "research_candidates"}
+    assert trusted <= set(run)
+    assert set(run["agent_task"]["data_reference"]) == trusted
