@@ -709,7 +709,7 @@ def _merge_profile_config(base_config):
     return merged
 
 
-def _risk_evidence_keys(*, vix, clusters: list[dict], geopolitical_crisis: bool) -> list[str]:
+def _risk_evidence_keys(*, vix, clusters: list[dict]) -> list[str]:
     keys: list[str] = []
     if isinstance(vix, (int, float)):
         if vix > 35:
@@ -993,7 +993,6 @@ def _compute_risk_assessment(context: dict) -> dict:
         "level": risk.level,
         "evidence_keys": _risk_evidence_keys(
             vix=macro.get("vix"), clusters=clusters,
-            geopolitical_crisis=geopolitical_crisis,
         ),
         "triggers": [{"condition": t.condition, "value": t.value} for t in risk.triggers],
         "recommended_actions": risk.recommended_actions,
@@ -1168,6 +1167,19 @@ def build_intelligence_run(
         config=engine_config.get("risk_warning") if engine_config else None,
     )
 
+    persistent_risk_assessment = {
+        "level": risk.level,
+        "evidence_keys": _risk_evidence_keys(vix=macro.get("vix"), clusters=clusters),
+        "triggers": [{"condition": item.condition, "value": item.value} for item in risk.triggers],
+        "recommended_actions": risk.recommended_actions,
+        "suspend_accumulation": risk.suspend_accumulation,
+        "cash_target_pct": risk.cash_target_pct,
+    }
+    risk_state = _persist_risk_state(
+        persistent_risk_assessment, generated_at=generated_at,
+        config=engine_config or config,
+    )
+
     # Non-trading-day downgrade: weekends can't act on signals,
     # so reduce alarm level to avoid unnecessary anxiety.
     if generated_at.weekday() >= 5:  # Saturday=5, Sunday=6
@@ -1185,15 +1197,10 @@ def build_intelligence_run(
                 cash_target_pct=risk.cash_target_pct,
             )
 
-    geopolitical_crisis = any(
-        c.get("theme") == "geopolitics" and c.get("urgency") == "critical"
-        for c in clusters
-    )
     risk_assessment = {
         "level": risk.level,
         "evidence_keys": _risk_evidence_keys(
             vix=macro.get("vix"), clusters=clusters,
-            geopolitical_crisis=geopolitical_crisis,
         ),
         "triggers": [{"condition": item.condition, "value": item.value}
                      for item in risk.triggers],
@@ -1201,10 +1208,6 @@ def build_intelligence_run(
         "suspend_accumulation": risk.suspend_accumulation,
         "cash_target_pct": risk.cash_target_pct,
     }
-    risk_state = _persist_risk_state(
-        risk_assessment, generated_at=generated_at, config=engine_config or config
-    )
-
     # Silent mode: no signals + no critical clusters + low priority → archive only
     has_critical = any(c.get("urgency") == "critical" for c in clusters)
     has_signals = len(signals) > 0

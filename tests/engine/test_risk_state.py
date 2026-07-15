@@ -45,6 +45,12 @@ def _load_raw(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _concurrent_update(path: str, level: str, key: str, minute: int):
+    store = RiskStateStore(path=path)
+    base = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+    store.update(_obs(level, evidence_keys=[key], observed_at=base + timedelta(minutes=minute)))
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. State transition tests
 # ═══════════════════════════════════════════════════════════════════════════
@@ -292,6 +298,61 @@ class TestEdgeCases:
             )
         )
         assert r2.level == "normal"
+
+
+class TestReviewerHardening:
+    def test_load_expired_returns_normal_without_mutating_file(self, tmp_path):
+        store = _store(tmp_path)
+        base = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+        store.update(
+            _obs(
+                "watch",
+                evidence_keys=["vix"],
+                observed_at=base,
+                expires_at=base + timedelta(hours=1),
+            )
+        )
+        loaded = store.load(as_of=base + timedelta(hours=2))
+        assert loaded.level == "normal"
+        assert loaded.transition == "expired"
+
+    def test_hedge_deescalates_one_level_at_a_time(self, tmp_path):
+        store = _store(tmp_path)
+        base = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+        store.update(_obs("hedge", evidence_keys=["vix", "cluster"], observed_at=base))
+        store.update(_obs("watch", observed_at=base + timedelta(minutes=1)))
+        result = store.update(_obs("watch", observed_at=base + timedelta(minutes=2)))
+        assert result.level == "reduce"
+        assert result.cash_target_pct == 0.10
+
+    def test_hedge_reconfirmation_merges_evidence(self, tmp_path):
+        store = _store(tmp_path)
+        base = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+        store.update(_obs("hedge", evidence_keys=["a", "b"], observed_at=base))
+        result = store.update(
+            _obs("hedge", evidence_keys=["c"], observed_at=base + timedelta(minutes=1))
+        )
+        assert result.level == "hedge"
+        assert result.transition == "reconfirmed"
+        assert result.evidence_keys == ["a", "b", "c"]
+
+    def test_concurrent_updates_preserve_both_confirmations(self, tmp_path):
+        import multiprocessing
+
+        path = str(tmp_path / "concurrent.json")
+        ctx = multiprocessing.get_context("fork")
+        processes = [
+            ctx.Process(target=_concurrent_update, args=(path, "hedge", "vix", 1)),
+            ctx.Process(target=_concurrent_update, args=(path, "hedge", "cluster", 2)),
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(10)
+            assert process.exitcode == 0
+        result = RiskStateStore(path=path).load()
+        assert result.level == "hedge"
+        assert result.evidence_keys == ["cluster", "vix"]
 
 
 class TestScheduledIntegration:

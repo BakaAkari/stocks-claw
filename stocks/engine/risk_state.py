@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
@@ -115,6 +116,17 @@ class RiskStateStore:
         return state
 
     def update(self, observation):
+        """Atomically apply one observation across concurrent processes."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                return self._update_locked(observation)
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+    def _update_locked(self, observation):
         now = observation.observed_at or datetime.now(timezone.utc)
         if observation.candidate_level not in _LEVEL_ORDER:
             raise ValueError(f"unknown risk level: {observation.candidate_level}")
@@ -134,7 +146,10 @@ class RiskStateStore:
             state.deescalation_count += 1
             state.transition = "deescalating"
             if state.deescalation_count >= int(self.config["deescalation_confirmations"]):
-                state.level = candidate
+                target_rank = max(current_rank - 1, candidate_rank)
+                state.level = next(
+                    level for level, rank in _LEVEL_ORDER.items() if rank == target_rank
+                )
                 state.candidate_level = None
                 state.confirmations_remaining = 0
                 state.deescalation_count = 0
@@ -167,9 +182,12 @@ class RiskStateStore:
             state.evidence_keys = evidence
             state.transition = "escalated"
         else:
+            old_evidence = set(state.evidence_keys)
             state.deescalation_count = 0
-            state.evidence_keys = sorted(set(state.evidence_keys) | set(evidence))
-            state.transition = "unchanged"
+            state.evidence_keys = sorted(old_evidence | set(evidence))
+            state.transition = (
+                "reconfirmed" if set(state.evidence_keys) != old_evidence else "unchanged"
+            )
         state.observed_at = now
         if candidate_rank >= current_rank or state.level == "normal":
             state.expires_at = observation.expires_at
@@ -196,7 +214,7 @@ class RiskStateStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.path)
-        except Exception:
+        except (OSError, TypeError, ValueError):
             try:
                 os.unlink(tmp)
             except OSError:
