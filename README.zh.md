@@ -4,11 +4,26 @@
 新闻、宏观数据、技术指标、组合映射、持仓估值/PnL 脚手架及数据质量信息组装成
 `AnalysisContext` 证据包，交给外部 Agent 完成最终分析。
 
-系统不下单。Engine 只负责事实、触发核对、降级处理和轻量信号，最终判断归 Agent，
-唯一决策人仍是用户。
+系统不下单。Engine 负责事实、触发核对、降级处理、确定性 Action Card 和组合上下文，
+最终判断归 Agent，唯一决策人仍是用户。当前验收结论:风险监控和研究辅助可用,自动动作、
+组合资金部署与可直接照单执行的报告尚未通过真实交易者验收。
 
 [English](README.md) · [Agent 指南](AGENT_GUIDE.md) ·
-[架构](ARCHITECTURE.md) · [计划](PLAN.md)
+[架构](ARCHITECTURE.md) · [计划](PLAN.md) ·
+[交易系统对抗性审查](docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md)
+
+## 文档地图
+
+- `PLAN.md`:方向、裁决和当前状态
+- `EXECUTION_PLAN.md`:唯一现行任务与验收清单
+- `ARCHITECTURE.md`:当前实现架构
+- `stocks/DATA_MODEL.md`:当前 schema 与字段语义
+- `AGENT_GUIDE.md`:Agent 与开发者操作规则
+- `stocks/VISION.md`:产品北极星
+- `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`:现行真实交易质量边界与整改优先级
+- `docs/INTELLIGENCE_FULL_REDESIGN.md`:部分实现的情报设计
+- `docs/NEWS_MODULE_REDESIGN.md`:尚未完整实施的统一推送设计
+- `docs/archive/`:仅保留历史证据,无现行效力
 
 ## 环境要求
 
@@ -138,5 +153,7 @@ uv run python -m compileall -q stocks tests
 uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-现行 schema 见 `stocks/DATA_MODEL.md`。本项目只用于分析、学习与参考，不构成确定性
-投资建议。
+现行 schema 见 `stocks/DATA_MODEL.md`,交易质量边界见
+`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。审查基线的新鲜验证为:ruff 通过,
+pytest 536 passed / 2 failed(情报测试固定日期超出滚动窗口)。本项目只用于分析、学习与参考,
+不构成确定性投资建议。

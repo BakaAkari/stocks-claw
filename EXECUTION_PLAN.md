@@ -1,6 +1,6 @@
 # EXECUTION_PLAN.md — 现行任务与验收
 
-> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-14(v12个性化引擎+v13架构修正)
+> 生成:2026-07-03;收缩:2026-07-06(S0~S2-7 归档);更新:2026-07-15(v14情报覆盖+对抗性交易审查)
 > 本文是**唯一的行动清单**,与 `PLAN.md`(方向、规则与状态)互补。
 > 已完成 S0~S2-7 的完整任务卡和证据归档于
 > `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;2026-07-03 以前历史证据归档于
@@ -9,8 +9,8 @@
 ## 使用说明(执行 Agent 必读)
 
 1. **读**:`PLAN.md`(尤其 §2 状态、§6 禁止事项、§7 执行协议)→ 本文 → 当前任务。
-2. S3 工程实现已完成。当前唯一现行闸门为 **S3-E 真实试运行验收**;未经用户明确开工,
-   不得实现 Backlog 或加厚通知/反馈/估值层。
+2. S3 与 S3-E 已关闭。当前现行闸门为 **T1 决策一致性与真实执行价值整改**;未经用户明确开工,
+   不得继续扩展扫描池、情报字段或新报告模块。
 3. 每次改动前先用 grep/读码验证前提;文档与代码冲突时以代码和测试为准。
 4. 涉及资产、画像、建议、执行、预测的长期金融记忆写入仍必须用户确认。
 5. 需要新增 schema、引入重型依赖、删除用户数据或改动任务外文件时,先报告用户。
@@ -158,7 +158,7 @@
 ## 已关闭 — global_intelligence_watch 切片
 
 状态:已实现并上线。`intelligence_brief.py` 每小时采集情报并推送 Feishu。
-详见 `references/global-intelligence-deployment.md`。
+部署细节保留在运维侧 skill reference；仓库内现行架构以 `ARCHITECTURE.md` 和脚本为准。
 
 ## 已关闭 — 2026-07-09 审查日 P0 修复
 
@@ -167,7 +167,7 @@
 - [x] 信号无区分度 → `_rank_signals()` 横截面排序(accumulate_candidate 按综合得分排名)
 - [x] 完美相关压力测试 → `_build_scenarios()` 三因子情景(global_risk_off/china_shock/inflation_commodity)
 - [x] agent_task v4 自包含指令集(persona/adaptability/data_reference/output_structure/飞书格式)
-- [x] intelligence_report.py 重写:从 LLM 翻译改为结构化数据+受控 LLM 总结
+- [x] intelligence_brief.py 双输出:结构化 brief + 受控 LLM 快速总结
 - [x] 8 个 cron prompt 精简为一行(指令全部迁入 agent_task JSON)
 - [x] 全局验收:ruff 全绿、pytest 509 passed、compileall 0、CLI smoke 通过
 
@@ -179,8 +179,8 @@
 - [x] 支付宝 6 项资产补全:票号/份额/成本价 + 代理 instrument(纳指→QQQ、黄金→518880)
 - [x] 建行 4 项资产补全:活期/嘉鑫稳利/建信现金添利/黄金积存(克数+均价)
 - [x] `_build_action_cards()` 新增 `_PRODUCT_TYPE_RULES` 四档路由:
-  `full`(场内ETF/股票,完整止损止盈)、`config_only`(QDII/混合/固收+/积存金,ratio=0,信号降级为提醒)、
-  `info_only`(银行理财,纯状态说明)、`skip`(货基/现金/保险,直接跳过)
+  `full`(场内ETF/股票)、`fund`(QDII/联接/混合/固收+,高门槛非零动作)、
+  `precious`(贵金属价差产品)、`info_only`(银行理财)、`skip`(货基/现金/保险)
 - [x] `AGENT_GUIDE.md` 新增 §4 资产分类与产品类型路由
 - [x] skill `stocks-claw-portfolio-advisory` 更新 Product-Type Routing 段
 - [x] 全局验收:ruff 全绿、pytest 46 passed、compileall 0
@@ -190,7 +190,7 @@
 - [x] 新增 `stocks/providers/polygon_quote.py`：PolygonQuoteProvider，使用 Polygon.io REST API (`/v2/aggs/ticker/{symbol}/prev`)
 - [x] 注册到 `StocksEngine`：import + registry.register，默认启用
 - [x] `markets.json` us.providers 增加 `"polygon"` 为备用源
-- [x] API key 路径：`.secret/polygon-key.md` → 环境变量 `POLYGON_API_KEY` → `/opt/data/.secret/polygon-key.md`
+- [x] API key 加载：环境变量 `POLYGON_API_KEY` 或仓库本地 `.secret/polygon-key.md`（密钥文件不提交）
 - [x] 实测：AAPL 315.32 / NVDA 210.96 / SPY 754.95 / XLE 55.08（07-10 收盘），3/3 batch fetch 成功
 - [x] 全局验收：ruff 全绿、pytest 498 passed、compileall 0
 
@@ -218,7 +218,7 @@
 - [x] CLI 新增 `--interpret-profile` / `--params-json`:预览→生成→确认写入流程
 - [x] `scheduled_analysis._merge_profile_config()`:每次 session 自动合并 computed_profile.json
 - [x] `_build_persona()`:按用户风格定制 LLM 报告 persona(5 条原则)
-- [x] `quant_action.py`:硬编码参数全部改为 config 驱动,覆盖 15 项
+- [x] `quant_action.py`:核心交易参数改为 config 驱动;当前 `DEFAULT_PARAMS` 共 17 项,其中 `chase_enabled` 仍未接入追高动作分支
 - [x] 全局验收:ruff 全绿、pytest 536/538、compileall 0
 
 ## 已关闭 — v13 架构修正 (2026-07-14)
@@ -230,12 +230,42 @@
 - [x] AGENT_GUIDE.md §5 更新:§5.3 参数表 + §5.6 资金部署文档
 - [x] 全局验收:ruff 全绿、pytest 536/538、compileall 0
 
+## 当前闸门 — T1 决策一致性与真实执行价值整改
+
+**依据**:`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。当前系统可作为风险监控与研究工作台,但自动动作、组合资金部署和可直接照单执行报告尚未通过。当前新鲜验证:`ruff` 通过、`compileall` 通过、CLI smoke 为 AnalysisContext v12 / 23 资产 / data_quality v10;`pytest` 536 passed / 2 failed。
+
+### T1-P0 必须先关闭
+
+- [ ] 恢复默认 `pytest` 全绿;修复 intelligence 测试时钟依赖,并增加 category padding、digest 完整传递和 15/15 driver coverage 回归测试。
+- [ ] 新鲜度改为按市场/持仓/数据类型计算;禁止美股 stale 全局削弱 A 股盘中动作。
+- [ ] 增加价格/指标异常守门;异常复权、拆分或跨源口径先阻断技术动作。
+- [ ] 重新定义资金可用性:即时现金、卖出回收、T+1、T+2、战略退出、锁定资产分层;禁止把现有持仓总值称为"今天可动用"。
+- [ ] 建立组合最终裁决:风险状态、组合约束、资产动作冲突时必须输出换仓链或明确暂停条件,不能只列 conflicts。
+- [ ] 修正 `trend_confirm_days` / `add_ladder` 命名和文档语义,或实现其字面行为。
+- [ ] 报告将"今日执行动作"与"研究候选"完全分离。
+
+### T1-P1 价值闭环
+
+- [ ] Watch Window 输出相对上一窗口的 Delta,无变化 SILENT。
+- [ ] Critical 风险增加首次触发、持续时长、解除条件、失效时间和状态变化。
+- [ ] Driver/Conflict/Dissent 共用单一情报匹配结果;信号增加 provenance 与 synthesized 标记。
+- [ ] Capital Allocation 不修改原始 Action Card;输出 portfolio approval 与 suppression_reason。
+- [ ] 建议支持执行/部分执行/拒绝/延后及原因的低成本记录。
+- [ ] 对最终 Action Card、因子覆盖、资金分配做版本化 Walk-forward 与交易成本归因。
+
+### T1 出口
+
+- [ ] 一致性闸:抽检真实 A 股与美股 session,数据→信号→动作→资产→组合→风险六层无未裁决冲突。
+- [ ] 执行闸:至少一轮真实报告动作能被记录并在下轮复盘。
+- [ ] 打扰闸:Watch Window 无变化不推送,critical 状态变化可追踪。
+- [ ] 价值闸:用户确认报告减少决策成本并改善纪律。
+
 ## Backlog(未排期,禁止开工)
 
-- **反馈回路(已标记待开发)**:建议vs执行对照→策略归因(胜率/盈亏/时序)→自适应参数。概念设计完成,等待用户裁决排期。
-- 基金净值与贵金属报价 Provider:用户已补录票号/份额/克数,手工估值已可计算逐笔盈亏。
+- **反馈回路**:已进入 T1-P1,不再是纯 Backlog。
+- 贵金属实时报价 Provider:基金净值 Provider 已完成;积存金当前仍依赖手工估值。
 - 估值数据层:A 股/美股指数 PE/PB 百分位,用于长线判断。
-- 论点笔记本、组合归因、危机预案、分批执行计划。
+- 论点笔记本加厚(证据去重/反证/失效/交易结果)、组合归因、危机预案、分批执行计划。
 - DecisionPlan 引擎化与内部 LLM 双路径:原 G1~G7 方向;G0 契约已落盘休眠。
 
 ## 全局验收(每次工程改动后必跑)
@@ -252,5 +282,4 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 不做自动交易/下单;不输出收益承诺。
 - 不做通用回测平台、因子库、多 Agent 辩论。
 - 不删除或跳过测试让其通过;不让默认测试访问真实网络。
-- S3 未接线 DecisionEnvelope、未实施双路径、未新增数据源、未改内部 LLM、
-  未做真实通知渠道和自动交易。
+- 不实施自动交易。DecisionEnvelope 双路径仍未接线;真实通知已由外部 Hermes/cron 承担,不属于 Engine 内置能力。

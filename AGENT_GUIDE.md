@@ -33,6 +33,10 @@ Agent 负责读取产物并生成最终分析。系统不下单、不承诺收�
   金额、逐持仓市值、盈亏、暴露集中度、可动用资金和数据边界。对外 HTTP 接口默认
   隐藏精确金额是另一条远程安全边界。
 - 所有结论必须结合 `data_quality`；stale、降级、换算失败和单源风险不可省略。
+- 交易报告的现行质量边界与六层一致性规则见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
+- 禁止把 `capital_allocation.net_deployable_cny` 直接称为"今天可用现金"；必须拆读 `liquidity_summary.buckets` 的 cash/T0、T1/T2、locked。
+- 当 `risk_assessment.suspend_accumulation=true` 时，研究候选不得写成即时买入建议；只允许说明解除暂停条件。
+- 指标出现异常偏离时先怀疑复权、拆分、跨源口径或缓存污染，不得直接执行技术动作。
 
 ## 2. 环境与入口
 
@@ -174,9 +178,10 @@ uv run python -m stocks.adapters.mcp
 | 模式 | product_type | 行为 |
 |---|---|---|
 | **full** (全规则) | `exchange_traded_fund`, `stock`, `short_treasury_etf` | 完整止损/止盈/MA20趋势/左侧加仓，ratio 非零 |
-| **config_only** (配置型) | `qdii_fund`, `feeder_fund`, `mixed_fund`, `fixed_income_plus_fund`, `precious_metal_account` | 引擎仍计算信号，但 ratio=0，信号降级为建议提醒，附资产特性上下文 |
-| **info_only** (信息型) | `bank_wealth_management` | 不跑引擎，输出持有状态 + 产品说明 |
-| **skip** (跳过) | `money_market_fund`, `cash`, `cash_equivalent`, `insurance_policy` | 不生成任何信号 |
+| **fund** (高门槛) | `qdii_fund`, `feeder_fund`, `mixed_fund`, `fixed_income_plus_fund` | 运行 PnL/配置阈值规则，使用更高止盈止损门槛；保留非零 ratio，但必须标注 T+2、收盘净值和人工平台操作 |
+| **precious** (价差产品) | `precious_metal_account` | 运行 PnL 规则，保留非零 ratio；必须标注买卖价差和人工确认 |
+| **info_only** (信息型) | `bank_wealth_management` | 不跑交易引擎，输出持有状态 + 开放期约束 |
+| **skip** (跳过) | `money_market_fund`, `cash`, `cash_equivalent`, `insurance_policy` | 生成 hold/skip 卡供结构化审计，不进入可操作持仓段 |
 
 **配置型资产的上下文示例**：
 - qdii_fund → "场外 QDII，申赎 T+2，适合长期配置。无明确替代方向时不宜频繁止盈"
@@ -193,8 +198,9 @@ uv run python -m stocks.adapters.mcp
 - `insurance_value`：保险现金价值 → 仅用于组合统计，不参与交易信号
 - `fund_nav`：通过天天基金 API 拉取 T-1 确认净值（公募基金），自动计算逐笔盈亏。需在 `instrument.fund_code` 填写 6 位基金代码
 
-Agent 读取 `action_cards[].facts` 时，带有"手工估值"标注的持仓不可按 ratio 执行，
-需登录对应平台确认实时净值后再手动操作。
+Agent 读取 `action_cards[].facts` 时，带有"手工估值"标注的持仓不可直接按 ratio 执行，
+需登录对应平台确认估值、交易价差和可操作状态后再手动操作。`fund_nav` 是 T-1 确认净值，
+QDII 还可能额外滞后，不得当作盘中价格。
 
 ### 4.3 新增持仓规范
 
@@ -323,9 +329,9 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
 |------|--------|--------------|
 | `stop_loss_pct` | -12.0 | 决定硬止损线。偏好"接受浮亏"→放宽至-15~-20；偏好"果断止损"→收紧至-5~-8 |
 | `take_profit_levels` | [[10,25],[20,25],[30,50]] | 决定止盈阶梯。"让利润奔跑"→阈值提高；"落袋为安"→降低阈值、加大减仓比例 |
-| `add_ladder` | [0.02] | 回踩加仓多档。引擎按 pnl_pct 自动选档（浮盈/浅亏→首档，中度浮亏→二档，深度浮亏→三档），facts 展示完整阶梯。"分批建仓"→[0.03,0.05,0.08] |
-| `chase_enabled` | false | "不追涨"→false；允许突破追入→true |
-| `trend_confirm_days` | 1 | "趋势证伪才离场"→3~5天。首次跌破 MA20 时 ratio÷N 降权（例：30%→10%），facts 标注"需 N 天确认" |
+| `add_ladder` | [0.02] | 回踩加仓多档。当前引擎按价格低于 MA20 的偏离选档:偏离≤1%首档、>1%二档、>2%三档(前提是配置有对应档位)。它不是按 PnL 选档。 |
+| `chase_enabled` | false | 画像参数可存储,但当前 QuantActionEngine 未实现追高分支,不要声称 true 会自动产生突破买入。 |
+| `trend_confirm_days` | 1 | 当前无状态引擎不会统计连续天数;该值用于每增加1天把 MA20 触发 cutoff 收紧0.5个百分点。报告不得表述为"已连续N天确认"。 |
 | `profit_pullback_pct` | -2.5 | 盈利回撤阈值（%），触发止盈锁定建议 |
 | `profit_pullback_min_pnl` | 5.0 | 触发盈利回撤保护的最低浮盈（%），低于此值不触发 |
 | ~10 个其他参数 | 见 DEFAULT_PARAMS | 根据偏好自动调整 |
@@ -336,9 +342,10 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
    `.local/computed_profile.json`，合并进 QuantActionEngine。无需 Agent 手动操作。
 2. **报告层面**：`build_agent_task` 的 `persona` 段由 `_build_persona()` 动态生成，
    包含风格化指令（如"用户容忍较大回撤，不必催促止损"）。
-3. **资金部署**：`mandatory_blocks.capital_facts` 提供纯事实资金状况块，
+3. **资金部署**：`mandatory_blocks.capital_facts` 提供系统计算的资金状况块，
    含约束告警、信号冲突、减仓回收预估、加仓候选排序、闲置资金轮动方向。
-   由 `_format_capital_advice()` 格式化，LLM 必须原样嵌入报告。
+   其中 `net_deployable_cny` 当前包含 cash/T0 与 T1/T2 持仓价值,不是今日现金;Agent 必须拆分说明。
+   `capital_facts` 可作为证据引用,但不得覆盖更高优先级的风险暂停、数据异常或资产约束。
 4. **无文件时的行为**：若 `.local/computed_profile.json` 不存在，引擎使用默认参数，
    报告 persona 使用通用模板。不报错、不阻塞。
 
@@ -363,15 +370,16 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
 
 包含以下内容：
 
-- **总体状态**：总资产 + 净可动用资金 + 现金占比
+- **总体状态**：总资产 + 系统口径 net_deployable；必须另读 liquidity buckets，禁止将其等同即时现金
 - **约束状态**：大类资产桶的偏离（超限/不足）
 - **信号冲突**：持仓信号方向 vs 约束方向的冲突（如"权益不足应加仓但信号为减仓"）
 - **减仓回收**：预计回收金额和笔数
 - **加仓排序**：按优先级×约束×轮动综合得分的加仓候选（若无有效加仓信号则展示轮动领涨方向）
 
 
-Agent 在撰写报告时,应基于 capital_facts 的事实独立生成"资金部署"段,结合 persona 和 intelligence_digest 回答"今天钱往哪放"。
-不得笼统说"关注"或"观望",必须引用具体数字。
+Agent 在撰写报告时,应先执行优先级:风险硬约束→数据异常/新鲜度→止损→组合约束→资金部署→研究候选。
+若 `suspend_accumulation=true`,资金部署段只能说明现金保持、允许减仓和解除暂停条件,不得给即时买入。
+必须引用具体数字,但同时标明即时现金、待回收资金和到账周期。Watch Window 只报告相对上一窗口的变化;无变化应 SILENT。
 
 ## 6. HTTP 边界
 
@@ -400,7 +408,17 @@ CORS，不应直接暴露公网。
 
 此约束已编码在 `agent_task.must_not_do` 和 `output_structure.format_rules` 中。
 
-## 8. 每次修改的验收
+## 8. 报告一致性检查
+
+每份报告发布前必须确认:
+
+- 数据→信号→动作→资产路由→组合约束→风险状态六层没有未解释冲突。
+- "今日动作"与"研究候选"分段,候选不得伪装成可执行建议。
+- 报告中的可用资金按即时现金、卖出回收、T+1/T+2 和锁定资产拆分。
+- Critical 风险说明首次触发/持续状态/解除条件;重复窗口只报告 Delta。
+- Action Card 的 `confidence` 不等于策略历史胜率;当前量化有效性尚未证明。
+
+## 9. 每次修改的验收
 
 ```bash
 uv run ruff check .

@@ -1,8 +1,12 @@
 # 愿景对照审计:现有代码与文档 vs "专业个人金融投资分析师"需求
 
+> **状态更新:历史参考,后续路线已被 2026-07-15 对抗性审查重排**
+> 本文中的历史完成证据保留有效;未完成方向不再自动进入现行计划。
+> 当前任务和交易质量边界以 `EXECUTION_PLAN.md` 与 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md` 为准。
+
 > ARCHIVED / PARTIALLY SUPERSEDED:本文是 S2 立项前的差距审计。资产入口、成本基准触发器、
-> 暴露/流动性派生等缺口已由 S2 工程实现覆盖;S2-E 用户验收和主动推送仍以
-> `EXECUTION_PLAN.md`、`PLAN.md` 与 S3 候选设计稿为准。
+> 暴露/流动性派生等缺口已由 S2 工程实现覆盖;S2-E 与 S3 已关闭。
+> 当前任务以 `EXECUTION_PLAN.md` T1 和 2026-07-15 对抗性审查为准。
 
 > 生成:2026-07-03。审计范围:models.py / context_builder.py / scaffolds.py /
 > action_signals.py / advice_review(经 DATA_MODEL 与 EXECUTION_PLAN 证据) /

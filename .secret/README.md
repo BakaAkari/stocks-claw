@@ -1,45 +1,30 @@
 # API Key 配置
 
-将申请的 API Key 写入对应的文件：
+本目录只保存本机密钥和连接配置，已被 `.gitignore` 排除。每个文件只放实际值，不要添加代码块、说明文字或提交到 Git。
 
-## 行情数据
+## 行情与情报
 
-1. **finnhub-key.md** — Finnhub API Key（美股行情）
-   - 申请地址：https://finnhub.io/
+- `finnhub-key.md`:Finnhub API Key，对应环境变量 `FINNHUB_API_KEY`
+- `polygon-key.md`:Polygon.io API Key，对应环境变量 `POLYGON_API_KEY`
+- `gnews-key.md`:GNews API Key，对应环境变量 `GNEWS_API_KEY`
+- `juhe-key.md` / `juhe-caijing-key.md`:可选聚合新闻 Key
 
-## LLM（OpenAI 兼容格式）
+FRED 当前使用官方 CSV 下载接口，不需要 API Key。
 
-5. **openai-key.md** — OpenAI 兼容 API Key
-   - 用于 LLM 数据增强和深度分析
-   - 支持任意 OpenAI 兼容服务（如 cliproxyapi 转发、Azure OpenAI、本地 Ollama 等）
+## OpenAI-compatible LLM
 
-6. **openai-base-url.md** — OpenAI 兼容 API Base URL（可选）
-   - 例如：`https://api.cliproxyapi.com/v1`
-   - 如使用官方 OpenAI 可省略此文件
+- `openai-key.md`:API Key
+- `openai-base-url.md`:兼容 API Base URL
 
-**优先级**：命令行参数 `--openai-key` > 环境变量 `OPENAI_API_KEY` > `.secret/openai-key.md`
+兼容环境变量:
 
-**环境变量方式**（不创建文件也可）：
-```bash
-export OPENAI_API_KEY="sk-xxx"
-export OPENAI_BASE_URL="https://api.cliproxyapi.com/v1"
-```
+- `OPENAI_COMPATIBLE_API_KEY` 或 `OPENAI_API_KEY`
+- `OPENAI_COMPATIBLE_BASE_URL` 或 `OPENAI_BASE_URL`
 
-## 新闻数据（可选）
+配置优先级由具体调用路径决定，通常为显式参数或环境变量优先，其次读取 `.secret/` 文件。不得在文档、日志或 Git remote 中暴露真实值。
 
-2. **gnews-key.md** — GNews API Key（英文新闻）
-   - 申请地址：https://gnews.io/
+## HTTP
 
-3. **juhe-key.md** — 聚合数据 Key（中文新闻）
-   - 申请地址：https://www.juhe.cn/
+- `http-token`:非回环 HTTP 访问使用的 Bearer token
 
-4. **juhe-caijing-key.md** — 聚合数据财经新闻 Key
-   - 申请地址：https://www.juhe.cn/
-
----
-
-每个文件只包含 Key/URL 字符串，例如：
-
-```
-abcd1234efgh5678ijkl9012mnop3456
-```
+缺少必要配置时系统应在 `data_quality` 或明确错误中报告，不得伪装为成功。

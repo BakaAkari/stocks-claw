@@ -145,10 +145,19 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `trigger_reviews`：最近建议中的触发器核对结果
 - `action_signal_reviews`：本次 session 相关的非 neutral 动作信号
 - `data_quality`：原样保留 `AnalysisContext.data_quality`
+- `action_cards`：逐持仓最终动作卡,含 `signal/action/ratio/facts/routing`、
+  `drivers`(technical/intelligence/factor)、`dissent`、`confidence`、
+  `intelligence_conflict`、`constraint_conflict`。
+- `portfolio_risk`：集中度、止损风险与多因子压力情景。
+- `capital_allocation`：约束告警、信号冲突、减仓回收、加仓候选、轮动参考与
+  `net_deployable_cny`。注意:当前 deployable 口径包含 cash/T0 和 T1/T2 持仓价值,
+  不是今日即时现金;消费端必须结合 `context_digest.liquidity_summary.buckets` 拆分。
+- `risk_assessment`：`level/triggers/recommended_actions/suspend_accumulation/cash_target_pct`。
+- `mandatory_blocks`：风险边界、约束偏离、资金事实、Shadow Account 和可选研究论点。
 - `agent_task`(v4)：自包含的 Agent 任务说明书,含以下子字段:
   - `task_version`：4
   - `must_answer`：session 特定的必答问题(含前瞻展望指令)
-  - `must_not_do`：11+ 条硬性约束(数据忠实性、触发器完整性、飞书格式)
+  - `must_not_do`：数据忠实性、触发器完整性、资产路由、扫描池完整性、情报来源与飞书格式硬约束
   - `persona`：分析师人格定义(角色、原则)
   - `adaptability`：自适应输出规则(silent_when_nothing/loud_when_critical)
   - `data_reference`：逐字段数据定位指南
@@ -156,11 +165,19 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
   - `final_analysis_instructions`：一行总结
 - `write_policy`：固定声明后台运行不得写长期金融记忆，写入必须用户确认
 - `notification`：推荐推送策略，通知层只发消息不写金融记忆
-- `context_digest`：市场状态、组合结构、暴露、流动性、粒度与轮动 leader 摘要
+- `context_digest`：市场状态、组合结构、暴露、流动性、粒度、轮动 leader、情报摘要与事件日历
 
 `agent_task.must_not_do` 固定包含：不得承诺收益、不得忽略 `data_quality`、不得建议动用
-`rebalance_eligible=false` 的资产、不得把代理 ETF 价格触发器套到场外基金、不得自动保存
-建议/执行/预测。
+锁定资产、不得把代理 ETF 价格触发器套到场外基金、不得自动保存建议/执行/预测、
+不得遗漏严重触发器、必须按 routing 报告资产操作约束、必须遵守飞书格式和情报来源边界。
+
+### 当前已知一致性边界
+
+- `data_quality.quotes.freshness` 当前是全局值,下游 Action Card 仍未按持仓市场拆分。
+- `capital_allocation.net_deployable_cny` 当前包含 cash/T0 与 T1/T2 资产,消费端不得当作即时现金。
+- category fallback `hold` 可提高 intelligence driver 字段覆盖率,但不等于独立方向情报。
+- `confidence` 表示当前证据与新鲜度,不表示历史胜率或未来收益概率。
+- 完整交易质量边界见 `../docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
 
 ## AdviceRecord
 

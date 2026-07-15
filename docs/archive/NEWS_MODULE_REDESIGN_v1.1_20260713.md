@@ -1,5 +1,9 @@
 # 新闻情报模块重构方案
 
+> **状态：已归档，被 v2.0 设计取代**
+> 本文保留作评审与设计决策追溯，不代表当前实现或现行路线。
+> 后续参考 `docs/NEWS_MODULE_REDESIGN.md`、`ARCHITECTURE.md` 与 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
+
 **状态**: 草案 v1.0 — 待多角度迭代评审
 **日期**: 2026-07-13
 

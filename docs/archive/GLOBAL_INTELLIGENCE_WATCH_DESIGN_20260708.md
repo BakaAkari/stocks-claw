@@ -2,6 +2,7 @@
 > 本文档为历史设计稿,其中描述的功能已实现并上线。
 > 现行架构和契约以 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md` 和代码为准。
 > 保留本文仅作设计决策追溯。
+> 实际现行配置已从设计时 8 个持仓窗口扩展为 A 股 6 个 + 美股 5 个;情报巡逻按 `scheduled_sessions.json` 每小时运行。
 
 # global_intelligence_watch 设计
 

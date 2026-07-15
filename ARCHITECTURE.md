@@ -11,8 +11,12 @@
   最终构建 `AnalysisContext v12`。
 - Engine 也能按配置生成 `ScheduledAnalysisRun v1` 文件产物，供外部 Agent 定时读取。
 - `ProfileInterpreter` 将用户自然语言偏好翻译为量化引擎参数(`computed_profile.json`),
-  每次 session 自动合并进 `QuantActionEngine`,覆盖 15 项参数。
-- 外部 Agent 读取上下文或定时运行产物并完成最终判断。
+  每次 session 自动合并进 `QuantActionEngine`。
+- `QuantActionEngine.review_position()` 生成纯技术面 `QuantReview`;`factor_rules.collect_votes()` /
+  `adjudicate()` 叠加约束、市场状态、事件、情报和数据新鲜度;`finalize_decision()` 输出
+  `FinalDecision` 及 `drivers/dissent/confidence`。
+- 外部 Agent 读取上下文或定时运行产物并完成最终判断。当前 Agent 报告不是自动执行单;
+  交易有效性边界见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
 - 定时产物 `mandatory_blocks` 含四块确定事实:`risk_boundary`(风险等级)、
   `constraint_alerts`(大类约束偏离)、`capital_facts`(资金状况:约束/净可动用/冲突/回收/轮动参考)、
   `shadow_account`(建议信号分布)。`capital_facts` 只陈述事实不做解释,资金部署建议由 LLM 基于 persona 生成。
@@ -83,10 +87,13 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - `exchange_rate.py`：外币估值与显式换算质量。
 - `persistence.py`：滚动最小上下文快照与确认建议摘要。
 - `advice_review.py`：建议表现回看与触发器核对（按收盘价，只列事实）。
-- `scheduled_analysis.py`：A 股/美股定时 session 日历、运行产物存储、
-  产品类型路由(`_PRODUCT_TYPE_RULES` 四档分流:full/config_only/info_only/skip)、
-  组合资金分配(`_build_capital_allocation` 约束检测+冲突标注+优先级排序)、
-  自包含 agent_task v5 指令集(persona/adaptability/data_reference/飞书格式/情报要点)和通知建议策略。
+- `quant_action.py`：纯技术面 review、产品类型路由、确定性最终决策、驱动向量与置信度。
+- `factor_rules.py`：约束、市场状态、事件、情报冲突和新鲜度因子投票及裁决。
+- `intelligence_harvester.py` / `intelligence_analyzer.py` / `news_intelligence_store.py`：
+  每小时多源情报采集、LLM 语义分析、规则降级、信号追踪与文件存储。
+- `scheduled_analysis.py`：A 股/美股/情报 session 日历、运行产物存储、Action Card、
+  Portfolio Risk、Capital Allocation、agent_task v4 和通知建议策略。
+- `shadow_account.py` / `hypothesis_tracker.py` / `signal_tracker.py`：建议快照、研究论点和情报信号效果跟踪。
 - `llm_analysis.py`：默认关闭的兼容报告模块。
 
 ### domain
@@ -165,9 +172,10 @@ uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
 ```
 
 `ScheduledAnalysisRun v1` 包含 session 元数据、持仓估值/PnL、触发器核对、
-action_signals(含 rank/score)、portfolio_risk(含多因子情景)、capital_allocation(约束+冲突+资金分配)、data_quality、
-agent_task v5(自包含指令集:persona/adaptability/data_reference/output_structure/
-飞书格式约束/情报要点)、写入策略和通知建议。定时运行只写
+action_cards(含 routing/drivers/dissent/confidence)、action_signals(含 rank/score)、
+portfolio_risk、capital_allocation、risk_assessment、mandatory_blocks、data_quality、
+agent_task v4(自包含指令集:persona/adaptability/data_reference/output_structure/飞书格式约束/情报要点)、
+写入策略和通知建议。定时运行只写
 `.local/scheduled_runs/`，不会自动保存 advice/execution/forecast，也不会修改资产或画像。
 
 ## 5. 金融记忆
@@ -229,8 +237,11 @@ HTTP 是远程接口边界，默认仍递归移除 `amount`、`amount_cny` 和 `
 
 - `.local/history/`：按标的 JSON 历史缓存，默认保留 90 天；按市场交易日去重。
 - `.local/snapshots/`：最多 30 份最小快照。
-- `.local/scheduled_runs/`：定时扫描 JSON 产物与 latest 入口。
+- `.local/scheduled_runs/`：定时扫描 JSON/Markdown 产物与 latest 入口。
 - `.local/news_intelligence/`：每小时情报采集快照、事件聚类和信号(7天在线/30天归档)。
+- `.local/advice_snapshots/`：Shadow Account 建议快照。
+- `.local/hypotheses/`：研究论点与 run 关联索引。
+- `.local/signal_tracker/`：情报方向信号及后续价格结算。
 - `data/cache/`：非隐私缓存，例如汇率；不与密钥目录混用。
 - `.secret/`：API key 与 HTTP token。
 
@@ -259,12 +270,24 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 - `stocks/config/event_calendar.json`：官方已公布的未来事件日程
 - `stocks/config/sector_scan.json`：候选池扫描，带 pool 分层（不进入 watchlist）
 - `stocks/config/scheduled_sessions.json`：A 股/美股/情报定时运行 session、时区与推送策略
-- `scripts/`：定时任务脚本(intelligence_report.py 直接格式化+受控LLM总结、cron 触发脚本)
+- `scripts/`：定时任务脚本(`intelligence_brief.py`、情报/到期结算/事件检查 shell 入口)
 
 Engine 配置优先级：环境变量 > YAML > 代码默认值。嵌套键使用双下划线，例如
 `STOCKS_FETCHER__MAX_RETRIES=3`。
 
-## 11. 验证基线
+## 11. 当前已知架构限制
+
+- 全局 quote freshness 当前会传给全部持仓,跨市场 session 可能相互污染动作比例。
+- `capital_allocation` 将 T1/T2 持仓计入 deployable,不能直接解释为今日现金。
+- `_build_capital_allocation()` 对低于 800 元的加仓会原地修改 Action Card,存在顺序依赖。
+- 情报 Driver 与 IntelConflictRule 使用不同匹配路径,可能出现结构化冲突漏报。
+- 产品路由在 `quant_action.py` 与 `scheduled_analysis.py` 存在重复映射。
+- Watch Window 仍以完整快照为主,尚未实现 Delta/SILENT 闭环。
+- 详情与整改优先级见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
+
+## 12. 验证基线
+
+当前审查基线:ruff 通过;pytest 536 passed / 2 failed。失败来自 intelligence 测试固定日期超出 6 小时窗口,默认质量门尚未全绿。
 
 ```bash
 uv run ruff check .

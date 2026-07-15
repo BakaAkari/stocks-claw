@@ -1,8 +1,12 @@
 # 情报分析引擎全面重构
 
+> **状态：部分实现，后续路线已由 2026-07-15 对抗性审查重排**
+> LLM 语义分析、规则 fallback、SignalTracker 与 holdings-aware 分析已落地；文中 P3 闭环和部分 schema 仍是设计，不代表当前实现。
+> 现行架构以 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md` 和代码为准；交易质量与后续优先级见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
+
 **版本**: v2.0
 **日期**: 2026-07-13
-**状态**: 设计阶段
+**状态**: 部分实现快照；Phase A 核心和 SignalTracker 已落地，完整效果反馈闭环未完成
 **覆盖**: P0 聚类质量 → P1 数据源优化 → P2 跨集群合成+信号验证 → P3 回测闭环
 
 ---
@@ -270,6 +274,14 @@ cron: 每 6 小时扫描未结算信号
 | 其他 | 不变 | — |
 
 ---
+
+## 3.1 截至 2026-07-15 的实现映射
+
+- 已实现:`LLMIntelligenceAnalyzer`、holdings 传入、GNews 关键词降为 3、JSON 解析降级、`SignalTracker`、结算脚本和基础测试。
+- 已实现但需整改:category fallback 提高了 driver 字段覆盖,但多数为 synthesized `hold`,不能解释为独立资产级方向信号。
+- 部分实现:跨集群合成、方向冲突和 holdings 影响已进入结构化产物,但 Driver/Conflict/Dissent 尚未共享同一匹配结果。
+- 未完成:将版本化历史效果稳定反馈到生产 Prompt、足够样本的 Walk-forward、交易成本和策略版本归因。
+- 当前默认测试为 536 passed / 2 failed;两项失败是固定日期 fixture 超出 Analyzer 六小时窗口。
 
 ## 4. 实施计划
 

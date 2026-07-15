@@ -5,11 +5,27 @@ positions, investor preferences, quotes, news, macro data, technical indicators,
 mapping, PnL/valuation scaffolds, and data-quality metadata, then returns an
 `AnalysisContext` evidence package for an external Agent.
 
-It does not place orders. The engine prepares facts, trigger checks, and lightweight signals;
-the Agent owns the final reasoning and the user remains the only decision-maker.
+It does not place orders. The engine prepares facts, trigger checks, deterministic action cards,
+and portfolio context; the Agent owns the final reasoning and the user remains the only decision-maker.
+Current review status: risk monitoring and research assistance are usable, but automated actions,
+capital deployment, and reports intended for direct execution have not passed trader-level acceptance.
 
 [中文](README.zh.md) · [Agent guide](AGENT_GUIDE.md) ·
-[Architecture](ARCHITECTURE.md) · [Plan](PLAN.md)
+[Architecture](ARCHITECTURE.md) · [Plan](PLAN.md) ·
+[Trading-system adversarial review](docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md)
+
+## Documentation map
+
+- `PLAN.md`: direction, decisions, and current status
+- `EXECUTION_PLAN.md`: the only active task and acceptance list
+- `ARCHITECTURE.md`: current implementation architecture
+- `stocks/DATA_MODEL.md`: current schemas and field semantics
+- `AGENT_GUIDE.md`: operating rules for Agents and developers
+- `stocks/VISION.md`: product north star
+- `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`: current trader-level quality boundary and remediation priorities
+- `docs/INTELLIGENCE_FULL_REDESIGN.md`: partially implemented intelligence design
+- `docs/NEWS_MODULE_REDESIGN.md`: active but not fully implemented unified-push design
+- `docs/archive/`: historical evidence only; no current authority
 
 ## Requirements
 
@@ -141,5 +157,8 @@ uv run python -m compileall -q stocks tests
 uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-See `stocks/DATA_MODEL.md` for the current schema. This software is for analysis and education,
-not guaranteed investment advice.
+See `stocks/DATA_MODEL.md` for the current schema and
+`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md` for the current trading-quality boundary.
+Fresh verification at the review baseline: ruff passes; pytest reports 536 passed and 2 failed due
+to time-dependent intelligence fixtures. This software is for analysis and education, not guaranteed
+investment advice.

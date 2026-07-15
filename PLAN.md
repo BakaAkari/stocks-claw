@@ -1,8 +1,8 @@
 # stocks-claw 开发主线计划
 
-> 版本:v4.8(2026-07-14,个性化引擎+架构修正+资金部署事实化)
+> 版本:v4.9(2026-07-15,对抗性交易审查+文档新鲜度收口)
 > **现行准则只有两份:本文档(方向、规则与状态)+ `EXECUTION_PLAN.md`(任务与验收)。**
-> 北极星是 `stocks/VISION.md`(v2.0);现状描述文档为 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md`、`AGENT_GUIDE.md`(只描述现实,不含路线)。
+> 北极星是 `stocks/VISION.md`(v2.1);现状描述文档为 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md`、`AGENT_GUIDE.md`;现行交易质量基准见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
 > `docs/archive/` 下的一切(含 2026-07-03 归档的 `PLAN_v3.0_20260703.md`、`EXECUTION_PLAN_20260703.md`)无现行效力,仅作历史与参考。
 > 文档与代码冲突时,以 grep/读码验证的代码现状为准,并回头修正文档。
 
@@ -14,32 +14,34 @@
 
 同日裁决:废除旧红线"不为平台化提前做重型架构",替换为成长规则——**复杂度必须由已验证的价值拉动**(§3)。自动交易与收益承诺仍永久禁止。
 
-## 2. 当前真实状态(2026-07-06 文档清理复核)
+## 2. 当前真实状态(2026-07-15 对抗性复核)
 
 > 2026-07-03 以前的完成证据见归档件 `docs/archive/EXECUTION_PLAN_20260703.md`。
 > S1/S2 的完整完成记录见 `docs/archive/EXECUTION_PLAN_S1_S2_20260706.md`;
 > 当前行动入口见 `EXECUTION_PLAN.md`。文档与代码冲突时仍以读码、grep 与测试结果为准。
 
-- **已完成**:P0 安全、P1 静默错误六项、P2 记忆回路、P3 删减、P4 数据底盘一期、P5 文档收口、M 建议闭环、F0、Phase D、Phase F 重新验收、G0 DecisionEnvelope 契约冻结、**切片 1 建议闭环**、**切片 2 资产数据结构 v2(S2-0~S2-7+S2-E)**、**S2.5 扫描池扩容**、**切片 3 定时扫描与触发推送(S3-1~S3-5+S3-E 真实试运行关闭)**、**global_intelligence_watch 情报管道**、**P0 四项修复(实时汇率、-10%中间止损、信号排名、多因子压力测试)**、**agent_task v4→v5 自包含指令集(persona+adaptability+飞书格式+情报要点)**、**intelligence_report.py 重写(结构化数据+受控LLM总结)**。当前契约:**AnalysisContext v12、data_quality v10、ScheduledAnalysisRun v1、agent_task v5**。
+- **已完成**:P0 安全、P1 静默错误六项、P2 记忆回路、P3 删减、P4 数据底盘一期、P5 文档收口、M 建议闭环、F0、Phase D、Phase F 重新验收、G0 DecisionEnvelope 契约冻结、**切片 1 建议闭环**、**切片 2 资产数据结构 v2(S2-0~S2-7+S2-E)**、**S2.5 扫描池扩容**、**切片 3 定时扫描与触发推送(S3-1~S3-5+S3-E 真实试运行关闭)**、**global_intelligence_watch 情报管道**、**P0 四项修复(实时汇率、-10%中间止损、信号排名、多因子压力测试)**、**agent_task v4 自包含指令集(persona+adaptability+飞书格式+情报要点)**、**intelligence_brief.py 双输出(结构化 brief + 受控LLM快速总结)**。当前契约:**AnalysisContext v12、data_quality v10、ScheduledAnalysisRun v1、agent_task v4**。
   - **v9 Polygon 美股第二行情源(2026-07-11)**:`stocks/providers/polygon_quote.py`,Finnhub主+Polygon备,`is_single_source(us)` False。
   - **v10 基金净值 Provider(2026-07-11)**:`stocks/providers/fund_nav.py`,天天基金JSONP接口,5只公募基金自动拉取T-1确认净值,标注从"手工估值"→"净值来源:天天基金"。
   - **v11 组合级资金分配(2026-07-11)**:`_build_capital_allocation()` — 约束检测(权益/固收/现金/黄金 vs portfolio_constraints.json)、冲突标注(约束方向 vs 信号方向)、约束感知加仓排序(超限大类惩罚×0.2)、闲置资金建议(轮动领涨候选)、优先级摘要。
-  - **v8 产品类型路由(2026-07-11)**:`_build_action_cards()` 新增 `_PRODUCT_TYPE_RULES` 表,按 `classification.product_type` 分四档路由:`full`(场内ETF/股票,完整止损止盈)、`config_only`(QDII/混合/固收+/积存金,ratio=0,信号降级为提醒)、`info_only`(银行理财,纯状态说明)、`skip`(货基/现金/保险,直接跳过)。支付宝6项+建行4项资产明细已补全(票号/份额/成本价+代理instrument)。
-- **v12 个性化参数引擎 (2026-07-13)**:`ProfileInterpreter` — Agent 直接推理将自然语言偏好翻译为量化参数(`computed_profile.json`),引擎自动合并。15 个参数覆盖止损/止盈/加仓/趋势确认/仓位上限。
+  - **v8 产品类型路由(2026-07-11)**:`_build_action_cards()` 新增 `_PRODUCT_TYPE_RULES` 表,按 `classification.product_type` 分五档路由:`full`(场内ETF/股票)、`fund`(QDII/联接/混合/固收+,高门槛非零动作)、`precious`(贵金属价差产品)、`info_only`(银行理财)、`skip`(货基/现金/保险)。支付宝6项+建行4项资产明细已补全(票号/份额/成本价+代理instrument)。
+- **v12 个性化参数引擎 (2026-07-13)**:`ProfileInterpreter` — Agent 直接推理将自然语言偏好翻译为量化参数(`computed_profile.json`),引擎自动合并。当前 `DEFAULT_PARAMS` 共 17 项,覆盖止损/止盈/加仓/趋势过滤/仓位上限等。
 - **v13 架构修正 (2026-07-14)**:`trend_confirm_days` 改为 cutoff 收紧(ratio÷N→阈值偏移,消除"首次跌破"谎言);`add_ladder` 改为 MA20 偏离驱动档位+仓位上限门(pnl_pct→同源偏离);`capital_deployment` 拆为 `capital_facts`(纯事实块)+LLM 负责解释。
-- **当前开发方向**:v8~v13已完成。下一步候选:反馈回路(建议vs执行对照)。
+- **v14 情报驱动向量与覆盖修复(2026-07-14~15)**:`action_cards` 新增 `drivers/dissent/confidence`;情报 JSON 解析增强;`10f5e05` 修复 digest 截断、缺失 symbol 和分类部分覆盖,使 15/15 活跃持仓获得 intelligence driver。注意:这是结构字段覆盖,多数新增信号为 category fallback `hold`,不等同于独立方向情报或已验证交易优势。
+- **2026-07-15 对抗性交易审查**:风险监控、情报辅助和持仓盘点通过或有条件通过;自动交易动作、组合资金部署和可直接照单执行报告不通过。下一阶段主线改为**决策一致性与执行反馈**,完整证据见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
+- **当前工程状态**:`ruff` 全绿;默认 `pytest` 为 536 passed / 2 failed,失败是 `test_intelligence.py` 固定日期 fixture 超出 6 小时窗口。质量门未全绿。
 - **Backlog其余项**(组合归因/危机预案/DecisionPlan)未排期。
 
 - **五个模块系统接入 (2026-07-13)**:
-  - Shadow Account: 每 run 保存建议快照到 .local/advice_snapshots/，自动生成信号分布诊断嵌入飞书报告
-  - 因子接口化:  步骤 2-7 迁移到  的 / 管道
-  - 研究目标:  接入 ，自动匹配论点与持仓
-  - FallbackTracker: 惰性注入 ，追踪数据源降级路径
-  - 回测 CLI: ，4 个因子规则历史命中率分析
-  - 测试覆盖: 5 个新模块各有单元测试（22 tests），ruff 全绿
-  - 因子化边界明确: 文档化在  顶部的 docstring
+  - Shadow Account:`stocks/engine/shadow_account.py`,每 run 保存建议快照到 `.local/advice_snapshots/`,并生成信号分布诊断
+  - 因子接口化:`stocks/engine/factor_rules.py`,由 `collect_votes()` / `adjudicate()` 参与 FinalDecision
+  - 研究论点:`stocks/engine/hypothesis_tracker.py`,将 open hypotheses 与 Action Card 标签匹配并记录证据
+  - FallbackTracker:`stocks/engine/fallback_tracker.py`,追踪 Provider 降级路径
+  - 回测 CLI:`stocks/cli/backtest_cmd.py`,调用 `stocks/engine/rule_backtest.py` 评估 4 个规则的历史命中表现
+  - 信号结算:`stocks/engine/signal_tracker.py` + `scripts/signal_settlement.py`,记录情报方向及后续价格表现
+  - 上述模块均已有单元测试;当前全库基线仍以 536 passed / 2 failed 为准
 
-- **未立项候选**:基金净值与贵金属报价 Provider、估值数据层、论点笔记本、组合归因、危机预案、分批执行计划。G0 契约保留为休眠资产。
+- **未立项候选**:估值数据层、组合归因、危机预案、分批执行计划。论点笔记本薄实现(`hypothesis_tracker.py`)已存在,但证据去重/反证/失效与交易结果闭环仍在 T1-P1。基金净值 Provider 已完成;贵金属实时报价仍未完成。G0 契约保留为休眠资产。
 - **两起必须记住的事故**:①执行 Agent 伪造带 commit hash 的完成记录并勾掉物理上不可能通过的验收;②文档维护方曾未比对内容整体覆盖完成态清单。§6、§7 的规则由此导出,永久有效。
 
 ## 3. 路线原则:价值拉动的切片开发
@@ -58,7 +60,7 @@
 |---|---|---|
 | 复盘问责 | 执行记录 + 建议/触发/预测对照(切片 1) | 组合归因、行为模式复盘 |
 | 可问责预测 | 预测台账 + 到期结算(切片 1) | 情景树、预期差、置信度校准 |
-| 信息沉淀 | 论点笔记本 JSON(未立项) | 财报季工作流、宏观状态机 |
+| 信息沉淀 | 论点笔记本 JSON 薄实现(已具备) | 证据去重/反证/失效、财报季工作流、宏观状态机 |
 | 机会窗口 | rotation/action_signals + 事件/公告日历(短中线,已具备) | 估值层(长线)、一致预期与预期差 |
 | 调仓操作 | 建议 actions 带幅度/触发/证伪(切片 1) | 分批计划、账户/费率约束、危机预案 |
 | 主动节奏 | 轻量定时 session + `.local/scheduled_runs/` 产物 + Agent handoff(S3 已具备) | 早报/周报、事件临近提醒、通知渠道与反馈台账 |
@@ -101,13 +103,13 @@
 
 ### 已关闭:2026-07-09 审查日 P0 修复
 
-内容:硬编码汇率→实时汇率、-10%中间止损档、信号横截面排序、多因子压力测试;agent_task v4 自包含指令集(persona/adaptability/飞书格式);intelligence_report.py 重写(结构化数据+受控LLM总结,消除 LLM 编造问题);8 个 cron prompt 精简为一行。
+内容:硬编码汇率→实时汇率、-10%中间止损档、信号横截面排序、多因子压力测试;agent_task v4 自包含指令集(persona/adaptability/飞书格式);当日 `intelligence_report.py` 重写(后续已由 `intelligence_brief.py` 取代);8 个 cron prompt 精简为一行。
 
 状态:已完成。ruff 全绿、pytest 509 passed、compileall 0、CLI smoke 通过。产出 `docs/archive/DEVELOPMENT_DIRECTION_20260709.md` 开发方向建议书。详见决策日志 2026-07-09。
 
 ### 切片候选队列(未排期,禁止开工)
 
-基金净值与贵金属报价 Provider、估值数据层(A股/美股指数 PE/PB 百分位,解锁长线判断)、论点笔记本、组合归因、危机预案、分批执行计划、DecisionPlan 引擎化与内部 LLM 双路径(原 G1~G7;G0 契约已落盘休眠;2026-07-03 双路径裁决保留为方向,排期后移)。
+贵金属实时报价 Provider、估值数据层(A股/美股指数 PE/PB 百分位,解锁长线判断)、论点笔记本加厚、组合归因、危机预案、分批执行计划、DecisionPlan 引擎化与内部 LLM 双路径(原 G1~G7;G0 契约已落盘休眠;2026-07-03 双路径裁决保留为方向,排期后移)。
 
 ## 6. 禁止事项
 
@@ -187,5 +189,6 @@ uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
 - 2026-07-13:ProfileInterpreter 上线。Agent 直接推理完成自然语言→量化参数翻译,写入 computed_profile.json;引擎每次 session 自动合并 15 项参数。依据:用户要求系统个性化,API key 401 后改为 Agent 直推。
 - 2026-07-14:架构修正三轮。①trend_confirm_days:ratio÷N→cutoff 收紧,消除无状态引擎追踪不了"第几天"的根因;②add_ladder:pnl_pct→MA20 偏离选档+仓位门;③capital_deployment→capital_facts 纯事实,LLM 负责解释。ruff 全绿,pytest 536/538。依据:对抗式校验发现三个改动存在架构假设错误。
 - 2026-07-14:标记反馈回路为待开发功能。用户裁决当前报告质量已达收益递减点,继续对抗式校验 ROI 极低。依据:用户明确判断。
+- 2026-07-15:完成最终对抗性交易系统审查,新增现行质量基准 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。裁决风险监控/情报辅助/持仓盘点通过或有条件通过,自动动作/组合资金部署/照单执行报告不通过;下一主线从扩字段切换为六层一致性、真实流动性、窗口 Delta、执行反馈与效果归因。同批登记该新增 md 并执行全项目文档新鲜度收口。依据:当前代码、12 个 latest session 产物、历史回测与 536 passed/2 failed 测试证据。
 
 - (追加格式:`日期:决定;依据`)
