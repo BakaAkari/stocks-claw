@@ -1109,6 +1109,7 @@ class ContextBuilder:
                 "status": "not_configured",
                 "source": "none",
                 "as_of": None,
+                "freshness": "not_configured",
                 "item_count": 0,
                 "missing_count": 0,
             }
@@ -1116,6 +1117,7 @@ class ContextBuilder:
             "status": rotation.get("status", "no_data"),
             "source": "history_cache",
             "as_of": rotation.get("as_of"),
+            "freshness": rotation.get("data_freshness", "unknown"),
             "item_count": len(rotation.get("items", [])),
             "missing_count": len(rotation.get("missing", [])),
             "missing": rotation.get("missing", []),

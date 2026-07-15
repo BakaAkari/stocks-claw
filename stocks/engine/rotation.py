@@ -65,7 +65,8 @@ def compute_rotation(
     scan_keys = scan_keys or set()
     items: list[dict] = []
     missing: list[str] = []
-    oldest_as_of: Optional[pd.Timestamp] = None
+    newest_as_of: Optional[pd.Timestamp] = None
+    stalest_as_of: Optional[pd.Timestamp] = None
 
     for key, instrument in instruments.items():
         frame = _clean_frame(frames.get(key))
@@ -83,8 +84,10 @@ def compute_rotation(
         )
         latest_price = float(prices.iloc[-1])
         as_of = frame["timestamp"].iloc[-1]
-        if oldest_as_of is None or as_of < oldest_as_of:
-            oldest_as_of = as_of
+        if newest_as_of is None or as_of > newest_as_of:
+            newest_as_of = as_of
+        if stalest_as_of is None or as_of < stalest_as_of:
+            stalest_as_of = as_of
         items.append(
             {
                 "symbol": key,
@@ -149,10 +152,19 @@ def compute_rotation(
         )
 
     status = "ok" if not missing else "partial"
+    # data_freshness: 基于 stalest_as_of → now 的差距
+    freshness = "fresh"
+    if stalest_as_of is not None:
+        stale_age = (pd.Timestamp.now(tz="UTC") - stalest_as_of).total_seconds() / 3600
+        if stale_age > 72:
+            freshness = "stale"
+        elif stale_age > 24:
+            freshness = "partial"
     return {
         "schema_version": ROTATION_SCHEMA_VERSION,
         "status": status,
-        "as_of": oldest_as_of.isoformat() if oldest_as_of is not None else None,
+        "as_of": newest_as_of.isoformat() if newest_as_of is not None else None,
+        "data_freshness": freshness,
         "window": {"short_bars": SHORT_BARS, "long_bars": LONG_BARS},
         "items": items,
         "category_momentum": category_momentum,
