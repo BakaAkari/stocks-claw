@@ -112,9 +112,14 @@ class CLIAdapter:
             help="列出已确认记录的执行记录",
         )
         asset_actions.add_argument(
+            "--execution-pending",
+            metavar="RUN_ID",
+            help="列出指定 run 下所有尚未 executed 的 planned action",
+        )
+        asset_actions.add_argument(
             "--execution-save",
             metavar="JSON",
-            help="保存一条执行记录；值为 ExecutionRecord 字段的 JSON 对象",
+            help="保存一条执行记录；值为 ExecutionRecord 新 schema 字段的 JSON 对象",
         )
         asset_actions.add_argument(
             "--forecast-list",
@@ -251,6 +256,15 @@ class CLIAdapter:
             return {"success": True, "data": self.engine.list_advice()}
         if args.execution_list:
             return {"success": True, "data": self.engine.list_executions()}
+        if args.execution_pending:
+            run_id = args.execution_pending
+            all_records = self.engine.list_executions()
+            pending = [
+                r for r in all_records
+                if r.get("status") == "planned"
+                and r.get("decision_id", "").startswith(run_id)
+            ]
+            return {"success": True, "data": pending, "run_id": run_id}
         if args.forecast_list:
             return {"success": True, "data": self.engine.list_forecasts()}
         if args.assets_list:
@@ -269,6 +283,7 @@ class CLIAdapter:
                 args.profile_update,
                 args.advice_save,
                 args.execution_save,
+                args.execution_pending,
                 args.forecast_save,
                 args.scheduled_run_due,
                 args.scheduled_run_session,

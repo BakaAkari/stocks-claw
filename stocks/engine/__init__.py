@@ -741,23 +741,37 @@ class StocksEngine:
         allowed = {
             "id",
             "advice_id",
+            "decision_id",
+            "status",
             "target",
             "action",
             "extent",
             "note",
             "executed_at",
+            "recorded_at",
+            "price",
+            "executed_ratio",
+            "rejection_reason",
+            "next_review_at",
         }
         unknown = set(payload) - allowed
         if unknown:
             raise ValueError(f"Unsupported execution fields: {sorted(unknown)}")
         record = ExecutionRecord.create(
             id=payload.get("id"),
+            decision_id=payload.get("decision_id", ""),
+            status=payload.get("status", "planned"),
             advice_id=payload.get("advice_id"),
             target=payload.get("target", ""),
             action=payload.get("action", ""),
             extent=payload.get("extent"),
             note=payload.get("note", ""),
+            price=payload.get("price"),
+            executed_ratio=payload.get("executed_ratio"),
+            rejection_reason=payload.get("rejection_reason"),
+            next_review_at=payload.get("next_review_at"),
             executed_at=payload.get("executed_at"),
+            recorded_at=payload.get("recorded_at"),
         )
         self.persistence.save_execution(record)
         return record.to_dict()
@@ -765,6 +779,14 @@ class StocksEngine:
     def list_executions(self) -> list[dict]:
         """列出已确认的执行记录。"""
         return self.persistence.list_executions()
+
+    def find_executions_by_decision_id(self, decision_id: str) -> list[dict]:
+        """按 decision_id 查找执行记录。"""
+        return self.persistence.find_executions_by_decision_id(decision_id)
+
+    def find_executions_by_run_id(self, run_id: str) -> list[dict]:
+        """按 run_id 查找执行记录（decision_id 前缀匹配）。"""
+        return self.persistence.find_executions_by_run_id(run_id)
 
     def save_forecast(self, payload: dict) -> dict:
         """保存用户确认过的预测记录。"""

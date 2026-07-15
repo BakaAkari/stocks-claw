@@ -491,6 +491,8 @@ def _execution_payload(
     action: str = "increase",
     extent: str | None = "full",
     note: str = "执行记录",
+    decision_id: str = "test-decision",
+    status: str = "executed",
 ) -> dict:
     payload = {
         "advice_id": advice_id,
@@ -498,9 +500,20 @@ def _execution_payload(
         "action": action,
         "note": note,
         "executed_at": "2026-07-03T12:00:00+08:00",
+        "decision_id": decision_id,
+        "status": status,
     }
     if extent is not None:
         payload["extent"] = extent
+    if status == "executed":
+        payload["price"] = 10.0
+        payload["executed_ratio"] = 1.0
+    if status == "rejected":
+        payload["rejection_reason"] = "测试拒绝"
+    if status == "not_executed":
+        payload["status"] = "not_executed"
+        payload.pop("price", None)
+        payload.pop("executed_ratio", None)
     return payload
 
 
@@ -543,13 +556,14 @@ def test_mcp_execution_save_requires_confirmation_and_review_four_states(adapter
 
     for execution in [
         _execution_payload(advice_id=advice_id, target="a:588000", extent="full"),
-        _execution_payload(advice_id=advice_id, target="现金", action="reduce", extent="partial"),
+        _execution_payload(advice_id=advice_id, target="现金", action="reduce", extent="partial", status="executed"),
         _execution_payload(
             advice_id=advice_id,
             target="固收",
             action="none",
             extent=None,
             note="明确未执行",
+            status="not_executed",
         ),
         _execution_payload(advice_id=None, target="a:588000", extent="partial"),
     ]:

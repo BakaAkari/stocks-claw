@@ -1022,6 +1022,9 @@ def build_scheduled_run(
             "intelligence_digest": context.get("intelligence_digest") or {},
             "upcoming_events": context.get("upcoming_events") or [],
         },
+        "execution_review": _build_execution_review_summary(
+            context.get("recent_advice") or []
+        ),
     }
     window_delta = compute_window_delta(
         previous_run, run, session_id=session.id, market=session.market
@@ -1753,6 +1756,22 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "严格遵守 must_not_do。所有金额比例必须来自 artifact 结构字段。"
             "严格遵守数据引用以 data_reference 为准。"
         ),
+    }
+
+
+def _build_execution_review_summary(recent_advice: list[dict]) -> dict:
+    """从 recent_advice 的 execution_review 汇总执行状态。"""
+    all_reviews: list[dict] = []
+    status_counts: dict[str, int] = {}
+    for advice in recent_advice:
+        for review in (advice.get("execution_review") or []):
+            all_reviews.append(review)
+            st = review.get("status", "unknown")
+            status_counts[st] = status_counts.get(st, 0) + 1
+    return {
+        "total": len(all_reviews),
+        "status_counts": dict(status_counts),
+        "reviews": all_reviews,
     }
 
 

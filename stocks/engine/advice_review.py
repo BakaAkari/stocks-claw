@@ -71,18 +71,24 @@ def attach_execution_review(
     advice_records: list[dict],
     execution_records: list[dict],
 ) -> list[dict]:
-    """为建议 actions 附加执行对照；只按 advice_id + target 精确匹配。"""
+    """为建议 actions 附加执行对照；优先按 decision_id 精确匹配，其次按 advice_id + target。"""
     if not advice_records:
         return []
     if not execution_records:
         return [_with_unknown_execution_review(advice) for advice in advice_records]
 
-    by_key: dict[tuple[str, str], dict] = {}
+    # Index by decision_id (new schema)
+    by_decision_id: dict[str, dict] = {}
+    # Index by (advice_id, target) (legacy schema)
+    by_advice_key: dict[tuple[str, str], dict] = {}
     for record in execution_records:
+        decision_id = record.get("decision_id")
+        if isinstance(decision_id, str) and decision_id:
+            by_decision_id.setdefault(decision_id, record)
         advice_id = record.get("advice_id")
         target = record.get("target")
         if isinstance(advice_id, str) and isinstance(target, str):
-            by_key.setdefault((advice_id, target), record)
+            by_advice_key.setdefault((advice_id, target), record)
 
     reviewed: list[dict] = []
     for advice in advice_records:
@@ -91,7 +97,11 @@ def attach_execution_review(
         execution_review = []
         for action in advice.get("actions", []):
             target = action.get("target")
-            record = by_key.get((advice_id, target))
+            # Try decision_id match first
+            decision_id = action.get("decision_id", "")
+            record = by_decision_id.get(decision_id) if decision_id else None
+            if record is None:
+                record = by_advice_key.get((advice_id, target))
             execution_review.append(
                 _execution_review_item(action, record)
             )
@@ -116,6 +126,17 @@ def _execution_review_item(action: dict, record: Optional[dict]) -> dict:
         "status": "unknown",
     }
     if record is None:
+        return item
+    # 优先使用新 status 字段
+    status = record.get("status", "")
+    if status == "executed":
+        extent = record.get("extent")
+        item["status"] = "executed" if extent == "full" else "partial"
+        item["execution"] = record
+        return item
+    if status in ("rejected", "deferred", "planned", "not_executed"):
+        item["status"] = status
+        item["execution"] = record
         return item
     execution_action = record.get("action")
     if execution_action == "none":

@@ -985,6 +985,7 @@ _ADVICE_ACTIONS = {"add", "increase", "reduce", "exit", "hold", "watch"}
 _ADVICE_HORIZONS = {"short", "medium", "long"}
 _EXECUTION_ACTIONS = _ADVICE_ACTIONS | {"none"}
 _EXECUTION_EXTENTS = {"full", "partial"}
+_EXECUTION_STATUSES = {"executed", "rejected", "deferred", "planned", "not_executed"}
 _FORECAST_METRICS = {"close"}
 _FORECAST_COMPARATORS = {"above", "below"}
 _FORECAST_CONFIDENCES = {"low", "medium", "high"}
@@ -1168,9 +1169,11 @@ class AdviceRecord:
 
 @dataclass(frozen=True)
 class ExecutionRecord:
-    """用户确认记录的一次建议执行或明确未执行。"""
+    """决策执行记录 — 记录一次 planned / executed / rejected / deferred 的决策执行结果。"""
 
     id: str
+    decision_id: str  # 必填，关联到 PortfolioDecision.decision_id
+    status: str  # executed | rejected | deferred | planned
     target: str
     action: str
     note: str
@@ -1178,68 +1181,104 @@ class ExecutionRecord:
     recorded_at: str
     advice_id: Optional[str] = None
     extent: Optional[str] = None
+    price: Optional[float] = None  # status=executed 时必填
+    executed_ratio: Optional[float] = None  # status=executed 时必填
+    rejection_reason: Optional[str] = None  # status=rejected 时必填
+    next_review_at: Optional[str] = None  # status=deferred 时可填
 
     @classmethod
     def create(
         cls,
         *,
-        target: str,
-        action: str,
+        decision_id: str,
+        status: str = "planned",
+        target: str = "",
+        action: str = "",
         note: str = "",
         executed_at: Optional[str] = None,
         advice_id: Optional[str] = None,
         extent: Optional[str] = None,
+        price: Optional[float] = None,
+        executed_ratio: Optional[float] = None,
+        rejection_reason: Optional[str] = None,
+        next_review_at: Optional[str] = None,
         id: Optional[str] = None,
+        recorded_at: Optional[str] = None,
     ) -> "ExecutionRecord":
         now = datetime.now(timezone.utc).isoformat()
         return cls(
             id=id or uuid4().hex,
-            advice_id=advice_id,
+            decision_id=decision_id,
+            status=status,
             target=target,
             action=action,
             extent=extent,
             note=note,
+            recorded_at=recorded_at or now,
             executed_at=executed_at or now,
-            recorded_at=now,
+            advice_id=advice_id,
+            price=price,
+            executed_ratio=executed_ratio,
+            rejection_reason=rejection_reason,
+            next_review_at=next_review_at,
         )
 
     @classmethod
     def from_dict(cls, data: dict) -> "ExecutionRecord":
         return cls(
             id=str(data.get("id", "")),
-            advice_id=data.get("advice_id"),
+            decision_id=str(data.get("decision_id", "")),
+            status=str(data.get("status", "planned")),
             target=str(data.get("target", "")),
             action=str(data.get("action", "")),
             extent=data.get("extent"),
             note=str(data.get("note", "")),
-            executed_at=str(data.get("executed_at", "")),
             recorded_at=str(data.get("recorded_at", "")),
+            executed_at=str(data.get("executed_at", "")),
+            advice_id=data.get("advice_id"),
+            price=_normalize_optional_float(data.get("price"), "execution.price"),
+            executed_ratio=_normalize_optional_float(data.get("executed_ratio"), "execution.executed_ratio"),
+            rejection_reason=data.get("rejection_reason"),
+            next_review_at=data.get("next_review_at"),
         )
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("execution.id is required")
+        if not self.decision_id:
+            raise ValueError("execution.decision_id is required")
+        if self.status not in _EXECUTION_STATUSES:
+            raise ValueError(
+                f"execution.status must be one of {sorted(_EXECUTION_STATUSES)}"
+            )
+        if self.status == "executed":
+            if self.price is None:
+                raise ValueError("execution.price is required when status=executed")
+            if self.executed_ratio is None:
+                raise ValueError("execution.executed_ratio is required when status=executed")
+            if self.executed_ratio < 0 or self.executed_ratio > 1:
+                raise ValueError("execution.executed_ratio must be between 0 and 1")
+        if self.status == "rejected" and not self.rejection_reason:
+            raise ValueError("execution.rejection_reason is required when status=rejected")
+        # Legacy backward-compatible validation
         if self.advice_id is not None and not isinstance(self.advice_id, str):
             raise ValueError("execution.advice_id must be a string when present")
-        if not isinstance(self.target, str) or not self.target.strip():
-            raise ValueError("execution.target must be a non-empty string")
-        if self.action not in _EXECUTION_ACTIONS:
+        if not isinstance(self.target, str):
+            raise ValueError("execution.target must be a string")
+        if self.action and self.action not in _EXECUTION_ACTIONS:
             raise ValueError(f"execution.action must be one of {sorted(_EXECUTION_ACTIONS)}")
-        if self.action == "none":
-            if self.extent is not None:
-                raise ValueError("execution.extent must be omitted when action is none")
-        elif self.extent not in _EXECUTION_EXTENTS:
-            raise ValueError("execution.extent must be full or partial")
+        if self.action == "none" and self.extent is not None:
+            raise ValueError("execution.extent must be omitted when action is none")
+        if self.action and self.action != "none" and self.extent not in (None, *_EXECUTION_EXTENTS):
+            raise ValueError("execution.extent must be full or partial when action is set")
         if not isinstance(self.note, str):
             raise ValueError("execution.note must be a string")
-        if not self.executed_at:
-            raise ValueError("execution.executed_at is required")
-        if not self.recorded_at:
-            raise ValueError("execution.recorded_at is required")
 
     def to_dict(self) -> dict:
         data = {
             "id": self.id,
+            "decision_id": self.decision_id,
+            "status": self.status,
             "advice_id": self.advice_id,
             "target": self.target,
             "action": self.action,
@@ -1249,6 +1288,14 @@ class ExecutionRecord:
         }
         if self.extent is not None:
             data["extent"] = self.extent
+        if self.price is not None:
+            data["price"] = self.price
+        if self.executed_ratio is not None:
+            data["executed_ratio"] = self.executed_ratio
+        if self.rejection_reason is not None:
+            data["rejection_reason"] = self.rejection_reason
+        if self.next_review_at is not None:
+            data["next_review_at"] = self.next_review_at
         return data
 
 

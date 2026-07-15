@@ -139,6 +139,22 @@ class DataPersistence:
         """列出所有执行记录（按 recorded_at 倒序）。"""
         return [record.to_dict() for record in self._load_execution_records()]
 
+    def find_executions_by_decision_id(self, decision_id: str) -> list[dict]:
+        """按 decision_id 查找执行记录。"""
+        return [
+            record.to_dict()
+            for record in self._load_execution_records()
+            if record.decision_id == decision_id
+        ]
+
+    def find_executions_by_run_id(self, run_id: str) -> list[dict]:
+        """按 run_id 查找执行记录（decision_id 前缀包含 run_id 即匹配）。"""
+        results: list[dict] = []
+        for record in self._load_execution_records():
+            if record.decision_id and record.decision_id.startswith(run_id):
+                results.append(record.to_dict())
+        return results
+
     def save_forecast(self, record: ForecastRecord) -> str:
         """保存一条确认预测记录或结算后的预测记录，并按上限滚动清理。"""
         self.forecast_dir.mkdir(parents=True, exist_ok=True)

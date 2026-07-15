@@ -93,33 +93,44 @@ def test_execution_record_round_trip_and_rolls_over(tmp_path):
     persistence.save_execution(
         ExecutionRecord.create(
             id="one",
+            decision_id="dec-run1",
+            status="executed",
             advice_id="advice-1",
             target="a:588000",
             action="increase",
             extent="full",
             note="已执行",
             executed_at="2026-07-03T10:00:00+08:00",
+            price=1.5,
+            executed_ratio=0.5,
         )
     )
     persistence.save_execution(
         ExecutionRecord.create(
             id="two",
+            decision_id="dec-run1",
+            status="rejected",
             advice_id="advice-1",
             target="现金",
             action="none",
             note="未执行",
             executed_at="2026-07-03T11:00:00+08:00",
+            rejection_reason="market_condition",
         )
     )
     persistence.save_execution(
         ExecutionRecord.create(
             id="three",
+            decision_id="dec-run2",
+            status="executed",
             advice_id=None,
             target="a:588000",
             action="increase",
             extent="partial",
             note="无 advice_id 不参与匹配",
             executed_at="2026-07-03T12:00:00+08:00",
+            price=1.6,
+            executed_ratio=0.3,
         )
     )
 
@@ -127,22 +138,34 @@ def test_execution_record_round_trip_and_rolls_over(tmp_path):
     assert len(records) == 2
     assert records[0]["id"] == "three"
     assert records[0]["extent"] == "partial"
-    assert records[1]["action"] == "none"
-    assert "extent" not in records[1]
+    assert records[0]["status"] == "executed"
+    assert records[0]["price"] == 1.6
+    assert records[0]["executed_ratio"] == 0.3
+    assert records[1]["status"] == "rejected"
+    assert records[1]["rejection_reason"] == "market_condition"
 
 
 def test_execution_record_validates_action_and_extent():
+    """Legacy extent validation: extent with action=none is invalid."""
     with pytest.raises(ValueError, match="extent must be omitted"):
         ExecutionRecord.create(
+            decision_id="dec-test",
+            status="rejected",
             target="a:588000",
             action="none",
             extent="full",
+            rejection_reason="test",
         )
-    with pytest.raises(ValueError, match="extent must be full or partial"):
-        ExecutionRecord.create(
-            target="a:588000",
-            action="increase",
-        )
+    # extent is now optional in the new schema — no error expected
+    ok = ExecutionRecord.create(
+        decision_id="dec-test",
+        status="executed",
+        target="a:588000",
+        action="increase",
+        price=1.0,
+        executed_ratio=0.5,
+    )
+    assert ok.extent is None
 
 
 def _forecast(index: int, status: str = "open") -> ForecastRecord:
@@ -195,6 +218,8 @@ def test_rollover_uses_record_time_when_file_mtime_ties(tmp_path):
         persistence.save_execution(
             ExecutionRecord(
                 id=f"execution-{index}",
+                decision_id="dec-rollover",
+                status="executed",
                 advice_id="advice-1",
                 target="a:588000",
                 action="increase",
@@ -202,6 +227,8 @@ def test_rollover_uses_record_time_when_file_mtime_ties(tmp_path):
                 note="执行记录",
                 executed_at=f"2026-07-03T0{index}:00:00+00:00",
                 recorded_at=f"2026-07-03T0{index}:00:00+00:00",
+                price=1.0,
+                executed_ratio=0.5,
             )
         )
         persistence.save_forecast(_forecast(index))
@@ -292,3 +319,254 @@ def test_advice_record_rejects_unknown_source_and_boundary():
             based_on=["quotes"],
             boundary=[{"type": "opinion", "text": "判断"}],
         )
+
+
+# ── Task 10: Decision Trust — ExecutionRecord 新 schema 验证 ──
+
+def test_execution_record_new_schema_status_validation():
+    """status=executed 必填 price+executed_ratio; status=rejected 必填 rejection_reason."""
+    # executed: price + executed_ratio 必填
+    with pytest.raises(ValueError, match="price is required when status=executed"):
+        ExecutionRecord.create(
+            decision_id="dec-1", status="executed",
+            target="a:588000", action="increase",
+        )
+    with pytest.raises(ValueError, match="executed_ratio is required when status=executed"):
+        ExecutionRecord.create(
+            decision_id="dec-1", status="executed",
+            target="a:588000", action="increase", price=1.0,
+        )
+    # executed_ratio 范围
+    with pytest.raises(ValueError, match="executed_ratio must be between 0 and 1"):
+        ExecutionRecord.create(
+            decision_id="dec-1", status="executed",
+            target="a:588000", action="increase", price=1.0, executed_ratio=1.5,
+        )
+    # rejected: rejection_reason 必填
+    with pytest.raises(ValueError, match="rejection_reason is required when status=rejected"):
+        ExecutionRecord.create(
+            decision_id="dec-1", status="rejected",
+            target="a:588000", action="increase",
+        )
+    # deferred: next_review_at 可选
+    d = ExecutionRecord.create(
+        decision_id="dec-1", status="deferred",
+        target="a:588000", action="increase",
+        next_review_at="2026-07-20",
+    )
+    assert d.next_review_at == "2026-07-20"
+    d2 = ExecutionRecord.create(
+        decision_id="dec-1", status="deferred",
+        target="a:588000", action="increase",
+    )
+    assert d2.next_review_at is None
+    # status 必须合法
+    with pytest.raises(ValueError, match="execution.status must be one of"):
+        ExecutionRecord.create(
+            decision_id="dec-1", status="cancelled",
+            target="a:588000",
+        )
+
+
+def test_execution_record_decision_id_required():
+    """decision_id 必填。"""
+    with pytest.raises(ValueError, match="decision_id is required"):
+        ExecutionRecord(
+            id="test", decision_id="", status="planned",
+            target="a:588000", action="hold", note="", executed_at="", recorded_at="",
+        )
+
+
+def test_execution_record_matching_by_decision_id():
+    """按 decision_id 匹配：同一 decision_id 匹配到多条。"""
+    r1 = ExecutionRecord.create(
+        id="match-1", decision_id="dec-run-1", status="executed",
+        target="a:588000", action="increase", price=1.0, executed_ratio=0.5,
+    )
+    r2 = ExecutionRecord.create(
+        id="match-2", decision_id="dec-run-1", status="rejected",
+        target="现金", action="none", rejection_reason="test",
+    )
+    r3 = ExecutionRecord.create(
+        id="match-3", decision_id="dec-run-2", status="executed",
+        target="a:588001", action="add", price=2.0, executed_ratio=1.0,
+    )
+    assert r1.decision_id == r2.decision_id == "dec-run-1"
+    assert r3.decision_id == "dec-run-2"
+
+
+def test_execution_record_legacy_backward_compat():
+    """旧 schema 存量数据 with action+extent 仍可加载。"""
+    legacy_dict = {
+        "id": "legacy-1",
+        "decision_id": "legacy-dec-1",
+        "status": "executed",
+        "advice_id": "advice-1",
+        "target": "a:588000",
+        "action": "increase",
+        "extent": "full",
+        "note": "test",
+        "executed_at": "2026-07-03T10:00:00Z",
+        "recorded_at": "2026-07-03T10:00:01Z",
+        "price": 1.0,
+        "executed_ratio": 0.5,
+    }
+    r = ExecutionRecord.from_dict(legacy_dict)
+    assert r.id == "legacy-1"
+    assert r.decision_id == "legacy-dec-1"
+    assert r.status == "executed"
+    assert r.advice_id == "advice-1"
+    assert r.action == "increase"
+    assert r.extent == "full"
+    assert r.price == 1.0
+    assert r.executed_ratio == 0.5
+
+
+def test_persistence_find_by_decision_id(tmp_path):
+    """DataPersistence.find_executions_by_decision_id 正确返回。"""
+    p = DataPersistence(
+        str(tmp_path / "snapshots"),
+        execution_dir=str(tmp_path / "executions"),
+        max_execution_records=10,
+    )
+    r1 = ExecutionRecord.create(
+        id="f1", decision_id="dec-group-1", status="executed",
+        target="a:001", action="increase", price=1.0, executed_ratio=0.5,
+    )
+    r2 = ExecutionRecord.create(
+        id="f2", decision_id="dec-group-1", status="rejected",
+        target="a:002", action="reduce", rejection_reason="no_liquidity",
+    )
+    r3 = ExecutionRecord.create(
+        id="f3", decision_id="dec-group-2", status="planned",
+        target="a:003", action="hold",
+    )
+    for r in (r1, r2, r3):
+        p.save_execution(r)
+
+    matched = p.find_executions_by_decision_id("dec-group-1")
+    assert len(matched) == 2
+    ids = {m["id"] for m in matched}
+    assert ids == {"f1", "f2"}
+
+    matched2 = p.find_executions_by_decision_id("dec-nonexistent")
+    assert matched2 == []
+
+
+def test_persistence_find_by_run_id(tmp_path):
+    """DataPersistence.find_executions_by_run_id 按前缀匹配 decision_id。"""
+    p = DataPersistence(
+        str(tmp_path / "snapshots"),
+        execution_dir=str(tmp_path / "executions"),
+        max_execution_records=10,
+    )
+    r1 = ExecutionRecord.create(
+        id="f1", decision_id="20260715T100000Z_morning_run_001", status="executed",
+        target="a:001", action="increase", price=1.0, executed_ratio=0.5,
+    )
+    r2 = ExecutionRecord.create(
+        id="f2", decision_id="20260715T100000Z_morning_run_002", status="rejected",
+        target="a:002", action="reduce", rejection_reason="no_liquidity",
+    )
+    r3 = ExecutionRecord.create(
+        id="f3", decision_id="20260716T100000Z_morning_run_001", status="planned",
+        target="a:003", action="hold",
+    )
+    for r in (r1, r2, r3):
+        p.save_execution(r)
+
+    matched = p.find_executions_by_run_id("20260715T100000Z_morning_run")
+    assert len(matched) == 2
+
+    matched2 = p.find_executions_by_run_id("nonexistent")
+    assert matched2 == []
+
+
+@pytest.mark.asyncio
+async def test_execution_integration_save_read_and_attach(tmp_path):
+    """绿灯：保存 executed/rejected/deferred 各一条，读回并附加到下一 run 的 advice。"""
+    from stocks.engine.advice_review import attach_execution_review
+
+    p = DataPersistence(
+        str(tmp_path / "snapshots"),
+        execution_dir=str(tmp_path / "executions"),
+        max_execution_records=10,
+    )
+
+    # 保存三种状态的记录
+    exec_rec = ExecutionRecord.create(
+        id="integration-exec",
+        decision_id="run1_dec_001",
+        status="executed",
+        target="a:588000",
+        action="increase",
+        extent="full",
+        note="已在 1.5 买入",
+        price=1.5,
+        executed_ratio=1.0,
+    )
+    rej_rec = ExecutionRecord.create(
+        id="integration-rej",
+        decision_id="run1_dec_002",
+        status="rejected",
+        target="现金",
+        action="none",
+        note="市场条件不符",
+        rejection_reason="market_risk_too_high",
+    )
+    def_rec = ExecutionRecord.create(
+        id="integration-def",
+        decision_id="run1_dec_003",
+        status="deferred",
+        target="a:588001",
+        action="add",
+        note="推迟建仓",
+        next_review_at="2026-07-20",
+    )
+    for r in (exec_rec, rej_rec, def_rec):
+        p.save_execution(r)
+
+    # 读回
+    all_records = p.list_executions()
+    assert len(all_records) == 3
+    statuses = {r["status"] for r in all_records}
+    assert statuses == {"executed", "rejected", "deferred"}
+
+    # 构造假 advice 和 actions，模拟下一 run 的 execution_review
+    fake_advice = [
+        {
+            "id": "adv-1",
+            "created_at": "2026-07-15T00:00:00Z",
+            "instruments": [{"market": "a", "code": "588000", "name": "科创50"}],
+            "direction": {"a:588000": "buy"},
+            "rationale_summary": "test",
+            "based_on": ["quotes"],
+            "boundary": [{"type": "fact", "text": "test"}],
+            "actions": [
+                {"target": "a:588000", "action": "increase", "size_hint": "一半仓位", "horizon": "short", "decision_id": "run1_dec_001"},
+                {"target": "现金", "action": "hold", "size_hint": "保持现金", "horizon": "short", "decision_id": "run1_dec_002"},
+                {"target": "a:588001", "action": "add", "size_hint": "小仓位", "horizon": "medium", "decision_id": "run1_dec_003"},
+            ],
+        }
+    ]
+
+    # attach_execution_review 使用 decision_id 匹配
+    reviewed = attach_execution_review(fake_advice, all_records)
+    assert len(reviewed) == 1
+    reviews = reviewed[0].get("execution_review") or []
+    assert len(reviews) == 3
+
+    # 按 target 验证状态
+    by_target = {r["target"]: r["status"] for r in reviews}
+    assert by_target["a:588000"] == "executed", f"Got {by_target}"
+    assert by_target["现金"] == "rejected", f"Got {by_target}"
+    assert by_target["a:588001"] == "deferred", f"Got {by_target}"
+
+    # 验证 execution 字段携带完整执行信息
+    exec_info = next(r for r in reviews if r["target"] == "a:588000")
+    assert exec_info["execution"]["price"] == 1.5
+    assert exec_info["execution"]["executed_ratio"] == 1.0
+    rej_info = next(r for r in reviews if r["target"] == "现金")
+    assert rej_info["execution"]["rejection_reason"] == "market_risk_too_high"
+    def_info = next(r for r in reviews if r["target"] == "a:588001")
+    assert def_info["execution"]["next_review_at"] == "2026-07-20"
