@@ -209,6 +209,13 @@ class QuantActionEngine:
 
     def __init__(self, indicators: dict, config: Optional[dict] = None):
         self.indicators = indicators
+        deprecated = {"trend_confirm_days", "add_ladder"} & set(config or {})
+        if deprecated:
+            raise ValueError(
+                "QuantActionEngine 收到已废弃参数键: "
+                + ", ".join(sorted(deprecated))
+                + "；请先迁移 computed_profile"
+            )
         cfg = _DEFAULT_QUANT_CONFIG if not config else {**_DEFAULT_QUANT_CONFIG, **config}
         self._c = cfg
 

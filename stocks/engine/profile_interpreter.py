@@ -136,6 +136,12 @@ def build_prompt(profile: dict) -> str:
 def validate_computed(computed: dict) -> list[str]:
     errors = []
     params = computed.get("params", {})
+    old_keys = sorted(set(params) & _OLD_KEYS)
+    if old_keys:
+        errors.append(
+            "检测到已废弃参数键，请先通过 load_computed 迁移: "
+            + ", ".join(old_keys)
+        )
     for key in ("stop_loss_pct", "mid_stop_pct", "warning_loss_pct"):
         v = params.get(key)
         if v is not None and (not isinstance(v, (int, float)) or v >= 0):
@@ -194,9 +200,10 @@ def _migrate_reasoning(reasoning: dict, params: dict) -> tuple[dict, bool]:
     if "trend_confirm_days" in migrated:
         migrated.pop("trend_confirm_days")
         extra = params.get("trend_break_extra_deviation_pct", 0.0)
-        migrated["trend_break_extra_deviation_pct"] = (
+        migrated.setdefault(
+            "trend_break_extra_deviation_pct",
             f"兼容迁移：旧参数对应 MA20 触发额外偏离 {extra}%；"
-            "系统不跟踪连续天数"
+            "系统不跟踪连续天数",
         )
         changed = True
     if "add_ladder" in migrated:
