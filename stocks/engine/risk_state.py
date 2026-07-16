@@ -134,14 +134,16 @@ class RiskStateStore:
         if state.expires_at and now >= state.expires_at:
             state = RiskState(updated_at=now, transition="expired")
         obs_id = _observation_id(observation, now)
-        if state.last_observation_id == obs_id:
-            state.transition = "unchanged"
-            self._save(state)
-            return state
         candidate = observation.candidate_level
         evidence = sorted(set(observation.evidence_keys))
         current_rank = _LEVEL_ORDER[state.level]
         candidate_rank = _LEVEL_ORDER[candidate]
+        # Detect concurrent update where the same observation is repeated by
+        # another process (identical idempotency key was already processed).
+        if obs_id == state.last_observation_id:
+            state.transition = "unchanged"
+            self._save(state)
+            return state
         if candidate_rank < current_rank:
             state.deescalation_count += 1
             state.transition = "deescalating"

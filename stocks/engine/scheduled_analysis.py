@@ -1637,7 +1637,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
         "open_watch": [
             "【变化摘要】读取 window_delta.changes，列出关键变化",
             "【今日动作】最多3个 approved_actions；无则写'无需操作'",
-            "【禁止/待确认】读取 portfolio_decision 中的 suppressed_actions 和 unresolved_conflicts",
+            "【禁止/待确认】读取 portfolio_decision 中的 suppressed_actions 和 unresolved_conflicts；suppressed 项若含数据异常，必须复述异常数值（如价格跳变幅度、偏离比例），不得只写异常码",
             "【资金到账与边界】读取 cash_schedule 和 risk_state",
             "【研究候选】读取 research_candidates",
         ],
@@ -1844,13 +1844,19 @@ def format_run_markdown(run: dict) -> str:
             cancel = action.get("cancel_condition") or "需人工复核取消条件"
             settlement = action.get("settlement_timing") or "待确认结算规则"
             checkpoint = action.get("next_checkpoint") or "下一交易窗口复核"
-            rlines.append(f"- **{pid}** {sig} {abs(ratio)*100:.0f}% -- {desc}")
+            rule_note = ""
+            if ("浮亏" in desc or "阈值" in desc) and ("止损" in desc or "stop" in desc or "mid" in desc or "阈值" in desc):
+                rule_note = " (止损规则触发，优先于左侧加仓)"
+            rlines.append(f"- **{pid}** {sig} {abs(ratio)*100:.0f}% -- {desc}{rule_note}")
             rlines.append(f"  - 取消条件: {cancel} | 到账: {settlement} | 下个检查点: {checkpoint}")
         if len(approved) > 3:
             rlines.append(f"- ... 还有 {len(approved)-3} 个动作")
     else:
         rlines.append("- 今日无需操作")
     rlines.append("")
+
+    # Build position_id -> evidence map for anomaly details
+    pr_map = {pr.get("position_id"): pr for pr in (run.get("position_reviews") or [])}
 
     # -- Section 3: Forbidden/Pending --
     rlines.append("## 禁止待确认")
@@ -1860,6 +1866,14 @@ def format_run_markdown(run: dict) -> str:
             pid = sa.get("position_id", "?")
             reason = sa.get("reason", "")
             rlines.append(f"- **{pid}** 禁止: {reason}")
+            # append anomaly numeric details if available
+            pr = pr_map.get(pid) or {}
+            for an in (pr.get("evidence") or {}).get("data_anomalies") or []:
+                ev = an.get("evidence") or {}
+                if "prev_close" in ev and "current_close" in ev:
+                    rlines.append(f"  - 异常数值: {ev['prev_close']:.4f} -> {ev['current_close']:.4f} (跳变 {ev.get('change_pct', 0):.2f}%, 阈值 {ev.get('threshold_pct', 0):.1f}%)")
+                elif "current_price" in ev and "ma20" in ev:
+                    rlines.append(f"  - 异常数值: 现价 {ev['current_price']:.4f} / MA20 {ev['ma20']:.4f} (偏离 {ev.get('deviation_pct', 0):.2f}%, 阈值 {ev.get('threshold_pct', 0):.1f}%)")
     else:
         rlines.append("- 无被禁止动作")
 
@@ -1889,6 +1903,17 @@ def format_run_markdown(run: dict) -> str:
         rlines.append(f"- 策略退出值: {strategic:,.0f}")
         rlines.append(f"- 锁定资产: {locked:,.0f}")
 
+    conflicts = pd.get("unresolved_conflicts") or []
+    if any("权益低配" in str(c.get("message", "")) for c in conflicts):
+        rlines.append("")
+        rlines.append("**权益暴露计算来源:**")
+        db = run.get("context_digest") or {}
+        exp = db.get("exposure_summary") or {}
+        equity = sum(v.get('value_cny', 0) for k, v in exp.get('exposures', {}).items() if k in {'a_share', 'us_equity', 'tech'})
+        rlines.append(f"- 权益 bucket 汇总 (a_share + us_equity + tech): {equity:,.0f} CNY")
+        rlines.append("- 计算路径: exposure_tags → 约束 bucket（us_equity/tech/a_share 均映射到 equity）")
+        rlines.append(f"- 占比: {equity / max(exp.get('total_value_cny', 1), 1e-6) * 100:.1f}%")
+        rlines.append("")
     level = risk_state.get("level", "normal")
     transition = risk_state.get("transition", "")
     if level != "normal":

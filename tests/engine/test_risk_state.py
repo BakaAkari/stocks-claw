@@ -45,9 +45,11 @@ def _load_raw(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _concurrent_update(path: str, level: str, key: str, minute: int):
+def _concurrent_update(path: str, level: str, key: str, minute: int, barrier=None):
     store = RiskStateStore(path=path)
     base = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+    if barrier is not None:
+        barrier.wait()
     store.update(_obs(level, evidence_keys=[key], observed_at=base + timedelta(minutes=minute)))
 
 
@@ -341,16 +343,17 @@ class TestReviewerHardening:
 
         path = str(tmp_path / "concurrent.json")
         ctx = multiprocessing.get_context("fork")
+        barrier = ctx.Barrier(2)
         processes = [
-            ctx.Process(target=_concurrent_update, args=(path, "hedge", "vix", 1)),
-            ctx.Process(target=_concurrent_update, args=(path, "hedge", "cluster", 2)),
+            ctx.Process(target=_concurrent_update, args=(path, "hedge", "vix", 1, barrier)),
+            ctx.Process(target=_concurrent_update, args=(path, "hedge", "cluster", 2, barrier)),
         ]
         for process in processes:
             process.start()
         for process in processes:
             process.join(10)
             assert process.exitcode == 0
-        result = RiskStateStore(path=path).load()
+        result = RiskStateStore(path=path).load(as_of=datetime(2026, 7, 15, 12, 2, tzinfo=timezone.utc))
         assert result.level == "hedge"
         assert result.evidence_keys == ["cluster", "vix"]
 
