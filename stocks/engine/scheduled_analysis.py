@@ -1630,7 +1630,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
         "pre_open_plan": [
             "【变化摘要】读取 window_delta.changes，列出本窗口相比上一窗口的关键变化；无变化时写'无实质变化'",
             "【今日动作】读取 portfolio_decision.approved_actions（最多3个），每个动作写明 position_id、signal、ratio、cancel_condition、settlement_timing、next_checkpoint；如果无 approved_actions，写'今日无需操作'",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 列出被禁止的动作及原因；读取 portfolio_decision.unresolved_conflicts 列出待人工确认的冲突；读取 risk_state，如果 suspend_accumulation=true 标注'暂停加仓，研究候选待解除后评估'",
+            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 risk_state.suspend_accumulation=true 标注暂停加仓",
             "【资金到账与边界】读取 portfolio_decision.cash_schedule 列出立刻可用/在途/锁定金额；读取 risk_state 列出当前风险等级和解除条件；读取 data_boundaries.data_quality 列出数据缺口和时效降级",
             "【研究候选】读取 research_candidates 列出观察标的；research_only 信号绝不写入今日动作段；风险暂停时标注解除条件后再评估",
         ],
@@ -1644,7 +1644,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
         "pre_close_decision": [
             "【变化摘要】读取 window_delta.changes，列出关键变化",
             "【今日动作】最多3个 approved_actions；每个动作附带 cancel_condition、settlement、next_checkpoint",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；若 suspend_accumulation=true 标注暂停加仓",
+            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 suspend_accumulation=true 标注暂停加仓",
             "【资金到账与边界】读取 portfolio_decision.cash_schedule（立即现金/在途/锁定）和 risk_state（等级与解除条件）和 data_boundaries（数据时效缺口）",
             "【研究候选】读取 research_candidates；research_only 信号绝不写入今日动作段；暂停期间标注'risk解除后再评估'",
         ],
@@ -1739,7 +1739,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 },
                 {
                     "name": "禁止/待确认",
-                    "content": "列出 portfolio_decision.suppressed_actions（每项原因）和 unresolved_conflicts。如果 risk_state.suspend_accumulation=true 标注暂停加仓。research_only 不在此段",
+                    "content": "列出 portfolio_decision.suppressed_actions（每项原因）和 unresolved_conflicts。数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny。如果 risk_state.suspend_accumulation=true 标注暂停加仓。research_only 不在此段",
                 },
                 {
                     "name": "资金到账与边界",
@@ -1866,14 +1866,20 @@ def format_run_markdown(run: dict) -> str:
             pid = sa.get("position_id", "?")
             reason = sa.get("reason", "")
             rlines.append(f"- **{pid}** 禁止: {reason}")
-            # append anomaly numeric details if available
+            # Append every anomaly code and its scalar evidence.  Generic
+            # rendering keeps new anomaly types auditable without adding a
+            # code-specific branch for each detector.
             pr = pr_map.get(pid) or {}
-            for an in (pr.get("evidence") or {}).get("data_anomalies") or []:
-                ev = an.get("evidence") or {}
-                if "prev_close" in ev and "current_close" in ev:
-                    rlines.append(f"  - 异常数值: {ev['prev_close']:.4f} -> {ev['current_close']:.4f} (跳变 {ev.get('change_pct', 0):.2f}%, 阈值 {ev.get('threshold_pct', 0):.1f}%)")
-                elif "current_price" in ev and "ma20" in ev:
-                    rlines.append(f"  - 异常数值: 现价 {ev['current_price']:.4f} / MA20 {ev['ma20']:.4f} (偏离 {ev.get('deviation_pct', 0):.2f}%, 阈值 {ev.get('threshold_pct', 0):.1f}%)")
+            for anomaly in (pr.get("evidence") or {}).get("data_anomalies") or []:
+                code = anomaly.get("code", "unknown")
+                evidence = anomaly.get("evidence") or {}
+                scalar_evidence = [
+                    f"{key}={value}"
+                    for key, value in sorted(evidence.items())
+                    if isinstance(value, (str, int, float, bool)) or value is None
+                ]
+                details = ", ".join(scalar_evidence) or anomaly.get("description", "无数值证据")
+                rlines.append(f"  - {code}: {details}")
     else:
         rlines.append("- 无被禁止动作")
 
@@ -1904,15 +1910,24 @@ def format_run_markdown(run: dict) -> str:
         rlines.append(f"- 锁定资产: {locked:,.0f}")
 
     conflicts = pd.get("unresolved_conflicts") or []
-    if any("权益低配" in str(c.get("message", "")) for c in conflicts):
+    if any(c.get("bucket") == "权益" or "权益占比" in str(c.get("message", "")) for c in conflicts):
         rlines.append("")
         rlines.append("**权益暴露计算来源:**")
-        db = run.get("context_digest") or {}
-        exp = db.get("exposure_summary") or {}
-        equity = sum(v.get('value_cny', 0) for k, v in exp.get('exposures', {}).items() if k in {'a_share', 'us_equity', 'tech'})
-        rlines.append(f"- 权益 bucket 汇总 (a_share + us_equity + tech): {equity:,.0f} CNY")
-        rlines.append("- 计算路径: exposure_tags → 约束 bucket（us_equity/tech/a_share 均映射到 equity）")
-        rlines.append(f"- 占比: {equity / max(exp.get('total_value_cny', 1), 1e-6) * 100:.1f}%")
+        equity_conflict = next(
+            conflict
+            for conflict in conflicts
+            if conflict.get("bucket") == "权益" or "权益占比" in str(conflict.get("message", ""))
+        )
+        equity_value = equity_conflict.get("bucket_value_cny")
+        portfolio_value = equity_conflict.get("portfolio_value_cny")
+        equity_ratio = equity_conflict.get("bucket_ratio")
+        if equity_value is not None:
+            rlines.append(f"- 权益 bucket 汇总: {equity_value:,.0f} CNY")
+        if portfolio_value is not None:
+            rlines.append(f"- 组合总值: {portfolio_value:,.0f} CNY")
+        rlines.append("- 计算路径: 每个 position 只计一次；exposure_tags 去重映射到约束 bucket")
+        if equity_ratio is not None:
+            rlines.append(f"- 占比: {equity_ratio * 100:.1f}%")
         rlines.append("")
     level = risk_state.get("level", "normal")
     transition = risk_state.get("transition", "")

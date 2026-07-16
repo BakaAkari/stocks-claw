@@ -566,10 +566,23 @@ def adjudicate_portfolio(
             else:
                 did = make_decision_id(run_id, reduce_pid, card.get("raw_signal", ""),
                                        card.get("raw_ratio", 0.0), rule_version)
+                equity_value = sum(
+                    (ev.get("market_value_cny", 0.0) or 0.0)
+                    for ev in evidences.values()
+                    if "\u6743\u76ca" in _get_exposure_buckets(ev)
+                )
+                portfolio_value = sum(
+                    ev.get("market_value_cny", 0.0) or 0.0
+                    for ev in evidences.values()
+                )
                 conflicts.append({
                     "position_id": reduce_pid,
                     "signal": card.get("signal", ""),
                     "bucket": "\u6743\u76ca",
+                    "bucket_ratio": round(equity_pct, 6),
+                    "bucket_value_cny": round(equity_value, 2),
+                    "portfolio_value_cny": round(portfolio_value, 2),
+                    "calculation": "position-deduplicated exposure_tags -> bucket",
                     "message": (
                         f"\u6743\u76ca\u5360\u6bd4 {equity_pct*100:.1f}% \u4f4e\u4e8e\u4e0b\u9650 {equity_min*100:.0f}%\uff0c"
                         f"\u4f46 {reduce_pid} \u89e6\u53d1 {card.get('signal', '')}\u3002\u672a\u627e\u5230\u66ff\u4ee3\uff0c\u9700\u4eba\u5de5\u5ba1\u6838\u3002"

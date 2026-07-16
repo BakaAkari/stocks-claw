@@ -20,6 +20,8 @@ import pytest
 
 from stocks.engine.portfolio_adjudicator import PortfolioAction, PortfolioDecision
 from stocks.engine.scheduled_analysis import (
+    ScheduledSession,
+    build_agent_task,
     format_run_markdown,
 )
 from tests.engine.test_scheduled_analysis import (
@@ -309,3 +311,79 @@ def test_blocked_position_symbol_excluded_from_research_candidates(tmp_path):
     run = runner.latest("cn_pre_close")["data"]
     symbols = {c["symbol"] for c in run["research_candidates"]}
     assert "a:512480" not in symbols, "Blocked position should not appear as research candidate"
+
+
+def test_pre_close_agent_task_requires_numeric_anomaly_evidence():
+    session = ScheduledSession(
+        id="cn_pre_close", market="cn", exchange_timezone="Asia/Shanghai",
+        user_timezone="Asia/Shanghai", time="14:35", intent="pre_close_decision",
+        push="normal", enabled=True, duplicate_window_minutes=30,
+        holidays=frozenset(), primary_market="cn",
+    )
+    task = build_agent_task(session)
+    forbidden_instruction = next(x for x in task["must_answer"] if "禁止" in x)
+    assert "异常数值" in forbidden_instruction
+    assert "不得只写异常码" in forbidden_instruction
+
+
+def test_renderer_uses_adjudicator_equity_ratio_without_overlapping_tag_double_count():
+    run = {
+        "session": "cn_pre_close", "market_date": "2026-07-15", "run_id": "r1",
+        "status": "ok", "session_summary": {}, "window_delta": {},
+        "portfolio_decision": {
+            "approved_actions": [], "suppressed_actions": [],
+            "unresolved_conflicts": [{
+                "message": "权益占比 16.0% 低于下限 25%，但 p1 触发 reduce。",
+                "bucket_ratio": 0.16, "bucket_value_cny": 160.0,
+                "portfolio_value_cny": 1000.0,
+            }],
+            "cash_schedule": {},
+        },
+        "risk_state": {}, "data_boundaries": {},
+        "context_digest": {"exposure_summary": {
+            "total_value_cny": 1000.0,
+            "exposures": {
+                "a_share": {"value_cny": 100.0},
+                "us_equity": {"value_cny": 60.0},
+                "tech": {"value_cny": 60.0},
+            },
+        }},
+        "position_reviews": [], "research_candidates": [],
+    }
+    md = format_run_markdown(run)
+    assert "权益 bucket 汇总: 160 CNY" in md
+    assert "占比: 16.0%" in md
+    assert "220 CNY" not in md
+
+
+def test_renderer_prints_generic_numeric_evidence_for_all_anomaly_codes():
+    run = {
+        "session": "cn_pre_close", "market_date": "2026-07-15", "run_id": "r1",
+        "status": "ok", "session_summary": {}, "window_delta": {},
+        "portfolio_decision": {
+            "approved_actions": [],
+            "suppressed_actions": [{"position_id": "p1", "reason": "数据异常阻断"}],
+            "unresolved_conflicts": [], "cash_schedule": {},
+        },
+        "risk_state": {}, "data_boundaries": {}, "context_digest": {},
+        "position_reviews": [{
+            "position_id": "p1",
+            "evidence": {"data_anomalies": [
+                {"code": "prev_close_mismatch", "evidence": {
+                    "quote_prev_close": 1.01, "history_prev_close": 1.50,
+                    "difference_pct": 32.67,
+                }},
+                {"code": "source_regime_change", "evidence": {
+                    "old_source": "eastmoney", "new_source": "tencent",
+                    "price_gap_pct": 12.5,
+                }},
+            ]},
+        }],
+        "research_candidates": [],
+    }
+    md = format_run_markdown(run)
+    assert "prev_close_mismatch" in md
+    assert "quote_prev_close=1.01" in md
+    assert "history_prev_close=1.5" in md
+    assert "source_regime_change" in md
+    assert "price_gap_pct=12.5" in md
