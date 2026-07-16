@@ -313,10 +313,22 @@ def test_blocked_position_symbol_excluded_from_research_candidates(tmp_path):
     assert "a:512480" not in symbols, "Blocked position should not appear as research candidate"
 
 
-def test_pre_close_agent_task_requires_numeric_anomaly_evidence():
+@pytest.mark.parametrize(
+    "intent",
+    [
+        "pre_open_plan",
+        "open_watch",
+        "pre_close_decision",
+        "after_close_review",
+        "morning_close_check",
+        "afternoon_open_check",
+        "mid_session_check",
+    ],
+)
+def test_all_trading_agent_tasks_require_numeric_anomaly_evidence(intent):
     session = ScheduledSession(
-        id="cn_pre_close", market="cn", exchange_timezone="Asia/Shanghai",
-        user_timezone="Asia/Shanghai", time="14:35", intent="pre_close_decision",
+        id="test_session", market="cn", exchange_timezone="Asia/Shanghai",
+        user_timezone="Asia/Shanghai", time="14:35", intent=intent,
         push="normal", enabled=True, duplicate_window_minutes=30,
         holidays=frozenset(), primary_market="cn",
     )
@@ -324,6 +336,7 @@ def test_pre_close_agent_task_requires_numeric_anomaly_evidence():
     forbidden_instruction = next(x for x in task["must_answer"] if "禁止" in x)
     assert "异常数值" in forbidden_instruction
     assert "不得只写异常码" in forbidden_instruction
+    assert "bucket_ratio" in forbidden_instruction
 
 
 def test_renderer_uses_adjudicator_equity_ratio_without_overlapping_tag_double_count():
