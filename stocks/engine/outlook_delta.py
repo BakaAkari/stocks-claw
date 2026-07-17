@@ -147,8 +147,11 @@ def _deep_diff(prev: dict, curr: dict) -> dict:
         changes["asset_views"] = asset_changes
 
     # Source refs: show actual IDs of added/removed sources
-    prev_src_ids = {s.get("id") for s in (prev.get("source_refs") or []) if isinstance(s, dict)}
-    curr_src_ids = {s.get("id") for s in (curr.get("source_refs") or []) if isinstance(s, dict)}
+    def _valid_src_id(s: dict) -> bool:
+        sid = s.get("id")
+        return isinstance(sid, str) and bool(sid.strip())
+    prev_src_ids = {s["id"] for s in (prev.get("source_refs") or []) if isinstance(s, dict) and _valid_src_id(s)}
+    curr_src_ids = {s["id"] for s in (curr.get("source_refs") or []) if isinstance(s, dict) and _valid_src_id(s)}
     added = curr_src_ids - prev_src_ids
     removed = prev_src_ids - curr_src_ids
     if added or removed:

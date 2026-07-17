@@ -252,3 +252,44 @@ def test_delta_fingerprint_ignores_metadata():
         "current_generated_at": "2026-07-09T00:00:00Z",
     }
     assert _stable_fingerprint(d1) == _stable_fingerprint(d2)
+
+
+def test_source_refs_filters_invalid_ids():
+    """None, empty, and non-string source ref IDs are excluded from delta."""
+    prev = _make_outlook("cn_after_close", {"base": {"label": "B"}})
+    curr = _make_outlook("cn_after_close", {"base": {"label": "B"}})
+    prev["structured_outlook"]["source_refs"] = [
+        {"id": "valid-1", "source": "R1"},
+        {"id": None, "source": "R2"},
+        {"id": "", "source": "R3"},
+        {"id": "   ", "source": "R4"},
+        {},  # no id key at all
+    ]
+    curr["structured_outlook"]["source_refs"] = [
+        {"id": "valid-1", "source": "R1"},
+        {"id": "valid-2", "source": "R5"},
+    ]
+    delta = compute_outlook_delta(prev, curr)
+    assert delta
+    sr = delta["changes"].get("source_refs", {})
+    assert sr.get("added") == ["valid-2"]
+    # None / empty / missing / whitespace-only ids must never appear in the delta
+    assert None not in sr.get("added", [])
+    assert "" not in sr.get("added", [])
+    assert None not in sr.get("removed", [])
+    assert "" not in sr.get("removed", [])
+
+
+def test_source_refs_all_invalid_ids_no_delta_in_source_refs():
+    """When only invalid IDs are present, source_refs delta is empty."""
+    prev = _make_outlook("cn_after_close", {"base": {"label": "B"}})
+    curr = _make_outlook("cn_after_close", {"base": {"label": "B"}})
+    prev["structured_outlook"]["source_refs"] = [
+        {"id": None, "source": "R1"},
+    ]
+    curr["structured_outlook"]["source_refs"] = [
+        {"id": "", "source": "R2"},
+    ]
+    delta = compute_outlook_delta(prev, curr)
+    if delta:
+        assert "source_refs" not in delta.get("changes", {})

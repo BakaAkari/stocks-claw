@@ -31,6 +31,7 @@ from stocks.engine.news_intelligence_store import (
 from stocks.engine.outcome_attribution import save_portfolio_snapshots
 from stocks.engine.outlook_delta import OutlookDeltaState, compute_outlook_delta
 from stocks.engine.outlook_evidence import (
+    OBSERVATION_OUTLOOK_SESSIONS,
     PRIMARY_OUTLOOK_SESSIONS,
     build_outlook_evidence,
     evidence_hash,
@@ -411,7 +412,12 @@ class ScheduledAnalysisRunner:
             if state_path_env:
                 state_path = Path(state_path_env)
             else:
-                state_path = artifact_dir.parent / ".local" / "outlook_delta_state.json"
+                # Production artifact_dir is often .local/scheduled_runs; parent
+                # is already .local -- avoid .local/.local/outlook_delta_state.json.
+                if artifact_dir.parent.name == ".local":
+                    state_path = artifact_dir.parent / "outlook_delta_state.json"
+                else:
+                    state_path = artifact_dir.parent / ".local" / "outlook_delta_state.json"
             self._outlook_delta_state = OutlookDeltaState(state_path)
         return self._outlook_delta_state
 
@@ -606,7 +612,7 @@ class ScheduledAnalysisRunner:
                 uv = run.get("portfolio_decision", {}).get("user_view", {})
                 if uv and "assistant_brief" in uv:
                     uv["assistant_brief"]["outlook"] = run["structured_outlook"]
-        elif session_id not in PRIMARY_OUTLOOK_SESSIONS:
+        elif session_id in OBSERVATION_OUTLOOK_SESSIONS:
             # Observation window: compute delta from latest two primary outlooks
             try:
                 primaries = self.store.find_latest_two_primary(run["market"])

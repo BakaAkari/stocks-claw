@@ -781,3 +781,72 @@ def _seed_primary_artifact(tmp_path, session_id, market_date, *, outlook_summary
     latest_dir = artifact_dir / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
     (latest_dir / f"{session_id}.json").write_text(json.dumps(run, ensure_ascii=False))
+
+
+# ── _get_delta_state path tests ──────────────────────────────────────────
+
+def test_delta_state_path_for_local_production_dir(tmp_path):
+    """When artifact_dir is .local/scheduled_runs, state goes to parent/.local/outlook_delta_state.json."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import FakeEngine, _context
+
+    # Simulate production layout: artifact_dir inside .local
+    local_artifact = tmp_path / ".local" / "scheduled_runs"
+    local_artifact.mkdir(parents=True)
+
+    engine = FakeEngine(_context())
+    config = {
+        "schema_version": 1, "user_timezone": "Asia/Shanghai",
+        "artifact_dir": str(local_artifact), "default_duplicate_window_minutes": 90,
+        "quiet_hours": {"enabled": False},
+        "markets": {"cn": {"enabled": True, "exchange_timezone": "Asia/Shanghai",
+                        "holidays": [], "sessions": []}},
+    }
+    runner = ScheduledAnalysisRunner(engine, config=config, artifact_dir=str(local_artifact))
+    state = runner._get_delta_state()
+    expected = tmp_path / ".local" / "outlook_delta_state.json"
+    assert state.path == expected, f"Expected {expected}, got {state.path}"
+
+
+def test_delta_state_path_for_tmp_scheduled_runs(tmp_path):
+    """When artifact_dir is /tmp/scheduled_runs, state goes to tmp/.local/outlook_delta_state.json."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import FakeEngine, _context
+
+    scheduled_dir = tmp_path / "scheduled_runs"
+    scheduled_dir.mkdir(parents=True)
+
+    engine = FakeEngine(_context())
+    config = {
+        "schema_version": 1, "user_timezone": "Asia/Shanghai",
+        "artifact_dir": str(scheduled_dir), "default_duplicate_window_minutes": 90,
+        "quiet_hours": {"enabled": False},
+        "markets": {"cn": {"enabled": True, "exchange_timezone": "Asia/Shanghai",
+                        "holidays": [], "sessions": []}},
+    }
+    runner = ScheduledAnalysisRunner(engine, config=config, artifact_dir=str(scheduled_dir))
+    state = runner._get_delta_state()
+    expected = tmp_path / ".local" / "outlook_delta_state.json"
+    assert state.path == expected, f"Expected {expected}, got {state.path}"
+
+
+def test_unknown_session_does_not_access_delta_state(tmp_path):
+    """A session not in OBSERVATION_OUTLOOK_SESSIONS never creates delta state."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    runner.outlook_synthesizer = FakeSynth()
+
+    now = datetime.fromisoformat("2026-07-06T15:30:00+08:00")
+    # cn_after_close is a PRIMARY session, not OBSERVATION -- should not create delta state
+    result = _run(runner.run_session("cn_after_close", now=now))
+    assert result["status"] == "ok"
+
+    delta_state_path = Path(config["artifact_dir"]).parent / ".local" / "outlook_delta_state.json"
+    assert not delta_state_path.exists(), (
+        "Primary session should not create delta state file"
+    )
