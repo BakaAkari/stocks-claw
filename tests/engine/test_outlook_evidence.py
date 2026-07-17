@@ -9,6 +9,7 @@ from stocks.engine.outlook_evidence import (
     PRIMARY_OUTLOOK_SESSIONS,
     build_outlook_evidence,
     compute_confidence_cap,
+    evidence_hash,
 )
 
 NOW = "2026-07-17T14:30:00+00:00"
@@ -371,6 +372,7 @@ def test_evidence_contains_no_position_ids(sample_context, sample_run):
     )
     dumped = json.dumps(evidence)
     assert "position_id" not in dumped
+    assert "decision_id" not in dumped
     assert "p1" not in dumped
     assert "p2" not in dumped
 
@@ -512,3 +514,143 @@ def test_compute_confidence_cap_returns_tuple():
     assert isinstance(cap, str)
     assert cap in ("high", "medium", "low")
     assert isinstance(reasons, list)
+
+# ===========================================================================
+# NEW TESTS — Task 2 Important Issue Fixes
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Issue 1: _top5_anomaly must NOT appear in evidence;
+#           top5_position_anomaly (public name) SHOULD appear
+# ---------------------------------------------------------------------------
+
+
+def test_top5_anomaly_no_underscore_key_in_data_boundaries(sample_context, sample_run):
+    """_top5_anomaly / _anomaly_top5 must NOT leak; top5_position_anomaly should exist."""
+    ctx = dict(sample_context)
+    pv = list(ctx["position_valuations"])
+    pv[0] = dict(pv[0])
+    pv[0]["evidence"] = dict(pv[0].get("evidence", {}))
+    pv[0]["evidence"]["data_anomalies"] = [{"code": "single_bar_jump"}]
+    ctx["position_valuations"] = pv
+    evidence = build_outlook_evidence(
+        ctx, sample_run,
+        session_id="cn_after_close", generated_at=NOW,
+    )
+    dumped = json.dumps(evidence)
+    assert "_top5_anomaly" not in dumped, "Underscore-prefixed key must not leak"
+    assert "_anomaly_top5" not in dumped, "Underscore-prefixed key must not leak"
+    assert evidence["data_boundaries"].get("top5_position_anomaly") is True
+
+
+# ---------------------------------------------------------------------------
+# Issue 2: data_quality must be whitelisted (only quotes & macro with safe fields)
+# ---------------------------------------------------------------------------
+
+
+def test_data_quality_debug_info_not_leaked(sample_context, sample_run):
+    """data_quality must not pass through debug_info / internal_query_log."""
+    ctx = dict(sample_context)
+    dq = dict(ctx["data_quality"])
+    dq["debug_info"] = {"secret": "must_not_leak"}
+    dq["internal_query_log"] = ["query1", "query2"]
+    dq["providers"] = {"main": "provider_a"}
+    ctx["data_quality"] = dq
+    evidence = build_outlook_evidence(
+        ctx, sample_run,
+        session_id="cn_after_close", generated_at=NOW,
+    )
+    dumped = json.dumps(evidence)
+    assert "debug_info" not in dumped
+    assert "internal_query_log" not in dumped
+    dq_out = evidence["data_boundaries"]["data_quality"]
+    assert "quotes" in dq_out
+    assert "macro" in dq_out
+
+
+# ---------------------------------------------------------------------------
+# Issue 3: conflicts must be read from run.portfolio_decision.unresolved_conflicts
+# ---------------------------------------------------------------------------
+
+
+def test_conflicts_read_from_run_portfolio_decision(sample_context, sample_run):
+    """Conflict source must read run.portfolio_decision, not context.portfolio_decision."""
+    run = dict(sample_run)
+    run["portfolio_decision"] = {
+        "unresolved_conflicts": [
+            {"position_id": "p6", "instrument_key": "us:INDA", "reason": "duplicate entry"},
+        ],
+    }
+    evidence = build_outlook_evidence(
+        sample_context, run,
+        session_id="cn_after_close", generated_at=NOW,
+    )
+    focus = evidence["portfolio_snapshot"]["focus_positions"]
+    labels = {p["display_label"] for p in focus}
+    # p6 (印度ETF) has weight 0.025, below top-5 threshold, no event tag match
+    # but is in run.portfolio_decision.unresolved_conflicts → must appear
+    assert "印度ETF（INDA）" in labels, (
+        "印度ETF should be in focus_positions via run.portfolio_decision conflict"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue 4: directional coverage rule — coverage < 20% OR signal_count == 0 → low
+# ---------------------------------------------------------------------------
+
+
+def test_directional_zero_coverage_with_signals_yields_low(sample_context, sample_run):
+    """directional=0 but signals non-empty must still yield low."""
+    ctx = dict(sample_context)
+    ctx["intelligence_digest"] = dict(ctx["intelligence_digest"])
+    ctx["intelligence_digest"]["intelligence_coverage"] = {
+        "field": 10, "directional": 0, "padding": 0,
+    }
+    # Keep signals non-empty
+    ctx["intelligence_digest"]["top_signals"] = [
+        {"symbol": "a:159915", "direction": "hold", "urgency": "medium"},
+    ]
+    evidence = build_outlook_evidence(
+        ctx, sample_run,
+        session_id="cn_after_close", generated_at=NOW,
+    )
+    assert evidence["confidence_cap"] == "low"
+    assert any("方向性" in r or "coverage" in r.lower() for r in evidence["confidence_reasons"])
+
+
+def test_directional_low_coverage_ratio_yields_low(sample_context, sample_run):
+    """directional=0 (coverage_ratio=0/1=0 < 20%) must yield low."""
+    ctx = dict(sample_context)
+    ctx["intelligence_digest"] = dict(ctx["intelligence_digest"])
+    ctx["intelligence_digest"]["intelligence_coverage"] = {
+        "field": 1, "directional": 0, "padding": 0,
+    }
+    ctx["intelligence_digest"]["top_signals"] = [
+        {"symbol": "a:159915", "direction": "hold", "urgency": "medium"},
+    ]
+    evidence = build_outlook_evidence(
+        ctx, sample_run,
+        session_id="cn_after_close", generated_at=NOW,
+    )
+    # coverage_ratio = 0 / max(1, 1) = 0.0 < 0.2 → low
+    assert evidence["confidence_cap"] == "low"
+
+
+# ---------------------------------------------------------------------------
+# Issue 6: evidence_hash direct tests
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_hash_is_stable_under_generated_at_change():
+    """Only generated_at changes → same hash."""
+    e1 = {"version": 1, "generated_at": NOW, "session": "cn_after_close"}
+    e2 = {"version": 1, "generated_at": "2099-01-01T00:00:00+00:00", "session": "cn_after_close"}
+    assert evidence_hash(e1) == evidence_hash(e2)
+
+
+def test_evidence_hash_changes_when_content_changes():
+    """Content change (version) → different hash."""
+    e1 = {"version": 1, "generated_at": NOW, "session": "cn_after_close"}
+    e2 = {"version": 2, "generated_at": NOW, "session": "cn_after_close"}
+    assert evidence_hash(e1) != evidence_hash(e2)

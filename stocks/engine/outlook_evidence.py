@@ -72,7 +72,7 @@ def build_outlook_evidence(
 
     # ── Portfolio snapshot ─────────────────────────────────────────────
     portfolio_snapshot = _build_portfolio_snapshot(
-        pv_list, events, context, risk_state,
+        pv_list, events, context, risk_state, run,
     )
 
     # ── Asset-class snapshot (aggregate) ────────────────────────────────
@@ -99,7 +99,7 @@ def build_outlook_evidence(
     # ── Data boundaries / freshness ─────────────────────────────────────
     data_boundaries = _build_data_boundaries(data_quality, omitted)
     # Propagate top-5 anomaly flag through to data_boundaries
-    data_boundaries['_top5_anomaly'] = portfolio_snapshot.pop('_anomaly_top5', False)
+    data_boundaries['top5_position_anomaly'] = portfolio_snapshot.pop('_anomaly_top5', False)
 
     # ── Authorised instruments ──────────────────────────────────────────
     authorised = _build_authorized_instruments(pv_list)
@@ -145,16 +145,16 @@ def compute_confidence_cap(evidence: dict) -> tuple[str, list[str]]:
     reasons: list[str] = []
 
     # Rule 1: data anomaly in top-5
-    top5_anomaly = evidence.get("data_boundaries", {}).get("_top5_anomaly", False)
+    top5_anomaly = evidence.get("data_boundaries", {}).get("top5_position_anomaly", False)
     if top5_anomaly:
         reasons.append("前5权重持仓存在数据质量异常，全局置信度降低")
         return ("low", reasons)
 
-    # Rule 2: directional intelligence coverage == 0
+    # Rule 2: directional intelligence coverage < 20 % or signal_count == 0
     directional = evidence.get("directional_intelligence", {}) or {}
-    d_coverage = directional.get("directional_coverage", 0)
+    coverage_ratio = directional.get("directional_coverage_ratio", 0)
     signal_count = len(directional.get("signals", []))
-    if d_coverage == 0 and signal_count == 0:
+    if coverage_ratio < 0.2 or signal_count == 0:
         reasons.append("方向性情报覆盖率为0，缺乏方向判断依据")
         return ("low", reasons)
 
@@ -231,7 +231,7 @@ def _build_intelligence_events(
             continue
 
         events.append({
-            "event_id": str(cluster.get("cluster_id", "")),
+            "event_id": str(cluster.get("cluster_id", "")),  # public event reference, not a position/decision internal ID
             "theme": str(cluster.get("theme", "")),
             "summary": str(cluster.get("summary", "")),
             "sources": sources,
@@ -269,6 +269,7 @@ def _build_directional_intelligence(digest: dict) -> dict:
         "signals": signals,
         "directional_coverage": directional_coverage,
         "field_coverage": field_coverage,
+        "directional_coverage_ratio": directional_coverage / max(field_coverage, 1),
     }
 
 
@@ -277,6 +278,7 @@ def _build_portfolio_snapshot(
     events: list[dict],
     context: dict,
     risk_state: dict,
+    run: dict,
 ) -> dict:
     """Portfolio total + focus positions (top-5 / conflict / event-tagged)."""
     total_value = sum(item.get("market_value_cny") or 0.0 for item in pv_list)
@@ -302,9 +304,9 @@ def _build_portfolio_snapshot(
         if key:
             top5_keys.add(key)
 
-    # Conflict position keys (from risk_state or portfolio_decision)
+    # Conflict position keys (from run.portfolio_decision.unresolved_conflicts)
     conflict_keys: set[str] = set()
-    decision = context.get("portfolio_decision") or {}
+    decision = run.get("portfolio_decision") or {}
     for conflict in decision.get("unresolved_conflicts") or []:
         pid = str(conflict.get("position_id") or "")
         for pv in pv_list:
@@ -456,11 +458,27 @@ def _build_risk_context(risk_state: dict, cash_schedule: dict) -> dict:
 
 
 def _build_data_boundaries(data_quality: dict, omitted_count: int) -> dict:
-    """Data freshness + omission counters."""
+    """Data freshness + omission counters (whitelisted)."""
     return {
-        "data_quality": data_quality,
+        "data_quality": _whitelist_data_quality(data_quality),
         "omitted_event_count": omitted_count,
     }
+
+
+def _whitelist_data_quality(dq: dict) -> dict:
+    """Only keep authorised fields from data_quality (quotes & macro, with
+    safe sub-fields).  This prevents internal fields such as debug_info or
+    internal_query_log from leaking into LLM-facing evidence."""
+    result: dict[str, Any] = {}
+    for key in ("quotes", "macro"):
+        section = dq.get(key) or {}
+        safe: dict[str, Any] = {}
+        for field in ("freshness", "as_of", "by_market", "providers", "errors"):
+            if field in section:
+                safe[field] = section[field]
+        if safe:
+            result[key] = safe
+    return result
 
 
 def _build_authorized_instruments(pv_list: list[dict]) -> list[dict]:
