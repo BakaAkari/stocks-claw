@@ -644,6 +644,7 @@ class ContextBuilder:
             "account_id": position.account_id,
             "display_name": position.display_name,
             "instrument_key": position.instrument_key,
+            "public_code": (position.instrument or {}).get("fund_code") or "",
             "currency": position.currency,
             "classification": position.classification.to_dict(),
             "liquidity": position.liquidity.to_dict(),

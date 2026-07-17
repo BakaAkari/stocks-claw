@@ -28,6 +28,7 @@ from stocks.engine.news_intelligence_store import (
     NewsIntelligenceStore,
 )
 from stocks.engine.outcome_attribution import save_portfolio_snapshots
+from stocks.engine.presentation import build_user_view
 from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
 from stocks.engine.quant_action import (
     _TAG_TO_BUCKET,
@@ -993,6 +994,22 @@ def build_scheduled_run(
         position_reviews=position_reviews,
     )
     status = _run_status(context_quality, primary_market=session.primary_market)
+    research_candidates = _build_research_candidates(
+        context.get("action_signals") or {},
+        risk_state,
+        session,
+        blocked_symbols=_blocked_symbols(context.get("position_valuations") or []),
+    )
+    portfolio_decision_dict = portfolio_decision.to_dict() if portfolio_decision else {}
+    portfolio_decision_dict["user_view"] = build_user_view(
+        portfolio_decision_dict,
+        context.get("position_valuations") or [],
+        position_reviews,
+        research_candidates,
+        risk_state,
+        session_id=session.id,
+        session_intent=session.intent,
+    )
     run = {
         "schema_version": SCHEDULED_RUN_SCHEMA_VERSION,
         "run_id": occurrence.run_id,
@@ -1024,7 +1041,7 @@ def build_scheduled_run(
         "portfolio_risk": portfolio_risk,
         "capital_allocation": capital_allocation,
         "cash_schedule": cash_schedule,
-        "portfolio_decision": portfolio_decision.to_dict() if portfolio_decision else {},
+        "portfolio_decision": portfolio_decision_dict,
         "trigger_reviews": trigger_reviews,
         "action_signal_reviews": action_signal_reviews,
         "action_signals": filtered_action_signals,
@@ -1044,12 +1061,7 @@ def build_scheduled_run(
                 "generated_at": context.get("generated_at"),
             },
         },
-        "research_candidates": _build_research_candidates(
-            context.get("action_signals") or {},
-            risk_state,
-            session,
-            blocked_symbols=_blocked_symbols(context.get("position_valuations") or []),
-        ),
+        "research_candidates": research_candidates,
         "mandatory_blocks": build_mandatory_blocks(
             risk_state,
             capital_allocation.get("constraint_alerts", []),

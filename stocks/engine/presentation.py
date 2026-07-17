@@ -46,11 +46,18 @@ def public_instrument_code(instrument_key: str, product_type: str = "") -> str:
     return code.strip()
 
 
-def display_label(display_name: str, instrument_key: str, product_type: str = "", *, fallback: str = "") -> str:
+def display_label(
+    display_name: str,
+    instrument_key: str,
+    product_type: str = "",
+    *,
+    public_code: str = "",
+    fallback: str = "",
+) -> str:
     """Render real name plus public code without leaking the machine fallback id."""
     del fallback
     name = str(display_name or "").strip() or "未命名持仓"
-    code = public_instrument_code(instrument_key, product_type)
+    code = str(public_code or "").strip() or public_instrument_code(instrument_key, product_type)
     return f"{name}（{code}）" if code else name
 
 
@@ -94,3 +101,171 @@ def anomaly_display(anomaly: dict) -> dict:
         "user_impact": impact,
         "evidence_summary": _evidence_summary((anomaly or {}).get("evidence") or {}),
     }
+
+
+_SUPPRESSION_REASON_TEXT = {
+    "research_only": "属于长期配置或研究信号，当前不形成交易动作",
+    "periodic_open": "当前不在开放操作期，暂时不能交易",
+    "locked": "资产当前处于锁定状态，暂时不能交易",
+    "prev_close_mismatch": "前收盘价存在数据源差异，需核对后再决定",
+    "source_regime_change": "行情来源或计算口径发生变化，需等待同口径数据",
+    "single_bar_jump": "行情出现异常跳变，需排查拆分、复权或数据源问题",
+    "mixed_adjustment_regime": "历史行情复权口径不一致，技术动作已暂停",
+    "price_ma20_dislocation": "价格与20日均线关系异常，技术动作已暂停",
+}
+
+
+def _safe_reason_text(reason: str) -> str:
+    value = str(reason or "")
+    for key, text in _SUPPRESSION_REASON_TEXT.items():
+        if key in value:
+            return text
+    if "数据异常" in value:
+        return "相关数据存在异常，需核对后再决定"
+    if "流动性" in value or "不可交易" in value or "不可操作" in value:
+        return "当前交易条件不满足，暂时不能操作"
+    return "组合约束或风险条件尚未满足，等待下一检查点"
+
+
+def _position_maps(position_valuations: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
+    by_id = {}
+    by_key = {}
+    for item in position_valuations or []:
+        pid = str(item.get("position_id") or "")
+        key = str(item.get("instrument_key") or "")
+        if pid:
+            by_id[pid] = item
+        if key:
+            by_key[key] = item
+    return by_id, by_key
+
+
+def _display_for_position(item: dict) -> str:
+    classification = item.get("classification") or {}
+    return display_label(
+        item.get("display_name", ""), item.get("instrument_key", ""),
+        classification.get("product_type", ""), public_code=item.get("public_code", ""),
+    )
+
+
+def _cash_view(schedule: dict) -> dict:
+    values = schedule or {}
+    return {
+        "immediate": {"label": "现在能用", "amount_cny": round(values.get("immediate_cash_cny", 0.0) or 0.0, 2)},
+        "settling": {"label": "到账途中", "amount_cny": round(values.get("settling_cash_cny", 0.0) or 0.0, 2)},
+        "strategic_exit": {"label": "卖出后才能用", "amount_cny": round(values.get("strategic_exit_value_cny", 0.0) or 0.0, 2)},
+        "locked": {"label": "不能动", "amount_cny": round(values.get("locked_value_cny", 0.0) or 0.0, 2)},
+    }
+
+
+def build_user_view(
+    portfolio_decision: dict,
+    position_valuations: list[dict],
+    position_reviews: list[dict],
+    research_candidates: list[dict],
+    risk_state: dict,
+    *,
+    session_id: str,
+    session_intent: str,
+) -> dict:
+    """Build the deterministic trade-card and assistant presentation contract."""
+    del position_reviews
+    decision = portfolio_decision or {}
+    by_id, by_key = _position_maps(position_valuations)
+    actions = []
+    for raw in (decision.get("approved_actions") or [])[:3]:
+        item = by_id.get(str(raw.get("position_id") or ""), {})
+        market_value = item.get("market_value_cny")
+        ratio = float(raw.get("ratio") or 0.0)
+        amount = round(float(market_value) * ratio, 2) if market_value is not None else None
+        actions.append({
+            "display_label": _display_for_position(item),
+            "action_label": signal_label(raw.get("signal", "")),
+            "ratio": ratio,
+            "estimated_amount_cny": amount,
+            "amount_is_estimate": freshness_is_estimate(
+                item.get("evidence") or {}, item.get("valuation_method", "")
+            ) if item else True,
+            "reason_summary": str(raw.get("action_description") or raw.get("reason") or "按获批条件执行"),
+            "cancel_condition": str(raw.get("cancel_condition") or "触发条件不再成立时取消"),
+            "settlement_display": str(raw.get("settlement_timing") or "到账时间待确认"),
+            "next_checkpoint": str(raw.get("next_checkpoint") or "下一交易窗口复核"),
+        })
+
+    no_action_reasons = []
+    for raw in decision.get("suppressed_actions") or []:
+        item = by_id.get(str(raw.get("position_id") or ""), {})
+        label = _display_for_position(item)
+        reason = f"{label}：{_safe_reason_text(raw.get('reason', ''))}"
+        if reason not in no_action_reasons:
+            no_action_reasons.append(reason)
+        if len(no_action_reasons) == 2:
+            break
+    if not no_action_reasons and decision.get("unresolved_conflicts"):
+        no_action_reasons.append("组合方向存在冲突，需人工确认后再操作")
+    if not no_action_reasons and not actions:
+        no_action_reasons.append("当前没有满足执行条件的获批动作")
+
+    raw_status = str(decision.get("status") or "")
+    if actions:
+        card_status, card_label = "action_required", "需要操作"
+    elif raw_status == "review_required" and decision.get("unresolved_conflicts"):
+        card_status, card_label = "manual_review", "等待人工确认"
+    else:
+        card_status, card_label = "no_action", "今日无需操作"
+
+    research = []
+    for candidate in (research_candidates or [])[:8]:
+        symbol = str(candidate.get("symbol") or "")
+        item = by_key.get(symbol, {})
+        name = candidate.get("name") or item.get("display_name") or "未命名标的"
+        research.append({
+            "display_label": display_label(name, symbol),
+            "action_hint": str(candidate.get("action_hint") or "仅供观察，不形成交易动作"),
+            "reassess_after": str(candidate.get("reassess_after") or "下一交易窗口复核"),
+        })
+
+    level = str((risk_state or {}).get("level") or "normal")
+    transition = str((risk_state or {}).get("transition") or "stable")
+    transition_text = {
+        "escalated": "风险升级", "deescalated": "风险缓和", "stable": "状态未变",
+    }.get(transition, "状态待确认")
+    assistant = {
+        "why": [a["reason_summary"] for a in actions] or no_action_reasons[:2],
+        "do_not_do": [
+            f"{_display_for_position(by_id.get(str(x.get('position_id') or ''), {}))}：{_safe_reason_text(x.get('reason', ''))}"
+            for x in (decision.get("suppressed_actions") or [])[:5]
+        ],
+        "cash": _cash_view(decision.get("cash_schedule") or {}),
+        "risk": {
+            "label": risk_label(level),
+            "transition": transition_text,
+            "suspend_accumulation": bool((risk_state or {}).get("suspend_accumulation")),
+            "release_condition": str((risk_state or {}).get("release_condition") or "等待风险状态满足解除条件"),
+        },
+        "research": research,
+    }
+    return {
+        "instruction_card": {
+            "status": card_status,
+            "status_label": card_label,
+            "actions": actions,
+            "no_action_reasons": no_action_reasons[:2] if not actions else [],
+            "next_checkpoint": actions[0]["next_checkpoint"] if actions else _session_checkpoint(session_id, session_intent),
+        },
+        "assistant_brief": assistant,
+    }
+
+
+def _session_checkpoint(session_id: str, session_intent: str) -> str:
+    checkpoints = {
+        "cn_pre_open": "A股开盘观察窗口复核",
+        "cn_open_watch": "A股收盘前窗口复核",
+        "cn_pre_close": "A股盘后复盘",
+        "cn_after_close": "下一交易日盘前复核",
+        "us_pre_open": "美股开盘观察窗口复核",
+        "us_open_watch": "美股收盘前窗口复核",
+        "us_pre_close": "美股盘后复盘",
+        "us_after_close": "下一交易日盘前复核",
+    }
+    return checkpoints.get(session_id, f"下一{session_intent or '交易'}窗口复核")

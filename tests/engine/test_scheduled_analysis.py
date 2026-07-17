@@ -492,3 +492,23 @@ def test_run_status_never_allows_market_ok_to_override_global_quote_failure():
         "action_signals": {"status": "ok"},
     }
     assert _run_status(quality, primary_market="cn") == "degraded"
+
+
+
+def test_scheduled_run_attaches_human_user_view_inside_portfolio_decision(tmp_path):
+    calendar = MarketSessionCalendar(_config(tmp_path))
+    occurrence = calendar.occurrence_for(
+        "cn_pre_close", datetime.fromisoformat("2026-07-06T14:35:00+08:00")
+    )
+    run = build_scheduled_run(
+        _context(), occurrence=occurrence,
+        generated_at=datetime.fromisoformat("2026-07-06T14:35:00+08:00"),
+        config=_config(tmp_path),
+    )
+    view = run["portfolio_decision"]["user_view"]
+    assert set(view) == {"instruction_card", "assistant_brief"}
+    assert view["instruction_card"]["status_label"] in {
+        "需要操作", "今日无需操作", "等待人工确认",
+    }
+    rendered = json.dumps(view, ensure_ascii=False)
+    assert "decision_id" not in rendered
