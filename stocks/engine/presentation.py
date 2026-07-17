@@ -9,6 +9,9 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
+_SENTINEL = object()
+_no_value = _SENTINEL
+
 _SIGNAL_LABELS = {
     "stop_loss": "止损", "take_profit": "止盈", "reduce": "减仓",
     "add": "加仓", "hold": "持有", "wait": "等待",
@@ -252,6 +255,166 @@ def _data_notes(data_boundaries: dict) -> list[str]:
     return notes
 
 
+_OUTLOOK_ALLOWED_TOP = frozenset({
+    "status", "generated_at", "message", "data_limitations",
+    "summary", "confidence", "near_term", "medium_term",
+    "asset_views", "sector_views", "scenarios", "source_refs",
+})
+_OUTLOOK_HORIZON_ALLOWED = frozenset({"horizon", "direction", "confidence"})
+_OUTLOOK_VIEW_ALLOWED = frozenset({"asset_class", "asset", "sector", "direction", "rationale"})
+_OUTLOOK_SCENARIO_ALLOWED = frozenset({
+    "label", "drivers", "portfolio_effect", "validation", "invalidation",
+})
+_OUTLOOK_SOURCE_ALLOWED = frozenset({"source", "title", "url", "published_at", "id"})
+_DELTA_ALLOWED_TOP = frozenset({
+    "schema_version", "changes",
+})
+_DELTA_CHANGE_SCALAR = frozenset({"summary", "confidence"})
+_DELTA_SCENARIO_NAMES = frozenset({"base", "bull", "risk"})
+_DELTA_SCENARIO_FIELDS = frozenset({"label", "validation", "invalidation"})
+_DELTA_HORIZON_KEYS = frozenset({"direction", "confidence", "horizon"})
+_DELTA_SOURCE_KEYS = frozenset({"added", "removed"})
+
+
+def _project_outlook(outlook: dict | None) -> dict:
+    """Project only whitelisted outlook fields; strip unknown/internal keys."""
+    if not isinstance(outlook, dict):
+        return {}
+    result: dict = {}
+    for key in outlook:
+        if key not in _OUTLOOK_ALLOWED_TOP:
+            continue
+        val = outlook[key]
+        if key in ("near_term", "medium_term"):
+            if isinstance(val, dict):
+                result[key] = {k: v for k, v in val.items() if k in _OUTLOOK_HORIZON_ALLOWED}
+            else:
+                result[key] = val
+        elif key in ("asset_views", "sector_views"):
+            if isinstance(val, list):
+                result[key] = [
+                    {k: v for k, v in item.items() if k in _OUTLOOK_VIEW_ALLOWED}
+                    for item in val if isinstance(item, dict)
+                ]
+        elif key == "scenarios":
+            if isinstance(val, dict):
+                result[key] = {}
+                for sname, scene in val.items():
+                    if isinstance(scene, dict):
+                        result[key][sname] = {
+                            k: v for k, v in scene.items()
+                            if k in _OUTLOOK_SCENARIO_ALLOWED
+                        }
+                    else:
+                        result[key][sname] = scene
+        elif key == "source_refs":
+            if isinstance(val, list):
+                result[key] = [
+                    {k: v for k, v in item.items() if k in _OUTLOOK_SOURCE_ALLOWED}
+                    for item in val if isinstance(item, dict)
+                ]
+        else:
+            result[key] = val
+    return result
+
+
+def _project_outlook_delta(delta: dict | None) -> dict:
+    """Project only whitelisted delta fields; strip unknown/internal keys."""
+    if not isinstance(delta, dict):
+        return {}
+    result: dict = {}
+    for key in delta:
+        if key not in _DELTA_ALLOWED_TOP:
+            continue
+        if key == "changes":
+            val = delta[key]
+            if not isinstance(val, dict):
+                result[key] = val
+                continue
+            projected = _project_delta_changes(val)
+            if projected:
+                result["changes"] = projected
+        else:
+            result[key] = delta[key]
+    return result
+
+
+def _project_delta_changes(changes: dict) -> dict:
+    """Recursive whitelist for delta changes; strip unknown/nested/internal keys."""
+    projected: dict = {}
+    for ckey, cval in changes.items():
+        if not isinstance(cval, dict):
+            continue
+        if ckey in _DELTA_CHANGE_SCALAR:
+            scalar = {}
+            if "from" in cval:
+                scalar["from"] = cval["from"]
+            if "to" in cval:
+                scalar["to"] = cval["to"]
+            if scalar:
+                projected[ckey] = scalar
+        elif ckey in ("near_term", "medium_term"):
+            h_proj = {}
+            for hk in _DELTA_HORIZON_KEYS:
+                hv = cval.get(hk)
+                if isinstance(hv, dict):
+                    h_sub = {}
+                    if "from" in hv:
+                        h_sub["from"] = hv["from"]
+                    if "to" in hv:
+                        h_sub["to"] = hv["to"]
+                    if h_sub:
+                        h_proj[hk] = h_sub
+            if h_proj:
+                projected[ckey] = h_proj
+        elif ckey in ("sector_views", "asset_views"):
+            v_proj = {}
+            for vname, vval in cval.items():
+                if not isinstance(vval, dict):
+                    continue
+                dir_val = vval.get("direction")
+                if isinstance(dir_val, dict):
+                    dir_proj = {}
+                    if "from" in dir_val:
+                        dir_proj["from"] = dir_val["from"]
+                    if "to" in dir_val:
+                        dir_proj["to"] = dir_val["to"]
+                    if dir_proj:
+                        v_proj[vname] = {"direction": dir_proj}
+            if v_proj:
+                projected[ckey] = v_proj
+        elif ckey == "scenarios":
+            s_proj = {}
+            for sname in _DELTA_SCENARIO_NAMES:
+                scene = cval.get(sname)
+                if not isinstance(scene, dict):
+                    continue
+                scene_proj = {}
+                for sf in _DELTA_SCENARIO_FIELDS:
+                    sfv = scene.get(sf)
+                    if isinstance(sfv, dict):
+                        sf_sub = {}
+                        if "from" in sfv:
+                            sf_sub["from"] = sfv["from"]
+                        if "to" in sfv:
+                            sf_sub["to"] = sfv["to"]
+                        if sf_sub:
+                            scene_proj[sf] = sf_sub
+                if scene_proj:
+                    s_proj[sname] = scene_proj
+            if s_proj:
+                projected[ckey] = s_proj
+        elif ckey == "source_refs":
+            src_proj = {}
+            for sk in _DELTA_SOURCE_KEYS:
+                sv = cval.get(sk)
+                if isinstance(sv, list):
+                    src_proj[sk] = [str(x) for x in sv]
+            if src_proj:
+                projected[ckey] = src_proj
+    return projected
+
+
 def build_user_view(
     portfolio_decision: dict,
     position_valuations: list[dict],
@@ -262,6 +425,8 @@ def build_user_view(
     data_boundaries: dict | None = None,
     session_id: str,
     session_intent: str,
+    structured_outlook: dict | None = None,
+    outlook_delta: dict | None = None,
 ) -> dict:
     """Build the deterministic trade-card and assistant presentation contract."""
     decision = portfolio_decision or {}
@@ -348,7 +513,11 @@ def build_user_view(
         },
         "data_notes": _data_notes(data_boundaries or {}),
         "research": research,
+        "outlook": _project_outlook(structured_outlook) if structured_outlook is not None else _no_value,
+        "outlook_delta": _project_outlook_delta(outlook_delta) if outlook_delta is not None else _no_value,
     }
+    # Strip sentinel keys that were never set
+    assistant = {k: v for k, v in assistant.items() if v is not _no_value}
     return {
         "instruction_card": {
             "status": card_status,

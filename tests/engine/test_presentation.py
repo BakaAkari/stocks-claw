@@ -129,8 +129,65 @@ def test_build_user_view_no_action_card_has_two_human_reasons():
     assert len(card["no_action_reasons"]) == 2
     assert "化工ETF（516020）" in card["no_action_reasons"][0]
     assert "prev_close_mismatch" not in str(view)
+
     assert "periodic_open" not in str(view)
     assert "research_only" not in str(view)
+
+
+def test_outlook_params_are_projected_into_assistant_brief():
+    """build_user_view projects structured_outlook and outlook_delta to assistant_brief."""
+    decision = {"status": "approved", "approved_actions": [], "suppressed_actions": [],
+                "unresolved_conflicts": [], "cash_schedule": {}}
+    outlook = {"status": "ok", "summary": "测试研判", "generated_at": "2026-07-17T08:00:00Z"}
+    delta = {"summary": "方向变化", "from": "中性", "to": "偏有利"}
+    view = build_user_view(
+        decision, [], [], [], {},
+        session_id="cn_after_close", session_intent="after_close_review",
+        structured_outlook=outlook, outlook_delta=delta,
+    )
+    # Projection strips unknown keys; check content not identity
+    assert view["assistant_brief"]["outlook"]["summary"] == "测试研判"
+    assert view["assistant_brief"]["outlook"]["status"] == "ok"
+    # delta without schema_version or changes gets projected to empty
+    assert "outlook_delta" in view["assistant_brief"]
+
+
+def test_outlook_absent_when_not_provided():
+    """No outlook fields when neither param is passed."""
+    view = build_user_view(
+        {"status": "approved", "approved_actions": [], "suppressed_actions": [],
+         "unresolved_conflicts": [], "cash_schedule": {}},
+        [], [], [], {}, session_id="cn_after_close", session_intent="after_close_review",
+    )
+    assert "outlook" not in view["assistant_brief"]
+
+
+def test_outlook_projection_strips_unknown_and_internal_keys():
+    """build_user_view strips unknown/internal keys from outlook projection."""
+    outlook = {
+        "status": "ok",
+        "summary": "测试研判",
+        "confidence": "medium",
+        "near_term": {"horizon": "1-2w", "direction": "supportive", "confidence": "high", "position_id": "a_123"},
+        "asset_views": [{"asset_class": "权益", "direction": "supportive", "rationale": "估值有支撑", "_internal_key": True}],
+        "scenarios": {"base": {"label": "基准", "drivers": [], "portfolio_effect": "", "_secret": "leak"}},
+        "source_refs": [{"source": "Reuters", "title": "T", "url": "https://x", "published_at": "2026-07-17T00:00:00Z", "position_id": "a_456"}],
+        "unknown_extra": "should not appear",
+    }
+    decision = {"status": "approved", "approved_actions": [], "suppressed_actions": [],
+                "unresolved_conflicts": [], "cash_schedule": {}}
+    view = build_user_view(
+        decision, [], [], [], {},
+        session_id="cn_after_close", session_intent="after_close_review",
+        structured_outlook=outlook,
+    )
+    brief = view["assistant_brief"]["outlook"]
+    assert "unknown_extra" not in brief
+    assert "position_id" not in str(brief.get("near_term", {}))
+    assert "_internal_key" not in str(brief.get("asset_views", []))
+    assert "_secret" not in str(brief.get("scenarios", {}).get("base", {}))
+    assert "position_id" not in str(brief.get("source_refs", []))
+    assert brief["summary"] == "测试研判"
 
 
 def test_build_user_view_research_candidates_use_real_names_and_never_actions():
@@ -273,3 +330,108 @@ def test_user_view_anomaly_explanation_includes_structured_evidence_without_code
         "暂停执行，等待核对正确收盘价"
     )
     assert "prev_close_mismatch" not in str(view)
+
+def test_outlook_delta_projection_strips_previous_session_and_market():
+    """_project_outlook_delta strips previous_session/current_session/market, keeps schema_version + changes."""
+    from stocks.engine.presentation import _project_outlook_delta
+    delta = {
+        "schema_version": 1,
+        "previous_session": "cn_pre_open",
+        "current_session": "cn_open_watch",
+        "previous_generated_at": "2026-07-17T08:00:00Z",
+        "current_generated_at": "2026-07-17T09:00:00Z",
+        "market": "cn",
+        "changes": {"summary": {"from": "中性", "to": "偏有利"}},
+    }
+    projected = _project_outlook_delta(delta)
+    assert projected.get("schema_version") == 1
+    assert "changes" in projected
+    assert "previous_session" not in projected
+    assert "current_session" not in projected
+    assert "market" not in projected
+    assert "previous_generated_at" not in projected
+    assert "current_generated_at" not in projected
+
+
+def test_outlook_delta_projection_strips_unknown_nested_fields():
+    """_project_outlook_delta strips unknown nested fields, position_id, and extra keys from changes."""
+    from stocks.engine.presentation import _project_outlook_delta
+    delta = {
+        "schema_version": 1,
+        "changes": {
+            "summary": {"from": "中性", "to": "偏有利", "extra_field": "nope", "position_id": "a_123"},
+            "scenarios": {
+                "base": {
+                    "label": {"from": "基准", "to": "温和"},
+                    "validation": {"from": "PMI扩张", "to": "GDP增长"},
+                    "invalidation": {"from": "通胀", "to": "通缩"},
+                    "drivers": {"from": "A", "to": "B"},
+                    "position_id": "a_456",
+                },
+                "bull": {
+                    "label": {"from": "乐观", "to": "非常乐观"},
+                    "extra": {"foo": "bar"},
+                },
+                "new_scenario": {
+                    "label": {"from": "X", "to": "Y"},
+                },
+            },
+            "sector_views": {
+                "科技": {
+                    "direction": {"from": "adverse", "to": "supportive"},
+                    "position_id": "a_789",
+                    "extra": "should not appear",
+                },
+            },
+            "source_refs": {
+                "added": ["src-1", "src-2"],
+                "removed": ["src-3"],
+                "modified": ["src-4"],
+            },
+            "near_term": {
+                "direction": {"from": "adverse", "to": "supportive"},
+                "confidence": {"from": "low", "to": "high"},
+                "horizon": {"from": "1-2w", "to": "2-3w"},
+                "position_id": "a_000",
+            },
+        },
+    }
+    projected = _project_outlook_delta(delta)
+    changes = projected.get("changes", {})
+
+    # summary: only from/to
+    assert changes["summary"] == {"from": "中性", "to": "偏有利"}
+    assert "extra_field" not in changes["summary"]
+    assert "position_id" not in changes["summary"]
+
+    # scenarios: only base/bull, only label/validation/invalidation
+    assert "base" in changes["scenarios"]
+    assert "bull" in changes["scenarios"]
+    assert "risk" not in changes["scenarios"]
+    assert "new_scenario" not in changes["scenarios"]
+    assert changes["scenarios"]["base"] == {
+        "label": {"from": "基准", "to": "温和"},
+        "validation": {"from": "PMI扩张", "to": "GDP增长"},
+        "invalidation": {"from": "通胀", "to": "通缩"},
+    }
+    assert "drivers" not in changes["scenarios"]["base"]
+    assert "position_id" not in changes["scenarios"]["base"]
+
+    # sector_views: only direction from/to
+    assert changes["sector_views"]["科技"] == {
+        "direction": {"from": "adverse", "to": "supportive"},
+    }
+    assert "position_id" not in changes["sector_views"]["科技"]
+    assert "extra" not in changes["sector_views"]["科技"]
+
+    # source_refs: only added/removed
+    assert changes["source_refs"] == {"added": ["src-1", "src-2"], "removed": ["src-3"]}
+    assert "modified" not in changes["source_refs"]
+
+    # near_term: only direction/confidence/horizon from/to
+    assert changes["near_term"] == {
+        "direction": {"from": "adverse", "to": "supportive"},
+        "confidence": {"from": "low", "to": "high"},
+        "horizon": {"from": "1-2w", "to": "2-3w"},
+    }
+    assert "position_id" not in changes["near_term"]

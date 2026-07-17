@@ -25,6 +25,11 @@ FORBIDDEN_PATTERNS = [
     ),
 ]
 
+# Chinese trading-action patterns — scanned only in outlook/delta narrative
+_OUTLOOK_TRADE_ACTIONS = re.compile(
+    r"买入|卖出|减仓|加仓|清仓|止损\d|止盈\d|仓位\s*\d|¥|人民币"
+)
+
 
 def _leaf_values(obj):
     if isinstance(obj, dict):
@@ -41,6 +46,8 @@ def scan_run(run: dict, source: str, *, rendered_markdown: str = "") -> list[str
     """Return leakage violations in the user view and final Markdown."""
     errors = []
     view = ((run.get("portfolio_decision") or {}).get("user_view")) or {}
+    # _leaf_values already recursively traverses the entire view, including
+    # nested outlook/outlook_delta --- no need for an extra explicit walk.
     text = "\n".join(_leaf_values(view))
     if rendered_markdown:
         text = f"{text}\n{rendered_markdown}"
@@ -48,6 +55,15 @@ def scan_run(run: dict, source: str, *, rendered_markdown: str = "") -> list[str
         for m in pat.finditer(text):
             snippet = text[max(0, m.start() - 15):m.end() + 15]
             errors.append(f"{source}: forbidden token `{m.group(0)}` in user view: {snippet}")
+    # Also scan outlook/delta specifically for Chinese trading actions
+    assistant = view.get("assistant_brief") or {}
+    for field in ("outlook", "outlook_delta"):
+        data = assistant.get(field) or {}
+        if data:
+            outlook_text = "\n".join(_leaf_values(data))
+            for m in _OUTLOOK_TRADE_ACTIONS.finditer(outlook_text):
+                snippet = outlook_text[max(0, m.start() - 15):m.end() + 15]
+                errors.append(f"{source}: forbidden token `{m.group(0)}` in outlook/delta: {snippet}")
     return errors
 
 

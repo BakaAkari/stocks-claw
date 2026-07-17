@@ -31,7 +31,34 @@ _WATCH = frozenset({"cn_open_watch", "cn_pre_close", "us_open_watch", "us_pre_cl
 _FORBIDDEN = re.compile(
     r"\b(?:manual_review|approved_actions|suppressed_actions|unresolved_conflicts|position_id|decision_id|research_only|review_required|take_profit|stop_loss|reduce|hedge)\b|(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
 )
+_DIRECTION_LABELS = {
+    "supportive": "\u504f\u6709\u5229",
+    "neutral": "\u4e2d\u6027",
+    "adverse": "\u504f\u4e0d\u5229",
+    "uncertain": "\u4e0d\u786e\u5b9a",
+    "mixed": "\u6df7\u5408",
+}
+_CONFIDENCE_LABELS = {
+    "high": "\u9ad8",
+    "medium": "\u4e2d",
+    "low": "\u4f4e",
+}
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?%?")
+
+# ── Forbidden tokens for outlook/delta narrative scanning ──────────────────
+# Real word boundaries (\b) - the nested \\\\b in the original was a literal
+# backslash-b sequence that never matched anything.
+_OUTLOOK_FORBIDDEN = re.compile(
+    r"\b(?:position_id|decision_id|manual_review|approved_actions|"
+    r"suppressed_actions|unresolved_conflicts|research_only|review_required|"
+    r"take_profit|stop_loss|reduce|add|hedge)\b|"
+    r"(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
+)
+
+# Chinese trading-action patterns that must never appear in outlook narrative
+_CHINESE_TRADE_ACTION_RE = re.compile(
+    "买入|卖出|减仓|加仓|清仓|止损\\d|止盈\\d|仓位\\s*\\d|¥|人民币"
+)
 
 
 def _parse_dt(value: str) -> datetime:
@@ -179,20 +206,332 @@ def render_push_payload(payload: dict) -> str:
                 lines.append(f"  - 再评估: {item['reassess_after']}")
     else:
         lines.append("- 暂无需要重点跟踪的研究候选")
+
+    # ── 中长期研判 section ──────────────────────────────────────────────────
+    outlook = assistant.get("outlook") or {}
+    outlook_delta = assistant.get("outlook_delta") or {}
+    if outlook_delta:
+        # ── 研判变化 (delta) ──────────────────────────────────────────
+        lines.extend(["", "**研判变化**"])
+        changes = outlook_delta.get("changes", {})
+        _render_delta_changes(changes, int(outlook_delta.get("schema_version", 1)), lines)
+    elif outlook and outlook.get("status") == "unavailable":
+        lines.extend(["", "**中长期研判**"])
+        lines.append(f"- {outlook.get('message', '研判暂不可用')}")
+        for limit in (outlook.get("data_limitations") or [])[:3]:
+            lines.append(f"  - {limit}")
+    elif outlook and outlook.get("status") == "ok":
+        lines.extend(["", "**中长期研判**"])
+        lines.append(f"- 综合置信度: {_CONFIDENCE_LABELS.get(outlook.get('confidence', ''), outlook.get('confidence', ''))}")
+        if outlook.get("summary"):
+            lines.append(f"- 综合判断: {outlook['summary']}")
+
+        # ── Near term (1-2w) ──────────────────────────────────────────
+        near = outlook.get("near_term") or {}
+        if near:
+            lines.append("")
+            lines.append("**未来1–2周**")
+            near_dir = _DIRECTION_LABELS.get(near.get("direction", ""), near.get("direction", ""))
+            near_conf = _CONFIDENCE_LABELS.get(near.get("confidence", ""), near.get("confidence", ""))
+            horizon_str = f"（{near.get('horizon', '')}）" if near.get("horizon") else ""
+            lines.append(f"- 方向: {near_dir}，置信度: {near_conf}{horizon_str}")
+
+        # ── Medium term (1-3m) ────────────────────────────────────────
+        medium = outlook.get("medium_term") or {}
+        if medium:
+            lines.append("")
+            lines.append("**未来1–3个月**")
+            med_dir = _DIRECTION_LABELS.get(medium.get("direction", ""), medium.get("direction", ""))
+            med_conf = _CONFIDENCE_LABELS.get(medium.get("confidence", ""), medium.get("confidence", ""))
+            horizon_str = f"（{medium.get('horizon', '')}）" if medium.get("horizon") else ""
+            lines.append(f"- 方向: {med_dir}，置信度: {med_conf}{horizon_str}")
+
+        # ── Asset views (top level, limit 4) ──────────────────────────
+        av_list = outlook.get("asset_views") or []
+        if av_list:
+            lines.append("")
+            lines.append("**资产类别**")
+        for av in av_list[:4]:
+            asset_key = av.get("asset_class", "") or av.get("asset", "")
+            d = _DIRECTION_LABELS.get(av.get("direction", ""), av.get("direction", ""))
+            rationale = av.get("rationale", "")
+            if rationale:
+                lines.append(f"- {asset_key}: {d} — {rationale}")
+            else:
+                lines.append(f"- {asset_key}: {d}")
+
+        # ── Sector views (top level, limit 5) ─────────────────────────
+        sv_list = outlook.get("sector_views") or []
+        if sv_list:
+            lines.append("")
+            lines.append("**行业观察**")
+        for sv in sv_list[:5]:
+            sector_key = sv.get("sector", "")
+            d = _DIRECTION_LABELS.get(sv.get("direction", ""), sv.get("direction", ""))
+            rationale = sv.get("rationale", "")
+            if rationale:
+                lines.append(f"- {sector_key}行业: {d} — {rationale}")
+            else:
+                lines.append(f"- {sector_key}行业: {d}")
+
+        # ── Scenarios ─────────────────────────────────────────────────
+        scenarios = outlook.get("scenarios") or {}
+        for key, label in (("base", "基准情景"), ("bull", "乐观情景"), ("risk", "风险情景")):
+            scene = scenarios.get(key) or {}
+            if not scene:
+                continue
+            lines.append("")
+            lines.append(f"**{label}**")
+            for driver in (scene.get("drivers") or [])[:3]:
+                lines.append(f"- 驱动因素: {driver}")
+            if scene.get("portfolio_effect"):
+                lines.append(f"- 组合影响: {scene['portfolio_effect']}")
+            # validation / invalidation are lists; render up to 3 items each
+            validation = scene.get("validation", []) if isinstance(scene.get("validation"), list) else ([scene["validation"]] if scene.get("validation") else [])
+            for item in validation[:3]:
+                lines.append(f"- 验证条件: {item}")
+            invalidation = scene.get("invalidation", []) if isinstance(scene.get("invalidation"), list) else ([scene["invalidation"]] if scene.get("invalidation") else [])
+            for item in invalidation[:3]:
+                lines.append(f"- 否定条件: {item}")
+
+        # ── Source references (limit 5) ───────────────────────────────
+        sources = outlook.get("source_refs") or []
+        if sources:
+            lines.append("")
+            lines.append("**来源**")
+            for src in sources[:5]:
+                s = src.get("source", "")
+                t = src.get("title", "")
+                u = src.get("url", "")
+                p = src.get("published_at", "")
+                if s and t and u:
+                    if p:
+                        lines.append(f"- [{s}｜{t}]({u}) — {p}")
+                    else:
+                        lines.append(f"- [{s}｜{t}]({u})")
+
     return "\n".join(lines)
+
+
+_SUBKEY_LABELS = {
+    "direction": "方向", "confidence": "置信度", "horizon": "时间范围",
+}
+
+
+def _render_delta_changes(changes: dict, schema_version: int, lines: list[str]) -> None:
+    """Render deterministic delta changes as Chinese text."""
+    _ = schema_version  # reserved for future schema migration
+
+    # Summary change
+    summary = changes.get("summary", {})
+    if isinstance(summary, dict) and ("from" in summary or "to" in summary):
+        from_val = summary.get("from", "")
+        to_val = summary.get("to", "")
+        if from_val and to_val:
+            lines.append(f"- 综合判断: {from_val} → {to_val}")
+        elif to_val:
+            lines.append(f"- 综合判断: 新→ {to_val}")
+
+    # Confidence change
+    confidence = changes.get("confidence", {})
+    if isinstance(confidence, dict):
+        from_c = confidence.get("from", "")
+        to_c = confidence.get("to", "")
+        if from_c and to_c:
+            from_label = _CONFIDENCE_LABELS.get(from_c, from_c)
+            to_label = _CONFIDENCE_LABELS.get(to_c, to_c)
+            lines.append(f"- 置信度: {from_label} → {to_label}")
+
+    # Sector view changes
+    sector_changes = changes.get("sector_views", {})
+    if isinstance(sector_changes, dict):
+        for sector_name in list(sector_changes.keys())[:5]:
+            sc = sector_changes[sector_name]
+            if not isinstance(sc, dict):
+                continue
+            direction = sc.get("direction", {})
+            if isinstance(direction, dict):
+                d_from = _DIRECTION_LABELS.get(direction.get("from", ""), direction.get("from", ""))
+                d_to = _DIRECTION_LABELS.get(direction.get("to", ""), direction.get("to", ""))
+                if d_from and d_to:
+                    lines.append(f"- {sector_name}行业: {d_from} → {d_to}")
+
+    # Asset view changes
+    asset_changes = changes.get("asset_views", {})
+    if isinstance(asset_changes, dict):
+        for asset_name in list(asset_changes.keys())[:4]:
+            ac = asset_changes[asset_name]
+            if not isinstance(ac, dict):
+                continue
+            direction = ac.get("direction", {})
+            if isinstance(direction, dict):
+                d_from = _DIRECTION_LABELS.get(direction.get("from", ""), direction.get("from", ""))
+                d_to = _DIRECTION_LABELS.get(direction.get("to", ""), direction.get("to", ""))
+                if d_from and d_to:
+                    lines.append(f"- {asset_name}: {d_from} → {d_to}")
+
+    # Near/medium term changes
+    for hkey, hlabel in (("near_term", "未来1-2周"), ("medium_term", "未来1-3个月")):
+        hc = changes.get(hkey, {})
+        if isinstance(hc, dict) and hc:
+            parts = []
+            for subkey in ("direction", "confidence", "horizon"):
+                sub = hc.get(subkey, {})
+                if isinstance(sub, dict) and ("from" in sub or "to" in sub):
+                    from_v = sub.get("from", "")
+                    to_v = sub.get("to", "")
+                    # Translate direction/confidence values
+                    if subkey == "direction":
+                        from_v = _DIRECTION_LABELS.get(from_v, from_v)
+                        to_v = _DIRECTION_LABELS.get(to_v, to_v)
+                    elif subkey == "confidence" or subkey == "horizon":
+                        pass  # keep raw values
+                    label = _SUBKEY_LABELS.get(subkey, subkey)
+                    parts.append(f"{label}: {from_v} → {to_v}")
+            if parts:
+                lines.append(f"- {hlabel}: {'; '.join(parts)}")
+
+    # Scenario changes (only base/bull/risk, each: label/validation/invalidation)
+    scenario_changes = changes.get("scenarios", {})
+    if isinstance(scenario_changes, dict):
+        for sname, slabel in (("base", "基准情景"), ("bull", "乐观情景"), ("risk", "风险情景")):
+            scene = scenario_changes.get(sname)
+            if not isinstance(scene, dict):
+                continue
+            scene_parts = []
+            for sf, sf_label in (("label", "研判"), ("validation", "验证条件"), ("invalidation", "否定条件")):
+                sfv = scene.get(sf)
+                if isinstance(sfv, dict) and ("from" in sfv or "to" in sfv):
+                    from_v = sfv.get("from", "")
+                    to_v = sfv.get("to", "")
+                    if from_v and to_v:
+                        scene_parts.append(f"{sf_label}: {from_v} → {to_v}")
+            if scene_parts:
+                for part in scene_parts[:3]:
+                    lines.append(f"- {slabel}: {part}")
+
+    # Source refs changes (added/removed IDs, max 5 total)
+    source_changes = changes.get("source_refs", {})
+    if isinstance(source_changes, dict):
+        src_shown = 0
+        added = source_changes.get("added", [])
+        if isinstance(added, list):
+            for sid in added[:5]:
+                if src_shown >= 5:
+                    break
+                lines.append(f"- 来源新增: {sid}")
+                src_shown += 1
+        removed = source_changes.get("removed", [])
+        if isinstance(removed, list):
+            for sid in removed[:5]:
+                if src_shown >= 5:
+                    break
+                lines.append(f"- 来源移除: {sid}")
+                src_shown += 1
+
+
+def _traverse_outlook_text(obj: Any) -> str:
+    """Concatenate all string values from outlook/outlook_delta sub-tree."""
+    parts: list[str] = []
+    _walk_outlook_strings(obj, parts)
+    return " ".join(parts)
+
+
+def _walk_outlook_strings(obj: Any, parts: list[str]) -> None:
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ("generated_at", "published_at", "horizon"):
+                # ISO dates allowed
+                continue
+            _walk_outlook_strings(v, parts)
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_outlook_strings(item, parts)
+    elif isinstance(obj, str):
+        parts.append(obj)
+
+
+def _strip_outlook_from_payload(payload: dict) -> dict:
+    """Return payload copy with outlook/outlook_delta removed for number scanning."""
+    p = json.loads(json.dumps(payload))
+    view = p.get("user_view") or {}
+    brief = view.get("assistant_brief") or {}
+    brief.pop("outlook", None)
+    brief.pop("outlook_delta", None)
+    return p
+
+
+def _is_safe_numeric_context(text: str, pos: int, num_str: str) -> bool:
+    """Check whether number at *pos* should be skipped (date, URL, horizon, etc.)."""
+    lookback = text[max(0, pos - 30):pos + len(num_str) + 30]
+    # ISO date (4-digit year + dash + 2-digit month)
+    if re.search(r"\d{4}-\d{2}-\d{2}", lookback):
+        return True
+    # Inside a URL
+    before = text[max(0, pos - 100):pos]
+    if re.search(r"https?://", before):
+        after_proto = text[max(0, pos - 100) + before.rfind("https://"):pos + len(num_str)]
+        if " " not in after_proto:
+            return True
+    # Horizon pattern like 1-2w, 1-3m, or Chinese 1-2周, 1-3个月
+    if re.search(r"\d[wmdy周个月天]|\d-\d+[wmdy周个月天]", lookback):
+        return True
+    # Version like v3.1.4
+    if re.search(r"v\d+(?:\.\d+)*", lookback):
+        return True
+    return False
 
 
 def validate_payload_text(payload: dict, text: str) -> list[str]:
     errors = [f"internal token: {m.group(0)}" for m in _FORBIDDEN.finditer(text)]
-    allowed = _number_values(payload)
+
+    # Base allowed numbers: payload MINUS outlook/outlook_delta (no self-authorization)
+    clean_payload = _strip_outlook_from_payload(payload)
+    allowed = _number_values(clean_payload)
+
     numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
-    for raw in _NUMBER.findall(numeric_text):
+    for m in _NUMBER.finditer(numeric_text):
+        raw = m.group()
+        pos = m.start()
         try:
             value = round(float(raw.rstrip("%")), 4)
         except ValueError:
             continue
+        # Skip safe numeric contexts
+        if _is_safe_numeric_context(numeric_text, pos, raw):
+            continue
         if value not in allowed:
             errors.append(f"unauthorized number: {raw}")
+
+    # Also scan outlook / outlook_delta sub-fields inside user_view
+    view = payload.get("user_view") or {}
+    assistant = view.get("assistant_brief") or {}
+    for field in ("outlook", "outlook_delta"):
+        outlook_data = assistant.get(field) or {}
+        if outlook_data:
+            outlook_text = _traverse_outlook_text(outlook_data)
+            errors.extend(
+                f"internal token in outlook: {m.group(0)}"
+                for m in _OUTLOOK_FORBIDDEN.finditer(outlook_text)
+            )
+            # Chinese trading action scanning in outlook narrative
+            for m in _CHINESE_TRADE_ACTION_RE.finditer(outlook_text):
+                errors.append(f"trade instruction in outlook: {m.group(0)}")
+            # Number scanning on outlook text — skip ISO dates, URLs, horizon
+            outlook_numeric = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", outlook_text)
+            for m in _NUMBER.finditer(outlook_numeric):
+                raw = m.group()
+                pos = m.start()
+                try:
+                    value = round(float(raw.rstrip("%")), 4)
+                except ValueError:
+                    continue
+                # Skip safe numeric contexts in outlook text
+                if _is_safe_numeric_context(outlook_numeric, pos, raw):
+                    continue
+                if value not in allowed:
+                    errors.append(f"unauthorized number in outlook: {raw}")
+
     if text != "[SILENT]":
         if "**交易指令卡**" not in text or "**私人投资助理**" not in text:
             errors.append("missing two-layer headings")

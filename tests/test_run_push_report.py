@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.test_push_payload import _artifact
+from tests.test_push_payload import _artifact, _full_outlook_artifact
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "run_push_report.py"
 
@@ -61,3 +61,33 @@ def test_entrypoint_is_silent_on_invalid_or_stale_artifact(tmp_path):
         text=True,
     )
     assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+
+
+def _outlook_test_artifact():
+    """Helper for outlook entrypoint tests."""
+    from tests.test_push_payload import _full_outlook_artifact
+    return _full_outlook_artifact()
+
+
+def test_entrypoint_renders_outlook_section(tmp_path):
+    """Full pipeline renders the outlook section."""
+    root = tmp_path / "latest"
+    root.mkdir()
+    (root / "cn_after_close.json").write_text(
+        json.dumps(_full_outlook_artifact(), ensure_ascii=False)
+    )
+    payload_dir = tmp_path / "payload"
+    r = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--session", "cn_after_close",
+            "--artifact-root", str(root),
+            "--payload-root", str(payload_dir),
+            "--now", "2026-07-17T15:27:00+08:00",
+        ],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "**中长期研判**" in r.stdout
+    assert "**未来1–2周**" in r.stdout
