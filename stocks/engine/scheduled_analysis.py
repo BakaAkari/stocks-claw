@@ -6,6 +6,7 @@ cron/launchd and to hand a structured JSON artifact to the user-facing Agent.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
@@ -28,6 +29,14 @@ from stocks.engine.news_intelligence_store import (
     NewsIntelligenceStore,
 )
 from stocks.engine.outcome_attribution import save_portfolio_snapshots
+from stocks.engine.outlook_delta import OutlookDeltaState, compute_outlook_delta
+from stocks.engine.outlook_evidence import (
+    PRIMARY_OUTLOOK_SESSIONS,
+    build_outlook_evidence,
+    evidence_hash,
+)
+from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+from stocks.engine.outlook_validation import sanitize_unavailable_outlook
 from stocks.engine.presentation import build_user_view
 from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
 from stocks.engine.quant_action import (
@@ -306,6 +315,55 @@ class RunArtifactStore:
                 best_generated = generated
         return best
 
+    def find_latest_two_primary(self, market: str) -> list[dict]:
+        """Return the two most recent primary-window artifacts for *market*.
+
+        Walks the dated artifact directory tree, collects all JSON artifacts
+        whose ``session`` field is in ``PRIMARY_OUTLOOK_SESSIONS``, whose
+        ``market`` matches, whose top-level ``status`` is ``"ok"``, and
+        whose ``structured_outlook.status`` is ``"ok"``.  Excludes files
+        with ``_push_payload`` in their name as well as all files under a
+        ``latest/`` directory.  Deduplicates by ``run_id``.  Returns the two
+        most recent by ``generated_at``, oldest first.
+        """
+        candidates: list[dict] = []
+        seen_run_ids: set[str] = set()
+        glob_expr = f"**/{market}/*/*.json"
+        for path in sorted(self.artifact_dir.glob(glob_expr)):
+            rel = path.relative_to(self.artifact_dir)
+            if "_push_payload" in path.name:
+                continue
+            if "latest" in rel.parts:
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("market") != market:
+                continue
+            if data.get("session") not in PRIMARY_OUTLOOK_SESSIONS:
+                continue
+            if data.get("status") != "ok":
+                continue
+            so = data.get("structured_outlook") or {}
+            if not isinstance(so, dict) or so.get("status") != "ok":
+                continue
+            run_id = data.get("run_id")
+            if run_id and run_id in seen_run_ids:
+                continue
+            if run_id:
+                seen_run_ids.add(run_id)
+            candidates.append(data)
+
+        candidates.sort(
+            key=lambda d: d.get("generated_at") or "", reverse=True,
+        )
+        top_two = candidates[:2]
+        top_two.reverse()
+        return top_two
+
 
     def _artifact_path(self, run: dict, *, suffix: str) -> Path:
         return (
@@ -328,6 +386,7 @@ class ScheduledAnalysisRunner:
         artifact_dir: str | Path,
         event_watcher = None,
         repo_root: Path | None = None,
+        outlook_synthesizer = None,
     ):
         self.engine = engine
         self.config = config
@@ -335,6 +394,26 @@ class ScheduledAnalysisRunner:
         self.store = RunArtifactStore(artifact_dir)
         self._repo_root = repo_root or Path(artifact_dir).parent.parent if artifact_dir else None
         self.event_watcher: Optional[EconomicEventWatcher] = event_watcher
+        self.outlook_synthesizer = outlook_synthesizer
+        self._outlook_delta_state: OutlookDeltaState | None = None
+
+    def _get_synthesizer(self) -> OutlookSynthesizer:
+        """Return the outlook synthesizer, constructing a default if none was injected."""
+        if self.outlook_synthesizer is None:
+            self.outlook_synthesizer = OutlookSynthesizer(self.config)
+        return self.outlook_synthesizer
+
+    def _get_delta_state(self) -> OutlookDeltaState:
+        """Return or create the shared outlook delta state file."""
+        if self._outlook_delta_state is None:
+            artifact_dir = self.store.artifact_dir
+            state_path_env = self.config.get("outlook_delta_state_path")
+            if state_path_env:
+                state_path = Path(state_path_env)
+            else:
+                state_path = artifact_dir.parent / ".local" / "outlook_delta_state.json"
+            self._outlook_delta_state = OutlookDeltaState(state_path)
+        return self._outlook_delta_state
 
     async def run_due(
         self,
@@ -440,12 +519,13 @@ class ScheduledAnalysisRunner:
             include_quotes=True,
             include_history=True,
         )
+        context_dict = context.to_dict()
         previous_run = self.store.find_previous_for_session(
             occurrence.session.id, occurrence.session.market,
             market_date=market_date,
         )
         run = build_scheduled_run(
-            context.to_dict(),
+            context_dict,
             occurrence=occurrence,
             generated_at=now,
             config=self.config,
@@ -493,6 +573,53 @@ class ScheduledAnalysisRunner:
                         mb["hypothesis_tracker"] = report
             except Exception:
                 pass  # 非关键路径
+
+        # Outlook synthesis for primary windows; delta for observation windows
+        session_id = run["session"]
+        if session_id in PRIMARY_OUTLOOK_SESSIONS:
+            try:
+                evidence = build_outlook_evidence(
+                    context_dict, run, session_id=session_id,
+                    generated_at=run["generated_at"],
+                )
+                # Write evidence meta *before* generation so it is preserved
+                # even when synthesis fails
+                run["outlook_evidence_meta"] = {
+                    "hash": evidence_hash(evidence),
+                    "confidence_cap": evidence["confidence_cap"],
+                }
+                outlook = await asyncio.to_thread(
+                    self._get_synthesizer().generate, evidence,
+                    now=run["generated_at"],
+                )
+                run["structured_outlook"] = outlook
+                # Attach outlook to the user-facing brief
+                uv = run.get("portfolio_decision", {}).get("user_view", {})
+                if uv and "assistant_brief" in uv:
+                    uv["assistant_brief"]["outlook"] = outlook
+            except Exception:
+                logger.exception("Outlook synthesis failed for %s", session_id)
+                run["structured_outlook"] = sanitize_unavailable_outlook(
+                    ["Outlook synthesis failed"], generated_at=run["generated_at"],
+                )
+                # Also attach unavailable outlook to assistant brief
+                uv = run.get("portfolio_decision", {}).get("user_view", {})
+                if uv and "assistant_brief" in uv:
+                    uv["assistant_brief"]["outlook"] = run["structured_outlook"]
+        elif session_id not in PRIMARY_OUTLOOK_SESSIONS:
+            # Observation window: compute delta from latest two primary outlooks
+            try:
+                primaries = self.store.find_latest_two_primary(run["market"])
+                if len(primaries) >= 2:
+                    delta = compute_outlook_delta(primaries[0], primaries[1])
+                    if delta:
+                        state = self._get_delta_state()
+                        if state.should_emit(run["market"], delta):
+                            uv = run.get("portfolio_decision", {}).get("user_view", {})
+                            if uv and "assistant_brief" in uv:
+                                uv["assistant_brief"]["outlook_delta"] = delta
+            except Exception:
+                logger.exception("Outlook delta failed for %s", session_id)
 
         paths = self.store.save(run)
         return {

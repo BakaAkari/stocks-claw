@@ -548,3 +548,236 @@ def test_main_window_no_action_card_and_watch_window_silence_are_explicit(tmp_pa
     watch_text = json.dumps(watch, ensure_ascii=False)
     assert "window_delta.material=false" in watch_text
     assert "[SILENT]" in watch_text
+
+
+# Primary-window synthesis & observation-window delta
+
+
+class FakeSynth:
+    """Fake outlook synthesizer that returns a fixed valid outlook."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def generate(self, evidence: dict, *, now: str) -> dict:
+        self.calls += 1
+        return {
+            "status": "ok",
+            "generated_at": now,
+            "summary": "组合研判",
+            "near_term": {"horizon": "1-2w", "direction": "supportive", "confidence": "high"},
+            "medium_term": {"horizon": "1-3m", "direction": "supportive", "confidence": "medium"},
+            "scenarios": {
+                "base": {"label": "基准情景", "drivers": ["经济数据温和"], "portfolio_effect": "小幅上涨",
+                         "validation": ["GDP符合预期"], "invalidation": ["通胀超预期"]},
+                "bull": {"label": "乐观情景", "drivers": ["政策刺激"], "portfolio_effect": "明显上涨",
+                         "validation": ["社融超预期"], "invalidation": ["地缘升级"]},
+                "risk": {"label": "风险情景", "drivers": ["地缘冲突"], "portfolio_effect": "下跌",
+                         "validation": ["VIX>25"], "invalidation": ["政策干预"]},
+            },
+            "sector_views": [{"sector": "科技", "direction": "bullish", "rationale": "政策支持"}],
+            "asset_views": [],
+            "source_refs": [],
+            "confidence": "high",
+            "forecast_candidates": [],
+        }
+
+
+def _engine_with_enough_for_outlook(tmp_path, context_payload=None):
+    """Config with cn_after_close and cn_open_watch sessions."""
+    from tests.engine.test_scheduled_analysis import FakeEngine, _context
+    config = {
+        "schema_version": 1,
+        "user_timezone": "Asia/Shanghai",
+        "artifact_dir": str(tmp_path / "scheduled_runs"),
+        "default_duplicate_window_minutes": 90,
+        "quiet_hours": {"enabled": True, "start": "00:00", "end": "07:30",
+                        "timezone": "Asia/Shanghai", "allow_critical": True},
+        "markets": {
+            "cn": {
+                "enabled": True, "exchange_timezone": "Asia/Shanghai",
+                "holidays": [],
+                "sessions": [
+                    {"id": "cn_after_close", "time": "15:30", "intent": "after_close_review",
+                     "push": "normal"},
+                    {"id": "cn_open_watch", "time": "10:00", "intent": "open_watch",
+                     "push": "normal", "delta_silent_when_unchanged": True},
+                ],
+            },
+        },
+    }
+    payload = context_payload or _context()
+    return FakeEngine(payload), config
+
+
+def test_primary_session_calls_synthesizer_once(tmp_path):
+    """cn_after_close (primary) calls synthesizer exactly once."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    fake = FakeSynth()
+    runner.outlook_synthesizer = fake
+
+    now = datetime.fromisoformat("2026-07-06T15:30:00+08:00")
+    result = _run(runner.run_session("cn_after_close", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    assert fake.calls == 1
+    assert artifact["structured_outlook"]["status"] == "ok"
+    assert artifact["portfolio_decision"]["user_view"]["assistant_brief"]["outlook"]["summary"] == "组合研判"
+
+
+def test_watch_session_does_not_call_synthesizer(tmp_path):
+    """cn_open_watch (observation) does NOT call synthesizer."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    fake = FakeSynth()
+    runner.outlook_synthesizer = fake
+
+    now = datetime.fromisoformat("2026-07-06T10:00:00+08:00")
+    _run(runner.run_session("cn_open_watch", now=now))
+
+    assert fake.calls == 0
+
+
+def test_synthesis_exception_saves_artifact_with_unavailable_outlook(tmp_path):
+    """Synthesis exception → unavailable outlook, trade card intact."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+
+    class CrashingSynth:
+        calls = 0
+
+        def generate(self, evidence, *, now):
+            self.calls += 1
+            msg = "deliberate crash"
+            raise RuntimeError(msg)
+
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    fake = CrashingSynth()
+    runner.outlook_synthesizer = fake
+
+    now = datetime.fromisoformat("2026-07-06T15:30:00+08:00")
+    result = _run(runner.run_session("cn_after_close", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    assert artifact["structured_outlook"]["status"] == "unavailable"
+    # Trade card must be intact
+    assert "portfolio_decision" in artifact
+    assert "user_view" in artifact["portfolio_decision"]
+    assert "instruction_card" in artifact["portfolio_decision"]["user_view"]
+
+
+def test_observation_session_attaches_delta_when_primaries_differ(tmp_path):
+    """With two differing primary outlooks, observation attaches delta."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+    _seed_primary_artifact(tmp_path, "cn_after_close", "2026-07-06",
+                           outlook_summary="前期研判")
+    _seed_primary_artifact(tmp_path, "cn_after_close", "2026-07-07",
+                           outlook_summary="最新研判")
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    runner.outlook_synthesizer = FakeSynth()
+
+    now = datetime.fromisoformat("2026-07-07T10:00:00+08:00")
+    result = _run(runner.run_session("cn_open_watch", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    uv = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+    assert "outlook_delta" in uv
+    assert uv["outlook_delta"]["market"] == "cn"
+
+
+def test_observation_session_suppresses_duplicate_delta(tmp_path):
+    """First differing delta emitted, second identical delta suppressed."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+    # Seed two differing primaries to produce a real delta
+    _seed_primary_artifact(tmp_path, "cn_after_close", "2026-07-06",
+                           outlook_summary="前期研判")
+    _seed_primary_artifact(tmp_path, "cn_after_close", "2026-07-07",
+                           outlook_summary="最新研判")
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    runner.outlook_synthesizer = FakeSynth()
+
+    now = datetime.fromisoformat("2026-07-07T10:00:00+08:00")
+    # First run: should emit the delta
+    result1 = _run(runner.run_session("cn_open_watch", now=now))
+    art1 = json.loads(Path(result1["paths"]["json_path"]).read_text())
+    uv1 = art1["portfolio_decision"]["user_view"]["assistant_brief"]
+    assert "outlook_delta" in uv1
+    assert uv1["outlook_delta"]["market"] == "cn"
+
+    # Second run: force overwrite to produce same delta, which should be suppressed
+    result2 = _run(runner.run_session("cn_open_watch", now=now, force=True))
+    art2 = json.loads(Path(result2["paths"]["json_path"]).read_text())
+    uv2 = art2["portfolio_decision"]["user_view"]["assistant_brief"]
+    assert "outlook_delta" not in uv2
+
+
+def _seed_primary_artifact(tmp_path, session_id, market_date, *, outlook_summary):
+    """Write a pre-existing primary artifact for delta tests."""
+    artifact_dir = Path(tmp_path / "scheduled_runs")
+    run_suffix = market_date.replace("-", "")
+    run_id = f"{run_suffix}T073000Z_{session_id}"
+    path = (
+        artifact_dir
+        / market_date
+        / "cn"
+        / session_id
+        / f"{run_id}.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    run = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "session": session_id,
+        "market": "cn",
+        "market_date": market_date,
+        "generated_at": f"{market_date}T07:30:00+00:00",
+        "status": "ok",
+        "structured_outlook": {
+            "status": "ok",
+            "generated_at": f"{market_date}T07:30:00+00:00",
+            "summary": outlook_summary,
+            "scenarios": {
+                "base": {"label": "基准", "drivers": [], "portfolio_effect": "", "validation": [], "invalidation": []},
+                "bull": {"label": "乐观", "drivers": [], "portfolio_effect": "", "validation": [], "invalidation": []},
+                "risk": {"label": "风险", "drivers": [], "portfolio_effect": "", "validation": [], "invalidation": []},
+            },
+            "sector_views": [],
+            "asset_views": [],
+            "source_refs": [],
+            "confidence": "high",
+            "near_term": {"horizon": "1-2w", "direction": "neutral", "confidence": "medium"},
+            "medium_term": {"horizon": "1-3m", "direction": "neutral", "confidence": "medium"},
+            "forecast_candidates": [],
+        },
+        "portfolio_decision": {
+            "status": "no_action_needed",
+            "user_view": {"instruction_card": {}, "assistant_brief": {}},
+        },
+    }
+    path.write_text(json.dumps(run, ensure_ascii=False))
+    # Also write to latest dir
+    latest_dir = artifact_dir / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    (latest_dir / f"{session_id}.json").write_text(json.dumps(run, ensure_ascii=False))
