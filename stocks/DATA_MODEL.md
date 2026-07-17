@@ -160,19 +160,11 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `research_candidates`：research_only 信号候选，最多 8 个，不进入 approved_actions。
 - `execution_review`：对当前 run 中 `approved_actions` 的执行状态对照（executed/partial/rejected/deferred/not_executed/unknown）。
 - `agent_task`：`task_version` 已升级为 5，只引用上述 5 个可信字段，输出固定五段：变化摘要 / 今日动作 / 禁止待确认 / 资金到账与边界 / 研究候选。
-- `mandatory_blocks`：风险边界、约束偏离、资金事实、Shadow Account 和可选研究论点。
-- `agent_task`(v4)：自包含的 Agent 任务说明书,含以下子字段:
-  - `task_version`：4
-  - `must_answer`：session 特定的必答问题(含前瞻展望指令)
-  - `must_not_do`：数据忠实性、触发器完整性、资产路由、扫描池完整性、情报来源与飞书格式硬约束
-  - `persona`：分析师人格定义(角色、原则)
-  - `adaptability`：自适应输出规则(silent_when_nothing/loud_when_critical)
-  - `data_reference`：逐字段数据定位指南
-  - `output_structure`：分节输出模板(含飞书格式规则)
-  - `final_analysis_instructions`：一行总结
+- `mandatory_blocks`：兼容字段，供历史 Markdown/内部审计使用；交易窗口 v5 Agent 不得读取。
+- `context_digest`：情报 session 和内部审计上下文；交易窗口 v5 Agent 不得读取。
+- 交易窗口已不再支持 `agent_task.task_version == 4`；存储层和推送守门均拒绝 v4。
 - `write_policy`：固定声明后台运行不得写长期金融记忆，写入必须用户确认
 - `notification`：推荐推送策略，通知层只发消息不写金融记忆
-- `context_digest`：市场状态、组合结构、暴露、流动性、粒度、轮动 leader、情报摘要与事件日历
 
 `agent_task.must_not_do` 固定包含：不得承诺收益、不得忽略 `data_quality`、不得建议动用
 锁定资产、不得把代理 ETF 价格触发器套到场外基金、不得自动保存建议/执行/预测、

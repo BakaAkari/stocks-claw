@@ -11,7 +11,7 @@ Agent 负责读取产物并生成最终分析。系统不下单、不承诺收�
 - 读取定时产物:`uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close`
 - JSON 中的 `agent_task` 字段是运行时自包含指令——严格按其执行即可，不需要外部 prompt
 - 生成自定义上下文:`uv run python -m stocks.adapters.cli --output json`
-- 所有路径基于项目根目录 `/mnt/user/code-project/stocks-claw`
+- 生产定时任务使用 worktree `/mnt/user/code-project/stocks-claw-trust-t1`；本地开发以当前 Git 工作树根目录为准
 - 飞书输出仅用 `**加粗**`、`` `行内代码` ``、`- 列表`、`[链接](url)`，禁用 `#` `|` ` ``` ` `>` `---` HTML
 
 ## 1. 必须遵守的边界
@@ -80,7 +80,7 @@ Agent 不需要任何外部 prompt。
 研究候选不得进入今日动作；风险暂停时只能写解除后再评估。每个获批动作必须
 展示结构化比例、取消条件、结算时间和下一检查点。禁止从 rationale、facts 或其他
 自由文本提取数字作为动作金额或比例。Markdown 是确定性 Artifact renderer，不再输出
-完整 Agent Task、全扫描信号或旧 mandatory_blocks。
+完整 Agent Task、全扫描信号或兼容字段。
 
 可选内部 LLM 报告：
 
@@ -352,10 +352,10 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
    `.local/computed_profile.json`，合并进 QuantActionEngine。无需 Agent 手动操作。
 2. **报告层面**：`build_agent_task` 的 `persona` 段由 `_build_persona()` 动态生成，
    包含风格化指令（如"用户容忍较大回撤，不必催促止损"）。
-3. **资金部署**：`mandatory_blocks.capital_facts` 提供系统计算的资金状况块，
-   含约束告警、信号冲突、减仓回收预估、加仓候选排序、闲置资金轮动方向。
-   其中 `net_deployable_cny` 当前包含 cash/T0 与 T1/T2 持仓价值,不是今日现金;Agent 必须拆分说明。
-   `capital_facts` 可作为证据引用,但不得覆盖更高优先级的风险暂停、数据异常或资产约束。
+3. **资金部署**：交易窗口只读取 `portfolio_decision.cash_schedule`。其中
+   `immediate_cash_cny` 是即时现金，`settling_cash_cny` 是在途资金，
+   `strategic_exit_value_cny` 是尚未变现的策略退出资产，`locked_value_cny` 是锁定资产。
+   禁止从五字段契约之外的顶层兼容数据重新计算资金建议。
 4. **无文件时的行为**：若 `.local/computed_profile.json` 不存在，引擎使用默认参数，
    报告 persona 使用通用模板。不报错、不阻塞。
 
@@ -373,23 +373,19 @@ uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
   不直接编辑文件。
 
 
-### 5.6 资金状况事实 (capital_facts)
+### 5.6 v5 资金到账与边界
 
-每次 session 的 `mandatory_blocks` 包含 `capital_facts` 字段——一条纯事实的中文资金状况块（不含建议），
-由 `_format_capital_facts()` 从 `capital_allocation` 数据生成。LLM 必须原样嵌入报告,并基于这些事实在报告前半部独立成段给出资金部署建议。
+交易窗口报告的唯一资金来源是 `portfolio_decision.cash_schedule`：
 
-包含以下内容：
+- `immediate_cash_cny`：已到账、可立即使用的 cash/T0 资金
+- `settling_cash_cny`：已批准动作形成但尚未到账的在途资金
+- `strategic_exit_value_cny`：T+1/T+2、场外基金或其他尚未执行退出的资产价值
+- `locked_value_cny`：不可调仓资产价值
 
-- **总体状态**：总资产 + 系统口径 net_deployable；必须另读 liquidity buckets，禁止将其等同即时现金
-- **约束状态**：大类资产桶的偏离（超限/不足）
-- **信号冲突**：持仓信号方向 vs 约束方向的冲突（如"权益不足应加仓但信号为减仓"）
-- **减仓回收**：预计回收金额和笔数
-- **加仓排序**：按优先级×约束×轮动综合得分的加仓候选（若无有效加仓信号则展示轮动领涨方向）
-
-
-Agent 在撰写报告时,应先执行优先级:风险硬约束→数据异常/新鲜度→止损→组合约束→资金部署→研究候选。
-若 `suspend_accumulation=true`,资金部署段只能说明现金保持、允许减仓和解除暂停条件,不得给即时买入。
-必须引用具体数字,但同时标明即时现金、待回收资金和到账周期。Watch Window 只报告相对上一窗口的变化;无变化应 SILENT。
+Agent 必须同时读取 `risk_state` 和 `data_boundaries`：风险硬约束 → 数据异常/新鲜度 →
+获批动作 → 资金到账 → 研究候选。若 `suspend_accumulation=true`，研究候选只能说明
+解除暂停后再评估。Watch Window 只报告 `window_delta`；无实质变化且无获批动作时应 SILENT。
+五字段契约之外的顶层数据仅供内部审计，不属于 v5 Agent 契约，禁止用于交易推送。
 
 ## 6. HTTP 边界
 

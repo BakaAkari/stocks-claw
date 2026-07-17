@@ -397,11 +397,13 @@ def test_all_configured_trading_sessions_emit_v5_trusted_contract(tmp_path):
             generated_at=datetime(2026, 7, 6, 16, 0, tzinfo=timezone.utc),
             config=config,
         )
-        assert run["agent_task"]["task_version"] == 5, session.id
-        for field in (
+        trusted = {
             "window_delta", "portfolio_decision", "risk_state",
             "data_boundaries", "research_candidates",
-        ):
+        }
+        assert run["agent_task"]["task_version"] == 5, session.id
+        assert set(run["agent_task"]["data_reference"]) == trusted, session.id
+        for field in trusted:
             assert field in run, f"{session.id} missing {field}"
 
 
