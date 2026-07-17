@@ -1,6 +1,7 @@
 """Tests for constrained OpenAI-compatible outlook synthesizer and cache."""
 from __future__ import annotations
 
+import io
 import json
 import time
 
@@ -73,7 +74,6 @@ def _valid_outlook_dict() -> dict:
                 "portfolio_effect": "组合预计小幅上涨",
                 "validation": ["GDP数据符合预期"],
                 "invalidation": ["通胀超预期上行"],
-                "probability": 0.5,
             },
             "bull": {
                 "label": "乐观情景",
@@ -81,7 +81,6 @@ def _valid_outlook_dict() -> dict:
                 "portfolio_effect": "组合预计明显上涨",
                 "validation": ["社融数据大幅超预期"],
                 "invalidation": ["地缘风险突然升级"],
-                "probability": 0.3,
             },
             "risk": {
                 "label": "风险情景",
@@ -89,7 +88,6 @@ def _valid_outlook_dict() -> dict:
                 "portfolio_effect": "组合预计下跌",
                 "validation": ["VIX指数持续高于25"],
                 "invalidation": ["政策强力干预"],
-                "probability": 0.2,
             },
         },
         "sector_views": [],
@@ -405,3 +403,183 @@ def test_outlook_cache_miss_returns_none(tmp_path):
     cache = OutlookCache(tmp_path)
     result = cache.load("nonexistent")
     assert result is None
+
+
+# ── New tests for production-readiness fixes ────────────────────────────────
+
+
+def test_http_error_temperature_retry(evidence, monkeypatch, tmp_path):
+    """Real HTTPError with temperature=1 body triggers retry with temp=1."""
+    import urllib.error
+
+    attempts = []
+
+    def fake_urlopen(req, *, timeout):  # noqa: ARG001
+        nonlocal attempts
+        body = json.loads(req.data) if hasattr(req, "data") and req.data else {}
+        attempts.append(body.get("temperature"))
+        if len(attempts) == 1:
+            err_body = json.dumps(
+                {"error": {"message": "The model deepseek-v4-pro only supports temperature=1"}}
+            ).encode("utf-8")
+            err_fp = io.BytesIO(err_body)
+            raise urllib.error.HTTPError(
+                url=req.full_url or "http://test",
+                code=400,
+                msg="Bad Request",
+                hdrs={},
+                fp=err_fp,
+            )
+        # Wrap in OpenAI-format response so _call_transport + _parse_response work
+        openai_body = json.dumps({
+            "choices": [{
+                "message": {
+                    "content": json.dumps(_valid_outlook_dict(), ensure_ascii=False)
+                }
+            }]
+        })
+        return MockHTTPResponse(openai_body)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "http://test.local/v1")
+
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)))
+    result = synth.generate(evidence, now=NOW)
+    assert result["status"] == "ok"
+    assert len(attempts) == 2
+    assert attempts[0] == 0.2
+    assert attempts[1] == 1.0
+
+
+class MockHTTPResponse:
+    """Minimal file-like mock for urllib response."""
+
+    def __init__(self, text: str):
+        self._text = text
+
+    def read(self) -> bytes:
+        return self._text.encode("utf-8")
+
+    def __enter__(self) -> "MockHTTPResponse":
+        return self
+
+    def __exit__(self, *args) -> None:
+        pass
+
+
+def test_generated_at_placeholder_overwritten(evidence, monkeypatch, tmp_path):
+    """Model placeholder generated_at/status are overwritten before validation."""
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+
+    def transport(req: dict) -> dict:
+        bad = _valid_outlook_dict()
+        bad["generated_at"] = "占位-自动填充"
+        bad["status"] = "pending"
+        return _chat_response(json.dumps(bad, ensure_ascii=False))
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)), transport=transport)
+    result = synth.generate(evidence, now=NOW)
+    assert result["status"] == "ok"
+    assert result["generated_at"] == NOW
+
+
+def test_cache_load_exact_hash(tmp_path):
+    """load(session, evidence_hash) returns outlook only when hash matches."""
+    from stocks.engine.outlook_synthesizer import OutlookCache
+
+    cache = OutlookCache(tmp_path)
+    outlook_a = {"status": "ok", "summary": "hash_a_outlook"}
+    outlook_b = {"status": "ok", "summary": "hash_b_outlook"}
+
+    cache.save("sess1", "hash_aaa", outlook_a)
+    cache.save("sess1", "hash_bbb", outlook_b)
+
+    loaded_a = cache.load("sess1", "hash_aaa")
+    assert loaded_a is not None
+    assert loaded_a["summary"] == "hash_a_outlook"
+
+    loaded_b = cache.load("sess1", "hash_bbb")
+    assert loaded_b is not None
+    assert loaded_b["summary"] == "hash_b_outlook"
+
+    assert cache.load("sess1", "hash_ccc") is None
+
+    # Backward-compat: load(session) still scans
+    scanned = cache.load("sess1")
+    assert scanned is not None
+    assert scanned["summary"] in ("hash_a_outlook", "hash_b_outlook")
+
+
+def test_cache_hash_hit_skips_transport(evidence, monkeypatch, tmp_path):
+    """Exact hash cache hit avoids transport call."""
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+
+    call_count = 0
+
+    def transport(req: dict) -> dict:
+        nonlocal call_count
+        call_count += 1
+        return _chat_response(json.dumps(_valid_outlook_dict(), ensure_ascii=False))
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)), transport=transport)
+
+    result1 = synth.generate(evidence, now=NOW)
+    assert result1["status"] == "ok"
+    assert call_count == 1
+
+    result2 = synth.generate(evidence, now=NOW)
+    assert result2["status"] == "ok"
+    assert call_count == 1
+
+
+def test_cache_atomic_write_overwrite(tmp_path):
+    """Cache save overwrites existing file atomically (os.replace)."""
+    from stocks.engine.outlook_synthesizer import OutlookCache
+
+    cache = OutlookCache(tmp_path)
+    cache.save("sess1", "hash1", {"status": "ok", "version": 1})
+    cache.save("sess1", "hash1", {"status": "ok", "version": 2})
+
+    loaded = cache.load("sess1", "hash1")
+    assert loaded is not None
+    assert loaded["version"] == 2
+
+
+def test_evidence_hash_not_in_final_outlook(evidence, monkeypatch, tmp_path):
+    """_evidence_hash must NOT appear in the final user-facing outlook."""
+    from stocks.engine.outlook_synthesizer import (
+        OutlookSynthesizer,
+        evidence_hash,
+    )
+
+    def transport(req: dict) -> dict:
+        return _chat_response(json.dumps(_valid_outlook_dict(), ensure_ascii=False))
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)), transport=transport)
+    result = synth.generate(evidence, now=NOW)
+    assert "_evidence_hash" not in result
+
+    cache_file = tmp_path / f"cn_after_close__{evidence_hash(evidence)}.json"
+    assert cache_file.exists()
+    raw = json.loads(cache_file.read_text("utf-8"))
+    assert "evidence_hash" in raw
+    assert "_evidence_hash" not in raw.get("outlook", {})
+
+
+def test_prompt_does_not_request_exact_scenario_probabilities(tmp_path, monkeypatch):
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    synth = OutlookSynthesizer(
+        _valid_cfg(cache_dir=str(tmp_path)),
+        transport=lambda request: _chat_response(
+            json.dumps(_valid_outlook_dict(), ensure_ascii=False)
+        ),
+    )
+    assert '"probability"' not in synth._prompt_text
+    assert "不输出任何精确情景概率" in synth._prompt_text

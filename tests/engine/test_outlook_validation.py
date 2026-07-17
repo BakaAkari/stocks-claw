@@ -79,7 +79,6 @@ def valid_outlook() -> dict:
                 "portfolio_effect": "\u7ec4\u5408\u9884\u8ba1\u5c0f\u5e45\u4e0a\u6da8",
                 "validation": ["GDP\u6570\u636e\u7b26\u5408\u9884\u671f"],
                 "invalidation": ["\u901a\u80c0\u8d85\u9884\u671f\u4e0a\u884c"],
-                "probability": 0.5,
             },
             "bull": {
                 "label": "\u4e50\u89c2\u60c5\u666f",
@@ -87,7 +86,6 @@ def valid_outlook() -> dict:
                 "portfolio_effect": "\u7ec4\u5408\u9884\u8ba1\u660e\u663e\u4e0a\u6da8",
                 "validation": ["\u793e\u878d\u6570\u636e\u5927\u5e45\u8d85\u9884\u671f"],
                 "invalidation": ["\u5730\u7f18\u98ce\u9669\u7a81\u7136\u5347\u7ea7"],
-                "probability": 0.3,
             },
             "risk": {
                 "label": "\u98ce\u9669\u60c5\u666f",
@@ -95,7 +93,6 @@ def valid_outlook() -> dict:
                 "portfolio_effect": "\u7ec4\u5408\u9884\u8ba1\u4e0b\u8dcc",
                 "validation": ["VIX\u6307\u6570\u6301\u7eed\u9ad8\u4e8e25"],
                 "invalidation": ["\u653f\u7b56\u5f3a\u529b\u5e72\u9884"],
-                "probability": 0.2,
             },
         },
         "sector_views": [
@@ -624,3 +621,10 @@ def test_multiple_errors_accumulate(valid_outlook, evidence):
 def test_empty_outlook_is_rejected(evidence):
     errors = validate_structured_outlook({}, evidence)
     assert len(errors) > 0
+
+
+def test_explicit_scenario_probability_is_rejected(valid_outlook, evidence):
+    outlook = copy.deepcopy(valid_outlook)
+    outlook["scenarios"]["base"]["probability"] = 0.5
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("probability" in error for error in errors)

@@ -90,6 +90,7 @@ def validate_structured_outlook(outlook: dict, evidence: dict) -> list[str]:
     _check_required_fields(outlook, errors)
     _check_horizon_blocks(outlook, errors)
     _check_scenario_completeness(outlook, errors)
+    _check_forbidden_probability_fields(outlook, errors)
     _check_source_authorization(outlook, evidence, errors)
     _check_instrument_authorization(outlook, evidence, errors)
     _check_confidence_cap(outlook, evidence, errors)
@@ -208,6 +209,16 @@ def _check_scenario_completeness(outlook: dict, errors: list[str]) -> None:
         for sub in ("drivers", "portfolio_effect", "validation", "invalidation"):
             if sub not in scene:
                 errors.append(f"{name}: missing {sub}")
+
+
+def _check_forbidden_probability_fields(outlook: dict, errors: list[str]) -> None:
+    """Reject exact scenario probabilities; the product contract is scenario-based."""
+    scenarios = outlook.get("scenarios") or {}
+    if not isinstance(scenarios, dict):
+        return
+    for name, scenario in scenarios.items():
+        if isinstance(scenario, dict) and "probability" in scenario:
+            errors.append(f"forbidden probability field in scenario: {name}")
 
 
 def _build_authorized_sources(evidence: dict) -> set[tuple[str, str, str, str]]:

@@ -6,13 +6,14 @@
 3. 不泄露内部 ID（position_id、decision_id、UUID 等）
 4. 所有数字必须有证据包中的依据
 5. 置信度不得超过证据包的 confidence_cap
+6. 不输出任何精确情景概率或 probability 字段
 
 ## 输出格式
 严格输出以下 JSON 结构，不要额外文字：
 
 {
   "status": "ok",
-  "generated_at": "占位-自动填充",
+  "generated_at": "2026-07-17T14:30:00+00:00",
   "summary": "一段中文总结",
   "near_term": {
     "horizon": "1-2w",
@@ -31,10 +32,21 @@
       "portfolio_effect": "对组合的影响描述",
       "validation": ["验证条件"],
       "invalidation": ["证伪条件"],
-      "probability": 0.5
     },
-    "bull": { ... },
-    "risk": { ... }
+    "bull": {
+      "label": "乐观情景",
+      "drivers": ["政策刺激超预期", "资金面宽松"],
+      "portfolio_effect": "组合预计明显上涨",
+      "validation": ["社融数据大幅超预期"],
+      "invalidation": ["地缘风险突然升级"],
+    },
+    "risk": {
+      "label": "风险情景",
+      "drivers": ["地缘冲突升级", "通胀超预期"],
+      "portfolio_effect": "组合预计下跌",
+      "validation": ["VIX指数持续高于25"],
+      "invalidation": ["政策强力干预"],
+    }
   },
   "sector_views": [{"sector": "板块名", "direction": "...", "rationale": "...", "confidence": "..."}],
   "asset_views": [{"asset_class": "equity|commodity|fixed_income|cash", "direction": "...", "rationale": "...", "confidence": "..."}],
@@ -42,3 +54,5 @@
   "confidence": "high|medium|low",
   "forecast_candidates": []
 }
+
+注意：generated_at 字段只需填写 ISO 8601 格式的时间戳即可，系统会自动覆盖为你生成的时间值。

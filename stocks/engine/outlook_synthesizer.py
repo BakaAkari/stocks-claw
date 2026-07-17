@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -31,7 +32,9 @@ NEAR_TERM_TTL_SECONDS = 86400  # 24 hours
 class OutlookCache:
     """Atomic JSON cache for outlook results, keyed by *(session, evidence_hash)*.
 
-    Each file is written atomically via a ``.tmp`` suffix then renamed.
+    Each file is written atomically via a ``.tmp`` suffix then replaced.
+    The cache envelope stores ``_cached_at``, ``session``, ``evidence_hash``,
+    and ``outlook`` — the outlook dict itself does NOT carry ``_evidence_hash``.
     """
 
     def __init__(self, root: Path) -> None:
@@ -41,8 +44,38 @@ class OutlookCache:
     def _path(self, session: str, evidence_hash_str: str) -> Path:
         return self.root / f"{session}__{evidence_hash_str}.json"
 
-    def load(self, session: str) -> dict | None:
-        """Return the freshest cached outlook for *session*, or *None*."""
+    def load(self, session: str, evidence_hash: str | None = None) -> dict | None:
+        """Load a cached outlook.
+
+        Parameters
+        ----------
+        session : str
+            Session identifier.
+        evidence_hash : str | None
+            When provided, performs an exact file lookup by hash — fast path.
+            When *None* (default), scans all files for *session* and returns
+            the first non-expired cache entry (backward-compatible scan).
+
+        Returns
+        -------
+        dict | None
+            The cached outlook dict (without ``_evidence_hash``), or *None*.
+        """
+        # ── Exact hash lookup ──────────────────────────────────────────
+        if evidence_hash is not None:
+            path = self._path(session, evidence_hash)
+            if not path.exists():
+                return None
+            try:
+                data = json.loads(path.read_text("utf-8"))
+            except (json.JSONDecodeError, OSError):
+                return None
+            cached_at = data.get("_cached_at", 0)
+            if time.time() - cached_at > NEAR_TERM_TTL_SECONDS:
+                return None
+            return data.get("outlook")
+
+        # ── Scan (backward-compatible) ─────────────────────────────────
         if not self.root.exists():
             return None
         prefix = f"{session}__"
@@ -60,7 +93,11 @@ class OutlookCache:
         return None
 
     def save(self, session: str, evidence_hash_str: str, outlook: dict) -> None:
-        """Atomically write *outlook* to the cache."""
+        """Atomically write *outlook* to the cache.
+
+        Writes to a ``.tmp`` file first, then ``os.replace`` to the final
+        path, and cleans up any leftover ``.tmp`` in a ``finally`` block.
+        """
         data: dict[str, Any] = {
             "_cached_at": time.time(),
             "session": session,
@@ -70,7 +107,11 @@ class OutlookCache:
         path = self._path(session, evidence_hash_str)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), "utf-8")
-        tmp.rename(path)
+        try:
+            os.replace(str(tmp), str(path))
+        finally:
+            if tmp.exists():
+                tmp.unlink()
 
 
 class OutlookSynthesizer:
@@ -137,16 +178,13 @@ class OutlookSynthesizer:
                 generated_at=now,
             )
 
-        # ── Check cache ──────────────────────────────────────────────────
+        # ── Check cache (exact hash lookup) ──────────────────────────────
         e_hash = evidence_hash(evidence)
         session = evidence.get("session", "unknown")
-        cached = self.cache.load(session)
+        cached = self.cache.load(session, e_hash)
         if cached is not None:
-            # Verify hash matches current evidence
-            cached_hash = cached.get("_evidence_hash")
-            if cached_hash == e_hash:
-                logger.info("Outlook cache hit for session=%s", session)
-                return cached
+            logger.info("Outlook cache hit for session=%s", session)
+            return cached
 
         # ── Build request ────────────────────────────────────────────────
         request = self._build_request(evidence)
@@ -162,8 +200,14 @@ class OutlookSynthesizer:
             response = self._call_transport(request)
             outlook = self._parse_response(response, now)
 
-        # ── Validate ─────────────────────────────────────────────────────
+        # ── Validate (with system fields forced before check) ────────────
         if outlook is not None:
+            # Force system-controlled fields; model output for these is
+            # ignored to prevent placeholder values from failing validation.
+            outlook = dict(outlook)
+            outlook["status"] = "ok"
+            outlook["generated_at"] = now
+
             errors = validate_structured_outlook(outlook, evidence)
             if errors:
                 logger.warning("Outlook validation failed: %s", errors)
@@ -171,7 +215,6 @@ class OutlookSynthesizer:
             else:
                 outlook["status"] = "ok"
                 outlook["generated_at"] = now
-                outlook["_evidence_hash"] = e_hash
                 self.cache.save(session, e_hash, outlook)
         else:
             outlook = sanitize_unavailable_outlook(
@@ -227,7 +270,12 @@ class OutlookSynthesizer:
         }
 
     def _call_transport(self, request: dict) -> dict | None:
-        """Call the transport (injected callable or real HTTP)."""
+        """Call the transport (injected callable or real HTTP).
+
+        Real HTTP path specifically handles ``urllib.error.HTTPError`` by
+        reading and parsing the response body, so ``_should_retry_temperature``
+        can detect temperature errors from production API responses.
+        """
         if self._transport is not None:
             try:
                 return self._transport(request)
@@ -249,6 +297,23 @@ class OutlookSynthesizer:
             )
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as http_err:
+            # Read response body so retry logic can inspect the error
+            try:
+                body = http_err.read().decode("utf-8")
+                error_data = json.loads(body)
+                logger.warning(
+                    "LLM API returned HTTP %s: %s",
+                    http_err.code,
+                    error_data.get("error", {}).get("message", body),
+                )
+                return error_data
+            except (json.JSONDecodeError, OSError):
+                logger.warning(
+                    "LLM API returned HTTP %s with unparseable body",
+                    http_err.code,
+                )
+                return None
         except Exception as exc:
             logger.warning("LLM API call failed: %s", exc)
             return None
