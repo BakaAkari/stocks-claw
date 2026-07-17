@@ -526,6 +526,88 @@ def test_sanitize_unavailable_outlook_message():
 
 
 # ===========================================================================
+# ===========================================================================
+# Fix 1 — non-dict source_ref values must report 'invalid source_ref'
+# ===========================================================================
+
+
+@pytest.mark.parametrize("bad_ref", [None, "malformed_string", [1, 2, 3]])
+def test_non_dict_source_ref_is_rejected(valid_outlook, evidence, bad_ref):
+    outlook = copy.deepcopy(valid_outlook)
+    outlook["source_refs"].append(bad_ref)
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("invalid source_ref" in e for e in errors)
+
+
+# ===========================================================================
+# Fix 2 — scenarios[*].label and source_refs[*].id included in scanning
+# ===========================================================================
+
+
+def test_label_with_position_id_is_rejected(valid_outlook, evidence):
+    """scenarios[*].label containing position_id must trigger internal token."""
+    outlook = copy.deepcopy(valid_outlook)
+    outlook["scenarios"]["base"]["label"] = "基准情景 position_id=a_1"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("internal token" in e for e in errors)
+
+
+def test_label_with_trade_instruction_is_rejected(valid_outlook, evidence):
+    """scenarios[*].label containing trade phrasing must trigger instruction."""
+    outlook = copy.deepcopy(valid_outlook)
+    outlook["scenarios"]["base"]["label"] = "建议加仓25%情景"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("trade instruction" in e for e in errors)
+
+
+def test_source_ref_id_with_decision_id_is_rejected(valid_outlook, evidence):
+    """source_refs[*].id containing decision_id must trigger internal token."""
+    outlook = copy.deepcopy(valid_outlook)
+    outlook["source_refs"][0]["id"] = "decision_id=abc"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("internal token" in e for e in errors)
+
+
+# ===========================================================================
+# Fix 3 — status type/value strictness, generated_at ISO-8601
+# ===========================================================================
+
+
+def test_status_string_not_ok_is_rejected(valid_outlook, evidence):
+    outlook = dict(valid_outlook)
+    outlook["status"] = "partial"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("invalid status" in e.lower() for e in errors)
+
+
+def test_status_non_string_is_rejected(valid_outlook, evidence):
+    outlook = dict(valid_outlook)
+    outlook["status"] = 12345
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("invalid status" in e.lower() for e in errors)
+
+
+def test_status_none_is_rejected(valid_outlook, evidence):
+    outlook = dict(valid_outlook)
+    outlook["status"] = None
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("invalid status" in e.lower() for e in errors)
+
+
+def test_generated_at_invalid_format_is_rejected(valid_outlook, evidence):
+    outlook = dict(valid_outlook)
+    outlook["generated_at"] = "not-a-date"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("generated_at" in e and "iso" in e.lower() for e in errors)
+
+
+def test_generated_at_none_is_rejected(valid_outlook, evidence):
+    outlook = dict(valid_outlook)
+    outlook["generated_at"] = None
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("generated_at" in e for e in errors)
+
+
 # Combined / regression
 # ===========================================================================
 

@@ -10,6 +10,7 @@ degradation when validation fails.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 # ── Confidence ordering (high > medium > low) ──────────────────────────────
@@ -140,11 +141,35 @@ def sanitize_unavailable_outlook(
 
 
 def _check_required_fields(outlook: dict, errors: list[str]) -> None:
-    """Assert all mandatory top-level fields are present."""
+    """Assert all mandatory top-level fields are present and valid."""
     for field in ("status", "generated_at", "scenarios", "near_term",
                   "medium_term", "source_refs", "confidence"):
         if field not in outlook:
             errors.append(f"missing top-level field: {field}")
+
+    # ── Status type/value enforcement ──────────────────────────────────
+    if "status" in outlook:
+        status = outlook["status"]
+        if status is None:
+            errors.append("invalid status: None (only 'ok' allowed for structured outlook)")
+        elif not isinstance(status, str):
+            errors.append(f"invalid status: expected string, got {type(status).__name__}")
+        elif status != "ok":
+            errors.append(f"invalid status: '{status}' (only 'ok' allowed for structured outlook)")
+
+    # ── generated_at ISO-8601 enforcement ────────────────────────────────
+    if "generated_at" in outlook:
+        gen = outlook["generated_at"]
+        if gen is None:
+            errors.append("invalid generated_at: None (expected ISO-8601 string)")
+        elif not isinstance(gen, str):
+            errors.append(f"invalid generated_at: expected ISO-8601 string, got {type(gen).__name__}")
+        else:
+            # Attempt to parse ISO-8601
+            try:
+                datetime.fromisoformat(gen)
+            except (ValueError, TypeError):
+                errors.append(f"invalid generated_at: '{gen}' is not a valid ISO-8601 string")
 
 
 def _check_horizon_blocks(outlook: dict, errors: list[str]) -> None:
@@ -204,8 +229,9 @@ def _check_source_authorization(
 ) -> None:
     """Reject source_refs that don't match evidence intelligence sources."""
     authorized = _build_authorized_sources(evidence)
-    for src_ref in outlook.get("source_refs", []):
+    for i, src_ref in enumerate(outlook.get("source_refs", [])):
         if not isinstance(src_ref, dict):
+            errors.append(f"invalid source_ref at index {i}: expected dict, got {type(src_ref).__name__}")
             continue
         s = str(src_ref.get("source", "") or "")
         t = str(src_ref.get("title", "") or "")
@@ -287,6 +313,13 @@ def _check_numeric_authority(
     evidence_numbers = _collect_evidence_numbers(evidence)
     narrative = _narrative_text(outlook)
 
+    # Exclude source_refs.id values from numeric scanning to avoid src-1 false positives
+    for ref in outlook.get("source_refs", []):
+        if isinstance(ref, dict):
+            rid = ref.get("id", "")
+            if isinstance(rid, str) and rid:
+                narrative = narrative.replace(rid, "")
+
     for m in _NUMBER_RE.finditer(narrative):
         num_str = m.group()
         pos = m.start()
@@ -330,7 +363,7 @@ def _narrative_text(outlook: dict) -> str:
         for scene in scenarios.values():
             if isinstance(scene, dict):
                 for sub_key in ("portfolio_effect", "drivers", "validation",
-                                "invalidation"):
+                                "invalidation", "label"):
                     val = scene.get(sub_key)
                     if isinstance(val, list):
                         parts.extend(str(item) for item in val)
@@ -353,10 +386,10 @@ def _narrative_text(outlook: dict) -> str:
                 if isinstance(val, str):
                     parts.append(val)
 
-    # Source refs (titles)
+    # Source refs (titles + id)
     for ref in outlook.get("source_refs", []):
         if isinstance(ref, dict):
-            for key in ("title",):
+            for key in ("title", "id"):
                 val = ref.get(key)
                 if isinstance(val, str):
                     parts.append(val)
