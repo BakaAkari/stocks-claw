@@ -19,7 +19,12 @@ def _artifact(*, session="cn_open_watch", market_date="2026-07-17", task_version
         "scheduled_for": "2026-07-17T10:00:00+08:00",
         "agent_task": {"task_version": task_version},
         "window_delta": {},
-        "portfolio_decision": {},
+        "portfolio_decision": {
+            "user_view": {
+                "instruction_card": {"status": "no_action", "status_label": "今日无需操作", "actions": [], "no_action_reasons": ["当前没有获批动作"]},
+                "assistant_brief": {"why": [], "do_not_do": [], "cash": {}, "risk": {}, "research": []},
+            },
+        },
         "risk_state": {},
         "data_boundaries": {},
         "research_candidates": [],
@@ -108,3 +113,20 @@ def test_guard_accepts_naive_utc_timestamps_by_normalizing_them(tmp_path):
     artifact["scheduled_for"] = "2026-07-17T02:00:00"
     result = _run(tmp_path, artifact, now="2026-07-17T02:10:00+00:00")
     assert result.returncode == 0, result.stderr
+
+
+
+def test_guard_rejects_missing_human_user_view(tmp_path):
+    artifact = _artifact()
+    artifact["portfolio_decision"].pop("user_view")
+    result = _run(tmp_path, artifact)
+    assert result.returncode != 0
+    assert "user_view" in result.stderr
+
+
+def test_guard_rejects_incomplete_human_user_view(tmp_path):
+    artifact = _artifact()
+    artifact["portfolio_decision"]["user_view"] = {"instruction_card": {}}
+    result = _run(tmp_path, artifact)
+    assert result.returncode != 0
+    assert "assistant_brief" in result.stderr

@@ -46,6 +46,13 @@ def main() -> int:
     missing = TRUSTED_FIELDS - set(artifact)
     if missing:
         return fail(f"trusted fields missing: {sorted(missing)}")
+    user_view = (artifact.get("portfolio_decision") or {}).get("user_view")
+    if not isinstance(user_view, dict):
+        return fail("portfolio_decision.user_view missing")
+    if not isinstance(user_view.get("instruction_card"), dict):
+        return fail("portfolio_decision.user_view.instruction_card missing")
+    if not isinstance(user_view.get("assistant_brief"), dict):
+        return fail("portfolio_decision.user_view.assistant_brief missing")
 
     try:
         now = parse_dt(args.now)
