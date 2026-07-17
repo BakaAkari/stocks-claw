@@ -88,6 +88,17 @@ llm:
   # API Key 从环境变量读取，也可通过 .secret/openai-key.md
   api_key_env: OPENAI_API_KEY
   base_url_env: OPENAI_BASE_URL
+  # 中长期研判综合器
+  outlook:
+    enabled: true
+    model: deepseek-v4-pro
+    api_key_env: OPENAI_COMPATIBLE_API_KEY
+    base_url_env: OPENAI_COMPATIBLE_BASE_URL
+    fallback_base_url: http://100.121.167.1:8317/v1
+    timeout_seconds: 120
+    temperature: 0.2
+    max_tokens: 3000
+    cache_dir: .local/outlook_cache
 
 risk_state:
   critical_ttl_minutes: 360

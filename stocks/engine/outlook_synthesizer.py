@@ -1,0 +1,308 @@
+"""Constrained OpenAI-compatible outlook synthesizer with cache.
+
+Produces validated structured outlooks via an OpenAI-compatible endpoint,
+with retry-on-temperature-error, fenced-JSON extraction, atomic file cache,
+and graceful degradation to sanitized-unavailable on any failure.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable
+
+from stocks.engine.outlook_evidence import evidence_hash
+from stocks.engine.outlook_validation import (
+    sanitize_unavailable_outlook,
+    validate_structured_outlook,
+)
+
+logger = logging.getLogger(__name__)
+
+_PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "structured_outlook_prompt.txt"
+
+# ── Cache TTL ───────────────────────────────────────────────────────────────
+NEAR_TERM_TTL_SECONDS = 86400  # 24 hours
+
+
+class OutlookCache:
+    """Atomic JSON cache for outlook results, keyed by *(session, evidence_hash)*.
+
+    Each file is written atomically via a ``.tmp`` suffix then renamed.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, session: str, evidence_hash_str: str) -> Path:
+        return self.root / f"{session}__{evidence_hash_str}.json"
+
+    def load(self, session: str) -> dict | None:
+        """Return the freshest cached outlook for *session*, or *None*."""
+        if not self.root.exists():
+            return None
+        prefix = f"{session}__"
+        for fpath in self.root.iterdir():
+            if not fpath.name.startswith(prefix) or fpath.suffix != ".json":
+                continue
+            try:
+                data = json.loads(fpath.read_text("utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            cached_at = data.get("_cached_at", 0)
+            if time.time() - cached_at > NEAR_TERM_TTL_SECONDS:
+                continue
+            return data.get("outlook")
+        return None
+
+    def save(self, session: str, evidence_hash_str: str, outlook: dict) -> None:
+        """Atomically write *outlook* to the cache."""
+        data: dict[str, Any] = {
+            "_cached_at": time.time(),
+            "session": session,
+            "evidence_hash": evidence_hash_str,
+            "outlook": outlook,
+        }
+        path = self._path(session, evidence_hash_str)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), "utf-8")
+        tmp.rename(path)
+
+
+class OutlookSynthesizer:
+    """Constrained OpenAI-compatible outlook synthesizer.
+
+    Parameters
+    ----------
+    config : dict
+        Engine configuration (``config["llm"]["outlook"]`` is consumed).
+    transport : Callable | None
+        Optional injected transport for testing.  Signature::
+
+            transport(request: dict) -> dict
+
+        Returns an OpenAI Chat Completions response dict.
+    """
+
+    def __init__(
+        self,
+        config: dict,
+        *,
+        transport: Callable[[dict], dict] | None = None,
+    ) -> None:
+        outlook_cfg = config.get("llm", {}).get("outlook", {})
+        self.enabled: bool = outlook_cfg.get("enabled", True)
+        self.model: str = outlook_cfg.get("model", "deepseek-v4-pro")
+        self.api_key_env: str = outlook_cfg.get("api_key_env", "OPENAI_COMPATIBLE_API_KEY")
+        self.base_url_env: str = outlook_cfg.get("base_url_env", "OPENAI_COMPATIBLE_BASE_URL")
+        self.fallback_base_url: str = outlook_cfg.get(
+            "fallback_base_url", "http://100.121.167.1:8317/v1"
+        )
+        self.timeout: int = outlook_cfg.get("timeout_seconds", 120)
+        self.temperature: float = outlook_cfg.get("temperature", 0.2)
+        self.max_tokens: int = outlook_cfg.get("max_tokens", 3000)
+        cache_dir_setting: str = outlook_cfg.get("cache_dir", ".local/outlook_cache")
+        cache_path = Path(cache_dir_setting)
+        if not cache_path.is_absolute():
+            cache_path = Path(__file__).resolve().parents[2] / cache_dir_setting
+        self.cache = OutlookCache(cache_path)
+        self._transport = transport
+
+        # Load prompt text
+        self._prompt_text = (
+            _PROMPT_PATH.read_text("utf-8") if _PROMPT_PATH.exists() else ""
+        )
+
+        # Resolve API key and base URL
+        self._api_key: str | None = None
+        self._base_url: str | None = None
+        self._resolve_credentials(config)
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def generate(self, evidence: dict, *, now: str) -> dict:
+        """Generate a structured outlook for the given *evidence*.
+
+        Returns a validated outlook (``status == "ok"``) or a sanitized
+        unavailable dict on any failure.
+        """
+        # ── Disabled / missing key → unavailable ──────────────────────────
+        if not self.enabled or not self._api_key:
+            return sanitize_unavailable_outlook(
+                ["outlook synthesizer disabled or not configured"],
+                generated_at=now,
+            )
+
+        # ── Check cache ──────────────────────────────────────────────────
+        e_hash = evidence_hash(evidence)
+        session = evidence.get("session", "unknown")
+        cached = self.cache.load(session)
+        if cached is not None:
+            # Verify hash matches current evidence
+            cached_hash = cached.get("_evidence_hash")
+            if cached_hash == e_hash:
+                logger.info("Outlook cache hit for session=%s", session)
+                return cached
+
+        # ── Build request ────────────────────────────────────────────────
+        request = self._build_request(evidence)
+
+        # ── Call transport ───────────────────────────────────────────────
+        response = self._call_transport(request)
+
+        # ── Parse ────────────────────────────────────────────────────────
+        outlook = self._parse_response(response, now)
+        if outlook is None and self._should_retry_temperature(response):
+            logger.info("Retrying with temperature=1")
+            request["temperature"] = 1.0
+            response = self._call_transport(request)
+            outlook = self._parse_response(response, now)
+
+        # ── Validate ─────────────────────────────────────────────────────
+        if outlook is not None:
+            errors = validate_structured_outlook(outlook, evidence)
+            if errors:
+                logger.warning("Outlook validation failed: %s", errors)
+                outlook = sanitize_unavailable_outlook(errors, generated_at=now)
+            else:
+                outlook["status"] = "ok"
+                outlook["generated_at"] = now
+                outlook["_evidence_hash"] = e_hash
+                self.cache.save(session, e_hash, outlook)
+        else:
+            outlook = sanitize_unavailable_outlook(
+                ["LLM returned no valid JSON"],
+                generated_at=now,
+            )
+
+        return outlook
+
+    # ── Internal helpers ────────────────────────────────────────────────────
+
+    def _resolve_credentials(self, config: dict) -> None:
+        """Resolve API key and base URL from env vars or secret env file."""
+        key = os.environ.get(self.api_key_env, "").strip()
+        url = os.environ.get(self.base_url_env, "").strip()
+
+        if not key or not url:
+            secret_env_file = config.get("paths", {}).get("secret_env_file")
+            if secret_env_file:
+                env_path = Path(secret_env_file)
+                if env_path.exists():
+                    for line in env_path.read_text("utf-8").splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("\"'")
+                        if k == self.api_key_env and not key:
+                            key = v
+                        if k == self.base_url_env and not url:
+                            url = v
+
+        self._api_key = key or None
+        base = (url or self.fallback_base_url).rstrip("/")
+        self._base_url = f"{base}/chat/completions"
+
+    def _build_request(self, evidence: dict) -> dict:
+        """Build the OpenAI-compatible request dict."""
+        messages = [
+            {"role": "system", "content": self._prompt_text},
+            {
+                "role": "user",
+                "content": json.dumps(evidence, ensure_ascii=False, default=str),
+            },
+        ]
+        return {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "response_format": {"type": "json_object"},
+        }
+
+    def _call_transport(self, request: dict) -> dict | None:
+        """Call the transport (injected callable or real HTTP)."""
+        if self._transport is not None:
+            try:
+                return self._transport(request)
+            except Exception as exc:
+                logger.warning("Transport call failed: %s", exc)
+                return None
+
+        # Real HTTP call via urllib
+        try:
+            data = json.dumps(request, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                self._base_url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._api_key}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            logger.warning("LLM API call failed: %s", exc)
+            return None
+
+    @staticmethod
+    def _parse_response(
+        response: dict | None, now: str  # noqa: ARG004
+    ) -> dict | None:
+        """Parse JSON from an OpenAI-compatible chat completion response."""
+        if response is None:
+            return None
+        try:
+            choices = response.get("choices", [])
+            if not choices:
+                return None
+            message = choices[0].get("message", {})
+            content = (message.get("content") or "").strip()
+            # Fenced JSON extraction
+            if content.startswith("```"):
+                content = OutlookSynthesizer._extract_fenced_json(content)
+            # Empty content → try reasoning_content
+            if not content:
+                content = (message.get("reasoning_content") or "").strip()
+            if not content:
+                return None
+            return json.loads(content)
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            logger.warning("Failed to parse LLM response: %s", exc)
+            return None
+
+    @staticmethod
+    def _extract_fenced_json(text: str) -> str:
+        """Extract JSON from within a `````json`` fenced code block."""
+        lines = text.splitlines()
+        start = -1
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                if start == -1:
+                    start = i
+                else:
+                    return "\n".join(lines[start + 1 : i])
+        return "\n".join(lines[start + 1 :]) if start >= 0 else text
+
+    @staticmethod
+    def _should_retry_temperature(response: dict | None) -> bool:
+        """Check whether the API response explicitly requires temperature=1."""
+        if response is None:
+            return False
+        error = response.get("error", {})
+        if isinstance(error, dict):
+            msg = (error.get("message") or "").lower()
+            if "temperature" in msg and (
+                "=1" in msg or "must be 1" in msg or "only support" in msg or "must equal 1" in msg
+            ):
+                return True
+        return False

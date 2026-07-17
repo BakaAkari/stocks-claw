@@ -64,6 +64,17 @@ DEFAULT_ENGINE_CONFIG = {
         "api_key_env": "OPENAI_API_KEY",
         "base_url_env": "OPENAI_BASE_URL",
         "fallback_base_url": "http://100.121.167.1:8317/v1",
+        "outlook": {
+            "enabled": True,
+            "model": "deepseek-v4-pro",
+            "api_key_env": "OPENAI_COMPATIBLE_API_KEY",
+            "base_url_env": "OPENAI_COMPATIBLE_BASE_URL",
+            "fallback_base_url": "http://100.121.167.1:8317/v1",
+            "timeout_seconds": 120,
+            "temperature": 0.2,
+            "max_tokens": 3000,
+            "cache_dir": ".local/outlook_cache",
+        },
     },
     "risk_state": {
         "critical_ttl_minutes": 360,
