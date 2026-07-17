@@ -72,15 +72,20 @@ must_answer(必答问题)、must_not_do(硬性约束,含飞书格式)、persona(
 adaptability(自适应输出)、data_reference(数据字段定位)和 output_structure(分节模板)。
 Agent 不需要任何外部 prompt。
 
-### 定时报告可信契约（v5）
+### 定时报告可信契约（v5 双层人类展示）
 
 交易窗口 Agent 只以五个结构字段形成报告：`window_delta`、`portfolio_decision`、
-`risk_state`、`data_boundaries`、`research_candidates`。输出固定五段：变化摘要、
-今日动作（最多 3 个获批动作）、禁止待确认、资金到账与边界、研究候选。
-研究候选不得进入今日动作；风险暂停时只能写解除后再评估。每个获批动作必须
-展示结构化比例、取消条件、结算时间和下一检查点。禁止从 rationale、facts 或其他
-自由文本提取数字作为动作金额或比例。Markdown 是确定性 Artifact renderer，不再输出
-完整 Agent Task、全扫描信号或兼容字段。
+`risk_state`、`data_boundaries`、`research_candidates`。其中用户可见正文只能来源于
+`portfolio_decision.user_view`。报告必须分为两段：上方是“**交易指令卡**”（读取
+`instruction_card`），紧接着下方是“**私人投资助理**”（读取 `assistant_brief`）。
+指令卡必须在最上方；没有获批动作时，主窗口必须显示“今日无需操作”并列出 1–2 个关键原因；
+观察窗口没有实质变化、无获批动作且无新增冲突时可以输出 `[SILENT]`。
+动作必须展示结构化比例、预计金额（`amount_is_estimate=true` 时标注“估算”）、
+取消条件、结算时间和下一检查点。禁止从 rationale、facts 或其他自由文本提取数字作为动作
+金额或比例。所有标的必须使用真实名称 + 公开代码（如“化工ETF（516020）”）；禁止展示
+position_id、decision_id、内部哈希、原始异常码和英文 signal/risk/liquidity 枚举。
+研究候选不得进入指令卡动作；风险暂停时只能写解除后再评估。Markdown 是确定性
+Artifact renderer，不再输出完整 Agent Task、全扫描信号或兼容字段。
 
 可选内部 LLM 报告：
 
