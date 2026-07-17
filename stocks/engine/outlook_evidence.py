@@ -136,11 +136,12 @@ def compute_confidence_cap(evidence: dict) -> tuple[str, list[str]]:
 
     Rules (checked in order, first match wins):
       1. Top-5 position has a data anomaly           → low
-      2. Directional coverage is 0                    → low
-      3. Main market quotes stale (> 1 day)           → low
-      4. Macro data stale (past publication cycle)    → low
-      5. Single-source intelligence events only       → at most medium
-      6. Otherwise fresh/current data                 → high / medium
+      2. No directional signals                   → low
+      3. Directional coverage ratio < 20 %             → low
+      4. Main market quotes stale (> 1 day)           → low
+      5. Macro data stale (past publication cycle)    → low
+      6. Single-source intelligence events only       → at most medium
+      7. Otherwise fresh/current data                 → high / medium
     """
     reasons: list[str] = []
 
@@ -150,15 +151,20 @@ def compute_confidence_cap(evidence: dict) -> tuple[str, list[str]]:
         reasons.append("前5权重持仓存在数据质量异常，全局置信度降低")
         return ("low", reasons)
 
-    # Rule 2: directional intelligence coverage < 20 % or signal_count == 0
+    # Rule 2: signal_count == 0 → low (no directional signal at all)
     directional = evidence.get("directional_intelligence", {}) or {}
-    coverage_ratio = directional.get("directional_coverage_ratio", 0)
     signal_count = len(directional.get("signals", []))
-    if coverage_ratio < 0.2 or signal_count == 0:
-        reasons.append("方向性情报覆盖率为0，缺乏方向判断依据")
+    if signal_count == 0:
+        reasons.append("无方向性信号，缺乏方向判断依据")
         return ("low", reasons)
 
-    # Rule 3: stale market quotes
+    # Rule 3: directional coverage ratio < 20 % → low
+    coverage_ratio = directional.get("directional_coverage_ratio", 0)
+    if coverage_ratio < 0.2:
+        reasons.append(f"方向性情报覆盖率不足（{coverage_ratio:.0%}），缺乏方向判断依据")
+        return ("low", reasons)
+
+    # Rule 4: stale market quotes
     data_bounds = evidence.get("data_boundaries", {})
     dq = data_bounds.get("data_quality", {})
     quotes = dq.get("quotes", {})

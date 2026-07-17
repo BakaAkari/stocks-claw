@@ -638,6 +638,54 @@ def test_directional_low_coverage_ratio_yields_low(sample_context, sample_run):
 
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Issue 4b: directional=3, field=20 → ratio=0.15 → low, reason must mention 15%
+# ---------------------------------------------------------------------------
+
+
+def test_directional_coverage_ratio_15_percent_yields_low(sample_context, sample_run):
+    """directional=3, field=20 → ratio=0.15 → low, reason must contain 15% or 覆盖率不足."""
+    ctx = dict(sample_context)
+    ctx["intelligence_digest"] = dict(ctx["intelligence_digest"])
+    ctx["intelligence_digest"]["intelligence_coverage"] = {
+        "field": 20, "directional": 3, "padding": 0,
+    }
+    ctx["intelligence_digest"]["top_signals"] = [
+        {"symbol": "a:159915", "direction": "hold", "urgency": "medium"},
+    ]
+    evidence = build_outlook_evidence(
+        ctx, sample_run,
+        session_id="cn_after_close", generated_at=NOW,
+    )
+    assert evidence["confidence_cap"] == "low"
+    reasons_text = " ".join(evidence["confidence_reasons"])
+    assert "15%" in reasons_text or "覆盖率不足" in reasons_text
+    assert "覆盖率为0" not in reasons_text  # must not claim zero coverage when ratio=0.15
+
+
+# ---------------------------------------------------------------------------
+# Issue 4c: signal_count=0 → reason must say 无方向性信号
+# ---------------------------------------------------------------------------
+
+
+def test_signal_count_zero_yields_low_with_no_signal_reason(sample_context, sample_run):
+    """signal_count=0 → cap low, reason must say 无方向性信号."""
+    ctx = dict(sample_context)
+    ctx["intelligence_digest"] = dict(ctx["intelligence_digest"])
+    ctx["intelligence_digest"]["intelligence_coverage"] = {
+        "field": 80, "directional": 60, "padding": 0,
+    }
+    ctx["intelligence_digest"]["top_signals"] = []  # empty signals
+    evidence = build_outlook_evidence(
+        ctx, sample_run,
+        session_id="cn_after_close", generated_at=NOW,
+    )
+    assert evidence["confidence_cap"] == "low"
+    reasons_text = " ".join(evidence["confidence_reasons"])
+    assert "无方向性信号" in reasons_text
+
+
 # Issue 6: evidence_hash direct tests
 # ---------------------------------------------------------------------------
 
