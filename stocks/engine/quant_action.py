@@ -815,6 +815,16 @@ def finalize_decision(
     if not rebalance_ok:
         facts.append("可调仓但需谨慎（场外基金/贵金属），仓位上限 2%")
 
+    # ── 9.5 长期场外 QDII：技术信号仅作研究，不产生可执行动作 ──
+    # 用户将 OTC QDII/联接基金定义为长期配置仓；T+1/T+2 净值与限购
+    # 也不适合盘中短线阶梯止盈。保留 raw_* 以便审计，但下游只能看到 hold。
+    if product_type in ("qdii_fund", "feeder_fund") and signal == "take_profit":
+        facts.append("长期配置仓：短线阶梯止盈信号仅供研究，不生成场内式执行动作")
+        signal = "hold"
+        ratio = 0.0
+        action = "长期配置仓，不套用短线阶梯止盈；如需赎回由人工资产配置决策确认"
+        evidence_status = "research_only"
+
     # ── 10. 构建多源驱动向量 ──
     drivers = _build_drivers(
         tech=tech, signal=signal, action=action,

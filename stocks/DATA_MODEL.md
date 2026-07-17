@@ -150,8 +150,8 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
   `intelligence_conflict`、`constraint_conflict`。
 - `portfolio_risk`：集中度、止损风险与多因子压力情景。
 - `capital_allocation`：约束告警、信号冲突、减仓回收、加仓候选、轮动参考与
-  `net_deployable_cny`。注意:当前 deployable 口径包含 cash/T0 和 T1/T2 持仓价值,
-  不是今日即时现金;消费端必须结合 `context_digest.liquidity_summary.buckets` 拆分。
+  `net_deployable_cny`。`available_cash_cny` 仅包含 cash/T0；T1/T2 持仓单列为
+  `strategic_exit_value_cny`，不得称为今日即时现金。
 - `risk_assessment`：`level ∈ {hedge, reduce, watch, normal}`、`triggers`、`recommended_actions`、`suspend_accumulation`、`cash_target_pct`。
 - `risk_state`：持久化风险状态（含 `level`、`transition`、`suspend_accumulation` 等），写入 `.local/risk_state/{market}_{market_date}.json`。
 - `window_delta`：相对上一窗口的语义变化摘要（`material`、`changes`、`priority`、`notification`、`first_in_session`）。
@@ -180,8 +180,10 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 
 ### 当前已知一致性边界
 
-- `data_quality.quotes.freshness` 当前是全局值,下游 Action Card 仍未按持仓市场拆分。
-- `capital_allocation.net_deployable_cny` 当前包含 cash/T0 与 T1/T2 资产,消费端不得当作即时现金。
+- `data_quality.quotes.freshness` 仍保留全局最差值用于总览；Action Card 使用逐持仓
+  `evidence.price_freshness`，run status 使用 primary market 的 `by_market` 状态，异市场 stale 不再污染动作。
+- `capital_allocation.available_cash_cny` 与 `net_deployable_cny` 只从 cash/T0 和已批准回收计算；
+  T1/T2/场外基金/股票价值单列为 `strategic_exit_value_cny`。
 - `window_delta` 仅比较语义键，忽略 `decision_id` 中的 run ID 和 `generated_at` 等运行时变化。
 - `portfolio_decision.cash_schedule` 区分 `immediate_cash_cny`、`settling_cash_cny`、`strategic_exit_value_cny`、`locked_value_cny`，不得把持仓总值直接称为"今天可动用"。
 - category fallback `hold` 可提高 intelligence driver 字段覆盖率,但不等于独立方向情报。

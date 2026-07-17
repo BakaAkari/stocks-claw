@@ -7,6 +7,8 @@ cron/launchd and to hand a structured JSON artifact to the user-facing Agent.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -207,22 +209,55 @@ class MarketSessionCalendar:
 class RunArtifactStore:
     """Persist scheduled run artifacts under .local/scheduled_runs."""
 
+    _TRUSTED_FIELDS = frozenset({
+        "window_delta", "portfolio_decision", "risk_state",
+        "data_boundaries", "research_candidates",
+    })
+
     def __init__(self, artifact_dir: str | Path):
         self.artifact_dir = Path(artifact_dir)
         self.latest_dir = self.artifact_dir / "latest"
 
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                file.write(content)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temp_name, path)
+        finally:
+            if os.path.exists(temp_name):
+                os.unlink(temp_name)
+
+    def _validate_trusted_contract(self, run: dict) -> None:
+        if run.get("market") not in {"cn", "us"}:
+            return
+        task_version = (run.get("agent_task") or {}).get("task_version")
+        missing = self._TRUSTED_FIELDS - set(run)
+        if task_version != 5 or missing:
+            raise ValueError(
+                "trading artifacts must use trusted v5 contract; "
+                f"task_version={task_version}, missing={sorted(missing)}"
+            )
+
     def save(self, run: dict) -> dict:
+        self._validate_trusted_contract(run)
         json_path = self._artifact_path(run, suffix=".json")
         md_path = self._artifact_path(run, suffix=".md")
         json_path.parent.mkdir(parents=True, exist_ok=True)
         self.latest_dir.mkdir(parents=True, exist_ok=True)
 
         payload = json.dumps(run, ensure_ascii=False, indent=2)
-        json_path.write_text(payload + "\n", encoding="utf-8")
-        md_path.write_text(format_run_markdown(run) + "\n", encoding="utf-8")
-        (self.latest_dir / f"{run['session']}.json").write_text(
+        self._atomic_write(json_path, payload + "\n")
+        self._atomic_write(md_path, format_run_markdown(run) + "\n")
+        self._atomic_write(
+            self.latest_dir / f"{run['session']}.json",
             payload + "\n",
-            encoding="utf-8",
         )
         return {
             "json_path": str(json_path),
@@ -957,7 +992,7 @@ def build_scheduled_run(
         trigger_reviews=trigger_reviews,
         position_reviews=position_reviews,
     )
-    status = _run_status(context_quality)
+    status = _run_status(context_quality, primary_market=session.primary_market)
     run = {
         "schema_version": SCHEDULED_RUN_SCHEMA_VERSION,
         "run_id": occurrence.run_id,
@@ -2382,10 +2417,8 @@ def _build_capital_allocation(
 
     # ── 4. 可动用资金 ──
     liq_buckets = liquidity_summary.get("buckets", {})
-    available_cash = (
-        liq_buckets.get("cash_or_t0", {}).get("value_cny", 0)
-        + liq_buckets.get("t1_t2", {}).get("value_cny", 0)
-    )
+    available_cash = liq_buckets.get("cash_or_t0", {}).get("value_cny", 0)
+    strategic_exit_value = liq_buckets.get("t1_t2", {}).get("value_cny", 0)
     safety_buffer = total_value * 0.05
     net_deployable = max(0, available_cash + reduce_proceeds - safety_buffer)
 
@@ -2505,6 +2538,7 @@ def _build_capital_allocation(
         "conflicts": conflicts,
         "reduce_items": reduce_items,
         "available_cash_cny": round(available_cash, 2),
+        "strategic_exit_value_cny": round(strategic_exit_value, 2),
         "reduce_proceeds_cny": round(reduce_proceeds, 2),
         "net_deployable_cny": round(net_deployable, 2),
         "add_candidates": add_candidates[:5],
@@ -2728,13 +2762,24 @@ def _quiet_hours_blocked(now: datetime, quiet_hours: dict) -> bool:
     return current >= start or current < end
 
 
-def _run_status(data_quality: dict) -> str:
+def _run_status(data_quality: dict, *, primary_market: str = "") -> str:
     degraded_sections = []
+    market_key = {"cn": "a", "us": "us", "crypto": "crypto"}.get(primary_market)
     for key in ("asset_completeness", "quotes", "history_backfill", "rotation", "action_signals"):
-        status = (data_quality.get(key) or {}).get("status")
+        section = data_quality.get(key) or {}
+        status = section.get("status")
+        global_severe = status in {"blocked", "failed", "no_data"}
+        if key == "quotes" and market_key and not global_severe:
+            market_quality = (section.get("by_market") or {}).get(market_key) or {}
+            market_status = market_quality.get("status")
+            market_freshness = market_quality.get("freshness")
+            if market_status:
+                status = market_status
+            if market_freshness in {"stale", "old", "unknown", "missing"}:
+                status = "degraded"
         if status in {"blocked", "failed", "no_data"}:
             return "degraded"
-        if status in {"degraded", "partial"}:
+        if status in {"degraded", "partial", "stale_fallback"}:
             degraded_sections.append(key)
     return "degraded" if degraded_sections else "ok"
 

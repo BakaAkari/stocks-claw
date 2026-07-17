@@ -1489,3 +1489,42 @@ class TestRealArtifactScenario:
 
         for action in decision.approved_actions:
             assert action.decision_id is not None
+
+
+
+def test_capital_allocation_available_cash_excludes_t1_t2_assets():
+    cards = [_make_card("cash", signal="hold", ratio=0.0)]
+    positions = [
+        _make_position("cash", product_type="cash", liquidity_tier="cash", market_value_cny=50_000.0),
+        _make_position("equity", product_type="stock", liquidity_tier="t1", market_value_cny=100_000.0),
+    ]
+    result = build_capital_allocation_with_suppression(
+        cards,
+        positions,
+        {"ratios": {"现金": 1 / 3, "权益": 2 / 3}},
+        _liquidity_summary(cash_or_t0=50_000.0, t1_t2=100_000.0),
+    )
+    assert result["available_cash_cny"] == 50_000.0
+    assert result["net_deployable_cny"] == 42_500.0
+    assert result["strategic_exit_value_cny"] == 100_000.0
+
+
+
+def test_adjudicator_rejects_research_only_qdii_action_even_if_signal_leaks():
+    cards = [{
+        **_make_card("qdii", signal="take_profit", ratio=0.3,
+                     raw_signal="take_profit", raw_ratio=0.6),
+        "routing": "fund",
+        "evidence_status": "research_only",
+    }]
+    positions = [_make_position(
+        "qdii", product_type="qdii_fund", exposure_tags=["qdii"],
+        liquidity_tier="t2_plus", market_value_cny=100_000.0,
+    )]
+    decision = adjudicate_portfolio(
+        cards, _evidences(positions), _constraints(equity_min=0.0),
+        _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+    )
+    assert decision.approved_actions == []
+    assert len(decision.suppressed_actions) == 1
+    assert "research_only" in decision.suppressed_actions[0].reason

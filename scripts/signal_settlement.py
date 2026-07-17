@@ -4,10 +4,11 @@
 Run via cron: every 6 hours, checks unsettled signals and settles them
 if their time windows (24h / 1w) have elapsed.
 """
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-PROJECT_ROOT = "/mnt/user/code-project/stocks-claw"
+PROJECT_ROOT = os.environ.get("STOCKS_CLAW_REPO_ROOT", "/mnt/user/code-project/stocks-claw-trust-t1")
 sys.path.insert(0, PROJECT_ROOT)
 
 from stocks.engine.intelligence_harvester import IntelligenceHarvester  # noqa: E402

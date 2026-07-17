@@ -389,10 +389,30 @@ def adjudicate_portfolio(
     conflicts: list[dict] = []
     suppressed_pids: set[str] = set()
 
+    # Priority 0: Research-only routes can never become executable actions.
+    for item in merged:
+        pid = item["position_id"]
+        card = item["card"]
+        if card.get("evidence_status") != "research_only":
+            continue
+        did = make_decision_id(
+            run_id, pid, card.get("raw_signal", ""),
+            card.get("raw_ratio", 0.0), rule_version,
+        )
+        suppressed.append(PortfolioAction(
+            position_id=pid,
+            signal=card.get("signal", "hold"),
+            action_description=card.get("action", ""),
+            ratio=card.get("ratio", 0.0),
+            decision_id=did,
+            reason="research_only：长期配置仓信号仅供研究，不可执行",
+        ))
+        suppressed_pids.add(pid)
+
     # Priority 1: Data anomaly -> suppress
     for item in merged:
         pid = item["position_id"]
-        if not item["anomaly"]:
+        if pid in suppressed_pids or not item["anomaly"]:
             continue
         card = item["card"]
         ev = item["evidence"]

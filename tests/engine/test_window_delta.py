@@ -1036,3 +1036,43 @@ class TestScheduledSessionNewField:
 # ═══════════════════════════════════════════════════════════════════════════
 # 7. WindowDelta dataclass structure
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+
+class TestArtifactStoreHardening:
+    def test_save_rejects_non_v5_trading_artifact(self, tmp_path):
+        store = RunArtifactStore(tmp_path / "scheduled_runs")
+        legacy = {
+            "schema_version": 1,
+            "run_id": "r1",
+            "session": "cn_open_watch",
+            "market": "cn",
+            "market_date": "2026-07-17",
+            "generated_at": "2026-07-17T02:00:00+00:00",
+            "agent_task": {"task_version": 4},
+        }
+        with pytest.raises(ValueError, match="trusted v5 contract"):
+            store.save(legacy)
+
+    def test_save_writes_latest_atomically_without_temp_residue(self, tmp_path):
+        store = RunArtifactStore(tmp_path / "scheduled_runs")
+        run = {
+            "schema_version": 1,
+            "run_id": "r1",
+            "session": "cn_open_watch",
+            "market": "cn",
+            "market_date": "2026-07-17",
+            "generated_at": "2026-07-17T02:00:00+00:00",
+            "status": "ok",
+            "session_summary": {},
+            "window_delta": {},
+            "portfolio_decision": {},
+            "risk_state": {},
+            "data_boundaries": {},
+            "research_candidates": [],
+            "agent_task": {"task_version": 5},
+        }
+        store.save(run)
+        latest = store.latest_dir / "cn_open_watch.json"
+        assert json.loads(latest.read_text())["run_id"] == "r1"
+        assert not list(latest.parent.glob("*.tmp"))

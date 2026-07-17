@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-cd /mnt/user/code-project/stocks-claw || exit 1
+set -euo pipefail
 
-output=$(uv run python -m stocks.adapters.cli --scheduled-run-due 2>&1)
-exit_code=$?
+REPO_ROOT="${STOCKS_CLAW_REPO_ROOT:-/mnt/user/code-project/stocks-claw-trust-t1}"
+EXPECTED_BRANCH="${STOCKS_CLAW_EXPECTED_BRANCH:-feat/decision-trust-t1}"
 
-if [ $exit_code -ne 0 ]; then
-    echo "stocks-claw scheduled-run-due failed (exit $exit_code):"
-    echo "$output" | tail -50
-    exit $exit_code
+cd "$REPO_ROOT"
+branch=$(git branch --show-current)
+if [[ "$branch" != "$EXPECTED_BRANCH" ]]; then
+  echo "stocks-claw generator refused: expected branch $EXPECTED_BRANCH, got $branch" >&2
+  exit 40
+fi
+if [[ ! -x .venv/bin/python ]]; then
+  echo "stocks-claw generator refused: .venv/bin/python missing" >&2
+  exit 41
 fi
 
-result=$(echo "$output" | grep -A 20 '"success"' | tail -40)
-if [ -z "$result" ]; then
-    result=$(echo "$output" | tail -30)
-fi
-
-echo "$result"
+exec .venv/bin/python -m stocks.adapters.cli --scheduled-run-due

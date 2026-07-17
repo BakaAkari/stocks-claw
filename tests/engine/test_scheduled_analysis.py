@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -10,6 +10,7 @@ from stocks.engine.scheduled_analysis import (
     MarketSessionCalendar,
     ScheduledAnalysisRunner,
     _build_action_cards,
+    _run_status,
     build_scheduled_run,
 )
 
@@ -379,3 +380,113 @@ def test_report_contract_artifact_has_five_trusted_fields(tmp_path):
     trusted = {"window_delta", "portfolio_decision", "risk_state", "data_boundaries", "research_candidates"}
     assert trusted <= set(run)
     assert set(run["agent_task"]["data_reference"]) == trusted
+
+
+
+def test_all_configured_trading_sessions_emit_v5_trusted_contract(tmp_path):
+    config = _config(tmp_path)
+    calendar = MarketSessionCalendar(config)
+    trading_sessions = [s for s in calendar.sessions if s.market in {"cn", "us"}]
+    assert trading_sessions
+    for session in trading_sessions:
+        occurrence = calendar.occurrence_for(
+            session, datetime(2026, 7, 6, 16, 0, tzinfo=timezone.utc)
+        )
+        run = build_scheduled_run(
+            _context(), occurrence=occurrence,
+            generated_at=datetime(2026, 7, 6, 16, 0, tzinfo=timezone.utc),
+            config=config,
+        )
+        assert run["agent_task"]["task_version"] == 5, session.id
+        for field in (
+            "window_delta", "portfolio_decision", "risk_state",
+            "data_boundaries", "research_candidates",
+        ):
+            assert field in run, f"{session.id} missing {field}"
+
+
+
+def test_long_term_qdii_short_term_take_profit_is_research_only_not_executable():
+    position = _tradable_position(
+        "alipay_qdii", "us:QQQ", freshness="previous_close"
+    )
+    position.update({
+        "valuation_method": "fund_nav",
+        "price": 6.0,
+        "cost_amount": 4.5,
+        "pnl_pct": 33.33,
+        "classification": {
+            "product_type": "qdii_fund",
+            "exposure_tags": ["qdii", "nasdaq100"],
+        },
+        "liquidity": {
+            "rebalance_eligible": True,
+            "tradable": True,
+            "tier": "t2_plus",
+        },
+    })
+    card = _build_action_cards([position])[0]
+    assert card["raw_signal"] == "take_profit"
+    assert card["routing"] == "fund"
+    assert card["signal"] == "hold"
+    assert card["ratio"] == 0.0
+    assert card["evidence_status"] == "research_only"
+    assert "长期配置" in card["action"]
+
+
+
+def test_run_status_uses_primary_market_quote_status_not_other_market_staleness():
+    quality = {
+        "asset_completeness": {"status": "ok"},
+        "quotes": {
+            "status": "degraded",
+            "freshness": "stale",
+            "by_market": {
+                "a": {"status": "ok", "freshness": "fresh"},
+                "us": {"status": "ok", "freshness": "stale"},
+            },
+        },
+        "history_backfill": {"status": "ok"},
+        "rotation": {"status": "ok"},
+        "action_signals": {"status": "ok"},
+    }
+    assert _run_status(quality, primary_market="cn") == "ok"
+    assert _run_status(quality, primary_market="us") == "degraded"
+
+
+
+def test_long_term_qdii_hard_stop_remains_executable_risk_discipline():
+    position = _tradable_position(
+        "alipay_qdii_stop", "us:QQQ", freshness="previous_close"
+    )
+    position.update({
+        "valuation_method": "fund_nav",
+        "price": 3.5,
+        "cost_amount": 5.0,
+        "pnl_pct": -30.0,
+        "classification": {
+            "product_type": "qdii_fund",
+            "exposure_tags": ["qdii", "nasdaq100"],
+        },
+        "liquidity": {"rebalance_eligible": True, "tradable": True, "tier": "t2_plus"},
+    })
+    card = _build_action_cards([position])[0]
+    assert card["raw_signal"] == "stop_loss"
+    assert card["signal"] == "stop_loss"
+    assert card["ratio"] > 0
+    assert card["evidence_status"] == "ok"
+
+
+
+def test_run_status_never_allows_market_ok_to_override_global_quote_failure():
+    quality = {
+        "asset_completeness": {"status": "ok"},
+        "quotes": {
+            "status": "failed",
+            "by_market": {"a": {"status": "ok", "freshness": "fresh"}},
+        },
+        "history_backfill": {"status": "ok"},
+        "rotation": {"status": "ok"},
+        "action_signals": {"status": "ok"},
+    }
+    assert _run_status(quality, primary_market="cn") == "degraded"
