@@ -205,3 +205,71 @@ def test_research_reassessment_hides_machine_risk_level():
     text = str(view["assistant_brief"]["research"])
     assert "风险解除后再评估" in text
     assert "hedge" not in text
+
+
+
+def test_user_view_contains_deterministic_conflict_counts_risk_reasons_and_data_notes():
+    decision = {
+        "status": "review_required", "approved_actions": [], "suppressed_actions": [],
+        "unresolved_conflicts": [
+            {"position_id": "a_510300", "signal": "reduce", "bucket": "权益", "bucket_ratio": 0.156},
+            {"position_id": "a_588000", "signal": "reduce", "bucket": "权益", "bucket_ratio": 0.156},
+            {"position_id": "us_ita", "signal": "reduce", "bucket": "权益", "bucket_ratio": 0.156},
+            {"position_id": "alipay_info", "signal": "take_profit", "bucket": "权益", "bucket_ratio": 0.156},
+        ], "cash_schedule": {},
+    }
+    positions = [
+        _position("a_510300", "沪深300ETF", "a:510300"),
+        _position("a_588000", "科创50ETF", "a:588000"),
+        _position("us_ita", "ITA", "us:ITA"),
+        _position("alipay_info", "易方达信息产业混合C", "fund:001513"),
+    ]
+    data_boundaries = {"data_quality": {
+        "quotes": {"by_market": {"us": {"freshness": "stale", "as_of": "2026-07-16T20:00:00+00:00"},
+                                     "a": {"freshness": "fresh", "as_of": "2026-07-17T05:07:30+00:00"}}},
+        "macro": {"freshness": "old", "as_of": "2026-06-01T00:00:00+00:00"},
+    }}
+    view = build_user_view(
+        decision, positions, [], [],
+        {"level": "hedge", "transition": "unchanged", "suspend_accumulation": True,
+         "evidence_keys": ["cluster:geopolitics"]},
+        data_boundaries=data_boundaries,
+        session_id="cn_after_close", session_intent="after_close_review",
+    )
+    brief = view["assistant_brief"]
+    assert brief["conflict_summary"] == [
+        {"action_label": "减仓", "count": 3}, {"action_label": "止盈", "count": 1}
+    ]
+    assert brief["risk"]["reasons"] == ["地缘政治风险达到临界级别"]
+    assert brief["data_notes"] == [
+        "美股行情数据已过时（截止 2026-07-16 20:00 UTC）",
+        "宏观数据较旧（截止 2026-06-01 00:00 UTC）",
+    ]
+    assert "reduce" not in str(view)
+    assert "take_profit" not in str(view)
+    assert "cluster:geopolitics" not in str(view)
+
+
+def test_user_view_anomaly_explanation_includes_structured_evidence_without_code():
+    decision = {
+        "status": "suppressed", "approved_actions": [],
+        "suppressed_actions": [{"position_id": "a_516020", "reason": "prev_close_mismatch"}],
+        "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    reviews = [{"position_id": "a_516020", "evidence": {"data_anomalies": [{
+        "code": "prev_close_mismatch", "evidence": {
+            "stated_prev_close": 0.828, "actual_prev_close": 0.922,
+            "diff_pct": 10.2, "threshold_pct": 5.0,
+        },
+    }]}}]
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020")], reviews, [], {},
+        data_boundaries={}, session_id="cn_after_close", session_intent="after_close_review",
+    )
+    text = view["assistant_brief"]["do_not_do"][0]
+    assert text == (
+        "化工ETF（516020）：前收盘价在不同数据源之间不一致；"
+        "上一根实际收盘价=0.922，差异百分比=10.2，数据源前收盘价=0.828，告警阈值=5.0；"
+        "暂停执行，等待核对正确收盘价"
+    )
+    assert "prev_close_mismatch" not in str(view)

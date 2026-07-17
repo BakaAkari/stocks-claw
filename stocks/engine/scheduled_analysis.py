@@ -1000,6 +1000,13 @@ def build_scheduled_run(
         session,
         blocked_symbols=_blocked_symbols(context.get("position_valuations") or []),
     )
+    data_boundaries = {
+        "data_quality": context_quality,
+        "source_context": {
+            "schema_version": context.get("schema_version"),
+            "generated_at": context.get("generated_at"),
+        },
+    }
     portfolio_decision_dict = portfolio_decision.to_dict() if portfolio_decision else {}
     portfolio_decision_dict["user_view"] = build_user_view(
         portfolio_decision_dict,
@@ -1007,6 +1014,7 @@ def build_scheduled_run(
         position_reviews,
         research_candidates,
         risk_state,
+        data_boundaries=data_boundaries,
         session_id=session.id,
         session_intent=session.intent,
     )
@@ -1054,13 +1062,7 @@ def build_scheduled_run(
         },
         "risk_assessment": risk_assessment,
         "risk_state": risk_state,
-        "data_boundaries": {
-            "data_quality": context_quality,
-            "source_context": {
-                "schema_version": context.get("schema_version"),
-                "generated_at": context.get("generated_at"),
-            },
-        },
+        "data_boundaries": data_boundaries,
         "research_candidates": research_candidates,
         "mandatory_blocks": build_mandatory_blocks(
             risk_state,
@@ -1689,7 +1691,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
         ],
         "must_not_do": [
             "不得承诺收益",
-            "不得忽略 data_boundaries.data_quality",
+            "数据质量、风险触发原因和信号分类已确定性写入 user_view；不得回读原始字段补充数字或结论",
             "不得向用户展示 position_id、decision_id、内部哈希、原始异常码、英文 signal/risk/liquidity 枚举",
             "所有标的必须使用 portfolio_decision.user_view 中的真实名称 + 公开代码；不得自行用代理标的代码替代基金代码",
             "动作卡必须显示结构化比例 + 预计金额；amount_is_estimate=true 时必须标注“估算”",
@@ -1702,11 +1704,11 @@ def build_agent_task(session: ScheduledSession) -> dict:
             "严禁使用 | 表格、```代码块、>引用、---分隔线、任务列表或HTML",
         ],
         "data_reference": {
-            "window_delta": "只用于判断是否有实质变化和观察窗口静默",
-            "portfolio_decision": "唯一用户展示来源为 portfolio_decision.user_view.instruction_card 和 assistant_brief",
-            "risk_state": "只用于交叉验证 user_view 风险说明，不得自行生成动作",
-            "data_boundaries": "只用于确认数据时效/质量说明完整，不得自行计算金额",
-            "research_candidates": "只用于交叉验证 user_view 观察候选，不得进入指令卡",
+            "window_delta": "仅供生成器确定观察窗口静默；不得进入用户正文",
+            "portfolio_decision": "用户正文唯一来源为 portfolio_decision.user_view",
+            "risk_state": "仅供生成器构建 user_view；消费端不得直接读取",
+            "data_boundaries": "仅供生成器构建 user_view.data_notes；消费端不得直接读取",
+            "research_candidates": "仅供生成器构建 user_view.research；消费端不得直接读取",
         },
         "output_structure": {
             "max_words": 900,
@@ -1798,6 +1800,12 @@ def format_run_markdown(run: dict) -> str:
     for reason in (assistant.get("why") or ["当前决策以组合裁决结果为准"])[0:5]:
         lines.append(f"- {reason}")
 
+    conflicts = assistant.get("conflict_summary") or []
+    if conflicts:
+        lines.extend(["", "**待人工确认的信号分类**"])
+        for item in conflicts:
+            lines.append(f"- {item.get('action_label', '待确认动作')}: {int(item.get('count') or 0)} 项")
+
     lines.extend(["", "**现在不要做什么**"])
     do_not_do = assistant.get("do_not_do") or []
     if do_not_do:
@@ -1817,7 +1825,15 @@ def format_run_markdown(run: dict) -> str:
     lines.append(f"- 当前状态: {risk.get('label', '风险状态待确认')}（{risk.get('transition', '状态待确认')}）")
     if risk.get("suspend_accumulation"):
         lines.append("- 当前暂停加仓")
+    for reason in risk.get("reasons") or []:
+        lines.append(f"- 触发原因: {reason}")
     lines.append(f"- 解除条件: {risk.get('release_condition', '等待风险条件明确')}")
+
+    data_notes = assistant.get("data_notes") or []
+    if data_notes:
+        lines.extend(["", "**数据说明**"])
+        for note in data_notes:
+            lines.append(f"- {note}")
 
     lines.extend(["", "**仅供观察**"])
     research = assistant.get("research") or []

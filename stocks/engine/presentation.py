@@ -5,6 +5,8 @@ module creates stable Chinese labels for the user-facing report contract.
 """
 from __future__ import annotations
 
+from collections import Counter
+from datetime import datetime
 from typing import Any
 
 _SIGNAL_LABELS = {
@@ -28,7 +30,12 @@ _ANOMALY_MESSAGES = {
 }
 _EVIDENCE_LABELS = {
     "price": "价格", "ma20": "20日均线", "prev_close": "前收盘价",
-    "source_prev_close": "数据源前收盘价", "pct_change": "涨跌幅",
+    "source_prev_close": "数据源前收盘价", "stated_prev_close": "数据源前收盘价",
+    "actual_prev_close": "上一根实际收盘价", "diff_pct": "差异百分比",
+    "current_close": "当前收盘价", "change_pct": "跳变幅度",
+    "prev_price": "跳变前价格", "current_price": "当前价格",
+    "ratio": "价格比值", "deviation_pct": "偏离百分比",
+    "threshold_pct": "告警阈值", "pct_change": "涨跌幅",
 }
 _ESTIMATE_FRESHNESS = frozenset({"previous_close", "stale", "old", "unknown", "missing", "no_data"})
 _ESTIMATE_VALUATION_METHODS = frozenset({"manual_amount", "fund_nav", "insurance_value"})
@@ -175,6 +182,76 @@ def _conflict_reason(conflict: dict, by_id: dict[str, dict]) -> str:
     return f"{label}：{bucket}当前占组合{ratio_text}，低于目标下限，但技术信号要求{action}；方向冲突，需人工确认"
 
 
+def _position_review_map(position_reviews: list[dict]) -> dict[str, dict]:
+    return {
+        str(item.get("position_id") or ""): item
+        for item in (position_reviews or [])
+        if item.get("position_id")
+    }
+
+
+def _suppressed_user_text(raw: dict, by_id: dict[str, dict], reviews_by_id: dict[str, dict]) -> str:
+    pid = str(raw.get("position_id") or "")
+    label = _display_for_position(by_id.get(pid, {}))
+    anomalies = ((reviews_by_id.get(pid, {}).get("evidence") or {}).get("data_anomalies") or [])
+    if anomalies:
+        display = anomaly_display(anomalies[0])
+        evidence = display.get("evidence_summary")
+        detail = f"；{evidence}" if evidence else ""
+        return f"{label}：{display['display_message']}{detail}；{display['user_impact']}"
+    return f"{label}：{_safe_reason_text(raw.get('reason', ''))}"
+
+
+def _conflict_summary(conflicts: list[dict]) -> list[dict]:
+    counts = Counter(signal_label(item.get("signal", "")) for item in (conflicts or []))
+    order = {"止损": 0, "减仓": 1, "止盈": 2, "加仓": 3, "持有": 4, "待确认动作": 9}
+    return [
+        {"action_label": label, "count": count}
+        for label, count in sorted(counts.items(), key=lambda pair: (order.get(pair[0], 8), pair[0]))
+    ]
+
+
+def _risk_reasons(risk_state: dict) -> list[str]:
+    mapping = {
+        "cluster:geopolitics": "地缘政治风险达到临界级别",
+        "cluster:macro": "宏观风险达到临界级别",
+        "cluster:liquidity": "市场流动性风险达到临界级别",
+    }
+    reasons = []
+    for key in (risk_state or {}).get("evidence_keys") or []:
+        text = mapping.get(str(key))
+        if text and text not in reasons:
+            reasons.append(text)
+    return reasons
+
+
+def _display_timestamp(value: str) -> str:
+    raw = str(value or "")
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw or "时间待确认"
+    return parsed.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _data_notes(data_boundaries: dict) -> list[str]:
+    quality = (data_boundaries or {}).get("data_quality") or {}
+    notes = []
+    by_market = ((quality.get("quotes") or {}).get("by_market") or {})
+    names = {"a": "A股", "us": "美股", "crypto": "加密资产"}
+    for market in ("a", "us", "crypto"):
+        item = by_market.get(market) or {}
+        freshness = str(item.get("freshness") or "")
+        if freshness in {"stale", "old"}:
+            notes.append(f"{names[market]}行情数据已过时（截止 {_display_timestamp(item.get('as_of'))}）")
+        elif freshness in {"missing", "unknown"} and item:
+            notes.append(f"{names[market]}行情数据缺失或时间未知")
+    macro = quality.get("macro") or {}
+    if str(macro.get("freshness") or "") in {"old", "stale"}:
+        notes.append(f"宏观数据较旧（截止 {_display_timestamp(macro.get('as_of'))}）")
+    return notes
+
+
 def build_user_view(
     portfolio_decision: dict,
     position_valuations: list[dict],
@@ -182,13 +259,14 @@ def build_user_view(
     research_candidates: list[dict],
     risk_state: dict,
     *,
+    data_boundaries: dict | None = None,
     session_id: str,
     session_intent: str,
 ) -> dict:
     """Build the deterministic trade-card and assistant presentation contract."""
-    del position_reviews
     decision = portfolio_decision or {}
     by_id, by_key = _position_maps(position_valuations)
+    reviews_by_id = _position_review_map(position_reviews)
     actions = []
     for raw in (decision.get("approved_actions") or [])[:3]:
         item = by_id.get(str(raw.get("position_id") or ""), {})
@@ -219,9 +297,7 @@ def build_user_view(
     for raw in decision.get("suppressed_actions") or []:
         if len(no_action_reasons) == 2:
             break
-        item = by_id.get(str(raw.get("position_id") or ""), {})
-        label = _display_for_position(item)
-        reason = f"{label}：{_safe_reason_text(raw.get('reason', ''))}"
+        reason = _suppressed_user_text(raw, by_id, reviews_by_id)
         if reason not in no_action_reasons:
             no_action_reasons.append(reason)
     if not no_action_reasons and not actions:
@@ -253,11 +329,13 @@ def build_user_view(
     transition = str((risk_state or {}).get("transition") or "stable")
     transition_text = {
         "escalated": "风险升级", "deescalated": "风险缓和", "stable": "状态未变",
+        "unchanged": "状态未变", "candidate": "候选状态待确认",
     }.get(transition, "状态待确认")
     assistant = {
         "why": [a["reason_summary"] for a in actions] or no_action_reasons[:2],
+        "conflict_summary": _conflict_summary(decision.get("unresolved_conflicts") or []),
         "do_not_do": [
-            f"{_display_for_position(by_id.get(str(x.get('position_id') or ''), {}))}：{_safe_reason_text(x.get('reason', ''))}"
+            _suppressed_user_text(x, by_id, reviews_by_id)
             for x in (decision.get("suppressed_actions") or [])[:5]
         ],
         "cash": _cash_view(decision.get("cash_schedule") or {}),
@@ -265,8 +343,10 @@ def build_user_view(
             "label": risk_label(level),
             "transition": transition_text,
             "suspend_accumulation": bool((risk_state or {}).get("suspend_accumulation")),
+            "reasons": _risk_reasons(risk_state or {}),
             "release_condition": str((risk_state or {}).get("release_condition") or "等待风险状态满足解除条件"),
         },
+        "data_notes": _data_notes(data_boundaries or {}),
         "research": research,
     }
     return {
