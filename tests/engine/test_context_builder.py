@@ -36,7 +36,12 @@ from stocks.domain.models import (
 )
 from stocks.engine.context_builder import ContextBuilder
 from stocks.engine.history_cache import HistoryCache
-from stocks.engine.news_intelligence_store import IntelligenceSignal, NewsIntelligenceStore
+from stocks.engine.news_intelligence_store import (
+    EventCluster,
+    IntelligenceSignal,
+    IntelligenceSnapshot,
+    NewsIntelligenceStore,
+)
 
 
 def test_intelligence_digest_preserves_complete_signal_payload(
@@ -66,6 +71,116 @@ def test_intelligence_digest_preserves_complete_signal_payload(
     )
     digest = builder._build_intelligence_digest(repo_root=tmp_path)
     assert digest["top_signals"] == [signal.to_dict()]
+
+
+def test_intelligence_digest_preserves_source_rich_clusters(
+    tmp_path: Path, mock_fetcher, mock_scaffolds
+):
+    portfolio_scaffold, market_scaffold = mock_scaffolds
+    intelligence_dir = tmp_path / "intelligence"
+    store = NewsIntelligenceStore(intelligence_dir)
+
+    snapshot = IntelligenceSnapshot(
+        collected_at=datetime(2026, 7, 17, 8, 0, 0, tzinfo=timezone.utc),
+        sources={"Reuters": "ok"},
+        articles=[{"title": "test"}],
+        macro={},
+        quotes={},
+        data_quality={},
+    )
+    store.save_snapshot(snapshot)
+
+    cluster = EventCluster(
+        cluster_id="cluster-oil",
+        theme="\u6cb9\u4ef7\u6ce2\u52a8",
+        event_type="geopolitical",
+        summary="\u4e2d\u4e1c\u5c40\u52bf\u63a8\u9ad8\u6cb9\u4ef7",
+        articles=[
+            {
+                "source": "Reuters",
+                "title": "Oil rises as shipping risk increases",
+                "url": "https://example.test/reuters-oil",
+                "published_at": "2026-07-17T07:30:00+00:00",
+            },
+            {
+                "source": "Bloomberg",
+                "title": "Traders hedge oil exposure",
+                "url": "https://example.test/bloomberg-hedge",
+                "published_at": "2026-07-17T07:45:00+00:00",
+                "raw_html": "<p>secret</p>",
+            },
+        ],
+        affected_markets=["crude_oil"],
+        affected_symbols=["a:600028"],
+        sentiment="bearish",
+        urgency="high",
+        confidence=0.85,
+        formed_at=datetime(2026, 7, 17, 8, 0, 0, tzinfo=timezone.utc),
+    )
+    store.save_clusters([cluster], formed_at=cluster.formed_at)
+
+    builder = ContextBuilder(
+        mock_fetcher,
+        portfolio_scaffold,
+        market_scaffold,
+        config={"intelligence_dir": str(intelligence_dir)},
+    )
+    digest = builder._build_intelligence_digest(repo_root=tmp_path)
+
+    assert digest["status"] == "ok"
+    cluster_out = digest["top_clusters"][0]
+    assert cluster_out["cluster_id"] == "cluster-oil"
+    assert cluster_out["event_type"] == "geopolitical"
+    assert cluster_out["formed_at"] == "2026-07-17T08:00:00+00:00"
+    assert cluster_out["articles"] == [
+        {
+            "source": "Reuters",
+            "title": "Oil rises as shipping risk increases",
+            "url": "https://example.test/reuters-oil",
+            "published_at": "2026-07-17T07:30:00+00:00",
+        },
+        {
+            "source": "Bloomberg",
+            "title": "Traders hedge oil exposure",
+            "url": "https://example.test/bloomberg-hedge",
+            "published_at": "2026-07-17T07:45:00+00:00",
+        },
+    ]
+    import json as _json
+    assert "raw_html" not in _json.dumps(cluster_out)
+
+
+def test_intelligence_digest_returns_empty_clusters_when_stale(
+    tmp_path: Path, mock_fetcher, mock_scaffolds
+):
+    portfolio_scaffold, market_scaffold = mock_scaffolds
+    intelligence_dir = tmp_path / "intelligence"
+    store = NewsIntelligenceStore(intelligence_dir)
+
+    old_formed_at = datetime(2026, 7, 14, 8, 0, 0, tzinfo=timezone.utc)
+    cluster = EventCluster(
+        cluster_id="cluster-oil",
+        theme="\u6cb9\u4ef7\u6ce2\u52a8",
+        event_type="geopolitical",
+        summary="\u4e2d\u4e1c\u5c40\u52bf\u63a8\u9ad8\u6cb9\u4ef7",
+        articles=[],
+        affected_markets=["crude_oil"],
+        affected_symbols=["a:600028"],
+        sentiment="bearish",
+        urgency="high",
+        confidence=0.85,
+        formed_at=old_formed_at,
+    )
+    store.save_clusters([cluster], formed_at=old_formed_at)
+
+    builder = ContextBuilder(
+        mock_fetcher,
+        portfolio_scaffold,
+        market_scaffold,
+        config={"intelligence_dir": str(intelligence_dir)},
+    )
+    digest = builder._build_intelligence_digest(repo_root=tmp_path)
+    assert digest["top_clusters"] == []
 
 
 @pytest.fixture

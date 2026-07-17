@@ -1735,6 +1735,18 @@ class ContextBuilder:
                     }
         return indicators_by_symbol
 
+    @staticmethod
+    def _public_cluster_articles(articles: list[dict], *, limit: int = 5) -> list[dict]:
+        allowed = ("source", "title", "url", "published_at")
+        result: list[dict] = []
+        for raw in articles or []:
+            item = {key: raw.get(key) for key in allowed if raw.get(key) not in (None, "")}
+            if item.get("title") and item.get("url") and item.get("published_at"):
+                result.append(item)
+            if len(result) == limit:
+                break
+        return result
+
     def _build_intelligence_digest(
         self,
         *,
@@ -1804,13 +1816,17 @@ class ContextBuilder:
                 "intelligence_coverage": coverage,
                 "top_clusters": [
                     {
+                        "cluster_id": c.get("cluster_id"),
                         "theme": c.get("theme"),
+                        "event_type": c.get("event_type"),
                         "summary": c.get("summary"),
+                        "articles": self._public_cluster_articles(c.get("articles", [])),
                         "affected_markets": c.get("affected_markets", []),
                         "affected_symbols": c.get("affected_symbols", []),
                         "sentiment": c.get("sentiment"),
                         "urgency": c.get("urgency"),
                         "confidence": c.get("confidence"),
+                        "formed_at": c.get("formed_at"),
                     }
                     for c in clusters[:5]
                 ] if risk_eligible else [],
