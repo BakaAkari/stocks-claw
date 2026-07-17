@@ -65,12 +65,13 @@ def test_guard_rejects_wrong_session(tmp_path):
     assert "session" in result.stderr
 
 
-def test_guard_rejects_artifact_generated_before_scheduled_time(tmp_path):
+def test_guard_rejects_stale_artifact_far_before_scheduled_time(tmp_path):
     artifact = _artifact()
-    artifact["generated_at"] = "2026-07-17T01:00:00+00:00"
-    result = _run(tmp_path, artifact)
+    artifact["generated_at"] = "2026-07-15T22:00:00+00:00"
+    artifact["scheduled_for"] = "2026-07-17T08:50:00+08:00"
+    result = _run(tmp_path, artifact, now="2026-07-17T08:50:00+08:00")
     assert result.returncode != 0
-    assert "generated_at" in result.stderr
+    assert "more than a day old" in result.stderr
 
 
 
@@ -130,3 +131,13 @@ def test_guard_rejects_incomplete_human_user_view(tmp_path):
     result = _run(tmp_path, artifact)
     assert result.returncode != 0
     assert "assistant_brief" in result.stderr
+
+
+
+def test_guard_allows_pre_generated_artifact_before_scheduled_time(tmp_path):
+    artifact = _artifact()
+    artifact["generated_at"] = "2026-07-17T08:30:00+08:00"
+    artifact["scheduled_for"] = "2026-07-17T08:50:00+08:00"
+    result = _run(tmp_path, artifact, now="2026-07-17T08:50:00+08:00")
+    assert result.returncode == 0
+    assert "VALID" in result.stdout

@@ -66,13 +66,15 @@ def main() -> int:
             f"market_date mismatch: artifact={artifact.get('market_date')} "
             f"scheduled={expected_date}"
         )
-    if generated < scheduled:
-        return fail(
-            f"generated_at {generated.isoformat()} precedes scheduled_for "
-            f"{scheduled.isoformat()}"
-        )
     if generated > now:
         return fail(f"generated_at {generated.isoformat()} is in the future")
+    # Allow pre-generated artifacts (force-run) and guard against stale or far-future timestamps
+    if (now - generated).total_seconds() > 24 * 3600:
+        return fail(
+            f"artifact generated_at {generated.isoformat()} is more than a day old"
+        )
+    if (now - scheduled).total_seconds() > 24 * 3600:
+        return fail(f"scheduled_for {scheduled.isoformat()} is more than a day before now")
     age_minutes = (now.astimezone(generated.tzinfo) - generated).total_seconds() / 60
     if age_minutes > 30:
         return fail(f"artifact age {age_minutes:.1f} minutes exceeds 30-minute limit")
