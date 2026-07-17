@@ -512,3 +512,39 @@ def test_scheduled_run_attaches_human_user_view_inside_portfolio_decision(tmp_pa
     }
     rendered = json.dumps(view, ensure_ascii=False)
     assert "decision_id" not in rendered
+
+
+
+def test_agent_task_is_trade_card_first_and_bans_internal_tokens(tmp_path):
+    config = _config(tmp_path)
+    session = MarketSessionCalendar(config).find_session("cn_pre_close")
+    from stocks.engine.scheduled_analysis import build_agent_task
+    task = build_agent_task(session)
+    sections = task["output_structure"]["sections"]
+    assert [s["name"] for s in sections] == ["交易指令卡", "私人投资助理"]
+    instructions = json.dumps(task, ensure_ascii=False)
+    assert "portfolio_decision.user_view.instruction_card" in instructions
+    assert "portfolio_decision.user_view.assistant_brief" in instructions
+    assert "不得向用户展示 position_id" in instructions
+    assert "真实名称 + 公开代码" in instructions
+    assert "比例 + 预计金额" in instructions
+
+
+def test_main_window_no_action_card_and_watch_window_silence_are_explicit(tmp_path):
+    config = _config(tmp_path)
+    calendar = MarketSessionCalendar(config)
+    from stocks.engine.scheduled_analysis import build_agent_task
+    main = build_agent_task(calendar.find_session("cn_pre_close"))
+    main_text = json.dumps(main, ensure_ascii=False)
+    assert "今日无需操作" in main_text
+    assert "1-2个关键原因" in main_text
+
+    watch_config = _config(tmp_path)
+    watch_config["markets"]["cn"]["sessions"].append({
+        "id": "cn_open_watch", "time": "10:00", "intent": "open_watch",
+        "push": "normal", "delta_silent_when_unchanged": True,
+    })
+    watch = build_agent_task(MarketSessionCalendar(watch_config).find_session("cn_open_watch"))
+    watch_text = json.dumps(watch, ensure_ascii=False)
+    assert "window_delta.material=false" in watch_text
+    assert "[SILENT]" in watch_text

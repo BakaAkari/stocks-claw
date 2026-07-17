@@ -1665,159 +1665,75 @@ def _build_research_candidates(
 
 
 def build_agent_task(session: ScheduledSession) -> dict:
-    """Report contract v2: Agent reads exactly 5 artifact fields.
-
-    The 5 contract fields are: window_delta, portfolio_decision, risk_state,
-    data_boundaries, research_candidates.  No other artifact fields are
-    referenced in data_reference.
-
-    Output: 5 fixed sections (变化摘要, 今日动作, 禁止/待确认, 资金到账与边界, 研究候选).
-    """
-    must_answer_by_intent = {
-        "pre_open_plan": [
-            "【变化摘要】读取 window_delta.changes，列出本窗口相比上一窗口的关键变化；无变化时写'无实质变化'",
-            "【今日动作】读取 portfolio_decision.approved_actions（最多3个），每个动作写明 position_id、signal、ratio、cancel_condition、settlement_timing、next_checkpoint；如果无 approved_actions，写'今日无需操作'",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 risk_state.suspend_accumulation=true 标注暂停加仓",
-            "【资金到账与边界】读取 portfolio_decision.cash_schedule 列出立刻可用/在途/锁定金额；读取 risk_state 列出当前风险等级和解除条件；读取 data_boundaries.data_quality 列出数据缺口和时效降级",
-            "【研究候选】读取 research_candidates 列出观察标的；research_only 信号绝不写入今日动作段；风险暂停时标注解除条件后再评估",
-        ],
-        "open_watch": [
-            "【变化摘要】读取 window_delta.changes，列出关键变化",
-            "【今日动作】最多3个 approved_actions；无则写'无需操作'",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 risk_state.suspend_accumulation=true 标注暂停加仓",
-            "【资金到账与边界】读取 cash_schedule 和 risk_state",
-            "【研究候选】读取 research_candidates",
-        ],
-        "pre_close_decision": [
-            "【变化摘要】读取 window_delta.changes，列出关键变化",
-            "【今日动作】最多3个 approved_actions；每个动作附带 cancel_condition、settlement、next_checkpoint",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 suspend_accumulation=true 标注暂停加仓",
-            "【资金到账与边界】读取 portfolio_decision.cash_schedule（立即现金/在途/锁定）和 risk_state（等级与解除条件）和 data_boundaries（数据时效缺口）",
-            "【研究候选】读取 research_candidates；research_only 信号绝不写入今日动作段；暂停期间标注'risk解除后再评估'",
-        ],
-        "after_close_review": [
-            "【变化摘要】读取 window_delta.changes",
-            "【今日动作】最多3个 approved_actions；无则写'今日无执行动作'",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 risk_state.suspend_accumulation=true 标注暂停加仓",
-            "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
-            "【研究候选】读取 research_candidates",
-        ],
-        "morning_close_check": [
-            "【变化摘要】读取 window_delta.changes",
-            "【今日动作】读取 approved_actions（最多3个）",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 risk_state.suspend_accumulation=true 标注暂停加仓",
-            "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
-            "【研究候选】读取 research_candidates",
-        ],
-        "afternoon_open_check": [
-            "【变化摘要】读取 window_delta.changes",
-            "【今日动作】读取 approved_actions（最多3个）",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 risk_state.suspend_accumulation=true 标注暂停加仓",
-            "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
-            "【研究候选】读取 research_candidates",
-        ],
-        "mid_session_check": [
-            "【变化摘要】读取 window_delta.changes",
-            "【今日动作】读取 approved_actions（最多3个）",
-            "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 risk_state.suspend_accumulation=true 标注暂停加仓",
-            "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
-            "【研究候选】读取 research_candidates",
-        ],
-    }
-
+    """v5 dual-layer report contract: trade card first, assistant second."""
+    is_watch = session.intent in {"open_watch", "mid_session_check"}
+    is_pre_close = session.intent == "pre_close_decision"
+    delivery_policy = (
+        "观察窗口：若 window_delta.material=false、没有获批动作且没有新增待人工确认事项，最终只输出 [SILENT]。"
+        if is_watch else
+        "主计划/复盘窗口：没有获批动作时仍输出“今日无需操作”，并展示1-2个关键原因。"
+    )
+    if is_pre_close:
+        delivery_policy += " 收盘前窗口若既无获批动作也无新增冲突，可输出 [SILENT]。"
     return {
         "task_version": 5,
         "language": "zh-CN",
         "audience": "single_user",
         "session_intent": session.intent,
         "primary_market": session.primary_market,
-
-        # -- Agent 必须回答的问题（对应5个固定报告段）--
-        "must_answer": must_answer_by_intent.get(
-            session.intent,
-            [
-                "【变化摘要】读取 window_delta.changes",
-                "【今日动作】最多3个 approved_actions",
-                "【禁止/待确认】读取 portfolio_decision.suppressed_actions 和 unresolved_conflicts；数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny；若 risk_state.suspend_accumulation=true 标注暂停加仓",
-                "【资金到账与边界】读取 cash_schedule 和 risk_state 和 data_boundaries",
-                "【研究候选】读取 research_candidates",
-            ],
-        ),
-
-        # -- 硬性禁止（违反 = 错误） --
+        "must_answer": [
+            "【交易指令卡】第一段只读取 portfolio_decision.user_view.instruction_card；原样表达状态、最多3个动作、比例、预计金额、取消条件、到账和下一检查点",
+            "没有获批动作时，主窗口写“今日无需操作”并列出 instruction_card.no_action_reasons 中1-2个关键原因",
+            "【私人投资助理】第二段只读取 portfolio_decision.user_view.assistant_brief，解释原因、当前不能做什么、四类资金、风险状态和观察候选",
+            delivery_policy,
+        ],
         "must_not_do": [
             "不得承诺收益",
             "不得忽略 data_boundaries.data_quality",
-            "research_only 信号不得写入今日动作段",
-            "不得从 rationale/facts/free text 中正则抽取数字作为动作金额或比例——所有金额比例必须来自 artifact 结构字段",
+            "不得向用户展示 position_id、decision_id、内部哈希、原始异常码、英文 signal/risk/liquidity 枚举",
+            "所有标的必须使用 portfolio_decision.user_view 中的真实名称 + 公开代码；不得自行用代理标的代码替代基金代码",
+            "动作卡必须显示结构化比例 + 预计金额；amount_is_estimate=true 时必须标注“估算”",
+            "不得从 rationale、facts 或自由文本提取数字作为动作比例或金额",
+            "suppressed_actions、unresolved_conflicts、research_candidates 不得变成新的交易动作",
+            "私人投资助理只能解释，不能新增动作、金额或交易时机",
+            "research_only 信号不得写入交易指令卡动作列表",
             "不得自动保存建议、执行或预测",
             "严禁使用 # 号标题（用**加粗**代替）",
-            "严禁使用 | 表格",
-            "严禁使用 ``` 代码块（用`行内代码`代替）",
-            "严禁使用 > 引用",
-            "严禁使用 --- 分隔线",
-            "严禁使用 - [ ] 任务列表",
-            "严禁使用任何 HTML 标签",
-            "情报引用必须标注来源标题和发布时间，严禁自编'市场传闻''据悉''有消息称'",
+            "严禁使用 | 表格、```代码块、>引用、---分隔线、任务列表或HTML",
         ],
-
-        # -- 数据字段引用指南（严格5个字段） --
         "data_reference": {
-            "window_delta": "window_delta -- changes[]（变化列表）、material（是否有实质变化）、first_in_session",
-            "portfolio_decision": "portfolio_decision -- status（approved/suppressed/review_required）、approved_actions[]（每个含position_id, signal, ratio, action_description, cancel_condition, settlement_timing, next_checkpoint）、suppressed_actions[]、unresolved_conflicts[]、cash_schedule",
-            "risk_state": "risk_state -- level、suspend_accumulation、cash_target_pct、transition",
-            "data_boundaries": "data_boundaries -- data_quality（各子项状态和时效）、source_context",
-            "research_candidates": "research_candidates[] -- symbol, name, signal（research_only）、action_hint、reassess_after（暂停期间）",
+            "window_delta": "只用于判断是否有实质变化和观察窗口静默",
+            "portfolio_decision": "唯一用户展示来源为 portfolio_decision.user_view.instruction_card 和 assistant_brief",
+            "risk_state": "只用于交叉验证 user_view 风险说明，不得自行生成动作",
+            "data_boundaries": "只用于确认数据时效/质量说明完整，不得自行计算金额",
+            "research_candidates": "只用于交叉验证 user_view 观察候选，不得进入指令卡",
         },
-
-        # -- 输出格式：5个固定段 --
         "output_structure": {
-            "max_words": 1000,
+            "max_words": 900,
             "platform": "feishu",
-            "format_rules": "仅使用**加粗**、`行内代码`、- 列表、[链接](url) 四种格式。用空行分隔段落。禁用 # | ``` > --- -[ ] HTML。",
+            "format_rules": "仅使用**加粗**、`行内代码`、- 列表、[链接](url)和空行。",
             "sections": [
                 {
-                    "name": "变化摘要",
-                    "content": "读取 window_delta.changes 列出变化；无变化写'无实质变化'",
+                    "name": "交易指令卡",
+                    "content": "必须位于最上方。读取 instruction_card。状态为需要操作时最多列3个动作；状态为今日无需操作时列1-2个原因；状态为等待人工确认时说明冲突但不得生成交易动作。",
                 },
                 {
-                    "name": "今日动作",
-                    "content": "列出 portfolio_decision.approved_actions（最多3个）。每项格式: **{position_id}** `{signal}` {ratio*100}% -- {action_description}。取消条件: {cancel_condition} . 到账: {settlement_timing} . 下个检查点: {next_checkpoint}。无 approved_actions 时写'今日无需操作'",
-                },
-                {
-                    "name": "禁止/待确认",
-                    "content": "列出 portfolio_decision.suppressed_actions（每项原因）和 unresolved_conflicts。数据异常必须复述异常码及异常数值（来自 evidence），不得只写异常码；权益冲突必须引用 bucket_ratio、bucket_value_cny、portfolio_value_cny。如果 risk_state.suspend_accumulation=true 标注暂停加仓。research_only 不在此段",
-                },
-                {
-                    "name": "资金到账与边界",
-                    "content": "读取 portfolio_decision.cash_schedule（立刻可用/在途/锁定）+ risk_state（等级+解除条件）+ data_boundaries.data_quality（数据缺口）。格式: - 立即现金: ¥XXX . 在途: ¥XXX . 锁定: ¥XXX。风险等级: {level}（{transition}）。数据缺口: {列举}",
-                },
-                {
-                    "name": "研究候选",
-                    "content": "读取 research_candidates。research_only 信号绝不写入今日动作段。暂停期间标注解除条件后再评估。每项: **{symbol}** {action_hint}。最多8个",
+                    "name": "私人投资助理",
+                    "content": "紧接交易指令卡。读取 assistant_brief，依次解释为什么、现在不要做什么、现在能用/到账途中/卖出后才能用/不能动的资金、风险状态、仅供观察的候选和下一检查点。",
                 },
             ],
         },
-
-        # -- 分析师人格 --
         "persona": _build_persona(),
-
-        # -- 自适应输出 --
         "adaptability": {
-            "silent_when_nothing": "如果 window_delta.material=false + 无 approved_actions + 无 suppressed_actions -> 输出可缩至 3-5 句话，不强制展开所有五节",
-            "loud_when_critical": "如果有 stop_loss 或 risk_state.transition=escalated -> 这些放在最前面，篇幅可扩展到 1200 字",
-            "no_research_only_in_actions": "research_only 信号必须严格限制在研究候选段，禁止出现在今日动作段",
+            "delivery_policy": delivery_policy,
+            "card_first": "无论篇幅长短，交易指令卡必须是第一段，私人投资助理必须紧接第二段",
+            "no_new_actions": "私人投资助理不得新增 portfolio_decision.user_view.instruction_card.actions 之外的动作",
         },
-
-        # -- 最终指令 --
         "final_analysis_instructions": (
-            "阅读 persona 理解你的角色。根据 adaptability 决定输出篇幅。"
-            "输出固定五节：变化摘要 -> 今日动作 -> 禁止/待确认 -> 资金到账与边界 -> 研究候选。"
-            "严格遵守 must_not_do。所有金额比例必须来自 artifact 结构字段。"
-            "严格遵守数据引用以 data_reference 为准。"
+            "严格按 portfolio_decision.user_view 输出双层报告：交易指令卡在上，私人投资助理紧接在下。"
+            "只使用确定性人类展示字段，不输出内部代号，不进行二次计算。"
         ),
     }
-
 
 def _build_execution_review_summary(recent_advice: list[dict]) -> dict:
     """从 recent_advice 的 execution_review 汇总执行状态。"""
@@ -1836,184 +1752,75 @@ def _build_execution_review_summary(recent_advice: list[dict]) -> dict:
 
 
 def format_run_markdown(run: dict) -> str:
-    """5-section human-readable report markdown.
-
-    All monetary values and ratios are rendered directly from structured
-    artifact fields - never from free text rationale/facts.
-    """
-    session = run.get("session", "")
-    market_date = run.get("market_date", "")
-    rlines = [
-        f"# {session} {market_date}",
+    """Render the deterministic trade-card-first human report."""
+    decision = run.get("portfolio_decision") or {}
+    view = decision.get("user_view") or {}
+    card = view.get("instruction_card") or {}
+    assistant = view.get("assistant_brief") or {}
+    lines = [
+        f"**{run.get('session', '交易窗口')} · {run.get('market_date', '')}**",
         "",
-        f"- run_id: `{run.get('run_id', '')}`",
-        f"- status: `{run.get('status', '')}`",
+        "**交易指令卡**",
+        f"- **{card.get('status_label', '等待人工确认')}**",
     ]
-
-    ss = run.get("session_summary") or {}
-    rlines.append(f"- priority: `{ss.get('priority', 'normal')}`")
-    rlines.append(f"- push_policy: `{ss.get('push_policy', '')}`")
-    rlines.append("")
-
-    # -- Section 1: Change Summary --
-    rlines.append("## 变化摘要")
-    wd = run.get("window_delta") or {}
-    changes = wd.get("changes") or []
-    if changes:
-        for c in changes[:8]:
-            field = c.get("field", "?")
-            old_v = c.get("old")
-            new_v = c.get("new")
-            if old_v is not None and new_v is not None:
-                rlines.append(f"- {field}: {old_v} -> {new_v}")
-            elif new_v is not None:
-                rlines.append(f"- {field}: {new_v} (新)")
+    actions = card.get("actions") or []
+    if actions:
+        for action in actions[:3]:
+            ratio = float(action.get("ratio") or 0.0)
+            lines.append(
+                f"- **{action.get('action_label', '待确认动作')}｜{action.get('display_label', '未命名持仓')}**"
+            )
+            lines.append(f"  - 比例: {ratio * 100:.0f}%")
+            amount = action.get("estimated_amount_cny")
+            if amount is None:
+                lines.append("  - 预计金额: 金额待确认")
             else:
-                rlines.append(f"- {field}: 有变化")
-        if len(changes) > 8:
-            rlines.append(f"- ... 还有 {len(changes)-8} 项变化")
+                estimate = "（估算）" if action.get("amount_is_estimate") else ""
+                lines.append(f"  - 预计金额: ¥{float(amount):,.0f}{estimate}")
+            lines.append(f"  - 取消条件: {action.get('cancel_condition', '条件不再成立时取消')}")
+            lines.append(f"  - 到账: {action.get('settlement_display', '到账时间待确认')}")
+            lines.append(f"  - 下次检查: {action.get('next_checkpoint', '下一交易窗口复核')}")
     else:
-        rlines.append("- 无实质变化")
-    if wd.get("first_in_session"):
-        rlines.append("- 本 session 首次运行（无前一窗口可对比）")
-    rlines.append("")
+        for reason in (card.get("no_action_reasons") or ["当前没有满足执行条件的获批动作"])[0:2]:
+            lines.append(f"- 原因: {reason}")
+        lines.append(f"- 下次检查: {card.get('next_checkpoint', '下一交易窗口复核')}")
 
-    # -- Section 2: Today Actions --
-    rlines.append("## 今日动作")
-    pd = run.get("portfolio_decision") or {}
-    approved = pd.get("approved_actions") or []
-    if approved:
-        for action in approved[:3]:
-            pid = action.get("position_id", "?")
-            sig = action.get("signal", "hold")
-            ratio = action.get("ratio", 0.0)
-            desc = action.get("action_description", "")
-            cancel = action.get("cancel_condition") or "需人工复核取消条件"
-            settlement = action.get("settlement_timing") or "待确认结算规则"
-            checkpoint = action.get("next_checkpoint") or "下一交易窗口复核"
-            rule_note = ""
-            if ("浮亏" in desc or "阈值" in desc) and ("止损" in desc or "stop" in desc or "mid" in desc or "阈值" in desc):
-                rule_note = " (止损规则触发，优先于左侧加仓)"
-            rlines.append(f"- **{pid}** {sig} {abs(ratio)*100:.0f}% -- {desc}{rule_note}")
-            rlines.append(f"  - 取消条件: {cancel} | 到账: {settlement} | 下个检查点: {checkpoint}")
-        if len(approved) > 3:
-            rlines.append(f"- ... 还有 {len(approved)-3} 个动作")
+    lines.extend(["", "**私人投资助理**", "", "**为什么这样安排**"])
+    for reason in (assistant.get("why") or ["当前决策以组合裁决结果为准"])[0:5]:
+        lines.append(f"- {reason}")
+
+    lines.extend(["", "**现在不要做什么**"])
+    do_not_do = assistant.get("do_not_do") or []
+    if do_not_do:
+        for item in do_not_do[:5]:
+            lines.append(f"- {item}")
     else:
-        rlines.append("- 今日无需操作")
-    rlines.append("")
+        lines.append("- 无额外禁止事项")
 
-    # Build position_id -> evidence map for anomaly details
-    pr_map = {pr.get("position_id"): pr for pr in (run.get("position_reviews") or [])}
+    lines.extend(["", "**资金状态**"])
+    cash = assistant.get("cash") or {}
+    for key in ("immediate", "settling", "strategic_exit", "locked"):
+        item = cash.get(key) or {}
+        lines.append(f"- {item.get('label', '资金待确认')}: ¥{float(item.get('amount_cny') or 0.0):,.0f}")
 
-    # -- Section 3: Forbidden/Pending --
-    rlines.append("## 禁止待确认")
-    suppressed = pd.get("suppressed_actions") or []
-    if suppressed:
-        for sa in suppressed:
-            pid = sa.get("position_id", "?")
-            reason = sa.get("reason", "")
-            rlines.append(f"- **{pid}** 禁止: {reason}")
-            # Append every anomaly code and its scalar evidence.  Generic
-            # rendering keeps new anomaly types auditable without adding a
-            # code-specific branch for each detector.
-            pr = pr_map.get(pid) or {}
-            for anomaly in (pr.get("evidence") or {}).get("data_anomalies") or []:
-                code = anomaly.get("code", "unknown")
-                evidence = anomaly.get("evidence") or {}
-                scalar_evidence = [
-                    f"{key}={value}"
-                    for key, value in sorted(evidence.items())
-                    if isinstance(value, (str, int, float, bool)) or value is None
-                ]
-                details = ", ".join(scalar_evidence) or anomaly.get("description", "无数值证据")
-                rlines.append(f"  - {code}: {details}")
+    risk = assistant.get("risk") or {}
+    lines.extend(["", "**组合与风险**"])
+    lines.append(f"- 当前状态: {risk.get('label', '风险状态待确认')}（{risk.get('transition', '状态待确认')}）")
+    if risk.get("suspend_accumulation"):
+        lines.append("- 当前暂停加仓")
+    lines.append(f"- 解除条件: {risk.get('release_condition', '等待风险条件明确')}")
+
+    lines.extend(["", "**仅供观察**"])
+    research = assistant.get("research") or []
+    if research:
+        for item in research[:8]:
+            lines.append(f"- **{item.get('display_label', '未命名标的')}**: {item.get('action_hint', '仅供观察')}")
+            if item.get("reassess_after"):
+                lines.append(f"  - 再评估: {item['reassess_after']}")
     else:
-        rlines.append("- 无被禁止动作")
+        lines.append("- 暂无需要重点跟踪的研究候选")
+    return "\n".join(lines)
 
-    conflicts = pd.get("unresolved_conflicts") or []
-    if conflicts:
-        rlines.append("")
-        rlines.append("**待人工确认的冲突:**")
-        for cf in conflicts[:5]:
-            msg = cf.get("message", cf.get("conflict", ""))
-            rlines.append(f"- {msg}")
-
-    risk_state = run.get("risk_state") or {}
-    if risk_state.get("suspend_accumulation"):
-        rlines.append("- **暂停加仓**: 风险状态要求暂停新开仓位")
-    rlines.append("")
-
-    # -- Section 4: Cash and Risk Boundaries --
-    rlines.append("## 资金到账与边界")
-    cs = pd.get("cash_schedule") or {}
-    if cs:
-        immediate = cs.get("immediate_cash_cny", 0)
-        settling = cs.get("settling_cash_cny", 0)
-        locked = cs.get("locked_value_cny", 0)
-        strategic = cs.get("strategic_exit_value_cny", 0)
-        rlines.append(f"- 立即现金: {immediate:,.0f}")
-        rlines.append(f"- 在途结算: {settling:,.0f}")
-        rlines.append(f"- 策略退出值: {strategic:,.0f}")
-        rlines.append(f"- 锁定资产: {locked:,.0f}")
-
-    conflicts = pd.get("unresolved_conflicts") or []
-    if any(c.get("bucket") == "权益" or "权益占比" in str(c.get("message", "")) for c in conflicts):
-        rlines.append("")
-        rlines.append("**权益暴露计算来源:**")
-        equity_conflict = next(
-            conflict
-            for conflict in conflicts
-            if conflict.get("bucket") == "权益" or "权益占比" in str(conflict.get("message", ""))
-        )
-        equity_value = equity_conflict.get("bucket_value_cny")
-        portfolio_value = equity_conflict.get("portfolio_value_cny")
-        equity_ratio = equity_conflict.get("bucket_ratio")
-        if equity_value is not None:
-            rlines.append(f"- 权益 bucket 汇总: {equity_value:,.0f} CNY")
-        if portfolio_value is not None:
-            rlines.append(f"- 组合总值: {portfolio_value:,.0f} CNY")
-        rlines.append("- 计算路径: 每个 position 只计一次；exposure_tags 去重映射到约束 bucket")
-        if equity_ratio is not None:
-            rlines.append(f"- 占比: {equity_ratio * 100:.1f}%")
-        rlines.append("")
-    level = risk_state.get("level", "normal")
-    transition = risk_state.get("transition", "")
-    if level != "normal":
-        rlines.append(f"- 风险等级: **{level}** (过渡: {transition})")
-    else:
-        rlines.append(f"- 风险等级: {level}")
-
-    db = run.get("data_boundaries") or {}
-    dq = db.get("data_quality") or {}
-    degraded_keys = []
-    for key in ("quotes", "news", "rotation", "action_signals", "history_backfill"):
-        sub = dq.get(key) or {}
-        if sub.get("status") not in (None, "ok", "fresh"):
-            degraded_keys.append(key + ":" + str(sub.get("status")))
-    if degraded_keys:
-        rlines.append("- 数据缺口: " + ", ".join(degraded_keys))
-    else:
-        rlines.append("- 数据质量: 正常")
-    rlines.append("")
-
-    # -- Section 5: Research Candidates --
-    rlines.append("## 研究候选")
-    rc = run.get("research_candidates") or []
-    if rc:
-        for candidate in rc[:8]:
-            symbol = candidate.get("symbol", "?")
-            hint = candidate.get("action_hint", "")
-            cond = candidate.get("reassess_after")
-            if cond:
-                rlines.append(f"- **{symbol}** {hint} ({cond})")
-            else:
-                rlines.append(f"- **{symbol}** {hint}")
-    else:
-        rlines.append("- 无待研究候选")
-    rlines.append("")
-
-    rlines.append("_generated_at: " + str(run.get("generated_at", "")) + "_")
-    return "\n".join(rlines)
 def resolve_artifact_dir(config: dict, *, repo_root: Path) -> Path:
     raw = str(config.get("artifact_dir") or ".local/scheduled_runs")
     path = Path(raw)

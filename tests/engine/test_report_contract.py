@@ -3,8 +3,8 @@
 Tests enforce:
 1. Artifact contains data_boundaries and research_candidates structures.
 2. agent_task.data_reference only references 5 fields.
-3. agent_task has 5 fixed output sections.
-4. format_run_markdown has 5 sections, no raw agent_task dump.
+3. agent_task has the trade-card-first two-layer output structure.
+4. format_run_markdown has the same two layers and hides internal identifiers.
 5. Each approved action has cancel_condition, settlement, next_checkpoint.
 6. research_only signals never appear in action section.
 7. All monetary values in markdown are traceable to artifact fields.
@@ -106,25 +106,14 @@ def test_agent_task_data_reference_five_fields(minimal_run: dict):
 # ─── Test 4: agent_task.must_answer covers 5 sections ──────────────────
 
 
-def test_agent_task_must_answer_covers_five_sections(minimal_run: dict):
-    """agent_task.must_answer must cover the 5 contract sections."""
+def test_agent_task_must_answer_covers_two_human_layers(minimal_run: dict):
     agent_task = minimal_run.get("agent_task", {})
-    must_answer = agent_task.get("must_answer", [])
-    all_text = " ".join(must_answer).lower()
-
-    section_keywords = {
-        "变化摘要": ["变化", "delta", "window"],
-        "今日动作": ["动作", "action", "approved"],
-        "禁止待确认": ["禁止", "suppressed", "pending", "confirm"],
-        "资金到账与边界": ["资金", "cash", "到账", "边界", "risk"],
-        "研究候选": ["研究", "research", "candidate"],
-    }
-
-    for section, keywords in section_keywords.items():
-        found = any(kw.lower() in all_text for kw in keywords)
-        assert found, (
-            f"must_answer missing coverage for section '{section}' (expected keywords: {keywords})"
-        )
+    sections = agent_task["output_structure"]["sections"]
+    assert [section["name"] for section in sections] == ["交易指令卡", "私人投资助理"]
+    text = json.dumps(agent_task, ensure_ascii=False)
+    assert "instruction_card" in text
+    assert "assistant_brief" in text
+    assert "不得向用户展示 position_id" in text
 
 
 # ─── Test 5: Each approved action has structured fields ────────────────
@@ -155,38 +144,32 @@ def test_approved_actions_have_structured_fields():
 # ─── Test 6: format_run_markdown has 5 sections ───────────────────────
 
 
-def test_format_run_markdown_has_five_sections(minimal_run: dict):
-    """format_run_markdown output must have 5 distinct sections."""
-    run = minimal_run
-    md = format_run_markdown(run)
-    # Must not contain raw agent_task must_answer lines
-    assert "## Agent Task" not in md, "Markdown must not contain raw Agent Task section"
-    assert "## Action Signals" not in md, "Markdown must not contain raw Action Signals section"
-
-    sections = ["变化摘要", "今日动作", "禁止待确认", "资金到账与边界", "研究候选"]
-    for section in sections:
-        assert f"## {section}" in md, f"Markdown missing required section: {section}"
+def test_format_run_markdown_has_trade_card_then_private_assistant(minimal_run: dict):
+    md = format_run_markdown(minimal_run)
+    assert "## Agent Task" not in md
+    assert "## Action Signals" not in md
+    assert "**交易指令卡**" in md
+    assert "**私人投资助理**" in md
+    assert md.index("**交易指令卡**") < md.index("**私人投资助理**")
 
 
 # ─── Test 7: research_only signals never in action section ─────────────
 
 
-def test_research_only_not_in_action_section(minimal_run: dict):
-    """research_only candidates render only after the research heading."""
+def test_research_only_not_in_instruction_card(minimal_run: dict):
     run = json.loads(json.dumps(minimal_run))
-    run["portfolio_decision"]["approved_actions"] = []
-    run["research_candidates"] = [
-        {
-            "symbol": "research:ONLY",
-            "signal": "research_only",
-            "action_hint": "仅研究，不执行",
-        }
-    ]
+    view = run["portfolio_decision"]["user_view"]
+    view["instruction_card"]["actions"] = []
+    view["assistant_brief"]["research"] = [{
+        "display_label": "医药ETF（512010）",
+        "action_hint": "仅研究，不执行",
+        "reassess_after": "下一窗口复核",
+    }]
     markdown = format_run_markdown(run)
-    action_section = markdown.split("## 今日动作", 1)[1].split("## 禁止待确认", 1)[0]
-    research_section = markdown.split("## 研究候选", 1)[1]
-    assert "research:ONLY" not in action_section
-    assert "research:ONLY" in research_section
+    card = markdown.split("**交易指令卡**", 1)[1].split("**私人投资助理**", 1)[0]
+    assistant = markdown.split("**私人投资助理**", 1)[1]
+    assert "医药ETF（512010）" not in card
+    assert "医药ETF（512010）" in assistant
 
 
 # ─── Test 8: Monetary values traceable to artifact fields ─────────────
@@ -209,20 +192,13 @@ def test_markdown_monetary_values_traceable_to_artifact(tmp_path: Path):
     run = runner.latest("cn_pre_close")["data"]
     md = format_run_markdown(run)
 
-    cash_schedule = run.get("cash_schedule", {})
-    if cash_schedule:
-        immediate = cash_schedule.get("immediate_cash_cny", 0)
-        if immediate > 0:
-            assert str(int(immediate)) in md, f"Cash amount ¥{immediate} must appear in markdown"
-
-    portfolio_decision = run.get("portfolio_decision", {})
-    for action in portfolio_decision.get("approved_actions", []):
-        ratio = action.get("ratio", 0)
-        if ratio > 0:
-            ratio_pct = f"{int(ratio * 100)}%"
-            assert ratio_pct in md, (
-                f"Ratio {ratio_pct} from approved action must appear in markdown"
-            )
+    view = run["portfolio_decision"]["user_view"]
+    immediate = view["assistant_brief"]["cash"]["immediate"]["amount_cny"]
+    assert f"¥{immediate:,.0f}" in md
+    for action in view["instruction_card"]["actions"]:
+        assert f"{action['ratio'] * 100:.0f}%" in md
+        if action["estimated_amount_cny"] is not None:
+            assert f"¥{action['estimated_amount_cny']:,.0f}" in md
 
 
 # ─── Test 9: Intelligence agent task not affected ──────────────────────
@@ -276,22 +252,21 @@ def test_suppressed_actions_in_forbidden_section():
     assert sa["position_id"] == "suppressed_pos"
 
 
-def test_renderer_does_not_extract_numbers_from_free_text(minimal_run: dict):
+def test_renderer_uses_only_user_view_structured_numbers(minimal_run: dict):
     run = json.loads(json.dumps(minimal_run))
-    run["portfolio_decision"]["approved_actions"] = [
-        {
-            "position_id": "p1",
-            "signal": "reduce",
-            "ratio": 0.25,
-            "action_description": "减仓",
-            "reason": "传闻金额 987654321 元，比例 77%",
-            "cancel_condition": "条件不成立",
-            "settlement_timing": "T+1",
+    run["portfolio_decision"]["user_view"]["instruction_card"] = {
+        "status": "action_required", "status_label": "需要操作",
+        "actions": [{
+            "display_label": "化工ETF（516020）", "action_label": "减仓",
+            "ratio": 0.25, "estimated_amount_cny": 4200.0,
+            "amount_is_estimate": True, "reason_summary": "传闻金额 987654321 元，比例 77%",
+            "cancel_condition": "条件不成立", "settlement_display": "T+1",
             "next_checkpoint": "下一窗口",
-        }
-    ]
+        }], "no_action_reasons": [], "next_checkpoint": "下一窗口",
+    }
     markdown = format_run_markdown(run)
     assert "25%" in markdown
+    assert "¥4,200" in markdown
     assert "987654321" not in markdown
     assert "77%" not in markdown
 
@@ -316,16 +291,12 @@ def test_blocked_position_symbol_excluded_from_research_candidates(tmp_path):
 @pytest.mark.parametrize(
     "intent",
     [
-        "pre_open_plan",
-        "open_watch",
-        "pre_close_decision",
-        "after_close_review",
-        "morning_close_check",
-        "afternoon_open_check",
-        "mid_session_check",
+        "pre_open_plan", "open_watch", "pre_close_decision",
+        "after_close_review", "morning_close_check",
+        "afternoon_open_check", "mid_session_check",
     ],
 )
-def test_all_trading_agent_tasks_require_numeric_anomaly_evidence(intent):
+def test_all_trading_agent_tasks_require_humanized_anomaly_explanations(intent):
     session = ScheduledSession(
         id="test_session", market="cn", exchange_timezone="Asia/Shanghai",
         user_timezone="Asia/Shanghai", time="14:35", intent=intent,
@@ -333,70 +304,24 @@ def test_all_trading_agent_tasks_require_numeric_anomaly_evidence(intent):
         holidays=frozenset(), primary_market="cn",
     )
     task = build_agent_task(session)
-    forbidden_instruction = next(x for x in task["must_answer"] if "禁止" in x)
-    assert "异常数值" in forbidden_instruction
-    assert "不得只写异常码" in forbidden_instruction
-    assert "bucket_ratio" in forbidden_instruction
+    text = json.dumps(task, ensure_ascii=False)
+    assert "原始异常码" in text
+    assert "不得向用户展示" in text
+    assert "assistant_brief" in text
 
 
-def test_renderer_uses_adjudicator_equity_ratio_without_overlapping_tag_double_count():
-    run = {
-        "session": "cn_pre_close", "market_date": "2026-07-15", "run_id": "r1",
-        "status": "ok", "session_summary": {}, "window_delta": {},
-        "portfolio_decision": {
-            "approved_actions": [], "suppressed_actions": [],
-            "unresolved_conflicts": [{
-                "message": "权益占比 16.0% 低于下限 25%，但 p1 触发 reduce。",
-                "bucket_ratio": 0.16, "bucket_value_cny": 160.0,
-                "portfolio_value_cny": 1000.0,
-            }],
-            "cash_schedule": {},
-        },
-        "risk_state": {}, "data_boundaries": {},
-        "context_digest": {"exposure_summary": {
-            "total_value_cny": 1000.0,
-            "exposures": {
-                "a_share": {"value_cny": 100.0},
-                "us_equity": {"value_cny": 60.0},
-                "tech": {"value_cny": 60.0},
-            },
-        }},
-        "position_reviews": [], "research_candidates": [],
-    }
+def test_renderer_hides_machine_ids_hashes_enums_and_anomaly_codes(minimal_run: dict):
+    run = json.loads(json.dumps(minimal_run))
+    run["portfolio_decision"]["decision_id"] = "abcdef0123456789"
+    run["portfolio_decision"]["approved_actions"] = [{
+        "position_id": "a_516020", "signal": "reduce", "decision_id": "abcdef0123456789",
+    }]
+    run["portfolio_decision"]["suppressed_actions"] = [{
+        "position_id": "ccb_wmp", "reason": "prev_close_mismatch periodic_open",
+    }]
     md = format_run_markdown(run)
-    assert "权益 bucket 汇总: 160 CNY" in md
-    assert "占比: 16.0%" in md
-    assert "220 CNY" not in md
-
-
-def test_renderer_prints_generic_numeric_evidence_for_all_anomaly_codes():
-    run = {
-        "session": "cn_pre_close", "market_date": "2026-07-15", "run_id": "r1",
-        "status": "ok", "session_summary": {}, "window_delta": {},
-        "portfolio_decision": {
-            "approved_actions": [],
-            "suppressed_actions": [{"position_id": "p1", "reason": "数据异常阻断"}],
-            "unresolved_conflicts": [], "cash_schedule": {},
-        },
-        "risk_state": {}, "data_boundaries": {}, "context_digest": {},
-        "position_reviews": [{
-            "position_id": "p1",
-            "evidence": {"data_anomalies": [
-                {"code": "prev_close_mismatch", "evidence": {
-                    "quote_prev_close": 1.01, "history_prev_close": 1.50,
-                    "difference_pct": 32.67,
-                }},
-                {"code": "source_regime_change", "evidence": {
-                    "old_source": "eastmoney", "new_source": "tencent",
-                    "price_gap_pct": 12.5,
-                }},
-            ]},
-        }],
-        "research_candidates": [],
-    }
-    md = format_run_markdown(run)
-    assert "prev_close_mismatch" in md
-    assert "quote_prev_close=1.01" in md
-    assert "history_prev_close=1.5" in md
-    assert "source_regime_change" in md
-    assert "price_gap_pct=12.5" in md
+    for forbidden in (
+        "a_516020", "ccb_wmp", "abcdef0123456789", "prev_close_mismatch",
+        "periodic_open", "review_required", "research_only",
+    ):
+        assert forbidden not in md

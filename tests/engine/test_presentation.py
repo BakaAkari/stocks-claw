@@ -143,3 +143,34 @@ def test_build_user_view_research_candidates_use_real_names_and_never_actions():
     assert view["assistant_brief"]["research"][0]["display_label"] == "医药ETF（512010）"
     assert "wait_for_pullback" not in str(view)
     assert "research_only" not in str(view)
+
+
+
+def test_manual_review_prioritizes_humanized_portfolio_conflict_over_research_suppression():
+    decision = {
+        "status": "review_required", "approved_actions": [],
+        "suppressed_actions": [{
+            "position_id": "alipay_gf_nasdaq", "signal": "hold",
+            "reason": "research_only：长期配置仓信号仅供研究，不可执行",
+        }],
+        "unresolved_conflicts": [{
+            "position_id": "a_510300", "signal": "reduce", "bucket": "权益",
+            "bucket_ratio": 0.156, "bucket_value_cny": 246605.21,
+            "portfolio_value_cny": 1578889.3,
+            "message": "权益占比 15.6% 低于下限，但 a_510300 触发 reduce",
+        }],
+        "cash_schedule": {},
+    }
+    positions = [
+        _position("a_510300", "沪深300ETF", "a:510300"),
+        _position("alipay_gf_nasdaq", "广发纳指100联接A", "us:QQQ", public_code="270042"),
+    ]
+    view = build_user_view(decision, positions, [], [], {"level": "watch"},
+                           session_id="cn_pre_open", session_intent="pre_open_plan")
+    card = view["instruction_card"]
+    assert card["status_label"] == "等待人工确认"
+    assert card["no_action_reasons"][0] == (
+        "沪深300ETF（510300）：权益当前占组合15.6%，低于目标下限，但技术信号要求减仓；方向冲突，需人工确认"
+    )
+    assert "a_510300" not in str(view)
+    assert "reduce" not in str(view)

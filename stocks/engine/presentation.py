@@ -158,6 +158,16 @@ def _cash_view(schedule: dict) -> dict:
     }
 
 
+def _conflict_reason(conflict: dict, by_id: dict[str, dict]) -> str:
+    item = by_id.get(str(conflict.get("position_id") or ""), {})
+    label = _display_for_position(item)
+    bucket = str(conflict.get("bucket") or "组合")
+    ratio = conflict.get("bucket_ratio")
+    ratio_text = f"{float(ratio) * 100:.1f}%" if isinstance(ratio, (int, float)) else "待确认"
+    action = signal_label(conflict.get("signal", ""))
+    return f"{label}：{bucket}当前占组合{ratio_text}，低于目标下限，但技术信号要求{action}；方向冲突，需人工确认"
+
+
 def build_user_view(
     portfolio_decision: dict,
     position_valuations: list[dict],
@@ -193,16 +203,20 @@ def build_user_view(
         })
 
     no_action_reasons = []
+    for conflict in decision.get("unresolved_conflicts") or []:
+        reason = _conflict_reason(conflict, by_id)
+        if reason not in no_action_reasons:
+            no_action_reasons.append(reason)
+        if len(no_action_reasons) == 2:
+            break
     for raw in decision.get("suppressed_actions") or []:
+        if len(no_action_reasons) == 2:
+            break
         item = by_id.get(str(raw.get("position_id") or ""), {})
         label = _display_for_position(item)
         reason = f"{label}：{_safe_reason_text(raw.get('reason', ''))}"
         if reason not in no_action_reasons:
             no_action_reasons.append(reason)
-        if len(no_action_reasons) == 2:
-            break
-    if not no_action_reasons and decision.get("unresolved_conflicts"):
-        no_action_reasons.append("组合方向存在冲突，需人工确认后再操作")
     if not no_action_reasons and not actions:
         no_action_reasons.append("当前没有满足执行条件的获批动作")
 
