@@ -112,6 +112,8 @@ _SUPPRESSION_REASON_TEXT = {
     "single_bar_jump": "行情出现异常跳变，需排查拆分、复权或数据源问题",
     "mixed_adjustment_regime": "历史行情复权口径不一致，技术动作已暂停",
     "price_ma20_dislocation": "价格与20日均线关系异常，技术动作已暂停",
+    "t2_plus": "资金或份额需等待结算完成后才能操作",
+    "manual_fallback": "当前使用人工估值，需更新可靠行情后再决定",
 }
 
 
@@ -125,6 +127,11 @@ def _safe_reason_text(reason: str) -> str:
     if "流动性" in value or "不可交易" in value or "不可操作" in value:
         return "当前交易条件不满足，暂时不能操作"
     return "组合约束或风险条件尚未满足，等待下一检查点"
+
+
+def suppression_reason_display(reason: str) -> str:
+    """Translate suppression reason codes without leaking machine tokens."""
+    return _safe_reason_text(reason)
 
 
 def _position_maps(position_valuations: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
@@ -233,10 +240,13 @@ def build_user_view(
         symbol = str(candidate.get("symbol") or "")
         item = by_key.get(symbol, {})
         name = candidate.get("name") or item.get("display_name") or "未命名标的"
+        reassess_after = str(candidate.get("reassess_after") or "下一交易窗口复核")
+        if "当前状态:" in reassess_after:
+            reassess_after = "风险解除后再评估"
         research.append({
             "display_label": display_label(name, symbol),
             "action_hint": str(candidate.get("action_hint") or "仅供观察，不形成交易动作"),
-            "reassess_after": str(candidate.get("reassess_after") or "下一交易窗口复核"),
+            "reassess_after": reassess_after,
         })
 
     level = str((risk_state or {}).get("level") or "normal")
@@ -282,4 +292,4 @@ def _session_checkpoint(session_id: str, session_intent: str) -> str:
         "us_pre_close": "美股盘后复盘",
         "us_after_close": "下一交易日盘前复核",
     }
-    return checkpoints.get(session_id, f"下一{session_intent or '交易'}窗口复核")
+    return checkpoints.get(session_id, "下一交易窗口复核")

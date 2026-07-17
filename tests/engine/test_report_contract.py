@@ -325,3 +325,12 @@ def test_renderer_hides_machine_ids_hashes_enums_and_anomaly_codes(minimal_run: 
         "periodic_open", "review_required", "research_only",
     ):
         assert forbidden not in md
+
+
+
+def test_renderer_header_uses_human_session_name_not_internal_session_id(minimal_run: dict):
+    run = json.loads(json.dumps(minimal_run))
+    run["session"] = "cn_pre_open"
+    markdown = format_run_markdown(run)
+    assert markdown.startswith("**A股盘前")
+    assert "cn_pre_open" not in markdown

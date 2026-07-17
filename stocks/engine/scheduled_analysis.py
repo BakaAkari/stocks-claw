@@ -1757,8 +1757,17 @@ def format_run_markdown(run: dict) -> str:
     view = decision.get("user_view") or {}
     card = view.get("instruction_card") or {}
     assistant = view.get("assistant_brief") or {}
+    session_labels = {
+        "cn_pre_open": "A股盘前", "cn_open_watch": "A股开盘观察",
+        "cn_morning_close": "A股午间检查", "cn_afternoon_open": "A股午后检查",
+        "cn_pre_close": "A股收盘前", "cn_after_close": "A股盘后复盘",
+        "us_pre_open": "美股盘前", "us_open_watch": "美股开盘观察",
+        "us_mid_session": "美股盘中检查", "us_pre_close": "美股收盘前",
+        "us_after_close": "美股盘后复盘",
+    }
+    session_label = session_labels.get(str(run.get("session") or ""), "交易窗口")
     lines = [
-        f"**{run.get('session', '交易窗口')} · {run.get('market_date', '')}**",
+        f"**{session_label} · {run.get('market_date', '')}**",
         "",
         "**交易指令卡**",
         f"- **{card.get('status_label', '等待人工确认')}**",

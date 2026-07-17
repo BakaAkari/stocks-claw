@@ -7,6 +7,7 @@ from stocks.engine.presentation import (
     risk_label,
     signal_label,
     status_label,
+    suppression_reason_display,
 )
 
 
@@ -174,3 +175,33 @@ def test_manual_review_prioritizes_humanized_portfolio_conflict_over_research_su
     )
     assert "a_510300" not in str(view)
     assert "reduce" not in str(view)
+
+
+
+def test_suppression_reason_translates_liquidity_and_manual_fallback_codes():
+    assert suppression_reason_display("t2_plus") == "资金或份额需等待结算完成后才能操作"
+    assert suppression_reason_display("manual_fallback") == "当前使用人工估值，需更新可靠行情后再决定"
+
+
+def test_unknown_session_checkpoint_does_not_leak_english_intent():
+    view = build_user_view(
+        {"status": "approved", "approved_actions": [], "suppressed_actions": [], "cash_schedule": {}},
+        [], [], [], {}, session_id="new_future_window", session_intent="future_trade_check",
+    )
+    checkpoint = view["instruction_card"]["next_checkpoint"]
+    assert checkpoint == "下一交易窗口复核"
+    assert "future_trade_check" not in checkpoint
+
+
+
+def test_research_reassessment_hides_machine_risk_level():
+    view = build_user_view(
+        {"status": "approved", "approved_actions": [], "suppressed_actions": [], "cash_schedule": {}},
+        [], [], [{
+            "symbol": "a:512010", "name": "医药ETF", "action_hint": "仅供观察",
+            "reassess_after": "风险解除后再评估（当前状态: hedge）",
+        }], {"level": "hedge"}, session_id="cn_pre_open", session_intent="pre_open_plan",
+    )
+    text = str(view["assistant_brief"]["research"])
+    assert "风险解除后再评估" in text
+    assert "hedge" not in text

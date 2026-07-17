@@ -47,3 +47,19 @@ def test_scan_allows_real_chinese_reports():
     }
     errors = scan_run(run, "test.json")
     assert errors == []
+
+
+
+def test_scan_catches_internal_session_id_in_rendered_markdown():
+    run = {
+        "session": "cn_pre_open",
+        "market_date": "2026-07-17",
+        "portfolio_decision": {
+            "user_view": {
+                "instruction_card": {"status_label": "今日无需操作", "actions": [], "no_action_reasons": []},
+                "assistant_brief": {"why": [], "do_not_do": [], "cash": {}, "risk": {}, "research": []},
+            }
+        },
+    }
+    errors = scan_run(run, "test.json", rendered_markdown="**cn_pre_open · 2026-07-17**")
+    assert any("cn_pre_open" in error for error in errors)
