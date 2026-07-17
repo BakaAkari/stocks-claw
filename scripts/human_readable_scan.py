@@ -23,11 +23,12 @@ FORBIDDEN_PATTERNS = [
         r"\b(?:cn|us)_(?:pre_open|open_watch|morning_close|afternoon_open|"
         r"mid_session|pre_close|after_close)\b"
     ),
+    re.compile(r"position_id|decision_id"),
 ]
 
 # Chinese trading-action patterns — scanned only in outlook/delta narrative
 _OUTLOOK_TRADE_ACTIONS = re.compile(
-    r"买入|卖出|减仓|加仓|清仓|止损\d|止盈\d|仓位\s*\d|¥|人民币"
+    r"买入|卖出|减仓|加仓|清仓|止损\d+|止盈\d+|仓位\s*\d+|¥|人民币"
 )
 
 
@@ -40,6 +41,19 @@ def _leaf_values(obj):
             yield from _leaf_values(item)
     elif isinstance(obj, str):
         yield obj
+
+
+def _dict_keys(obj, depth=0):
+    """Recursively yield all dict keys as strings from a nested structure."""
+    if depth > 20:
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield str(k)
+            yield from _dict_keys(v, depth + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _dict_keys(item, depth + 1)
 
 
 def scan_run(run: dict, source: str, *, rendered_markdown: str = "") -> list[str]:
@@ -55,7 +69,7 @@ def scan_run(run: dict, source: str, *, rendered_markdown: str = "") -> list[str
         for m in pat.finditer(text):
             snippet = text[max(0, m.start() - 15):m.end() + 15]
             errors.append(f"{source}: forbidden token `{m.group(0)}` in user view: {snippet}")
-    # Also scan outlook/delta specifically for Chinese trading actions
+    # Also scan outlook/delta for Chinese trading actions
     assistant = view.get("assistant_brief") or {}
     for field in ("outlook", "outlook_delta"):
         data = assistant.get(field) or {}
@@ -64,6 +78,11 @@ def scan_run(run: dict, source: str, *, rendered_markdown: str = "") -> list[str
             for m in _OUTLOOK_TRADE_ACTIONS.finditer(outlook_text):
                 snippet = outlook_text[max(0, m.start() - 15):m.end() + 15]
                 errors.append(f"{source}: forbidden token `{m.group(0)}` in outlook/delta: {snippet}")
+    # Scan all dict keys in user_view for position_id|decision_id
+    all_keys = " ".join(_dict_keys(view))
+    for pat in [re.compile(r"position_id|decision_id")]:
+        for m in pat.finditer(all_keys):
+            errors.append(f"{source}: forbidden key `{m.group(0)}` in user_view keys: ...{all_keys[max(0, m.start()-20):m.end()+20]}...")
     return errors
 
 

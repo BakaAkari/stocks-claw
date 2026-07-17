@@ -266,9 +266,7 @@ _OUTLOOK_SCENARIO_ALLOWED = frozenset({
     "label", "drivers", "portfolio_effect", "validation", "invalidation",
 })
 _OUTLOOK_SOURCE_ALLOWED = frozenset({"source", "title", "url", "published_at", "id"})
-_DELTA_ALLOWED_TOP = frozenset({
-    "schema_version", "changes",
-})
+_DELTA_ALLOWED_TOP = frozenset({"schema_version", "changes"})
 _DELTA_CHANGE_SCALAR = frozenset({"summary", "confidence"})
 _DELTA_SCENARIO_NAMES = frozenset({"base", "bull", "risk"})
 _DELTA_SCENARIO_FIELDS = frozenset({"label", "validation", "invalidation"})
@@ -276,8 +274,28 @@ _DELTA_HORIZON_KEYS = frozenset({"direction", "confidence", "horizon"})
 _DELTA_SOURCE_KEYS = frozenset({"added", "removed"})
 
 
-def _project_outlook(outlook: dict | None) -> dict:
-    """Project only whitelisted outlook fields; strip unknown/internal keys."""
+def _str(val: Any) -> str | None:
+    """Return *val* only when it is already a string."""
+    if isinstance(val, str):
+        return val
+    return None
+
+
+def _str_list(val: Any, max_items: int = 0) -> list[str]:
+    """Return list of str values; cap at max_items (0 = unlimited)."""
+    if not isinstance(val, list):
+        return []
+    items = [v for v in val if isinstance(v, str)]
+    return items[:max_items] if max_items > 0 else items
+
+
+def project_outlook_for_display(outlook: dict | None) -> dict:
+    """Public helper: project only whitelisted outlook fields with type enforcement.
+
+    Strips unknown/internal keys, enforces scalar types, limits list lengths,
+    and restricts scenario names to base/bull/risk only.  Call before writing
+    an outlook into the user-facing assistant_brief.
+    """
     if not isinstance(outlook, dict):
         return {}
     result: dict = {}
@@ -285,41 +303,100 @@ def _project_outlook(outlook: dict | None) -> dict:
         if key not in _OUTLOOK_ALLOWED_TOP:
             continue
         val = outlook[key]
-        if key in ("near_term", "medium_term"):
+        # ---- scalar string fields ----
+        if key in ("status", "generated_at", "message", "summary", "confidence"):
+            s = _str(val)
+            if s is not None:
+                result[key] = s
+        # ---- data_limitations: str list, max 3 ----
+        elif key == "data_limitations":
+            items = _str_list(val, max_items=3)
+            if items:
+                result[key] = items
+        # ---- near_term / medium_term: dict with str-only horizon/direction/confidence ----
+        elif key in ("near_term", "medium_term"):
             if isinstance(val, dict):
-                result[key] = {k: v for k, v in val.items() if k in _OUTLOOK_HORIZON_ALLOWED}
-            else:
-                result[key] = val
+                projected = {}
+                for hk in _OUTLOOK_HORIZON_ALLOWED:
+                    hv = val.get(hk)
+                    s = _str(hv)
+                    if s is not None:
+                        projected[hk] = s
+                if projected:
+                    result[key] = projected
+        # ---- asset_views / sector_views: list of dicts, str-only fields, max 5/4 ----
         elif key in ("asset_views", "sector_views"):
             if isinstance(val, list):
-                result[key] = [
-                    {k: v for k, v in item.items() if k in _OUTLOOK_VIEW_ALLOWED}
-                    for item in val if isinstance(item, dict)
-                ]
+                max_items = 4 if key == "asset_views" else 5
+                items = []
+                for item in val:
+                    if not isinstance(item, dict):
+                        continue
+                    projected = {}
+                    for vk in _OUTLOOK_VIEW_ALLOWED:
+                        vv = item.get(vk)
+                        s = _str(vv)
+                        if s is not None:
+                            projected[vk] = s
+                    if projected:
+                        items.append(projected)
+                    if len(items) >= max_items:
+                        break
+                if items:
+                    result[key] = items
+        # ---- scenarios: only base/bull/risk, each scene str/list[str] with caps ----
         elif key == "scenarios":
             if isinstance(val, dict):
-                result[key] = {}
-                for sname, scene in val.items():
-                    if isinstance(scene, dict):
-                        result[key][sname] = {
-                            k: v for k, v in scene.items()
-                            if k in _OUTLOOK_SCENARIO_ALLOWED
-                        }
-                    else:
-                        result[key][sname] = scene
+                projected = {}
+                for sname in ("base", "bull", "risk"):
+                    scene = val.get(sname)
+                    if not isinstance(scene, dict):
+                        continue
+                    scene_proj: dict = {}
+                    # label / portfolio_effect -> str
+                    for sk in ("label", "portfolio_effect"):
+                        sv = scene.get(sk)
+                        s = _str(sv)
+                        if s is not None:
+                            scene_proj[sk] = s
+                    # drivers / validation / invalidation -> str list, max 3 each
+                    for sk in ("drivers", "validation", "invalidation"):
+                        items = _str_list(scene.get(sk), max_items=3)
+                        if items:
+                            scene_proj[sk] = items
+                    if scene_proj:
+                        projected[sname] = scene_proj
+                if projected:
+                    result[key] = projected
+        # ---- source_refs: list of dicts, str-only fields, max 5 ----
         elif key == "source_refs":
             if isinstance(val, list):
-                result[key] = [
-                    {k: v for k, v in item.items() if k in _OUTLOOK_SOURCE_ALLOWED}
-                    for item in val if isinstance(item, dict)
-                ]
-        else:
-            result[key] = val
+                items = []
+                for item in val:
+                    if not isinstance(item, dict):
+                        continue
+                    projected = {}
+                    for sk in _OUTLOOK_SOURCE_ALLOWED:
+                        sv = item.get(sk)
+                        s = _str(sv)
+                        if s is not None:
+                            projected[sk] = s
+                    if projected:
+                        items.append(projected)
+                    if len(items) >= 5:
+                        break
+                if items:
+                    result[key] = items
     return result
 
 
-def _project_outlook_delta(delta: dict | None) -> dict:
-    """Project only whitelisted delta fields; strip unknown/internal keys."""
+def project_outlook_delta_for_display(delta: dict | None) -> dict:
+    """Public helper: project only whitelisted outlook delta fields.
+
+    Strips unknown/internal keys and enforces type constraints on from/to
+    values (scalar str or list[str] by field).  Call before writing a delta
+    into the user-facing assistant_brief.
+    """
     if not isinstance(delta, dict):
         return {}
     result: dict = {}
@@ -329,45 +406,50 @@ def _project_outlook_delta(delta: dict | None) -> dict:
         if key == "changes":
             val = delta[key]
             if not isinstance(val, dict):
-                result[key] = val
                 continue
             projected = _project_delta_changes(val)
             if projected:
                 result["changes"] = projected
-        else:
+        elif key == "schema_version" and isinstance(delta[key], int) and not isinstance(delta[key], bool):
             result[key] = delta[key]
     return result
 
 
 def _project_delta_changes(changes: dict) -> dict:
-    """Recursive whitelist for delta changes; strip unknown/nested/internal keys."""
+    """Recursive whitelist for delta changes; strip unknown/nested/internal keys
+    and enforce type constraints."""
     projected: dict = {}
     for ckey, cval in changes.items():
         if not isinstance(cval, dict):
             continue
         if ckey in _DELTA_CHANGE_SCALAR:
+            # summary/confidence: from/to scalar str
             scalar = {}
-            if "from" in cval:
-                scalar["from"] = cval["from"]
-            if "to" in cval:
-                scalar["to"] = cval["to"]
+            for dk in ("from", "to"):
+                dv = cval.get(dk)
+                s = _str(dv)
+                if s is not None:
+                    scalar[dk] = s
             if scalar:
                 projected[ckey] = scalar
         elif ckey in ("near_term", "medium_term"):
+            # direction/confidence/horizon: from/to scalar str
             h_proj = {}
             for hk in _DELTA_HORIZON_KEYS:
                 hv = cval.get(hk)
                 if isinstance(hv, dict):
                     h_sub = {}
-                    if "from" in hv:
-                        h_sub["from"] = hv["from"]
-                    if "to" in hv:
-                        h_sub["to"] = hv["to"]
+                    for dk in ("from", "to"):
+                        dv = hv.get(dk)
+                        s = _str(dv)
+                        if s is not None:
+                            h_sub[dk] = s
                     if h_sub:
                         h_proj[hk] = h_sub
             if h_proj:
                 projected[ckey] = h_proj
         elif ckey in ("sector_views", "asset_views"):
+            # direction: only scalar str from/to for each named view
             v_proj = {}
             for vname, vval in cval.items():
                 if not isinstance(vval, dict):
@@ -375,15 +457,17 @@ def _project_delta_changes(changes: dict) -> dict:
                 dir_val = vval.get("direction")
                 if isinstance(dir_val, dict):
                     dir_proj = {}
-                    if "from" in dir_val:
-                        dir_proj["from"] = dir_val["from"]
-                    if "to" in dir_val:
-                        dir_proj["to"] = dir_val["to"]
+                    for dk in ("from", "to"):
+                        dv = dir_val.get(dk)
+                        s = _str(dv)
+                        if s is not None:
+                            dir_proj[dk] = s
                     if dir_proj:
                         v_proj[vname] = {"direction": dir_proj}
             if v_proj:
                 projected[ckey] = v_proj
         elif ckey == "scenarios":
+            # label: scalar str; validation/invalidation: list[str]
             s_proj = {}
             for sname in _DELTA_SCENARIO_NAMES:
                 scene = cval.get(sname)
@@ -392,14 +476,30 @@ def _project_delta_changes(changes: dict) -> dict:
                 scene_proj = {}
                 for sf in _DELTA_SCENARIO_FIELDS:
                     sfv = scene.get(sf)
-                    if isinstance(sfv, dict):
-                        sf_sub = {}
-                        if "from" in sfv:
-                            sf_sub["from"] = sfv["from"]
-                        if "to" in sfv:
-                            sf_sub["to"] = sfv["to"]
-                        if sf_sub:
-                            scene_proj[sf] = sf_sub
+                    if sf == "label":
+                        if isinstance(sfv, dict):
+                            sub = {}
+                            for dk in ("from", "to"):
+                                dv = sfv.get(dk)
+                                s = _str(dv)
+                                if s is not None:
+                                    sub[dk] = s
+                            if sub:
+                                scene_proj[sf] = sub
+                    else:
+                        # validation/invalidation: list[str] from/to
+                        if isinstance(sfv, dict):
+                            sub = {}
+                            for dk in ("from", "to"):
+                                dv = sfv.get(dk)
+                                if isinstance(dv, list):
+                                    lst = [x for x in dv if isinstance(x, str)]
+                                    if lst:
+                                        sub[dk] = lst
+                                elif isinstance(dv, str):
+                                    sub[dk] = dv
+                            if sub:
+                                scene_proj[sf] = sub
                 if scene_proj:
                     s_proj[sname] = scene_proj
             if s_proj:
@@ -409,10 +509,17 @@ def _project_delta_changes(changes: dict) -> dict:
             for sk in _DELTA_SOURCE_KEYS:
                 sv = cval.get(sk)
                 if isinstance(sv, list):
-                    src_proj[sk] = [str(x) for x in sv]
+                    lst = [str(x) for x in sv if isinstance(x, (str, int, float, bool))]
+                    if lst:
+                        src_proj[sk] = lst
             if src_proj:
                 projected[ckey] = src_proj
     return projected
+
+
+# Backward-compatible private aliases used internally by build_user_view
+_project_outlook = project_outlook_for_display
+_project_outlook_delta = project_outlook_delta_for_display
 
 
 def build_user_view(

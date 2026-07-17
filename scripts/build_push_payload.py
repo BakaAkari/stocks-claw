@@ -57,7 +57,7 @@ _OUTLOOK_FORBIDDEN = re.compile(
 
 # Chinese trading-action patterns that must never appear in outlook narrative
 _CHINESE_TRADE_ACTION_RE = re.compile(
-    "买入|卖出|减仓|加仓|清仓|止损\\d|止盈\\d|仓位\\s*\\d|¥|人民币"
+    "买入|卖出|减仓|加仓|清仓|止损\\d+|止盈\\d+|仓位\\s*\\d+|¥|人民币"
 )
 
 
@@ -438,11 +438,14 @@ def _traverse_outlook_text(obj: Any) -> str:
 
 
 def _walk_outlook_strings(obj: Any, parts: list[str]) -> None:
+    """Walk all string values for token/number scanning.
+
+    Does NOT skip any key — horizon, published_at, and generated_at values are
+    scanned for internal tokens; the caller's span-based safe-numeric check
+    handles ISO dates and legit horizon patterns.
+    """
     if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k in ("generated_at", "published_at", "horizon"):
-                # ISO dates allowed
-                continue
+        for v in obj.values():
             _walk_outlook_strings(v, parts)
     elif isinstance(obj, list):
         for item in obj:
@@ -461,24 +464,44 @@ def _strip_outlook_from_payload(payload: dict) -> dict:
     return p
 
 
-def _is_safe_numeric_context(text: str, pos: int, num_str: str) -> bool:
-    """Check whether number at *pos* should be skipped (date, URL, horizon, etc.)."""
-    lookback = text[max(0, pos - 30):pos + len(num_str) + 30]
-    # ISO date (4-digit year + dash + 2-digit month)
-    if re.search(r"\d{4}-\d{2}-\d{2}", lookback):
-        return True
-    # Inside a URL
-    before = text[max(0, pos - 100):pos]
-    if re.search(r"https?://", before):
-        after_proto = text[max(0, pos - 100) + before.rfind("https://"):pos + len(num_str)]
-        if " " not in after_proto:
+def _safe_numeric_spans(text: str) -> set[tuple[int, int]]:
+    """Precompute (start, end) spans in *text* where numbers are contextually safe.
+
+    Safe contexts:
+    - Inside an ISO date (e.g. ``2026-07-17``)
+    - Inside a URL (from ``http[s]://`` to the next whitespace / closing paren)
+    - Horizon patterns (e.g. ``1-2w``, ``1-3个月``)
+    - Version strings (e.g. ``v3.1.4``)
+    """
+    spans: set[tuple[int, int]] = set()
+
+    # 1. ISO date/time spans — exact match only. Including the complete
+    # timestamp exempts its time and timezone tokens, but not adjacent prose.
+    iso_pattern = r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?"
+    for m in re.finditer(iso_pattern, text):
+        spans.add((m.start(), m.end()))
+
+    # 2. URL spans
+    for m in re.finditer(r"https?://[^\s\)>]+", text):
+        spans.add((m.start(), m.end()))
+
+    # 3. Horizon spans (e.g. "1-2w", "1-3m", "1-2周", "1-3个月")
+    for m in re.finditer(r"\d[wmdy周个月天]|\d-\d+[wmdy周个月天]", text):
+        spans.add((m.start(), m.end()))
+
+    # 4. Version strings (e.g. "v3.1.4")
+    for m in re.finditer(r"v\d+(?:\.\d+)+", text):
+        spans.add((m.start(), m.end()))
+
+    return spans
+
+
+def _is_span_safe(pos: int, num_str: str, safe_spans: set[tuple[int, int]]) -> bool:
+    """Return True if the number at *pos* of length *len(num_str)* overlaps any safe span."""
+    num_end = pos + len(num_str)
+    for start, end in safe_spans:
+        if pos < end and num_end > start:
             return True
-    # Horizon pattern like 1-2w, 1-3m, or Chinese 1-2周, 1-3个月
-    if re.search(r"\d[wmdy周个月天]|\d-\d+[wmdy周个月天]", lookback):
-        return True
-    # Version like v3.1.4
-    if re.search(r"v\d+(?:\.\d+)*", lookback):
-        return True
     return False
 
 
@@ -490,6 +513,7 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
     allowed = _number_values(clean_payload)
 
     numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
+    safe_spans = _safe_numeric_spans(numeric_text)
     for m in _NUMBER.finditer(numeric_text):
         raw = m.group()
         pos = m.start()
@@ -497,8 +521,8 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
             value = round(float(raw.rstrip("%")), 4)
         except ValueError:
             continue
-        # Skip safe numeric contexts
-        if _is_safe_numeric_context(numeric_text, pos, raw):
+        # Skip safe numeric spans (date, URL, horizon)
+        if _is_span_safe(pos, raw, safe_spans):
             continue
         if value not in allowed:
             errors.append(f"unauthorized number: {raw}")
@@ -519,6 +543,7 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
                 errors.append(f"trade instruction in outlook: {m.group(0)}")
             # Number scanning on outlook text — skip ISO dates, URLs, horizon
             outlook_numeric = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", outlook_text)
+            outlook_safe = _safe_numeric_spans(outlook_numeric)
             for m in _NUMBER.finditer(outlook_numeric):
                 raw = m.group()
                 pos = m.start()
@@ -526,8 +551,8 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
                     value = round(float(raw.rstrip("%")), 4)
                 except ValueError:
                     continue
-                # Skip safe numeric contexts in outlook text
-                if _is_safe_numeric_context(outlook_numeric, pos, raw):
+                # Skip safe numeric spans in outlook text
+                if _is_span_safe(pos, raw, outlook_safe):
                     continue
                 if value not in allowed:
                     errors.append(f"unauthorized number in outlook: {raw}")

@@ -38,7 +38,11 @@ from stocks.engine.outlook_evidence import (
 )
 from stocks.engine.outlook_synthesizer import OutlookSynthesizer
 from stocks.engine.outlook_validation import sanitize_unavailable_outlook
-from stocks.engine.presentation import build_user_view
+from stocks.engine.presentation import (
+    build_user_view,
+    project_outlook_delta_for_display,
+    project_outlook_for_display,
+)
 from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
 from stocks.engine.quant_action import (
     _TAG_TO_BUCKET,
@@ -602,7 +606,7 @@ class ScheduledAnalysisRunner:
                 # Attach outlook to the user-facing brief
                 uv = run.get("portfolio_decision", {}).get("user_view", {})
                 if uv and "assistant_brief" in uv:
-                    uv["assistant_brief"]["outlook"] = outlook
+                    uv["assistant_brief"]["outlook"] = project_outlook_for_display(outlook)
             except Exception:
                 logger.exception("Outlook synthesis failed for %s", session_id)
                 run["structured_outlook"] = sanitize_unavailable_outlook(
@@ -611,7 +615,7 @@ class ScheduledAnalysisRunner:
                 # Also attach unavailable outlook to assistant brief
                 uv = run.get("portfolio_decision", {}).get("user_view", {})
                 if uv and "assistant_brief" in uv:
-                    uv["assistant_brief"]["outlook"] = run["structured_outlook"]
+                    uv["assistant_brief"]["outlook"] = project_outlook_for_display(run["structured_outlook"])
         elif session_id in OBSERVATION_OUTLOOK_SESSIONS:
             # Observation window: compute delta from latest two primary outlooks
             try:
@@ -623,7 +627,7 @@ class ScheduledAnalysisRunner:
                         if state.should_emit(run["market"], delta):
                             uv = run.get("portfolio_decision", {}).get("user_view", {})
                             if uv and "assistant_brief" in uv:
-                                uv["assistant_brief"]["outlook_delta"] = delta
+                                uv["assistant_brief"]["outlook_delta"] = project_outlook_delta_for_display(delta)
             except Exception:
                 logger.exception("Outlook delta failed for %s", session_id)
 

@@ -699,7 +699,7 @@ def test_observation_session_attaches_delta_when_primaries_differ(tmp_path):
 
     uv = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
     assert "outlook_delta" in uv
-    assert uv["outlook_delta"]["market"] == "cn"
+    assert uv["outlook_delta"]["changes"]["summary"] == {"from": "前期研判", "to": "最新研判"}
 
 
 def test_observation_session_suppresses_duplicate_delta(tmp_path):
@@ -724,7 +724,7 @@ def test_observation_session_suppresses_duplicate_delta(tmp_path):
     art1 = json.loads(Path(result1["paths"]["json_path"]).read_text())
     uv1 = art1["portfolio_decision"]["user_view"]["assistant_brief"]
     assert "outlook_delta" in uv1
-    assert uv1["outlook_delta"]["market"] == "cn"
+    assert uv1["outlook_delta"]["changes"]["summary"] == {"from": "前期研判", "to": "最新研判"}
 
     # Second run: force overwrite to produce same delta, which should be suppressed
     result2 = _run(runner.run_session("cn_open_watch", now=now, force=True))
@@ -850,3 +850,146 @@ def test_unknown_session_does_not_access_delta_state(tmp_path):
     assert not delta_state_path.exists(), (
         "Primary session should not create delta state file"
     )
+
+
+# ── Outlook projection trust boundary tests ──────────────────────
+
+
+def test_primary_outlook_projection_strips_unknown_keys(tmp_path):
+    """FakeSynth returns outlook with unknown_extra; assistant_brief.outlook strips it."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+
+    class LeakySynth:
+        calls = 0
+        def generate(self, evidence, *, now):
+            self.calls += 1
+            return {
+                "status": "ok",
+                "generated_at": now,
+                "summary": "测试",
+                "near_term": {"horizon": "1-2w", "direction": "supportive", "confidence": "high"},
+                "unknown_extra": "should_be_stripped",
+                "internal_code": "leaked_position_id_12345",
+            }
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(engine, config=config, artifact_dir=config["artifact_dir"])
+    runner.outlook_synthesizer = LeakySynth()
+
+    now = datetime.fromisoformat("2026-07-06T15:30:00+08:00")
+    result = _run(runner.run_session("cn_after_close", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    brief = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+    assert "outlook" in brief
+    outlook = brief["outlook"]
+    assert outlook["summary"] == "测试"
+    # Unknown keys MUST be stripped
+    assert "unknown_extra" not in outlook
+    assert "internal_code" not in outlook
+
+
+def test_primary_outlook_projection_strips_position_id(tmp_path):
+    """position_id in synthetic outlook is stripped from assistant_brief."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+
+    class LeakySynth2:
+        calls = 0
+        def generate(self, evidence, *, now):
+            self.calls += 1
+            return {
+                "status": "ok",
+                "generated_at": now,
+                "summary": "正常判断",
+                "position_id": "cn_588000",
+                "near_term": {"horizon": "1-2w", "direction": "supportive", "confidence": "high"},
+            }
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(engine, config=config, artifact_dir=config["artifact_dir"])
+    runner.outlook_synthesizer = LeakySynth2()
+
+    now = datetime.fromisoformat("2026-07-06T15:30:00+08:00")
+    result = _run(runner.run_session("cn_after_close", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    brief = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+    assert "outlook" in brief
+    assert "position_id" not in brief["outlook"]
+    assert brief["outlook"]["summary"] == "正常判断"
+
+
+def test_unavailable_outlook_is_projected(tmp_path):
+    """Unavailable outlook (status=unavailable) goes through projection."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+
+    class UnavailableSynth:
+        calls = 0
+        def generate(self, evidence, *, now):
+            self.calls += 1
+            msg = "deliberate"
+            raise RuntimeError(msg)
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(engine, config=config, artifact_dir=config["artifact_dir"])
+    runner.outlook_synthesizer = UnavailableSynth()
+
+    now = datetime.fromisoformat("2026-07-06T15:30:00+08:00")
+    result = _run(runner.run_session("cn_after_close", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    brief = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+    assert "outlook" in brief
+    ul = brief["outlook"]
+    assert ul["status"] == "unavailable"
+    assert "message" in ul
+    assert "data_limitations" in ul
+
+
+def test_observation_delta_projection_strips_unknown_nested(tmp_path):
+    """Delta with unknown keys in changes is projected to whitelist."""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+
+    _seed_primary_artifact(tmp_path, "cn_after_close", "2026-07-06",
+                           outlook_summary="前期研判")
+    _seed_primary_artifact(tmp_path, "cn_after_close", "2026-07-07",
+                           outlook_summary="最新研判")
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(engine, config=config, artifact_dir=config["artifact_dir"])
+    runner.outlook_synthesizer = FakeSynth()
+
+    # Monkey-patch compute_outlook_delta to inject malicious delta
+    import stocks.engine.scheduled_analysis as sa_mod
+    original = sa_mod.compute_outlook_delta
+    def _poisoned_delta(p1, p2):
+        return {
+            "schema_version": 1,
+            "market": "cn",
+            "changes": {
+                "summary": {"from": "中性", "to": "偏有利"},
+                "position_id": {"from": "cn_588000", "to": "cn_588001"},
+                "_secret": "leaked_internal_data",
+            },
+            "extra_top_key": "should_not_pass",
+        }
+    sa_mod.compute_outlook_delta = _poisoned_delta
+    try:
+        now = datetime.fromisoformat("2026-07-07T10:00:00+08:00")
+        result = _run(runner.run_session("cn_open_watch", now=now, force=True))
+        artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+        uv = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+        assert "outlook_delta" in uv
+        od = uv["outlook_delta"]
+        # Whitelisted fields present
+        assert od.get("changes", {}).get("summary") == {"from": "中性", "to": "偏有利"}
+        # Unknown keys MUST be stripped
+        assert "position_id" not in od.get("changes", {})
+        assert "_secret" not in od.get("changes", {})
+        assert "extra_top_key" not in od
+    finally:
+        sa_mod.compute_outlook_delta = original

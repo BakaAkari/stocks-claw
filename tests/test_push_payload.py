@@ -440,3 +440,48 @@ def test_full_outlook_shows_asset_and_sector_subtitles():
     text = render_push_payload(payload)
     assert "**资产类别**" in text
     assert "**行业观察**" in text
+
+
+def test_validate_payload_text_rejects_date_adjacent_hostile_number():
+    """Hostile number adjacent to ISO date in outlook summary is rejected.
+
+    Ensures that the old ±30-char lookback date exemption does not falsely
+    authorize 99999 when it appears in the same sentence as an ISO date.
+    """
+    base = _full_outlook_artifact()
+    base["portfolio_decision"]["user_view"]["assistant_brief"]["outlook"]["summary"] = (
+        "2026-07-17目标价格99999元"
+    )
+    payload = build_push_payload(base, now="2026-07-17T15:27:00+08:00")
+    text = render_push_payload(payload)
+    errors = validate_payload_text(payload, text)
+    # 99999 must be caught; 2026, 07, 17 (parts of ISO date) are safe
+    assert any("unauthorized number" in e and "99999" in e for e in errors), (
+        f"Expected 99999 in errors, got: {errors}"
+    )
+
+
+def test_validate_payload_text_allows_legitimate_published_date_and_horizon():
+    """Legitimate published_at date, URL numbers, and horizon values pass."""
+    base = _full_outlook_artifact()
+    payload = build_push_payload(base, now="2026-07-17T15:27:00+08:00")
+    text = render_push_payload(payload)
+    # Confirm the rendered text includes published date and horizon
+    assert "2026-07-17" in text
+    assert "1-2w" in text or "1-2" in text
+    errors = validate_payload_text(payload, text)
+    assert errors == [], f"Expected no errors for legitimate values, got: {errors}"
+
+
+def test_validate_payload_text_allows_https_url_with_port_numbers():
+    """URL port numbers (e.g., :443 in https://host:443/path) pass through."""
+    base = _full_outlook_artifact()
+    brief = base["portfolio_decision"]["user_view"]["assistant_brief"]
+    # Inject a URL with port number into source_refs
+    brief["outlook"]["source_refs"] = [
+        {"source": "Test", "title": "API", "url": "https://api.test:443/v3/data", "published_at": "2026-07-17T00:00:00Z"}
+    ]
+    payload = build_push_payload(base, now="2026-07-17T15:27:00+08:00")
+    text = render_push_payload(payload)
+    errors = validate_payload_text(payload, text)
+    assert errors == [], f"Expected no errors for URL with port, got: {errors}"
