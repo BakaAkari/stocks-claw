@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-PROJECT_ROOT = os.environ.get("STOCKS_CLAW_REPO_ROOT", "/mnt/user/code-project/stocks-claw-trust-t1")
+PROJECT_ROOT = os.environ.get("STOCKS_CLAW_REPO_ROOT", "/mnt/user/code-project/stocks-claw")
 sys.path.insert(0, PROJECT_ROOT)
 
 from stocks.engine.intelligence_harvester import IntelligenceHarvester  # noqa: E402

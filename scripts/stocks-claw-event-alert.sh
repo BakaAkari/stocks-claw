@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-REPO_ROOT="${STOCKS_CLAW_REPO_ROOT:-/mnt/user/code-project/stocks-claw-trust-t1}"
-EXPECTED_BRANCH="${STOCKS_CLAW_EXPECTED_BRANCH:-feat/decision-trust-t1}"
+REPO_ROOT="${STOCKS_CLAW_REPO_ROOT:-/mnt/user/code-project/stocks-claw}"
+EXPECTED_BRANCH="${STOCKS_CLAW_EXPECTED_BRANCH:-master}"
 cd "$REPO_ROOT"
 branch=$(git branch --show-current)
 if [[ "$branch" != "$EXPECTED_BRANCH" ]]; then
