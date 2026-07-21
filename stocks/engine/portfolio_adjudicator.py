@@ -650,12 +650,9 @@ def adjudicate_portfolio(
                         institution_type=card.get("institution_type", ""),
                         account_id=card.get("account_id", ""),
                     ))
-                    suppressed.append(PortfolioAction(
-                        position_id=reduce_pid, signal=card["signal"],
-                        action_description=card.get("action", ""),
-                        ratio=card.get("ratio", 0.0) - default_ratio, decision_id=did,
-                        reason="权益低配+减仓冲突；剩余部分需人工确认",
-                    ))
+                    # Phase 2: do not append the remaining portion to suppressed_actions.
+                    # The default action is the executable slice; the rest is simply held.
+                    # This avoids showing the same position in both action and do-not-do lists.
 
     # Remaining non-suppressed cards -> approve
     for item in merged:

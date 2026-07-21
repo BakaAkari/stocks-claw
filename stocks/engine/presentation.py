@@ -615,7 +615,11 @@ def build_user_view(
         })
 
     no_action_reasons = []
+    approved_pids = {str(raw.get("position_id") or "") for raw in (decision.get("approved_actions") or [])[:3]}
     for conflict in decision.get("unresolved_conflicts") or []:
+        pid = str(conflict.get("position_id") or "")
+        if pid in approved_pids:
+            continue
         reason = _conflict_reason(conflict, by_id)
         if reason not in no_action_reasons:
             no_action_reasons.append(reason)
@@ -624,6 +628,9 @@ def build_user_view(
     for raw in decision.get("suppressed_actions") or []:
         if len(no_action_reasons) == 2:
             break
+        pid = str(raw.get("position_id") or "")
+        if pid in approved_pids:
+            continue
         reason = _suppressed_user_text(raw, by_id, reviews_by_id)
         if reason not in no_action_reasons:
             no_action_reasons.append(reason)

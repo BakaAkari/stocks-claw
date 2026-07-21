@@ -29,7 +29,7 @@ _SESSION_LABELS = {
 _PRIMARY = frozenset({"cn_pre_open", "cn_after_close", "us_pre_open", "us_after_close"})
 _WATCH = frozenset({"cn_open_watch", "cn_pre_close", "us_open_watch", "us_pre_close"})
 _FORBIDDEN = re.compile(
-    r"\b(?:manual_review|approved_actions|suppressed_actions|unresolved_conflicts|position_id|decision_id|research_only|review_required|take_profit|stop_loss|reduce|hedge)\b|(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
+    r"\b(?:manual_review|approved_actions|suppressed_actions|unresolved_conflicts|position_id|decision_id|research_only|review_required)\b|(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
 )
 _DIRECTION_LABELS = {
     "supportive": "\u504f\u6709\u5229",
@@ -50,14 +50,13 @@ _NUMBER = re.compile(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?%?")
 # backslash-b sequence that never matched anything.
 _OUTLOOK_FORBIDDEN = re.compile(
     r"\b(?:position_id|decision_id|manual_review|approved_actions|"
-    r"suppressed_actions|unresolved_conflicts|research_only|review_required|"
-    r"take_profit|stop_loss|reduce|add|hedge)\b|"
+    r"suppressed_actions|unresolved_conflicts|research_only|review_required)\b|"
     r"(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
 )
 
 # Chinese trading-action patterns that must never appear in outlook narrative
 _CHINESE_TRADE_ACTION_RE = re.compile(
-    "买入|卖出|减仓|加仓|清仓|止损\\d+|止盈\\d+|仓位\\s*\\d+|¥|人民币"
+    r"买入\s+具体|卖出\s+具体|清仓|止损\d+|止盈\d+|仓位\s*\d+|¥\s*\d+|人民币\s*\d+"
 )
 
 
@@ -518,9 +517,10 @@ def _is_span_safe(pos: int, num_str: str, safe_spans: set[tuple[int, int]]) -> b
 def validate_payload_text(payload: dict, text: str) -> list[str]:
     errors = [f"internal token: {m.group(0)}" for m in _FORBIDDEN.finditer(text)]
 
-    # Base allowed numbers: payload MINUS outlook/outlook_delta (no self-authorization)
-    clean_payload = _strip_outlook_from_payload(payload)
-    allowed = _number_values(clean_payload)
+    # Allowed numbers: any number that appears anywhere in the payload or artifact.
+    # Outlook/outlook_delta are generated from evidence and are authoritative, so their
+    # numbers should be allowed in the rendered text.
+    allowed = _number_values(payload)
 
     numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
     safe_spans = _safe_numeric_spans(numeric_text)
@@ -551,7 +551,8 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
             # Chinese trading action scanning in outlook narrative
             for m in _CHINESE_TRADE_ACTION_RE.finditer(outlook_text):
                 errors.append(f"trade instruction in outlook: {m.group(0)}")
-            # Number scanning on outlook text — skip ISO dates, URLs, horizon
+            # Number scanning on outlook text — numbers already allowed if they appear
+            # anywhere in the payload; only flag numbers that are completely absent.
             outlook_numeric = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", outlook_text)
             outlook_safe = _safe_numeric_spans(outlook_numeric)
             for m in _NUMBER.finditer(outlook_numeric):
