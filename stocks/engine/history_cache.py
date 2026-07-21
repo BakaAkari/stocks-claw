@@ -107,6 +107,32 @@ class HistoryCache:
         else:
             ts = datetime.now(timezone.utc)
 
+        # Normalize prev_close against the previous trading day's close to avoid
+        # anomalies when provider-provided prev_close differs from the actual
+        # historical close (e.g. data source hand-off, stale fields).
+        prev_close = quote.prev_close
+        last_stored = self._memory.get(key)
+        if (
+            prev_close is not None
+            and last_stored is not None
+            and not last_stored.empty
+            and len(last_stored) >= 2
+        ):
+            # Use the second-to-last bar as the previous day's close.
+            prior_close = float(last_stored.iloc[-2]["price"])
+            if prior_close > 0 and abs(prev_close - prior_close) / prior_close > 0.05:
+                prev_close = prior_close
+        elif (
+            prev_close is not None
+            and last_stored is not None
+            and not last_stored.empty
+            and len(last_stored) == 1
+        ):
+            # Fallback for single-bar history: compare against the only stored close.
+            last_close = float(last_stored.iloc[-1]["price"])
+            if last_close > 0 and abs(prev_close - last_close) / last_close > 0.05:
+                prev_close = last_close
+
         row = {
             "timestamp": ts,
             "code": instrument.code,
@@ -116,7 +142,7 @@ class HistoryCache:
             "open_price": quote.open_price,
             "high": quote.high,
             "low": quote.low,
-            "prev_close": quote.prev_close,
+            "prev_close": prev_close,
             "volume_lot": quote.volume_lot,
             "data_source": "realtime",
         }

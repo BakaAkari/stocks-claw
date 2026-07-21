@@ -195,12 +195,19 @@ def _is_locked(ev: dict) -> bool:
 
 
 def _has_data_anomaly(card: dict, ev: dict) -> bool:
+    """Return True only if there is a blocking-level (critical/high) data anomaly.
+
+    Info/warning anomalies are recorded as evidence but should not suppress
+    actionable signals, otherwise every stale prev_close or settled spike
+    would silence the assistant.
+    """
     if card.get("evidence_status") == "blocked":
         return True
     evidence = ev.get("evidence", {})
     anomalies = evidence.get("data_anomalies", [])
-    if anomalies:
-        return True
+    for a in anomalies:
+        if a.get("severity") in ("critical", "high"):
+            return True
     return False
 
 

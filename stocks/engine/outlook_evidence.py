@@ -416,7 +416,11 @@ def _build_asset_class_snapshot(pv_list: list[dict]) -> dict:
 
 def _build_sector_snapshot(context: dict) -> dict:
     """Exposure summary as sector snapshot."""
+    # Exposure_summary may live at top-level (fresh AnalysisContext.to_dict())
+    # or inside context_digest (older scheduled run artifacts).
     exposure = context.get("exposure_summary") or {}
+    if not exposure:
+        exposure = (context.get("context_digest") or {}).get("exposure_summary") or {}
     result = {}
     for k, v in exposure.items():
         if isinstance(v, (int, float)) and not isinstance(v, bool):

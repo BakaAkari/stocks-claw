@@ -1266,7 +1266,15 @@ def _compute_risk_assessment(context: dict) -> dict:
         "evidence_keys": _risk_evidence_keys(
             vix=macro.get("vix"), clusters=clusters,
         ),
-        "triggers": [{"condition": t.condition, "value": t.value} for t in risk.triggers],
+        "triggers": [
+            {
+                "name": t.condition,
+                "condition": t.condition,
+                "value": t.value,
+                "severity": t.severity,
+            }
+            for t in risk.triggers
+        ],
         "recommended_actions": risk.recommended_actions,
         "suspend_accumulation": risk.suspend_accumulation,
         "cash_target_pct": risk.cash_target_pct,

@@ -26,7 +26,9 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     # dislocation 次条件: 近 20 bar 内存在跳变超过此值
     "dislocation_jump_window_pct": 25.0,
     # prev_close 与上一根 close 差异阈值
-    "prev_close_mismatch_pct": 5.0,
+    # Relaxed to 10%: ETF data sources frequently report stale or proxy prev_close
+    # values that differ from the actual last close, especially around hand-offs.
+    "prev_close_mismatch_pct": 10.0,
     # 近 n 根 bar 检查跳变 (用于 dislocation 和 regime)
     "price_jump_window": 20,
     # regime 全范围 bar 数
@@ -90,9 +92,15 @@ def _calc_pct_change(prev: float, curr: float) -> float:
 def _detect_single_bar_jump(
     frame: pd.DataFrame, thresholds: dict
 ) -> list[dict]:
-    """检测相邻 bar 绝对变化 > threshold (%)。"""
+    """检测相邻 bar 绝对变化 > threshold (%)。
+
+    如果跳变后价格很快在新水平稳定（后续 3 根 bar 都远离跳变前的价格），
+    则跳变前的 bar 很可能是异常值（例如缺失数据被填充或数据源错误），
+    不应该阻断交易。
+    """
     anomalies: list[dict] = []
     jump_pct = thresholds["single_bar_jump_pct"]
+    settle_bars = 3
 
     closes = frame["close"].values
     for i in range(1, len(closes)):
@@ -100,12 +108,24 @@ def _detect_single_bar_jump(
         if change > jump_pct:
             prev_val = closes[i - 1]
             cur_val = closes[i]
+            # 后续 3 根 bar 是否稳定在新水平？
+            future = closes[i + 1:i + 1 + settle_bars]
+            settled = (
+                len(future) > 0
+                and all(
+                    abs(f - cur_val) / max(abs(cur_val), 1e-9) < 0.05
+                    for f in future
+                )
+            )
+            severity = _SEVERITY_INFO if settled else _SEVERITY_CRITICAL
             anomalies.append({
                 "code": SINGLE_BAR_JUMP,
-                "severity": _SEVERITY_CRITICAL,
+                "severity": severity,
                 "description": (
                     f"Bar {i}: 价格从 {prev_val:.4f} 跳变至 {cur_val:.4f}，"
                     f"变化 {change:.1f}%（阈值 >{jump_pct:.0f}%）"
+                ) + (
+                    "；价格已在新水平稳定，作为数据质量记录" if settled else ""
                 ),
                 "bar_index": i,
                 "evidence": {
@@ -113,6 +133,7 @@ def _detect_single_bar_jump(
                     "current_close": float(cur_val),
                     "change_pct": round(change, 2),
                     "threshold_pct": jump_pct,
+                    "settled_at_new_level": bool(settled),
                 },
             })
     return anomalies
@@ -147,13 +168,37 @@ def _detect_price_ma20_dislocation(
     if not has_recent_jump:
         return []
 
+    # 如果跳变已经在新水平稳定，说明跳变前的 bar 是异常值，
+    # MA20 偏离也是由异常值拉高的，降级为 info
+    settle_bars = 3
+    last_jump_idx = max(
+        (j for j in range(len(recent) - 1)
+         if _calc_pct_change(recent[j], recent[j + 1]) > jump_pct),
+        default=None
+    )
+    if last_jump_idx is not None:
+        jump_target = recent[last_jump_idx + 1]
+        future = recent[last_jump_idx + 2:last_jump_idx + 2 + settle_bars]
+        settled = (
+            len(future) > 0
+            and all(
+                abs(f - jump_target) / max(abs(jump_target), 1e-9) < 0.05
+                for f in future
+            )
+        )
+    else:
+        settled = False
+
+    severity = _SEVERITY_INFO if settled else _SEVERITY_HIGH
     return [{
         "code": PRICE_MA20_DISLOCATION,
-        "severity": _SEVERITY_HIGH,
+        "severity": severity,
         "description": (
             f"现价 {current_price:.4f} 偏离 MA20({ma20:.4f}) "
             f"{deviation:.1f}%（阈值 >{dislocation_pct:.0f}%），"
             f"且近 {jump_window} bar 存在异常跳变"
+        ) + (
+            "；跳变已稳定在新水平，作为数据质量记录" if settled else ""
         ),
         "bar_index": len(frame) - 1,
         "evidence": {
@@ -162,6 +207,7 @@ def _detect_price_ma20_dislocation(
             "deviation_pct": round(deviation, 2),
             "threshold_pct": dislocation_pct,
             "recent_jump_check": int(jump_window),
+            "settled_at_new_level": bool(settled),
         },
     }]
 
@@ -169,7 +215,11 @@ def _detect_price_ma20_dislocation(
 def _detect_prev_close_mismatch(
     frame: pd.DataFrame, thresholds: dict
 ) -> list[dict]:
-    """检测 prev_close 与上一根 close 的差异 > threshold。"""
+    """检测 prev_close 与上一根 close 的差异 > threshold。
+
+    当 data_source 切换时，prev_close 可能来自不同来源，这种不一致通常
+    是数据接口差异而非真实价格跳变，因此降级为 info 证据。
+    """
     anomalies: list[dict] = []
     mismatch_pct = thresholds["prev_close_mismatch_pct"]
 
@@ -178,6 +228,11 @@ def _detect_prev_close_mismatch(
 
     prev_closes = frame["prev_close"].values
     closes = frame["close"].values
+    sources = (
+        frame["data_source"].values
+        if "data_source" in frame.columns
+        else [None] * len(frame)
+    )
 
     for i in range(1, len(frame)):
         actual_prev = closes[i - 1]
@@ -186,12 +241,16 @@ def _detect_prev_close_mismatch(
             continue
         diff = abs(stated_prev - actual_prev) / actual_prev * 100
         if diff > mismatch_pct:
+            source_changed = sources[i] != sources[i - 1]
+            severity = _SEVERITY_INFO if source_changed else _SEVERITY_WARNING
             anomalies.append({
                 "code": PREV_CLOSE_MISMATCH,
-                "severity": _SEVERITY_WARNING,
+                "severity": severity,
                 "description": (
                     f"Bar {i}: prev_close({stated_prev:.4f}) 与上一根 close({actual_prev:.4f}) "
                     f"差异 {diff:.2f}%（阈值 >{mismatch_pct:.0f}%）"
+                ) + (
+                    "；数据源切换，作为信息记录" if source_changed else ""
                 ),
                 "bar_index": i,
                 "evidence": {
@@ -199,6 +258,7 @@ def _detect_prev_close_mismatch(
                     "actual_prev_close": float(actual_prev),
                     "diff_pct": round(diff, 2),
                     "threshold_pct": mismatch_pct,
+                    "source_changed": bool(source_changed),
                 },
             })
     return anomalies
@@ -207,11 +267,16 @@ def _detect_prev_close_mismatch(
 def _detect_mixed_adjustment_regime(
     frame: pd.DataFrame, thresholds: dict
 ) -> list[dict]:
-    """检测混合调整区间 — 大跳变且比例接近 1:2/2:1 拆并区间。"""
+    """检测混合调整区间 — 大跳变且比例接近 1:2/2:1 拆并区间。
+
+    与 single_bar_jump 一致，如果跳变后价格稳定在新水平，
+    则跳变前的 bar 很可能是异常值，降为 info 证据。
+    """
     jump_pct = thresholds["single_bar_jump_pct"]
     lookback = int(thresholds["regime_lookback"])
     ratio_min = thresholds["mixed_adjustment_ratio_min"]
     ratio_max = thresholds["mixed_adjustment_ratio_max"]
+    settle_bars = 3
 
     closes = frame["close"].values
     if len(closes) < 3:
@@ -236,12 +301,25 @@ def _detect_mixed_adjustment_regime(
 
         if is_near_0_5 or is_near_2_0:
             regime_type = "1:2（拆细）" if is_near_0_5 else "2:1（合并）"
+            # 如果跳变后价格稳定在新水平，降级为 info
+            offset = bar_idx - start_index
+            future = closes[offset + 1:offset + 1 + settle_bars]
+            settled = (
+                len(future) > 0
+                and all(
+                    abs(f - cur_val) / max(abs(cur_val), 1e-9) < 0.05
+                    for f in future
+                )
+            )
+            severity = _SEVERITY_INFO if settled else _SEVERITY_HIGH
             return [{
                 "code": MIXED_ADJUSTMENT_REGIME,
-                "severity": _SEVERITY_HIGH,
+                "severity": severity,
                 "description": (
                     f"Bar {bar_idx}: 价格跳变 {prev_val:.4f}→{cur_val:.4f} "
                     f"比例为 {prev_val/cur_val:.4f}，接近 {regime_type} 拆并区间"
+                ) + (
+                    "；价格已在新水平稳定，作为数据质量记录" if settled else ""
                 ),
                 "bar_index": bar_idx,
                 "evidence": {
@@ -250,6 +328,7 @@ def _detect_mixed_adjustment_regime(
                     "ratio": round(prev_val / cur_val, 4),
                     "suggested_regime": regime_type,
                     "lookback_bars": lookback,
+                    "settled_at_new_level": bool(settled),
                 },
             }]
 
