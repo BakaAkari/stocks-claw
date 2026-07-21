@@ -109,9 +109,23 @@ uv run python -m stocks.adapters.cli --output text --llm-analysis
 - 情报产物 `global_intelligence_watch` 不走此推送路径；若需发送情报摘要，应使用独立的情报专门路径。
 - 推送前会校验 artifact 新鲜度（默认 45 分钟窗口）、`task_version == 5` 和信任边界，
   任何校验失败以 `INVALID` 退出并且不发送。
-- 推送 cron 时间应该晚于 `scheduled_sessions.json` 中对应 session 的生成时间，
-  例如 `cn_pre_open` 9:00 生成则 9:05 推送。原配置 8:55 推送会导致
-  `artifact age -4.3 minutes` 失败。
+- 推送 cron 时间必须晚于实际产物完成时间，不能只看 `scheduled_sessions.json` 中的
+  scheduled time。实际产物完成可能晚于 scheduled time 10-30 分钟（生成耗时、
+  API 限流等）。当前运营配置为：
+  - `cn_pre_open` 9:00 生成，9:15 推送
+  - `cn_open_watch` 10:00 生成，10:30 推送
+  - `cn_morning_close` 11:00 生成，11:05 推送（产物完成较快）
+  - `cn_afternoon_open` 13:05 生成，13:05 推送
+  - `cn_pre_close` 14:35 生成，14:50 推送
+  - `cn_after_close` 15:20 生成，15:40 推送（等待 A股收盘数据刷新）
+  - `us_pre_open` 21:00 生成，21:20 推送
+  - `us_open_watch` 22:00 生成，22:20 推送
+  - `us_mid_session` 00:30 生成，00:35 推送
+  - `us_pre_close` 03:35 生成，03:50 推送
+  - `us_after_close` 04:25 生成，04:40 推送
+- 不建议缩短 `generate-due` 周期（如 1-2 分钟），会导致空转和在 due 窗口内
+  多次触发 API，容易触发 Finnhub/FRED/RSS 限流。保持 5 分钟周期，
+  从推送端解决时间竞态是更安全的方案。
 - 本地调试推送可以使用 `--now` 使推送时间与 artifact 时间对齐，但不应用于生产。
 
 

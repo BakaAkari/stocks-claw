@@ -493,6 +493,14 @@ def _safe_numeric_spans(text: str) -> set[tuple[int, int]]:
     for m in re.finditer(r"v\d+(?:\.\d+)+", text):
         spans.add((m.start(), m.end()))
 
+    # 5. Instrument codes inside parentheses (e.g. "沪深300ETF（510300）")
+    for m in re.finditer(r"[（\(]\d{6}[）\)]", text):
+        spans.add((m.start(), m.end()))
+
+    # 6. Array index notation (e.g. "sector_views[2]")
+    for m in re.finditer(r"\[\d+\]", text):
+        spans.add((m.start(), m.end()))
+
     return spans
 
 
