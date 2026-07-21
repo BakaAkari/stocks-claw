@@ -16,6 +16,30 @@ _SIGNAL_LABELS = {
     "stop_loss": "止损", "take_profit": "止盈", "reduce": "减仓",
     "add": "加仓", "hold": "持有", "wait": "等待",
 }
+
+# ── Phase 2: 平台/操作通道显示 ──
+_PLATFORM_NAME = {
+    "brokerage": "证券账户",
+    "fund_platform": "支付宝",
+    "bank": "银行理财",
+    "insurance": "保险账户",
+}
+
+_OPERATION_HINT = {
+    ("fund_platform", "alipay"): "打开支付宝 → 理财 → 按名称/代码搜索",
+    ("bank", "ccb"): "打开建行 APP → 理财/基金 → 查看开放期",
+    ("insurance", "boc_life"): "联系香港中银人寿顾问或登录中银人寿 APP",
+    ("brokerage", "a_stock"): "通过东方财富/华泰等中信建投交易软件",
+    ("brokerage", "ibkr"): "登录 Interactive Brokers (IBKR) 账户",
+}
+
+_INSTITUTION_FROM_ACCOUNT = {
+    "a_stock": "brokerage",
+    "ibkr": "brokerage",
+    "alipay": "fund_platform",
+    "ccb": "bank",
+    "boc_life": "insurance",
+}
 _STATUS_LABELS = {
     "approved": "已有获批动作", "suppressed": "今日无需操作",
     "review_required": "等待人工确认",
@@ -127,6 +151,29 @@ _SUPPRESSION_REASON_TEXT = {
 }
 
 
+def _operation_hint_for(card: dict, default: str = "") -> str:
+    """Return a human-readable operation channel hint for an action card."""
+    it = (card or {}).get("institution_type", "")
+    aid = (card or {}).get("account_id", "")
+    if not it and aid:
+        it = _INSTITUTION_FROM_ACCOUNT.get(aid, "")
+    routing = (card or {}).get("routing", "")
+    if routing in ("info_only", "skip"):
+        if it == "insurance":
+            return _OPERATION_HINT.get(("insurance", "boc_life"), "联系对应机构顾问")
+        return ""
+    hint = _OPERATION_HINT.get((it, aid))
+    if hint:
+        return hint
+    if it == "brokerage":
+        return "登录证券账户执行"
+    if it == "fund_platform":
+        return "打开支付宝 → 理财 → 按名称/代码搜索"
+    if it == "bank":
+        return "打开建行 APP → 理财/基金"
+    return default
+
+
 def _safe_reason_text(reason: str) -> str:
     value = str(reason or "")
     for key, text in _SUPPRESSION_REASON_TEXT.items():
@@ -195,14 +242,18 @@ def _position_review_map(position_reviews: list[dict]) -> dict[str, dict]:
 
 def _suppressed_user_text(raw: dict, by_id: dict[str, dict], reviews_by_id: dict[str, dict]) -> str:
     pid = str(raw.get("position_id") or "")
-    label = _display_for_position(by_id.get(pid, {}))
+    item = by_id.get(pid, {})
+    label = _display_for_position(item)
+    platform = str(raw.get("platform_display") or _PLATFORM_NAME.get(raw.get("institution_type", ""), ""))
+    op_hint = _operation_hint_for(raw)
+    platform_hint = f"（在 {platform} 操作：{op_hint}）" if platform and op_hint else ""
     anomalies = ((reviews_by_id.get(pid, {}).get("evidence") or {}).get("data_anomalies") or [])
     if anomalies:
         display = anomaly_display(anomalies[0])
         evidence = display.get("evidence_summary")
         detail = f"；{evidence}" if evidence else ""
-        return f"{label}：{display['display_message']}{detail}；{display['user_impact']}"
-    return f"{label}：{_safe_reason_text(raw.get('reason', ''))}"
+        return f"{label}：{display['display_message']}{detail}；{display['user_impact']}{platform_hint}"
+    return f"{label}：{_safe_reason_text(raw.get('reason', ''))}{platform_hint}"
 
 
 def _conflict_summary(conflicts: list[dict]) -> list[dict]:
@@ -545,6 +596,8 @@ def build_user_view(
         market_value = item.get("market_value_cny")
         ratio = float(raw.get("ratio") or 0.0)
         amount = round(float(market_value) * ratio, 2) if market_value is not None else None
+        platform = str(raw.get("platform_display") or _PLATFORM_NAME.get(raw.get("institution_type", ""), ""))
+        op_hint = _operation_hint_for(raw)
         actions.append({
             "display_label": _display_for_position(item),
             "action_label": signal_label(raw.get("signal", "")),
@@ -557,6 +610,8 @@ def build_user_view(
             "cancel_condition": str(raw.get("cancel_condition") or "触发条件不再成立时取消"),
             "settlement_display": str(raw.get("settlement_timing") or "到账时间待确认"),
             "next_checkpoint": str(raw.get("next_checkpoint") or "下一交易窗口复核"),
+            "platform": platform,
+            "operation_channel": op_hint,
         })
 
     no_action_reasons = []

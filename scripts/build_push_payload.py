@@ -150,6 +150,8 @@ def render_push_payload(payload: dict) -> str:
             lines.extend(
                 [
                     f"  - 预计金额: {amount_text}",
+                    f"  - 平台: {action.get('platform', '待确认')}",
+                    f"  - 操作: {action.get('operation_channel', '在平台内执行')}",
                     f"  - 取消条件: {action.get('cancel_condition', '条件不再成立时取消')}",
                     f"  - 到账: {action.get('settlement_display', '到账时间待确认')}",
                     f"  - 下次检查: {action.get('next_checkpoint', '下一交易窗口复核')}",

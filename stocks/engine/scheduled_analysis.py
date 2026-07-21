@@ -57,6 +57,89 @@ from stocks.logging_utils import get_logger
 
 logger = get_logger("scheduled_analysis")
 
+# ── Phase 2: 可执行性辅助函数 ──
+
+_ACCOUNT_ID_TO_INSTITUTION = {
+    "a_stock": "brokerage",
+    "ibkr": "brokerage",
+    "alipay": "fund_platform",
+    "ccb": "bank",
+    "boc_life": "insurance",
+}
+
+
+def _institution_type_for_account_id(account_id: str) -> str:
+    """Infer institution_type from account_id when not present in position metadata."""
+    return _ACCOUNT_ID_TO_INSTITUTION.get(account_id, "")
+
+# ── Phase 2: 可执行性辅助函数 ──
+
+_PLATFORM_DISPLAY = {
+    "brokerage": "证券账户",
+    "fund_platform": "支付宝",
+    "bank": "银行理财",
+    "insurance": "保险账户",
+}
+
+_OPERATION_CHANNEL = {
+    ("fund_platform", "alipay"): "打开支付宝 → 理财 → 按名称/代码搜索",
+    ("bank", "ccb"): "打开建行 APP → 理财/基金 → 查看开放期",
+    ("insurance", "boc_life"): "联系香港中银人寿顾问或登录中银人寿 APP",
+    ("brokerage", "a_stock"): "通过东方财富/华泰等中信建投交易软件",
+    ("brokerage", "ibkr"): "登录 Interactive Brokers (IBKR) 账户",
+}
+
+
+def _platform_display(institution_type: str, account_id: str) -> str:
+    """Return a human-readable platform name based on institution type and account id."""
+    if institution_type == "brokerage":
+        if account_id == "ibkr":
+            return "IBKR"
+        if account_id == "a_stock":
+            return "A股证券账户"
+        return "证券账户"
+    if institution_type == "fund_platform":
+        return "支付宝"
+    if institution_type == "bank":
+        return "建行 APP"
+    if institution_type == "insurance":
+        return "中银人寿"
+    return "待确认平台"
+
+
+def _settlement_timing_for_institution(institution_type: str, routing: str) -> str:
+    """Return settlement timing for a given institution type and routing."""
+    if routing in ("info_only", "skip"):
+        return "不可交易"
+    if institution_type == "brokerage":
+        return "T+1"
+    if institution_type == "fund_platform":
+        return "T+1"
+    if institution_type == "bank":
+        return "按产品开放期"
+    if institution_type == "insurance":
+        return "锁定"
+    return "T+1"
+
+
+def _operation_channel(institution_type: str, account_id: str, routing: str) -> str:
+    """Return concrete operation-channel hint for the platform."""
+    if routing in ("info_only", "skip"):
+        if institution_type == "insurance":
+            return _OPERATION_CHANNEL.get(("insurance", "boc_life"), "联系对应机构顾问")
+        return "当前不形成交易动作，继续持有"
+    channel = _OPERATION_CHANNEL.get((institution_type, account_id))
+    if channel:
+        return channel
+    if institution_type == "brokerage":
+        return "登录证券账户执行"
+    if institution_type == "fund_platform":
+        return "打开支付宝 → 理财 → 按名称/代码搜索"
+    if institution_type == "bank":
+        return "打开建行 APP → 理财/基金"
+    return "在对应平台执行"
+
+
 SCHEDULED_RUN_SCHEMA_VERSION = 1
 
 
@@ -2248,6 +2331,8 @@ def _build_action_cards(
             else:
                 routing = "full"
 
+        account_id = (item.get("account") or {}).get("account_id", "") or item.get("account_id", "")
+        institution_type = (item.get("account") or {}).get("institution_type", "") or _institution_type_for_account_id(account_id)
         cards.append({
             "position_id": decision.position_id,
             "display_name": item.get("display_name", ""),
@@ -2255,6 +2340,9 @@ def _build_action_cards(
             "product_type": product_type,
             "routing": routing,
             "account_type": account_type,
+            "account_id": account_id,
+            "institution_type": institution_type,
+            "platform_display": _platform_display(institution_type, account_id),
             "signal": decision.signal,
             "action": decision.action,
             "ratio": decision.ratio,
@@ -2274,6 +2362,9 @@ def _build_action_cards(
             "raw_ratio": getattr(decision, 'raw_ratio', 0.0),
             "raw_action": getattr(decision, 'raw_action', ''),
             "evidence_status": getattr(decision, 'evidence_status', 'ok'),
+            # ── Phase 2: 结算和平台信息 ──
+            "settlement_timing": getattr(decision, 'settlement_timing', '') or _settlement_timing_for_institution(institution_type, routing),
+            "operation_channel": _operation_channel(institution_type, account_id, routing),
         })
 
     return cards

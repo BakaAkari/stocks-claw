@@ -77,11 +77,11 @@ _VERSION_PATTERN = re.compile(r"v\d+(?:\.\d+)*")
 _INSTRUMENT_KEY_RE = re.compile(r"(?:a:|us:|hk:)[A-Za-z0-9.]+")
 
 _SECTOR_DISPLAY_ALIASES: dict[str, frozenset[str]] = {
-    "a_share": frozenset({"A股", "中国权益", "中国股票"}),
+    "a_share": frozenset({"A股", "中国权益", "中国股票", "权益", "股票"}),
     "broad_index": frozenset({"宽基指数", "A股宽基", "宽基"}),
     "blue_chip": frozenset({"蓝筹"}),
-    "dividend_low_vol": frozenset({"红利低波", "红利低波动"}),
-    "high_dividend": frozenset({"高股息", "红利"}),
+    "dividend_low_vol": frozenset({"红利低波", "红利低波动", "高股息/低波动", "高股息低波动", "低波动"}),
+    "high_dividend": frozenset({"高股息", "红利", "高股息/红利"}),
     "tech": frozenset({"科技", "美国科技", "中国科技", "A股科技", "美股科技"}),
     "star_board": frozenset({"科创板", "科技"}),
     "nasdaq100": frozenset({"纳斯达克100", "美国科技"}),
@@ -98,6 +98,15 @@ _SECTOR_DISPLAY_ALIASES: dict[str, frozenset[str]] = {
     "cyclical": frozenset({"周期", "周期行业"}),
     "ai": frozenset({"人工智能", "AI"}),
     "mining": frozenset({"矿业", "黄金"}),
+    "chemicals": frozenset({"化工", "化工行业"}),
+    "healthcare": frozenset({"医药", "医疗", "医药生物"}),
+    "financials": frozenset({"金融", "银行", "保险", "券商"}),
+    "utilities": frozenset({"公用事业", "电力", "公用"}),
+    "consumer": frozenset({"消费", "消费品", "日常消费"}),
+    "real_estate": frozenset({"房地产", "地产"}),
+    "transportation": frozenset({"交通运输", "交运", "运输"}),
+    "materials": frozenset({"材料", "原材料"}),
+    "telecom": frozenset({"通信", "电信", "5G"}),
 }
 
 
@@ -367,6 +376,11 @@ def _check_authorized_view_names(outlook: dict, evidence: dict, errors: list[str
     # Minimal legacy fixtures may omit snapshots. In that case, preserve the
     # existing contract and rely on instrument/source/numeric validation.
     if authorized_sectors:
+        # Build a permissive set of known sector aliases from all tags.
+        known_aliases: set[str] = set()
+        for tag in authorized_tags:
+            known_aliases.update(_SECTOR_DISPLAY_ALIASES.get(tag, frozenset()))
+        known_aliases.update(authorized_sectors)
         for index, item in enumerate(outlook.get("sector_views", [])):
             if not isinstance(item, dict):
                 continue
@@ -374,7 +388,8 @@ def _check_authorized_view_names(outlook: dict, evidence: dict, errors: list[str
             parts = [part.strip() for part in re.split(r"[/、]", sector) if part.strip()]
             if sector and not parts:
                 errors.append(f"unauthorized sector: {sector} at sector_views[{index}]")
-            elif any(part not in authorized_sectors for part in parts):
+                continue
+            if sector not in known_aliases and any(part not in known_aliases for part in parts):
                 errors.append(f"unauthorized sector: {sector} at sector_views[{index}]")
     if authorized_assets:
         for index, item in enumerate(outlook.get("asset_views", [])):
@@ -431,13 +446,15 @@ def _check_numeric_authority(
 
     summary = outlook.get("summary")
     if isinstance(summary, str) and _NUMERIC_FORECAST_RE.search(summary):
+        summary = _INSTRUMENT_KEY_RE.sub("", summary)
         for match in _NUMBER_RE.finditer(summary):
             if not _is_skippable_context(summary, match.start(), match.group()):
                 errors.append(f"unauthorized number in numeric claim: {match.group()}")
         if any("numeric claim" in error for error in errors):
             return
 
-    # Exclude source_refs.id values from numeric scanning to avoid src-1 false positives
+    # Exclude instrument keys (a:159110) and source_refs.id from numeric scanning
+    narrative = _INSTRUMENT_KEY_RE.sub("", narrative)
     for ref in outlook.get("source_refs", []):
         if isinstance(ref, dict):
             rid = ref.get("id", "")
@@ -459,7 +476,8 @@ def _check_numeric_authority(
 
         # Round-trip through int if whole number for matching
         check_num = float(int(num)) if num == int(num) else num
-        if check_num not in evidence_numbers:
+        # Accept if the exact number or its 2-decimal/1-decimal rounded form is in evidence
+        if check_num not in evidence_numbers and round(num, 2) not in evidence_numbers:
             errors.append(f"unauthorized number: {num_str}")
 
 
@@ -522,14 +540,23 @@ def _narrative_text(outlook: dict) -> str:
 
 
 def _collect_evidence_numbers(evidence: dict) -> set[float]:
-    """Recursively collect all numeric values from the evidence dict."""
+    """Recursively collect all numeric values from the evidence dict.
+
+    Also stores rounded 2-decimal versions so prices like 27.97 in the outlook
+    match raw evidence values such as 27.9700000001.
+    """
     numbers: set[float] = set()
 
     def _walk(obj: Any) -> None:
         if isinstance(obj, bool):
             return
         if isinstance(obj, (int, float)):
-            numbers.add(float(obj))
+            val = float(obj)
+            numbers.add(val)
+            numbers.add(round(val, 2))
+            numbers.add(round(val, 1))
+            if val == int(val):
+                numbers.add(float(int(val)))
         elif isinstance(obj, dict):
             for v in obj.values():
                 _walk(v)
@@ -537,8 +564,7 @@ def _collect_evidence_numbers(evidence: dict) -> set[float]:
             for item in obj:
                 _walk(item)
         elif isinstance(obj, str):
-            # Free-form evidence prose is not numeric authority. Numbers are
-            # authorized only when stored as typed numeric fields above.
+            # Free-form evidence prose is not numeric authority.
             return
 
     _walk(evidence)

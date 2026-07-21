@@ -91,6 +91,10 @@ class PortfolioAction:
     alternative_position_id: Optional[str] = None
     cancel_condition: str = ""
     next_checkpoint: str = ""
+    # Phase 2: platform info for human-readable execution hints
+    platform_display: str = ""
+    institution_type: str = ""
+    account_id: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -105,6 +109,9 @@ class PortfolioAction:
             "alternative_position_id": self.alternative_position_id,
             "cancel_condition": self.cancel_condition or "若触发条件或组合约束不再成立，取消执行",
             "next_checkpoint": self.next_checkpoint or "下一交易窗口复核",
+            "platform_display": self.platform_display,
+            "institution_type": self.institution_type,
+            "account_id": self.account_id,
         }
 
 
@@ -626,12 +633,28 @@ def adjudicate_portfolio(
                     ))
                     suppressed_pids.add(reduce_pid)
                 else:
+                    # Phase 2: 对于权益低配+减仓冲突，不完全阻断，
+                    # 而是给出默认动作（执行 50% 仓位）并标注需人工确认，
+                    # 让投资者看到具体建议。
+                    default_ratio = round(card.get("ratio", 0.0) * 0.5, 4)
+                    if default_ratio <= 0:
+                        default_ratio = 0.0
                     suppressed_pids.add(reduce_pid)
+                    approved.append(PortfolioAction(
+                        position_id=reduce_pid, signal=card["signal"],
+                        action_description=card.get("action", ""),
+                        ratio=default_ratio, decision_id=did,
+                        reason=f"权益低配+减仓冲突；默认先执行 {int(default_ratio * 100)}%，剩余等待人工确认",
+                        settlement_timing=card.get("settlement_timing") or "T+1",
+                        platform_display=card.get("platform_display", ""),
+                        institution_type=card.get("institution_type", ""),
+                        account_id=card.get("account_id", ""),
+                    ))
                     suppressed.append(PortfolioAction(
                         position_id=reduce_pid, signal=card["signal"],
                         action_description=card.get("action", ""),
-                        ratio=card.get("ratio", 0.0), decision_id=did,
-                        reason="\u6743\u76ca\u4f4e\u914d+\u51cf\u4ed3\u51b2\u7a81\uff0c\u65e0\u66ff\u4ee3\uff0c\u9700\u5ba1\u6838",
+                        ratio=card.get("ratio", 0.0) - default_ratio, decision_id=did,
+                        reason="权益低配+减仓冲突；剩余部分需人工确认",
                     ))
 
     # Remaining non-suppressed cards -> approve

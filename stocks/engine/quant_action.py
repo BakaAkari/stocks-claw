@@ -199,6 +199,10 @@ class FinalDecision:
     raw_ratio: float = 0.0
     raw_action: str = ""
     evidence_status: str = "ok"
+    # ── Phase 2: 结算和平台信息 ──
+    settlement_timing: str = ""
+    account_id: str = ""
+    institution_type: str = ""
 
 # ---------------------------------------------------------------------------
 # QuantActionEngine — 纯技术面
@@ -847,6 +851,21 @@ def finalize_decision(
         warn = f'⚠️ 低置信度{reason}'
         facts.insert(0, warn)
 
+    # Determine settlement timing and account info from position metadata
+    account = (position or {}).get("account") or {}
+    account_id = account.get("account_id", "")
+    institution_type = account.get("institution_type", "")
+    if institution_type == "brokerage":
+        settlement_timing = "T+1"
+    elif institution_type == "fund_platform":
+        settlement_timing = "T+1"
+    elif institution_type == "bank":
+        settlement_timing = "按产品开放期"
+    elif institution_type == "insurance":
+        settlement_timing = "锁定，不可交易"
+    else:
+        settlement_timing = "T+1"
+
     return FinalDecision(
         position_id=tech.position_id, signal=signal, action=action,
         ratio=ratio, facts=facts,
@@ -863,6 +882,10 @@ def finalize_decision(
         # ── Task 2: 数据异常守门 ──
         raw_signal=raw_signal, raw_ratio=raw_ratio, raw_action=raw_action,
         evidence_status=evidence_status,
+        # ── Phase 2: 结算和平台信息 ──
+        settlement_timing=settlement_timing,
+        account_id=account_id,
+        institution_type=institution_type,
     )
 
 
