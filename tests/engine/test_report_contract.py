@@ -334,3 +334,84 @@ def test_renderer_header_uses_human_session_name_not_internal_session_id(minimal
     markdown = format_run_markdown(run)
     assert markdown.startswith("**A股盘前")
     assert "cn_pre_open" not in markdown
+
+
+# ─── Task 7: Report contract ───────────────────────────────────────
+
+
+def test_agent_task_still_two_sections(minimal_run: dict):
+    """agent_task.output_structure.sections must still have exactly two sections."""
+    agent_task = minimal_run.get("agent_task", {})
+    sections = agent_task["output_structure"]["sections"]
+    names = [s["name"] for s in sections]
+    assert names == ["交易指令卡", "私人投资助理"]
+
+
+def test_agent_task_licenses_assistant_brief_outlook(minimal_run: dict):
+    """agent_task must contain the explicit permission path."""
+    text = json.dumps(minimal_run.get("agent_task", {}), ensure_ascii=False)
+    # Must mention the full path to outlook in data_reference or must_answer
+    assert "portfolio_decision.user_view.assistant_brief.outlook" in text \
+        or "assistant_brief.outlook" in text
+    assert "outlook_delta" in text
+    # Should not expand into arbitrary new sections
+    sections = minimal_run["agent_task"]["output_structure"]["sections"]
+    assert len(sections) == 2
+
+
+def test_run_artifact_retains_outlook_when_present(tmp_path):
+    """When outlook data exists, artifact must retain it without expanding contract."""
+    config = _config(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        FakeEngine(_context()),
+        config=config,
+        artifact_dir=config["artifact_dir"],
+    )
+    _run(
+        runner.run_session(
+            "cn_pre_close",
+            now=datetime.fromisoformat("2026-07-06T14:35:00+08:00"),
+        )
+    )
+    run = runner.latest("cn_pre_close")["data"]
+    decision = run.get("portfolio_decision", {})
+    _view = decision.get("user_view", {})
+
+    # Regardless of outlook presence, portfolio_decision must not contain unknown top keys
+    allowed = {"status", "decision_id", "approved_actions", "suppressed_actions",
+               "cancelled_actions", "user_view", "rule_version",
+               "post_trade_projection", "cash_schedule", "replacement_chains",
+               "unresolved_conflicts"}
+    actual = set(decision.keys())
+    unknown = actual - allowed
+    assert not unknown, f"Unknown portfolio_decision keys: {unknown}"
+    # agent_task must still have exactly 2 sections
+    agent_task = run.get("agent_task", {})
+    sections = agent_task.get("output_structure", {}).get("sections", [])
+    assert len(sections) == 2
+
+
+def test_assistant_brief_accepts_outlook_and_outlook_delta():
+    """assistant_brief must tolerate outlook and outlook_delta keys."""
+    from stocks.engine.scheduled_analysis import format_run_markdown
+    run = {
+        "session": "cn_pre_close",
+        "scheduled_for": "2026-07-17T14:30:00+08:00",
+        "portfolio_decision": {
+            "user_view": {
+                "instruction_card": {
+                    "status": "no_action", "status_label": "今日无需操作",
+                    "actions": [], "no_action_reasons": ["无获批动作"],
+                },
+                "assistant_brief": {
+                    "why": [], "do_not_do": [],
+                    "cash": {}, "risk": {}, "research": [],
+                    "outlook": {"status": "ok"},
+                    "outlook_delta": {"new": True},
+                },
+            },
+        },
+    }
+    # Must render without error
+    md = format_run_markdown(run)
+    assert "**私人投资助理**" in md

@@ -38,7 +38,7 @@ def test_entrypoint_renders_and_persists_sanitized_payload(tmp_path):
     assert set(data) == {"payload_version", "session_label", "market_date", "delivery", "user_view"}
 
 
-def test_entrypoint_is_silent_on_invalid_or_stale_artifact(tmp_path):
+def test_entrypoint_fails_loudly_on_invalid_or_stale_artifact(tmp_path):
     root = tmp_path / "latest"
     root.mkdir()
     bad = _artifact()
@@ -60,7 +60,10 @@ def test_entrypoint_is_silent_on_invalid_or_stale_artifact(tmp_path):
         capture_output=True,
         text=True,
     )
-    assert r.returncode == 0 and r.stdout == "" and r.stderr == ""
+    assert r.returncode != 0
+    assert r.stdout == ""
+    assert "INVALID:" in r.stderr
+    assert not (tmp_path / "payload" / "cn_after_close.json").exists()
 
 
 def _outlook_test_artifact():

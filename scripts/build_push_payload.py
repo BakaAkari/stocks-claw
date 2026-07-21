@@ -110,7 +110,7 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
     generated = _parse_dt(artifact.get("generated_at") or "")
     current = _parse_dt(now)
     age = (current.astimezone(generated.tzinfo) - generated).total_seconds() / 60
-    if age < -1 or age > 30:
+    if age < -1 or age > 45:
         raise ValueError(f"artifact age {age:.1f} minutes outside allowed range")
     delivery = "send"
     if (session in _WATCH or session not in _PRIMARY) and not _has_content(view):

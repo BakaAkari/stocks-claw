@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -32,8 +33,15 @@ def main() -> int:
         tmp = payload_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         tmp.replace(payload_path)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"INVALID: {exc}", file=sys.stderr)
+        return 2
+    if text == "[SILENT]":
+        print("[SILENT]", file=sys.stderr)
         return 0
+    if not text.strip():
+        print("INVALID: empty push output", file=sys.stderr)
+        return 2
     print(text)
     return 0
 

@@ -3,9 +3,10 @@
 职责：基于 AnalysisContext 与统一分析宪法生成投资分析报告。
 
 设计原则：
-- 默认禁用（llm_analysis.enabled = false）
-- 使用 Agent 自己的 LLM 或指定模型
-- 失败降级
+- **已废弃** — 系统已迁移至结构化 Outlook/Advisory 受限 LLM 路径。
+- 此模块保留仅为向后兼容内部试验，不得用于生产推送。
+- 其在配置中默认禁用，且不应被任何新路径引用。
+- 如需恢复受限 LLM 综合分析，请通过 outlook_evidence → outlook_synthesizer → outlook_validation 管道扩展。
 """
 
 from __future__ import annotations
@@ -49,13 +50,8 @@ class LLMAnalysis:
         self.prompt_path = prompt_path or _DEFAULT_PROMPT_PATH
 
     async def generate_report(self, context: AnalysisContext) -> str:
-        """基于上下文生成投资分析报告。
-
-        构建详细分析 prompt，调用 LLM 生成中文投资分析报告。
-        未启用时返回固定提示文本；调用失败时降级返回错误提示，不抛异常。
-        """
-        if not self.enabled:
-            return "LLM analysis disabled."
+        """DEPRECATED — always returns disabled message. 请勿调用。"""
+        return "LLM analysis disabled — 请使用结构化 Outlook 管道。旧版自由文本路径已于 2026-07-20 废弃。"
 
         try:
             system_prompt = self.prompt_path.read_text(encoding="utf-8").strip()

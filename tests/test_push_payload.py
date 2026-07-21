@@ -121,7 +121,7 @@ def _artifact(session="cn_after_close"):
         "market_date": "2026-07-17",
         "generated_at": "2026-07-17T07:25:00+00:00",
         "scheduled_for": "2026-07-17T15:20:00+08:00",
-        "agent_task": {"task_version": 5},
+        "agent_task": {"task_version": 5, "data_reference": {"window_delta": "", "portfolio_decision": "", "risk_state": "", "data_boundaries": "", "research_candidates": ""}},
         "portfolio_decision": {
             "user_view": {
                 "instruction_card": {

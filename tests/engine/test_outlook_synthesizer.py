@@ -45,14 +45,14 @@ def evidence() -> dict:
             },
         ],
         "confidence_cap": "high",
-        "confidence_reasons": ["数据均在有效期内"],
+        "confidence_reasons": ["数据均在有效期内（VIX参考值25）"],
         "portfolio_snapshot": {"total_value_cny": 1000000.0, "focus_positions": []},
         "asset_class_snapshot": {"equity": 1000000.0},
         "sector_snapshot": {},
         "technical_evidence": [],
         "rotation_evidence": [],
         "directional_intelligence": {"signal_count": 1, "signals": []},
-        "macro_evidence": {},
+        "macro_evidence": {"vix": 25.0},
         "upcoming_events": [],
         "risk_context": {},
         "data_boundaries": {},
@@ -583,3 +583,48 @@ def test_prompt_does_not_request_exact_scenario_probabilities(tmp_path, monkeypa
     )
     assert '"probability"' not in synth._prompt_text
     assert "不输出任何精确情景概率" in synth._prompt_text
+
+
+
+
+def test_reasoning_content_fenced_json_extraction(evidence, monkeypatch, tmp_path):
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+
+    def transport(req: dict) -> dict:
+        fenced = "```json\n" + json.dumps(_valid_outlook_dict(), ensure_ascii=False) + "\n```"
+        return {"choices": [{"message": {"content": "", "reasoning_content": fenced}}]}
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)), transport=transport)
+    assert synth.generate(evidence, now=NOW)["status"] == "ok"
+
+
+def test_response_parser_extracts_json_with_reasoning_prefix(evidence, monkeypatch, tmp_path):
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+
+    def transport(req: dict) -> dict:
+        content = "分析完成，JSON如下：\n" + json.dumps(_valid_outlook_dict(), ensure_ascii=False)
+        return _chat_response(content)
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)), transport=transport)
+    assert synth.generate(evidence, now=NOW)["status"] == "ok"
+
+
+
+def test_retries_truncated_response_with_larger_token_budget(evidence, monkeypatch, tmp_path):
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+    budgets = []
+
+    def transport(req: dict) -> dict:
+        budgets.append(req["max_tokens"])
+        if len(budgets) == 1:
+            return {"choices": [{"message": {"content": "{\"status\":\"ok\""}, "finish_reason": "length"}]}
+        return _chat_response(json.dumps(_valid_outlook_dict(), ensure_ascii=False))
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    cfg = _valid_cfg(cache_dir=str(tmp_path))
+    cfg["llm"]["outlook"]["max_tokens"] = 3000
+    synth = OutlookSynthesizer(cfg, transport=transport)
+    assert synth.generate(evidence, now=NOW)["status"] == "ok"
+    assert budgets == [3000, 8000]

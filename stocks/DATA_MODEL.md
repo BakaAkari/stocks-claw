@@ -170,6 +170,17 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `research_candidates`：research_only 信号候选，最多 8 个，不进入 approved_actions。
 - `execution_review`：对当前 run 中 `approved_actions` 的执行状态对照（executed/partial/rejected/deferred/not_executed/unknown）。
 - `agent_task`：`task_version` 已升级为 5，只引用上述 5 个可信字段，输出固定五段：变化摘要 / 今日动作 / 禁止待确认 / 资金到账与边界 / 研究候选。
+- `structured_outlook` 主窗口（`cn_pre_open`、`cn_after_close`、`us_pre_open`、`us_after_close`）
+  结构化展望，含 `status`(`ok`、`unavailable`)、`summary`、`near_term`、`medium_term`、
+  `asset_views`、`sector_views`、`scenarios`(仅 `base`/`bull`/`risk`)、`source_refs`、
+  `confidence`(置信度 cap)、`data_limitations`。生成前经 `outlook_validation.py` 多层校验；
+  失败时状态为 `unavailable`。
+- `outlook_evidence_meta` 等：展望证据包缩写、confidence cap 原因和 hash，
+  供审计和缓存查找，不进入用户正文。
+- `outlook_delta` 仅存于观察窗口（`cn_open_watch`、`cn_pre_close`、`us_open_watch`、`us_pre_close`），
+  记录与上一主窗口 outlook 的语义差异：`material`(是否重大变化)、`changes`(按
+  `summary`/`confidence`/`near_term`/`medium_term`/`sector_views`/`asset_views`/`scenarios`
+  分组的 from/to)。
 - `mandatory_blocks`：兼容字段，供历史 Markdown/内部审计使用；交易窗口 v5 Agent 不得读取。
 - `context_digest`：情报 session 和内部审计上下文；交易窗口 v5 Agent 不得读取。
 - 交易窗口已不再支持 `agent_task.task_version == 4`；存储层和推送守门均拒绝 v4。
@@ -468,6 +479,50 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 逐持仓市值、盈亏、暴露和流动性边界。仓位动作仍用比例、区间或自然语言表达，
 不得保存具体货币金额。HTTP 适配器默认隐藏精确金额是远程接口安全策略，不改变
 本地 `raw_prompt_input` 的真实金额语义。
+
+
+## StructuredOutlook v1
+
+`structured_outlook` 是主窗口的展望部分，给出中立的方向性研判，不含具体交易指令。
+
+必填字段：
+
+- `status`: `"ok"` 或 `"unavailable"`
+- `generated_at`: UTC ISO 时间
+- `summary`: 一句话展望摘要
+- `near_term`: `{horizon, direction, confidence}`，方向词限于 `bullish/bearish/neutral/uncertain`
+- `medium_term`: 同 `near_term` 结构
+- `asset_views`: 资产类别观点列表，每项 `{asset_class, direction, rationale}`
+- `sector_views`: 行业/风格观点列表，每项 `{sector, direction, rationale}`
+- `scenarios`: 仅允许 `base`/`bull`/`risk` 三个子字典，每个场景含 `label`、
+  `drivers[]`、`portfolio_effect`、`validation[]`、`invalidation[]`
+- `source_refs`: 新闻来源引用列表，每项 `{source, title, url, published_at, id}`。
+  只能引用 `outlook_evidence` 中经过验证的来源，不得编造。
+- `confidence`: 置信度 cap，`high`/`medium`/`low`；系统先根据数据质量、覆盖率、
+  来源独立性计算好 cap，LLM 输出不得超越。
+
+校验失败时，`sanitize_unavailable_outlook()` 产出：
+
+```json
+{
+  "status": "unavailable",
+  "generated_at": "...",
+  "message": "展望不可用",
+  "data_limitations": ["..."]
+}
+```
+
+## OutlookDelta v1
+
+`outlook_delta` 记录两个主窗口 outlook 之间的语义变化，仅为观察窗口使用。
+
+- `schema_version`: 1
+- `material`: bool，是否存在值得通知的变化
+- `changes`: 以字段为键的 from/to 映射：
+  - `summary`/`confidence`: `{from, to}` 字符串
+  - `near_term`/`medium_term`: `{direction, confidence, horizon}` 下的 `{from, to}`
+  - `sector_views`/`asset_views`: 以 `sector`/`asset_class` 为键，只保留 `direction` 的 from/to
+  - `scenarios`: 仅 `base`/`bull`/`risk`，保留 `label`、`validation`、`invalidation` 的 from/to
 
 ## data_quality v10
 

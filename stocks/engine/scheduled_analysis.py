@@ -1823,7 +1823,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
         "must_answer": [
             "【交易指令卡】第一段只读取 portfolio_decision.user_view.instruction_card；原样表达状态、最多3个动作、比例、预计金额、取消条件、到账和下一检查点",
             "没有获批动作时，主窗口写“今日无需操作”并列出 instruction_card.no_action_reasons 中1-2个关键原因",
-            "【私人投资助理】第二段只读取 portfolio_decision.user_view.assistant_brief，解释原因、当前不能做什么、四类资金、风险状态和观察候选",
+            "【私人投资助理】第二段只读取 portfolio_decision.user_view.assistant_brief（含 outlook 研判和 outlook_delta 观测变化），解释原因、当前不能做什么、四类资金、风险状态和观察候选",
             delivery_policy,
         ],
         "must_not_do": [
@@ -1842,7 +1842,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
         ],
         "data_reference": {
             "window_delta": "仅供生成器确定观察窗口静默；不得进入用户正文",
-            "portfolio_decision": "用户正文唯一来源为 portfolio_decision.user_view",
+            "portfolio_decision": "用户正文唯一来源为 portfolio_decision.user_view（含 assistant_brief.outlook 和 outlook_delta）",
             "risk_state": "仅供生成器构建 user_view；消费端不得直接读取",
             "data_boundaries": "仅供生成器构建 user_view.data_notes；消费端不得直接读取",
             "research_candidates": "仅供生成器构建 user_view.research；消费端不得直接读取",

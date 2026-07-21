@@ -26,6 +26,7 @@ from stocks.providers.base import QuoteProvider
 
 ROOT = Path(__file__).resolve().parents[2]
 FINNHUB_KEY_PATH = ROOT / ".secret" / "finnhub-key.md"
+ALT_KEY_PATH = Path("/opt/data/.secret/finnhub-key.md")
 
 
 class FinnhubQuoteProvider(QuoteProvider):
@@ -63,6 +64,8 @@ class FinnhubQuoteProvider(QuoteProvider):
                 self.api_key = env_key
             elif FINNHUB_KEY_PATH.exists():
                 self.api_key = FINNHUB_KEY_PATH.read_text(encoding="utf-8").strip()
+            elif ALT_KEY_PATH.exists():
+                self.api_key = ALT_KEY_PATH.read_text(encoding="utf-8").strip()
             else:
                 self.api_key = ""
         self._min_request_interval = max(0.0, min_request_interval)

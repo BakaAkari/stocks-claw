@@ -1,4 +1,7 @@
-"""统一个人建议 prompt 接线测试。"""
+"""（已对齐废弃路径）统一个人建议 prompt 接线测试。
+
+LLMAnalysis.generate_report 已于 2026-07-20 强制返回废弃提示，
+不再调用 LLM。此测试验证废弃行为可预测。"""
 
 from unittest.mock import Mock
 
@@ -18,8 +21,5 @@ async def test_generate_report_uses_shared_system_prompt(tmp_path):
 
     result = await analyzer.generate_report(context)
 
-    assert result == "report"
-    analyzer._call_llm.assert_called_once_with(
-        "SHARED ANALYSIS CONSTITUTION",
-        "DESENSITIZED CONTEXT",
-    )
+    assert "LLM analysis disabled" in result
+    analyzer._call_llm.assert_not_called()

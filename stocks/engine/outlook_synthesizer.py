@@ -194,6 +194,11 @@ class OutlookSynthesizer:
 
         # ── Parse ────────────────────────────────────────────────────────
         outlook = self._parse_response(response, now)
+        if outlook is None and self._is_truncated_response(response):
+            logger.info("Retrying truncated outlook with larger token budget")
+            request["max_tokens"] = max(self.max_tokens, 8000)
+            response = self._call_transport(request)
+            outlook = self._parse_response(response, now)
         if outlook is None and self._should_retry_temperature(response):
             logger.info("Retrying with temperature=1")
             request["temperature"] = 1.0
@@ -319,6 +324,13 @@ class OutlookSynthesizer:
             return None
 
     @staticmethod
+    def _is_truncated_response(response: dict | None) -> bool:
+        if not isinstance(response, dict):
+            return False
+        choices = response.get("choices") or []
+        return bool(choices and choices[0].get("finish_reason") == "length")
+
+    @staticmethod
     def _parse_response(
         response: dict | None, now: str  # noqa: ARG004
     ) -> dict | None:
@@ -331,15 +343,22 @@ class OutlookSynthesizer:
                 return None
             message = choices[0].get("message", {})
             content = (message.get("content") or "").strip()
-            # Fenced JSON extraction
-            if content.startswith("```"):
-                content = OutlookSynthesizer._extract_fenced_json(content)
-            # Empty content → try reasoning_content
             if not content:
                 content = (message.get("reasoning_content") or "").strip()
             if not content:
                 return None
-            return json.loads(content)
+            # Some compatible/reasoning models wrap JSON in a code fence or
+            # prefix it with a short explanatory sentence despite response_format.
+            if content.startswith("```"):
+                content = OutlookSynthesizer._extract_fenced_json(content)
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                start = content.find("{")
+                end = content.rfind("}")
+                if start < 0 or end <= start:
+                    raise
+                return json.loads(content[start : end + 1])
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
             logger.warning("Failed to parse LLM response: %s", exc)
             return None

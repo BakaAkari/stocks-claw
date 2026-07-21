@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from stocks.engine.presentation import display_label
@@ -65,7 +66,7 @@ def build_outlook_evidence(
     data_quality: dict = context.get("data_quality") or {}
 
     # ── Intelligence events (filter source-less) ───────────────────────
-    events, omitted = _build_intelligence_events(intel_digest)
+    events, omitted = _build_intelligence_events(intel_digest, generated_at=generated_at)
 
     # ── Directional intelligence summary ────────────────────────────────
     directional = _build_directional_intelligence(intel_digest)
@@ -180,8 +181,11 @@ def compute_confidence_cap(evidence: dict) -> tuple[str, list[str]]:
         reasons.append("宏观数据超过发布周期")
         return ("low", reasons)
 
-    # Rule 5: single-source events → at most medium
+    # Rule 5: single-source or absent events → at most medium
     events = evidence.get("intelligence_events", [])
+    if not events:
+        reasons.append("无可验证新闻来源，置信度上限为中")
+        return ("medium", reasons)
     has_single_source = False
     for ev in events:
         sources = ev.get("sources", [])
@@ -208,15 +212,30 @@ def evidence_hash(evidence: dict) -> str:
 # ── Internal builders ──────────────────────────────────────────────────────
 
 
+def _parse_iso_utc(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _build_intelligence_events(
     digest: dict,
+    *,
+    generated_at: str,
 ) -> tuple[list[dict], int]:
-    """Map top clusters to intelligence_events; drop source-less clusters."""
+    """Map fresh top clusters to evidence events; drop stale or source-less clusters."""
     top_clusters: list[dict] = digest.get("top_clusters") or []
     events: list[dict] = []
     omitted = 0
+    now = _parse_iso_utc(generated_at)
 
     for cluster in top_clusters:
+        formed_at = _parse_iso_utc(str(cluster.get("formed_at") or ""))
+        if now is None or formed_at is None or (now - formed_at).total_seconds() > 72 * 3600:
+            omitted += 1
+            continue
         articles: list[dict] = cluster.get("articles") or []
         sources: list[dict] = []
         for article in articles:
@@ -364,6 +383,9 @@ def _build_portfolio_snapshot(
 
     result: dict[str, Any] = {
         "total_value_cny": total_value,
+        # Human-scale value is deterministic evidence, not an LLM-side conversion.
+        "total_value_wan_cny": round(total_value / 10000, 2),
+        "total_value_wan_cny_1dp": round(total_value / 10000, 1),
         "focus_positions": focus,
     }
     # Attach anomaly flag for confidence cap
@@ -395,7 +417,21 @@ def _build_asset_class_snapshot(pv_list: list[dict]) -> dict:
 def _build_sector_snapshot(context: dict) -> dict:
     """Exposure summary as sector snapshot."""
     exposure = context.get("exposure_summary") or {}
-    return {"exposures": {k: round(v, 2) for k, v in exposure.items()}}
+    result = {}
+    for k, v in exposure.items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            result[k] = round(v, 6)
+    # Handle nested shape: total_value_cny / exposures / top
+    nested = exposure.get("exposures")
+    if isinstance(nested, dict):
+        for k, v in nested.items():
+            if isinstance(v, dict):
+                val = v.get("ratio")
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    result[k] = round(val, 6)
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                result[k] = round(v, 6)
+    return {"exposures": result}
 
 
 def _build_technical_evidence(context: dict) -> list[dict]:
@@ -437,16 +473,26 @@ def _build_macro_evidence(data_quality: dict) -> dict:
 
 
 def _build_upcoming_events(context: dict) -> list[dict]:
-    """Upcoming calendar events."""
+    """Upcoming calendar events with deterministic date components."""
     events: list = context.get("upcoming_events") or []
-    return [
-        {
-            "name": str(e.get("name", "")),
-            "scheduled_at": str(e.get("scheduled_at", "")),
-            "source": str(e.get("source", "")),
+    result = []
+    for event in events:
+        scheduled = str(event.get("scheduled_at", ""))
+        parsed = _parse_iso_utc(scheduled)
+        item = {
+            "name": str(event.get("name", "")),
+            "scheduled_at": scheduled,
+            "source": str(event.get("source", "")),
         }
-        for e in events
-    ]
+        if parsed is not None:
+            item.update({
+                "year": parsed.year,
+                "month": parsed.month,
+                "day": parsed.day,
+                "date_display": f"{parsed.month}月{parsed.day}日",
+            })
+        result.append(item)
+    return result
 
 
 def _build_risk_context(risk_state: dict, cash_schedule: dict) -> dict:

@@ -72,7 +72,7 @@ DEFAULT_ENGINE_CONFIG = {
             "fallback_base_url": "http://100.121.167.1:8317/v1",
             "timeout_seconds": 120,
             "temperature": 0.2,
-            "max_tokens": 3000,
+            "max_tokens": 8000,
             "cache_dir": ".local/outlook_cache",
         },
     },

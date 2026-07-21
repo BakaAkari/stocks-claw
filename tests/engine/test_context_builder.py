@@ -125,7 +125,9 @@ def test_intelligence_digest_preserves_source_rich_clusters(
         market_scaffold,
         config={"intelligence_dir": str(intelligence_dir)},
     )
-    digest = builder._build_intelligence_digest(repo_root=tmp_path)
+    digest = builder._build_intelligence_digest(
+        repo_root=tmp_path, generated_at="2026-07-17T09:00:00+00:00"
+    )
 
     assert digest["status"] == "ok"
     cluster_out = digest["top_clusters"][0]
@@ -1466,3 +1468,62 @@ class TestHistoryBackfillQuality:
         assert node["ok_count"] == 1
         assert node["failed_count"] == 1
         assert len(node["items"]) == 2
+
+
+# --- Task 7: _public_cluster_articles limit and projection ---
+
+
+def test_public_cluster_articles_limits_to_five():
+    from stocks.engine.context_builder import ContextBuilder
+    articles = [
+        {"source": f"S{i}", "title": f"Title{i}", "url": f"https://x{i}.test",
+         "published_at": "2026-07-17T00:00:00+00:00",
+         "internal_field": "secret"}
+        for i in range(20)
+    ]
+    result = ContextBuilder._public_cluster_articles(articles)
+    assert len(result) == 5
+
+
+def test_public_cluster_articles_only_public_fields():
+    from stocks.engine.context_builder import ContextBuilder
+    articles = [
+        {"source": "Reuters", "title": "Oil rises", "url": "https://example.test/oil",
+         "published_at": "2026-07-17T07:30:00+00:00", "internal_id": "cluster-123", "score": 0.95},
+    ]
+    result = ContextBuilder._public_cluster_articles(articles)
+    assert len(result) == 1
+    item = result[0]
+    assert item["source"] == "Reuters"
+    assert item["title"] == "Oil rises"
+    assert item["url"] == "https://example.test/oil"
+    assert item["published_at"] == "2026-07-17T07:30:00+00:00"
+    assert "internal_id" not in item
+    assert "score" not in item
+
+
+def test_public_cluster_articles_filters_missing_required():
+    from stocks.engine.context_builder import ContextBuilder
+    articles = [
+        {"source": "S1", "title": "T1", "url": "", "published_at": "2026-07-17T00:00:00+00:00"},
+        {"source": "S2", "title": "", "url": "https://x.test", "published_at": "2026-07-17T00:00:00+00:00"},
+        {"source": "S3", "title": "T3", "url": "https://x3.test", "published_at": None},
+        {"source": "S4", "title": "T4", "url": "https://x4.test", "published_at": "2026-07-17T00:00:00+00:00"},
+    ]
+    result = ContextBuilder._public_cluster_articles(articles)
+    assert len(result) == 1
+    assert result[0]["source"] == "S4"
+
+
+def test_public_cluster_articles_limit_5_independent():
+    from stocks.engine.context_builder import ContextBuilder
+    articles = [
+        {"source": f"S{i}", "title": f"T{i}", "url": f"https://x{i}.test",
+         "published_at": "2026-07-17T00:00:00+00:00"}
+        for i in range(10)
+    ]
+    result = ContextBuilder._public_cluster_articles(articles)
+    assert len(result) == 5
+    # Ensure limit works independently from other tests
+    result2 = ContextBuilder._public_cluster_articles(articles, limit=3)
+    assert len(result2) == 3

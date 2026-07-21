@@ -20,7 +20,7 @@
 - 定时产物 `mandatory_blocks` 含四块确定事实:`risk_boundary`(风险等级)、
   `constraint_alerts`(大类约束偏离)、`capital_facts`(资金状况:约束/净可动用/冲突/回收/轮动参考)、
   `shadow_account`(建议信号分布)。`capital_facts` 只陈述事实不做解释,资金部署建议由 LLM 基于 persona 生成。
-- 可选 `LLMAnalysis` 能生成兼容报告，但默认关闭，不改变主边界。
+- `LLMAnalysis`（已废弃，默认关闭） 能生成兼容报告，但默认关闭，不改变主边界。
 - 系统没有券商连接和下单能力。
 
 ```text
@@ -94,6 +94,11 @@ Adapter 不实现组合算法或 Provider 逻辑。
 - `scheduled_analysis.py`：A 股/美股/情报 session 日历、运行产物存储、Action Card、
   Portfolio Risk、Capital Allocation、agent_task v4 和通知建议策略。
 - `shadow_account.py` / `hypothesis_tracker.py` / `signal_tracker.py`：建议快照、研究论点和情报信号效果跟踪。
+- `outlook_evidence.py`：构建 outlook 生成的白名单证据包，过滤过时/无来源的情报事件，计算置信度上限（cap）。
+- `outlook_synthesizer.py`：基于 OpenAI 兼容端点的结构化 outlook 合成器，带 evidence hash 缓存、温度错误重试、围栏式 JSON 过滤，任何失败时退化到 sanitized-unavailable。
+- `outlook_validation.py`：对 LLM 返回的 outlook 做字段、方面、证券来源、提示注入、内部 token 和数字授权校验；失败时退化到筛选后的 unavailable 状态。
+- `outlook_delta.py`：计算主窗口 outlook 之间的语义差异，供观察窗口使用。
+- `presentation.py`：将 outlook 和 outlook_delta 展开为用户可读的确定性文本，同时过滤掉任何内部 token。
 - `llm_analysis.py`：默认关闭的兼容报告模块。
 
 ### domain
@@ -225,7 +230,7 @@ CLI 写操作要求 `--confirmed`；MCP 写操作要求 `confirmed: true`。确�
 
 ## 7. Prompt 与金额边界
 
-`stocks/prompts/personal_advice_prompt.txt` 是内置 LLM 与外部 Agent 共用的分析约束。
+`stocks/prompts/personal_advice_prompt.txt` 是（已废弃的自由文本路径保留的）分析约束。
 `raw_prompt_input` 是本地 Agent 证据包，当前包含真实资产金额、逐持仓市值、盈亏、
 暴露集中度、可动用资金和数据边界；仓位动作仍要求用比例、区间或自然语言表达，
 不得保存具体下单金额。
@@ -242,6 +247,9 @@ HTTP 是远程接口边界，默认仍递归移除 `amount`、`amount_cny` 和 `
 - `.local/advice_snapshots/`：Shadow Account 建议快照。
 - `.local/hypotheses/`：研究论点与 run 关联索引。
 - `.local/signal_tracker/`：情报方向信号及后续价格结算。
+- `.local/outlook_cache/`：结构化 `outlook` 的 LLM 生成缓存，24 小时 TTL，按 evidence hash 去重；不得提交。
+- `.local/outlook_delta_state.json`：跨窗口 outlook 差异状态，用于观察窗口只报告变化。
+- `.local/forecasts/`：用户确认保存的预测台账，系统按历史收盘价自动结算。
 - `data/cache/`：非隐私缓存，例如汇率；不与密钥目录混用。
 - `.secret/`：API key 与 HTTP token。
 
@@ -258,7 +266,40 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 
 异常响应不回传内部堆栈。当前没有速率限制和 CORS 策略，因此不能视为公网 API。
 
-## 10. 配置
+## 10. 中期 outlook 与展望合成
+
+系统为 A 股/美股主窗口（`cn_pre_open`、`cn_after_close`、`us_pre_open`、`us_after_close`）
+生成结构化展望 `structured_outlook`：
+
+1. `outlook_evidence.py` 从 `AnalysisContext` 中提取白名单证据：前 5 持仓/冲突持仓、资产类别和 sector 快照、技术/轮动信号、情报事件、宏观、即将发生事件、风险和数据边界。
+2. `OutlookSynthesizer` 调用 OpenAI 兼容端点，将证据包转换为约束后的 JSON outlook：near_term / medium_term、sector_views、asset_views、scenarios、source_refs、confidence。
+3. `outlook_validation.py` 对 outlook 做多层校验：必填字段、方向词表、不含交易指令/内部 token/概率字段/数字授权、source_refs 必须来自证据包中的可验证新闻、instrument/symbol 必须在证据包的授权列表中。
+4. 校验失败时，`sanitize_unavailable_outlook()` 代替生成一个筛选后的 unavailable 状态，不中断 session。
+5. 观察窗口（`cn_open_watch`、`cn_pre_close`、`us_open_watch`、`us_pre_close`）
+   不生成独立 outlook，而是计算与上一个主窗口 outlook 的语义差异，并展示为 `outlook_delta`。
+
+`outlook` 和 `outlook_delta` 在渲入 `assistant_brief` 之前，经 `presentation.py` 的
+`project_outlook_for_display()` / `project_outlook_delta_for_display()` 进一步白名单过滤，
+确保用户可见正文不泄露内部 token、position_id 或 decision_id。
+
+## 11. 推送边界与信任谷仓
+
+定时产物并不直接发送到飞书。推送层由 Hermes cron/no-agent 脚本执行：
+
+- `scripts/cron/stocks-claw-push-*.sh` 以 `--session` 调用 `scripts/run_push_report.py`。
+- `run_push_report.py` 调用 `build_push_payload()` 构建用户可见报告，并调用
+  `validate_payload_text()` 做崩溃闭锁（fail-closed）。
+- 支持的 session 只包含 A 股/美股交易窗口：`cn_pre_open`、`cn_open_watch`、`cn_pre_close`、
+  `cn_after_close`、`us_pre_open`、`us_open_watch`、`us_pre_close`、`us_after_close`。
+  `global_intelligence_watch` 等情报产物不走这个推送门。
+- 推送脚本会检查 artifact 新鲜度（默认 45 分钟窗口）；新鲜度不足时以 `INVALID` 退出，不发送。
+- 推送时间应晚于 `scheduled_sessions.json` 中对应 session 的生成时间，
+  以避免 `artifact age` 为负数（如 `cn_pre_open` 9:00 生成，推送 cron 9:05）。
+- 推送调试可以使用 `--now` 将推送时间与 artifact 时间对齐，但不应用于生产环境。
+
+
+
+## 12. 配置
 
 主要配置：
 
@@ -275,7 +316,7 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 Engine 配置优先级：环境变量 > YAML > 代码默认值。嵌套键使用双下划线，例如
 `STOCKS_FETCHER__MAX_RETRIES=3`。
 
-## 11. 当前已知架构限制
+## 13. 当前已知架构限制
 
 - 全局 quote freshness 当前会传给全部持仓,跨市场 session 可能相互污染动作比例。
 - `capital_allocation` 将 T1/T2 持仓计入 deployable,不能直接解释为今日现金。
@@ -283,17 +324,33 @@ Engine 配置优先级：环境变量 > YAML > 代码默认值。嵌套键使用
 - 情报 Driver 与 IntelConflictRule 使用不同匹配路径,可能出现结构化冲突漏报。
 - 产品路由在 `quant_action.py` 与 `scheduled_analysis.py` 存在重复映射。
 - Watch Window 仍以完整快照为主,尚未实现 Delta/SILENT 闭环。
+- **outlook 合成与推送**：`outlook_validation.py` 对数字和 sector 名称的白名单较为严格，
+  导致合法的 ETF 基金代码（如 `a:159110`）和合法的行业/风格标签（如 `防御/航空`）
+  被报 `unauthorized`，尚需宽化。此问题影响 `us_pre_open` 等已生成报告的推送。
+- 推送 cron 时间必须与 `scheduled_sessions.json` 的生成时间保持正向容差；
+  原配置中 `cn_pre_open-push` 8:55 运行、报告 9:00 才生成，导致 `artifact age -4.3 minutes` 失败。
+  当前 45 分钟窗口来自 `build_push_payload.py`。原 30 分钟在产物提前生成（如 9:35 生成 10:00 的
+  `cn_open_watch`）、推送 10:05 时就被突破，因此扩大到 45 分钟并将推送 cron 调到 scheduled + 5–10 分钟。
 - 详情与整改优先级见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
 
-## 12. 验证基线
+## 14. 验证基线
 
-当前审查基线:ruff 通过;pytest 536 passed / 2 failed。失败来自 intelligence 测试固定日期超出 6 小时窗口,默认质量门尚未全绿。
+当前实测基线（2026-07-21）：
+
+- `ruff check .`：通过
+- `pytest -q`：1106 passed / 2 failed
+- 失败集合：`tests/providers/test_filings.py` 中 SEC EDGAR 公告测试
+- 失败原因：测试对网络异常的 assertion 与当前 provider 的异常处理路径不一致；不影响生产推送逻辑
+- 未解决问题：outlook 对数字和 sector 的误报（见 §11）
+
+当前不建议将自动生成的交易动作作为直接执行单；系统定位为风险监控与研究工作台，详情见
+`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
 
 ```bash
-uv run ruff check .
-uv run python -m pytest -q
-uv run python -m compileall -q stocks tests
-uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
+.venv/bin/ruff check .
+.venv/bin/python -m pytest -q
+.venv/bin/python -m compileall -q stocks tests
+.venv/bin/python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-测试覆盖 Engine、Provider、脚手架、持久化、CLI/MCP/HTTP、安全确认、降级状态和 schema。
+测试覆盖 Engine、Provider、脚手架、持久化、CLI/MCP/HTTP、安全确认、降级状态、schema 与 outlook 合成/校验/推送边界。

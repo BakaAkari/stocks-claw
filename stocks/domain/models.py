@@ -1559,7 +1559,15 @@ class AnalysisContext:
 
 @dataclass(frozen=True)
 class DecisionEnvelope:
-    """决策层统一传输协议；所有字段始终存在，缺失值显式为 None。"""
+    """（已冻结，未在运行时接线）决策层统一传输协议。
+
+    此 dataclass 及其契约校验器已冻结为设计参考，不作为当前
+    运行路径的一部分。系统当前通过 portfolio_decision.user_view
+    交付确定性结果，通过 structured_outlook 交付受限 LLM 研判。
+
+    G0 设计：Status ∈ {ok,degraded,setup_required,validation_failed,failed}
+    Internal modes: internal_llm / agent_delegate / deterministic_only
+    """
 
     status: str
     mode_requested: str

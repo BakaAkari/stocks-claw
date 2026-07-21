@@ -87,6 +87,10 @@ position_id、decision_id、内部哈希、原始异常码和英文 signal/risk/
 研究候选不得进入指令卡动作；风险暂停时只能写解除后再评估。Markdown 是确定性
 Artifact renderer，不再输出完整 Agent Task、全扫描信号或兼容字段。
 
+`assistant_brief` 还可以包含主窗口产生的 `outlook` 研判（日级和中期展望、置信度 cap、
+场景、来源引用）和观察窗口产生的 `outlook_delta` 差异小结；二者均已经
+`presentation.py` 白名单过滤，Agent 不得在正文中暴露内部 token、position_id 或 decision_id。
+
 可选内部 LLM 报告：
 
 ```bash
@@ -94,6 +98,22 @@ uv run python -m stocks.adapters.cli --output text --llm-analysis
 ```
 
 项目不存在 `--llm-enhancer`，也不存在旧的子命令式 CLI。
+
+### 定时产物推送规范
+
+生产环境下，定时产物由 Hermes cron/no-agent 脚本推送，而不是在 `stocks-claw` CLI 内直接发送：
+
+- 推送脚本位于 `scripts/cron/stocks-claw-push-{session}.sh`，调用 `scripts/run_push_report.py --session {session}`。
+- 支持的交易窗口 session 为：`cn_pre_open`、`cn_open_watch`、`cn_pre_close`、`cn_after_close`、
+  `us_pre_open`、`us_open_watch`、`us_pre_close`、`us_after_close`。
+- 情报产物 `global_intelligence_watch` 不走此推送路径；若需发送情报摘要，应使用独立的情报专门路径。
+- 推送前会校验 artifact 新鲜度（默认 45 分钟窗口）、`task_version == 5` 和信任边界，
+  任何校验失败以 `INVALID` 退出并且不发送。
+- 推送 cron 时间应该晚于 `scheduled_sessions.json` 中对应 session 的生成时间，
+  例如 `cn_pre_open` 9:00 生成则 9:05 推送。原配置 8:55 推送会导致
+  `artifact age -4.3 minutes` 失败。
+- 本地调试推送可以使用 `--now` 使推送时间与 artifact 时间对齐，但不应用于生产。
+
 
 ## 3. 金融记忆操作
 
@@ -432,11 +452,15 @@ CORS，不应直接暴露公网。
 ## 9. 每次修改的验收
 
 ```bash
-uv run ruff check .
-uv run python -m pytest -q
-uv run python -m compileall -q stocks tests
-uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
+.venv/bin/ruff check .
+.venv/bin/python -m pytest -q
+.venv/bin/python -m compileall -q stocks tests
+.venv/bin/python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
+
+当前实测基线（2026-07-21）：`ruff` 通过，`pytest` 1106 passed / 2 failed，失败位于
+`tests/providers/test_filings.py`，与 SEC EDGAR provider 的网络异常 assertion 相关，
+不影响交易窗口推送主路径。
 
 不得提交 `.local/`、`.secret/`、缓存、快照、虚拟环境或用户资产。新增 Markdown
 必须遵守 `PLAN.md` 的文档冻结规则。

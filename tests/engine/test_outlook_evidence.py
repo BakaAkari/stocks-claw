@@ -702,3 +702,51 @@ def test_evidence_hash_changes_when_content_changes():
     e1 = {"version": 1, "generated_at": NOW, "session": "cn_after_close"}
     e2 = {"version": 2, "generated_at": NOW, "session": "cn_after_close"}
     assert evidence_hash(e1) != evidence_hash(e2)
+
+
+# ---------------------------------------------------------------------------
+# Production-shape exposure and event freshness regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_sector_snapshot_accepts_production_nested_exposure_shape(sample_context, sample_run):
+    ctx = dict(sample_context)
+    ctx["exposure_summary"] = {
+        "total_value_cny": 2_000_000.0,
+        "exposures": {
+            "cn_equity": {"value_cny": 730_000.0, "ratio": 0.365, "positions": ["p1"]},
+            "gold": {"value_cny": 300_000.0, "ratio": 0.15, "positions": ["p2"]},
+        },
+        "top": [],
+    }
+    evidence = build_outlook_evidence(
+        ctx, sample_run, session_id="cn_after_close", generated_at=NOW,
+    )
+    assert evidence["sector_snapshot"] == {
+        "exposures": {"total_value_cny": 2_000_000.0, "cn_equity": 0.365, "gold": 0.15}
+    }
+
+
+def test_no_verifiable_news_caps_confidence_at_medium(sample_context, sample_run):
+    ctx = dict(sample_context)
+    ctx["intelligence_digest"] = dict(ctx["intelligence_digest"])
+    ctx["intelligence_digest"]["top_clusters"] = []
+    evidence = build_outlook_evidence(
+        ctx, sample_run, session_id="cn_after_close", generated_at=NOW,
+    )
+    assert evidence["confidence_cap"] in {"low", "medium"}
+    assert evidence["confidence_cap"] != "high"
+
+
+def test_stale_news_event_is_omitted_from_outlook_evidence(sample_context, sample_run):
+    ctx = dict(sample_context)
+    ctx["intelligence_digest"] = dict(ctx["intelligence_digest"])
+    cluster = dict(ctx["intelligence_digest"]["top_clusters"][0])
+    cluster["formed_at"] = "2026-07-12T08:00:00+00:00"
+    cluster["articles"] = [dict(x, published_at="2026-07-12T07:30:00+00:00") for x in cluster["articles"]]
+    ctx["intelligence_digest"]["top_clusters"] = [cluster]
+    evidence = build_outlook_evidence(
+        ctx, sample_run, session_id="cn_after_close", generated_at=NOW,
+    )
+    assert evidence["intelligence_events"] == []
+    assert evidence["data_boundaries"]["omitted_event_count"] >= 1
