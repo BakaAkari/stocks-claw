@@ -245,6 +245,20 @@ class CLIAdapter:
         else:
             print(output_text)
 
+
+    @staticmethod
+    def _valuation_for_asset(asset, valuation_map: dict) -> dict | None:
+        """Find position valuation matching an asset by instrument_key or name."""
+        if asset.instrument_key:
+            for pv in valuation_map.values():
+                if pv.get("instrument_key") == asset.instrument_key:
+                    return pv
+        name = asset.name or ""
+        for pv in valuation_map.values():
+            if pv.get("display_name") == name or pv.get("position_id", "").endswith(name):
+                return pv
+        return None
+
     async def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
         if args.decision_attribution:
             return {"success": True, "data": self.engine.decision_attribution()}
@@ -291,10 +305,31 @@ class CLIAdapter:
             now_val = None if settle_arg == "now" else settle_arg
             return self.engine.decision_attribution_settle(now=now_val)
         if args.assets_list:
-            return {
-                "success": True,
-                "data": [asset.to_dict() for asset in self.engine.load_assets()],
+            # Use position valuations from build_context so that quantity-based
+            # holdings (e.g. IBKR USD positions) show their market value in CNY.
+            context = await self.engine.build_context(
+                include_news=False,
+                include_quotes=True,
+                include_history=False,
+            )
+            valuation_map = {
+                pv.get("position_id", ""): pv
+                for pv in (context.position_valuations or [])
             }
+            data = []
+            for asset in self.engine.load_assets():
+                asset_dict = asset.to_dict()
+                pv = self._valuation_for_asset(asset, valuation_map)
+                if pv is not None and pv.get("market_value_cny") is not None:
+                    asset_dict["amount_cny"] = pv["market_value_cny"]
+                    asset_dict["conversion_status"] = "ok"
+                    asset_dict["conversion_source"] = "market_quote"
+                    asset_dict["conversion_rate"] = pv.get("fx_rate")
+                    asset_dict["price"] = pv.get("price")
+                    asset_dict["price_source"] = pv.get("price_source")
+                    asset_dict["as_of"] = pv.get("as_of")
+                data.append(asset_dict)
+            return {"success": True, "data": data}
         if args.asset_migrate_v2:
             return self.engine.migrate_assets_v2(confirmed=args.confirmed)
 
