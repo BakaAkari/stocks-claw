@@ -1031,7 +1031,7 @@ class LLMIntelligenceAnalyzer:
             'us_tech': ['us:NVDA', 'us:QQQ'],
             'us_energy': ['us:XLE'],
             'us_defense': ['us:ITA'],
-            'china_broad': ['a:510300', 'a:512890', 'a:511880'],
+            'china_broad': ['a:510300', 'a:512890', 'a:511880', 'a:516020'],
             'china_sci': ['a:588000', 'a:512480', 'a:561560'],
             'qdii': ['alipay_gf_nasdaq', 'alipay_dc_nasdaq'],
             'active': ['alipay_info'],
