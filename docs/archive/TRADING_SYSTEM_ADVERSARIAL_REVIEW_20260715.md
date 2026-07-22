@@ -1,3 +1,6 @@
+> **ARCHIVED 2026-07-22：历史设计/审查证据，无现行实施效力。**
+> 当前愿景、路线、执行和架构以 `stocks/VISION.md`、`PLAN.md`、`EXECUTION_PLAN.md`、`ARCHITECTURE.md` 为准。
+
 # stocks-claw 最终对抗性交易系统审查
 
 > 日期：2026-07-15

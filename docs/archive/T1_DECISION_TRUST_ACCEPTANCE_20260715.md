@@ -1,3 +1,6 @@
+> **ARCHIVED 2026-07-22：历史设计/审查证据，无现行实施效力。**
+> 当前愿景、路线、执行和架构以 `stocks/VISION.md`、`PLAN.md`、`EXECUTION_PLAN.md`、`ARCHITECTURE.md` 为准。
+
 # T1 决策一致性与执行价值验收报告
 
 > 日期:2026-07-15

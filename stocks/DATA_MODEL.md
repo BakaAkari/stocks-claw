@@ -1,7 +1,30 @@
-# 现行数据模型
+# 数据模型
 
-本文只描述当前代码中的 schema。权威实现位于 `stocks/domain/models.py`，
-`AnalysisContext.schema_version` 当前为 `12`。
+> 当前生产 schema 以 `stocks/domain/models.py` 和本文“当前生产模型”章节为准；`AnalysisContext.schema_version` 当前为 `12`。以下目标契约已获批准但尚未实现，实施顺序见 `EXECUTION_PLAN.md`。
+
+## 计划新增契约
+
+### UnifiedAnalysisSnapshot v1
+
+统一 LLM 证据入口，计划字段：`snapshot_id`、`generated_at`、`trigger`、`session`、`market_scope`、`portfolio`、`profile`、`quotes`、`history_features`、`technical_evidence`、`news_clusters`、`filings`、`macro`、`upcoming_events`、`rotation`、`portfolio_constraints`、`risk_context`、`candidate_signals`、`data_quality`、`source_registry`。
+
+高风险事实使用 `fact_id`、`metric`、`value`、`unit`、`as_of`、`source_ref`。Snapshot 是证据，不是最终建议，也不得包含 API key 或模型内部推理。
+
+### InvestmentAdvisory v1
+
+计划顶层字段：`market_assessment`、`portfolio_assessment`、`actions`、`hold_decisions`、`do_not_do`、`sector_opportunities`、`asset_class_opportunities`、`watchlist_candidates`、`scenarios`、`forecast_candidates`、`next_checkpoints`、`data_limitations`。
+
+每个 action 至少包含：`action_id`、`target`、`action`、`size`、`reasoning`、`evidence_refs`、`execute_when`、`cancel_when`、`horizon`、`confidence`。自由货币金额禁止由 LLM 输出；预计金额由确定性系统根据已验证比例和持仓事实派生。
+
+### AdvisoryValidationReceipt v1
+
+计划字段：`status`、`schema_version`、`validator_version`、`prompt_contract_hash`、`snapshot_hash`、`advisory_content_hash`、`validated_at`、`warnings`。下游通过 receipt 检查完整性，不重复执行信息不足的金融语义判断。
+
+### AssetIntakeDraft v1
+
+计划字段：`accounts_to_add`、`positions_to_add`、`positions_to_update`、`positions_to_remove`、`profile_updates`、`ambiguities`、`source_quotes`、`base_memory_hash`、`draft_hash`。Draft 不是金融记忆，只有用户确认且 hash 未失效时才能原子写入。
+
+## 当前生产模型
 
 ## portfolio_decision.user_view
 
@@ -201,7 +224,7 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `portfolio_decision.cash_schedule` 区分 `immediate_cash_cny`、`settling_cash_cny`、`strategic_exit_value_cny`、`locked_value_cny`，不得把持仓总值直接称为"今天可动用"。
 - category fallback `hold` 可提高 intelligence driver 字段覆盖率,但不等于独立方向情报。
 - `confidence` 表示当前证据与新鲜度,不表示历史胜率或未来收益概率。
-- 完整交易质量边界见 `../docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
+- 2026-07-15 历史交易质量审查见 `../docs/archive/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`；现行边界以 `VISION.md`、`../PLAN.md` 和 `../EXECUTION_PLAN.md` 为准。
 
 ## AdviceRecord
 

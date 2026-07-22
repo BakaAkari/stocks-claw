@@ -1,8 +1,11 @@
+> **ARCHIVED 2026-07-22：历史设计/审查证据，无现行实施效力。**
+> 当前愿景、路线、执行和架构以 `stocks/VISION.md`、`PLAN.md`、`EXECUTION_PLAN.md`、`ARCHITECTURE.md` 为准。
+
 # 情报分析引擎全面重构
 
 > **状态：部分实现，后续路线已由 2026-07-15 对抗性审查重排**
 > LLM 语义分析、规则 fallback、SignalTracker 与 holdings-aware 分析已落地；文中 P3 闭环和部分 schema 仍是设计，不代表当前实现。
-> 现行架构以 `ARCHITECTURE.md`、`stocks/DATA_MODEL.md` 和代码为准；交易质量与后续优先级见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
+> 现行架构、路线和执行优先级以 `ARCHITECTURE.md`、`PLAN.md`、`EXECUTION_PLAN.md` 和代码为准。
 
 **版本**: v2.0
 **日期**: 2026-07-13

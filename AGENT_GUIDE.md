@@ -1,477 +1,133 @@
 # Agent 使用指南
 
-**本文档供 AI Agent 和人类开发者共同使用。如果你是 AI Agent，本文是你操作
-stocks-claw 的唯一入口文档。**
+> 本文供 AI Agent 和开发者操作当前系统，并约束下一阶段 Advisory 重构。
 
-系统定位:个人投资分析师工作台。确定性引擎负责金融记忆、市场数据、定时产物；
-Agent 负责读取产物并生成最终分析。系统不下单、不承诺收益。
+## 1. 当前产品边界
 
-**Agent 快速开始:**
+stocks-claw 是个人投资分析师系统。当前生产仍使用确定性规则动作 + 受限 Outlook；目标架构见 `stocks/VISION.md` 和 `ARCHITECTURE.md`，实施清单见 `EXECUTION_PLAN.md`。
 
-- 读取定时产物:`uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close`
-- JSON 中的 `agent_task` 字段是运行时自包含指令——严格按其执行即可，不需要外部 prompt
-- 生成自定义上下文:`uv run python -m stocks.adapters.cli --output json`
-- 生产定时任务与本地开发统一使用 `/mnt/user/code-project/stocks-claw` 的 `master` 分支；不得引用已退役的 feature worktree
-- 飞书输出仅用 `**加粗**`、`` `行内代码` ``、`- 列表`、`[链接](url)`，禁用 `#` `|` ` ``` ` `>` `---` HTML
+- 系统不下单，不承诺收益。
+- 用户是唯一决策人。
+- 长期金融记忆只有在用户明确确认后才能写入。
+- 行情、新闻、宏观、技术指标和 LLM 推断不得写入用户事实。
+- 生产运行统一使用 `/mnt/user/code-project/stocks-claw` 的 `master`。
 
-## 1. 必须遵守的边界
-
-- 资产和投资者画像属于长期金融记忆，仅在用户明确确认后写入。
-- 行情、新闻、宏观数据、技术指标和 LLM 推断不得写进长期金融记忆。
-- 用户提到“买了”“卖了”或偏好变化时，先确认是否更新；未确认不得调用写接口。
-- 同一资产冲突时，以用户最后一次明确确认的内容为准。
-- 生产报告不得读取旧 `personal_advice_prompt`；唯一输出契约是 artifact 内的
-  `agent_task v5` 与 `portfolio_decision.user_view`。旧自由文本 prompt 已移至
-  `stocks/prompts/archive/`，仅供历史兼容和审计。
-- 每次报告先复盘上期建议：`recent_advice` 里的 `trigger_review` 是系统按
-  收盘价核对的触发事实（fired / not_fired / no_data），必须逐条回应。
-- `action_signals` 是引擎给出的规则化方向性候选动作（附 reasons），
-  是分析的初始底稿：每条方向性信号必须采纳或给理由推翻，不许无视；
-  它不是指令，最终动作仍需结合组合结构与用户偏好落定。
-- `AnalysisContext.raw_prompt_input` 只保留为兼容数据摘要，不是生产报告指令来源。
-  本地上下文会包含真实金额、逐持仓市值、盈亏、暴露集中度、可动用资金和数据边界；
-  对外 HTTP 接口默认隐藏精确金额是另一条远程安全边界。
-- 所有结论必须结合 `data_quality`；stale、降级、换算失败和单源风险不可省略。
-- 交易报告的现行质量边界与六层一致性规则见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
-- 禁止把 `capital_allocation.net_deployable_cny` 直接称为"今天可用现金"；必须拆读 `liquidity_summary.buckets` 的 cash/T0、T1/T2、locked。
-- 当 `risk_assessment.suspend_accumulation=true` 时，研究候选不得写成即时买入建议；只允许说明解除暂停条件。
-- 指标出现异常偏离时先怀疑复权、拆分、跨源口径或缓存污染，不得直接执行技术动作。
-
-## 2. 环境与入口
-
-要求 Python 3.11+ 和 `uv`：
+## 2. 当前操作入口
 
 ```bash
-uv venv --python 3.11 .venv
-uv pip install -r requirements.txt
+.venv/bin/python -m stocks.adapters.cli --output json
+.venv/bin/python -m stocks.adapters.cli --scheduled-run-due
+.venv/bin/python -m stocks.adapters.cli --scheduled-run-session cn_pre_close --force
+.venv/bin/python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
 ```
 
-统一 CLI：
+资产和画像读取不需确认；写入必须使用 CLI `--confirmed` 或 MCP `confirmed:true`。
 
-```bash
-uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
-uv run python -m stocks.adapters.cli --output json
+## 3. 当前生产报告规则
+
+在 A5 切换前：
+
+- 交易窗口产物仍以 `portfolio_decision.user_view` 为用户可见主结构；
+- 主窗口可以附加已过滤 `outlook`，观察窗口可以附加 `outlook_delta`；
+- Agent 不得从内部 action_cards、decision_id、position_id 或兼容字段自行构造动作；
+- 数据异常、stale、fallback、锁定和结算边界必须展示；
+- 研究候选不能进入交易指令卡；
+- 风险暂停时不得把候选写成即时买入建议；
+- Feishu 只使用加粗、行内代码、列表和链接，不使用表格、代码围栏、HTML 和标题符号。
+
+旧 `LLMAnalysis` 和 archive prompts 不参与生产。
+
+## 4. 新 Advisory 实施规则
+
+### 4.1 职责
+
+- Provider/Engine：事实、计算和来源；
+- Rule modules：候选信号和约束证据；
+- LLM：InvestmentAdvisory 综合判断；
+- Validator：证据与可执行性检查；
+- Renderer：纯展示；
+- Push：时效、receipt、完整性和渠道格式。
+
+禁止在多个模块重复实现同一种语义验证。禁止通过全局裸数字集合授权金融声明。
+
+### 4.2 Shadow-first
+
+A0–A4 的新 Advisory：
+
+- 不进入生产 user_view；
+- 不推送；
+- 不自动保存 advice/execution/forecast；
+- 只写 `.local/advisory_shadow/`；
+- 必须能按 run_id 与当前规则路径对比。
+
+### 4.3 LLM 输出约束
+
+LLM 不得：
+
+- 编造持仓、价格、新闻、来源和金额；
+- 使用未授权标的；
+- 把 candidate signal 当作必须采纳；
+- 建议操作锁定、不可交易或非开放期资产；
+- 绕过 data quality 和风险暂停；
+- 直接持久化用户记忆。
+
+LLM 必须：
+
+- 逐条说明对重要规则候选的采纳、修改、推翻或延后；
+- 引用 fact/evidence refs；
+- 给出执行与取消条件；
+- 区分今日动作、持有决策和研究候选；
+- 标注数据限制和置信度。
+
+### 4.4 Validator 约束
+
+Validator 可以拒绝、警告、计算确定性金额或要求 LLM 修正一次；不得静默把动作 A 改成动作 B。仍无法通过时输出 `review_required`。
+
+### 4.5 文件和 schema
+
+- 新 schema 只增不减，必须同步 `stocks/DATA_MODEL.md`；
+- 计划文件中的路径和接口为实施约束，变更前更新 `EXECUTION_PLAN.md`；
+- 大文件新增功能优先拆到独立模块，不继续堆入 `scheduled_analysis.py`；
+- 不提交 `.local/`、`.secret/`、缓存、快照和模型原始响应。
+
+## 5. 金融记忆
+
+自然语言资产入口完成前，外部 Agent 可以帮助用户组织资产写接口，但必须：
+
+1. 先列出将新增、修改、删除的字段；
+2. 对代码、币种、成本、数量、账户和流动性不确定项提问；
+3. 获得明确确认；
+4. 写入后读回验证；
+5. 不根据行情或推断修改用户持仓事实。
+
+## 6. 数据质量
+
+所有分析必须读取 `data_quality`。正确顺序：
+
+```text
+数据异常/缺失
+→ 阻断相关推断
+→ 使用可用的其他证据
+→ 降低置信度或 review_required
 ```
 
-定时扫描与 Agent handoff：
-
-```bash
-uv run python -m stocks.adapters.cli --scheduled-run-due
-uv run python -m stocks.adapters.cli --scheduled-run-due --now "2026-07-06T14:35:00+08:00"
-uv run python -m stocks.adapters.cli --scheduled-run-session cn_pre_close --force
-uv run python -m stocks.adapters.cli --scheduled-run-session us_pre_open --force
-uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
-```
-
-`--scheduled-run-due` 适合由 launchd/cron 高频调用；系统只在命中 session 时生成
-`.local/scheduled_runs/` 产物。同一市场日内同一 session 默认只跑一次，`--force` 仅用于补跑
-或调试。外部 Agent 应读取 `--scheduled-run-latest SESSION` 返回的 JSON，严格按
-`agent_task` 字段的全部指令执行——`agent_task` 是自包含的任务说明书，包含
-must_answer(必答问题)、must_not_do(硬性约束,含飞书格式)、persona(分析师人格)、
-adaptability(自适应输出)、data_reference(数据字段定位)和 output_structure(分节模板)。
-Agent 不需要任何外部 prompt。
-
-### 定时报告可信契约（v5 双层人类展示）
-
-交易窗口 Agent 只以五个结构字段形成报告：`window_delta`、`portfolio_decision`、
-`risk_state`、`data_boundaries`、`research_candidates`。其中用户可见正文只能来源于
-`portfolio_decision.user_view`。报告必须分为两段：上方是“**交易指令卡**”（读取
-`instruction_card`），紧接着下方是“**私人投资助理**”（读取 `assistant_brief`）。
-指令卡必须在最上方；没有获批动作时，主窗口必须显示“今日无需操作”并列出 1–2 个关键原因；
-观察窗口没有实质变化、无获批动作且无新增冲突时可以输出 `[SILENT]`。
-动作必须展示结构化比例、预计金额（`amount_is_estimate=true` 时标注“估算”）、
-取消条件、结算时间和下一检查点。禁止从 rationale、facts 或其他自由文本提取数字作为动作
-金额或比例。所有标的必须使用真实名称 + 公开代码（如“化工ETF（516020）”）；禁止展示
-position_id、decision_id、内部哈希、原始异常码和英文 signal/risk/liquidity 枚举。
-研究候选不得进入指令卡动作；风险暂停时只能写解除后再评估。Markdown 是确定性
-Artifact renderer，不再输出完整 Agent Task、全扫描信号或兼容字段。
-
-`assistant_brief` 还可以包含主窗口产生的 `outlook` 研判（日级和中期展望、置信度 cap、
-场景、来源引用）和观察窗口产生的 `outlook_delta` 差异小结；二者均已经
-`presentation.py` 白名单过滤，Agent 不得在正文中暴露内部 token、position_id 或 decision_id。
-
-旧 `--llm-analysis` 参数仅为 CLI 兼容入口，当前固定返回 disabled 提示，不参与
-生产报告。中长期 LLM 只走 `outlook_evidence → outlook_synthesizer →
-outlook_validation` 受限路径。
-
-项目不存在 `--llm-enhancer`，也不存在旧的子命令式 CLI。
-
-### 定时产物推送规范
-
-生产环境下，定时产物由 Hermes cron/no-agent 脚本推送，而不是在 `stocks-claw` CLI 内直接发送：
-
-- 推送脚本位于 `scripts/cron/stocks-claw-push-{session}.sh`，调用 `scripts/run_push_report.py --session {session}`。
-- 支持的交易窗口 session 为：`cn_pre_open`、`cn_open_watch`、`cn_pre_close`、`cn_after_close`、
-  `us_pre_open`、`us_open_watch`、`us_pre_close`、`us_after_close`。
-- 情报产物 `global_intelligence_watch` 不走此推送路径；若需发送情报摘要，应使用独立的情报专门路径。
-- 推送前会校验 artifact 新鲜度（默认 45 分钟窗口）、`task_version == 5` 和信任边界，
-  任何校验失败以 `INVALID` 退出并且不发送。
-- 推送 cron 时间必须晚于实际产物完成时间，不能只看 `scheduled_sessions.json` 中的
-  scheduled time。实际产物完成可能晚于 scheduled time 10-30 分钟（生成耗时、
-  API 限流等）。当前运营配置为：
-  - `cn_pre_open` 9:00 生成，9:15 推送
-  - `cn_open_watch` 10:00 生成，10:30 推送
-  - `cn_morning_close` 11:00 生成，11:05 推送（产物完成较快）
-  - `cn_afternoon_open` 13:05 生成，13:05 推送
-  - `cn_pre_close` 14:35 生成，14:50 推送
-  - `cn_after_close` 15:20 生成，15:40 推送（等待 A股收盘数据刷新）
-  - `us_pre_open` 21:00 生成，21:20 推送
-  - `us_open_watch` 22:00 生成，22:20 推送
-  - `us_mid_session` 00:30 生成，00:35 推送
-  - `us_pre_close` 03:35 生成，03:50 推送
-  - `us_after_close` 04:25 生成，04:40 推送
-- 不建议缩短 `generate-due` 周期（如 1-2 分钟），会导致空转和在 due 窗口内
-  多次触发 API，容易触发 Finnhub/FRED/RSS 限流。保持 5 分钟周期，
-  从推送端解决时间竞态是更安全的方案。
-- 本地调试推送可以使用 `--now` 使推送时间与 artifact 时间对齐，但不应用于生产。
-
-
-## 3. 金融记忆操作
-
-读取资产与画像：
-
-```bash
-uv run python -m stocks.adapters.cli --assets-list
-uv run python -m stocks.adapters.cli --profile-get
-```
-
-所有写操作都必须带 `--confirmed`：
-
-```bash
-uv run python -m stocks.adapters.cli \
-  --asset-add '{"name":"现金","platform":"银行","amount":10000,"currency":"CNY"}' \
-  --confirmed
-
-uv run python -m stocks.adapters.cli \
-  --asset-update '{"name":"现金","changes":{"amount":12000}}' \
-  --confirmed
-
-uv run python -m stocks.adapters.cli --asset-remove '现金' --confirmed
-
-uv run python -m stocks.adapters.cli --asset-migrate-v2
-uv run python -m stocks.adapters.cli --asset-migrate-v2 --confirmed
-
-uv run python -m stocks.adapters.cli \
-  --profile-update '{"risk_tolerance":"moderate","investment_horizon":"long_term"}' \
-  --confirmed
-
-uv run python -m stocks.adapters.cli \
-  --advice-save '{"instruments":[{"market":"a","code":"000001","name":"平安银行"}],"direction":{"a:000001":"watch"},"rationale_summary":"现金占比较高，等待放量站回20日线。","based_on":["quotes","portfolio"],"boundary":[{"type":"fact","text":"现金占比较高"},{"type":"inference","text":"等待放量站回20日线"}],"triggers":[{"instrument":"a:000001","type":"price_above","level":12.5,"action":"收盘站上12.5则用现金层一成建仓","invalidation":"跌破11.8本条作废"},{"instrument":"a:588000","type":"pnl_pct_above","level":20,"action":"浮盈达到20%后减半卫星仓"}],"actions":[{"target":"权益","action":"increase","size_hint":"现金层一成","trigger":"收盘站上20日线","invalidation":"跌破11.8本条作废","horizon":"short"}]}' \
-  --confirmed
-
-uv run python -m stocks.adapters.cli --advice-list
-
-uv run python -m stocks.adapters.cli \
-  --execution-save '{"advice_id":"2026-07-03T04:40:29.112458+00:00","target":"a:588000","action":"increase","extent":"partial","note":"按触发条件执行一部分","executed_at":"2026-07-03T12:00:00+08:00"}' \
-  --confirmed
-
-uv run python -m stocks.adapters.cli --execution-list
-
-uv run python -m stocks.adapters.cli \
-  --forecast-save '{"statement":"科创50ETF 一周内收盘高于 1.0","target":"a:588000","metric":"close","comparator":"above","level":1.0,"deadline":"2026-07-10","confidence":"medium"}' \
-  --confirmed
-
-uv run python -m stocks.adapters.cli --forecast-list
-```
-
-资产保存在 `.local/financial_assets.json`，画像保存在
-`.local/investor_profile.json`。没有本地资产文件时才读取
-`stocks/data/financial_assets.json` 示例。画像结构示例见
-`stocks/data/investor_profile.example.json`。确认保存的建议摘要位于 `.local/advice/`，
-执行记录位于 `.local/executions/`，预测台账位于 `.local/forecasts/`。
-
-MCP 对应工具：
-
-- `assets_list`
-- `asset_add`、`asset_update`、`asset_remove`，参数必须含
-  `"confirmed": true`
-- `asset_migrate_v2`，`confirmed=false` 只返回完整迁移预览和缺字段摘要；
-  `confirmed=true` 写入 `.local/financial_assets.json`，源文件若已是 `.local`
-  私有文件则备份为 `financial_assets.v1.bak.json`
-- `profile_get`、`profile_update`，写操作同样必须确认
-- `advice_list`、`advice_save`，保存建议必须确认；`advice.triggers` 可选，
-  保存"触发条件 → 动作"三元组供下次运行程序化核对；触发器支持
-  `price_*`、`pct_change_*` 和基于用户成本的 `pnl_pct_above/pnl_pct_below`；
-  pnl 型触发器要求对应 v2 持仓有 `holding.cost_basis`。`advice.actions`
-  用于保存结构化调仓动作，`size_hint` 只能写比例或自然语言，不写具体金额
-- `execution_list`、`execution_save`，保存建议执行记录必须确认；执行对照只按
-  `advice_id + target` 精确匹配，匹配不到显示 `unknown`
-- `forecast_list`、`forecast_save`，保存预测记录必须确认；有 `target + level`
-  的预测到期后按历史收盘价自动结算，缺 `target` 或 `level` 的记录保存为
-  `manual`，不自动判断
-- `get_analysis_context`、`get_quotes`、`get_news`、
-  `get_portfolio_summary`
-
-启动 stdio MCP：
-
-```bash
-uv run python -m stocks.adapters.mcp
-```
-
-## 4. 资产分类与产品类型路由
-
-`.local/financial_assets.json` (schema v2) 中每个持仓都有 `classification` 字段，
-包含三个维度：
-
-- `asset_class`: 大类（equity / fixed_income / commodity / cash_equivalent / insurance）
-- `product_type`: 产品形态（exchange_traded_fund / stock / qdii_fund / mixed_fund / fixed_income_plus_fund / bank_wealth_management / precious_metal_account / money_market_fund / cash / insurance_policy / short_treasury_etf）
-- `exposure_tags`: 暴露标签（nasdaq100 / gold / tech / us_equity / a_share 等）
-
-### 4.1 产品类型路由规则
-
-`_build_action_cards()` 在生成持仓动作卡时，按 `product_type` 分流：
-
-| 模式 | product_type | 行为 |
-|---|---|---|
-| **full** (全规则) | `exchange_traded_fund`, `stock`, `short_treasury_etf` | 完整止损/止盈/MA20趋势/左侧加仓，ratio 非零 |
-| **fund** (高门槛) | `qdii_fund`, `feeder_fund`, `mixed_fund`, `fixed_income_plus_fund` | 运行 PnL/配置阈值规则，使用更高止盈止损门槛；保留非零 ratio，但必须标注 T+2、收盘净值和人工平台操作 |
-| **precious** (价差产品) | `precious_metal_account` | 运行 PnL 规则，保留非零 ratio；必须标注买卖价差和人工确认 |
-| **info_only** (信息型) | `bank_wealth_management` | 不跑交易引擎，输出持有状态 + 开放期约束 |
-| **skip** (跳过) | `money_market_fund`, `cash`, `cash_equivalent`, `insurance_policy` | 生成 hold/skip 卡供结构化审计，不进入可操作持仓段 |
-
-**配置型资产的上下文示例**：
-- qdii_fund → "场外 QDII，申赎 T+2，适合长期配置。无明确替代方向时不宜频繁止盈"
-- mixed_fund → "主动管理混合基金，高浮盈后需关注基金经理风格漂移风险"
-- fixed_income_plus_fund → "固收+产品，波动率低，MA20/RSI 技术信号不适用"
-- precious_metal_account → "积存金，买卖有价差，短线操作成本高"
-
-### 4.2 估值方法
-
-每笔持仓有 `valuation_input.method`：
-
-- `market_quote`：通过 watchlist 获取实时/近实时行情 → 适用于场内 ETF 和美股
-- `manual_amount`：手工录入金额，非实时 → 适用于场外基金、银行理财、积存金
-- `insurance_value`：保险现金价值 → 仅用于组合统计，不参与交易信号
-- `fund_nav`：通过天天基金 API 拉取 T-1 确认净值（公募基金），自动计算逐笔盈亏。需在 `instrument.fund_code` 填写 6 位基金代码
-
-Agent 读取 `action_cards[].facts` 时，带有"手工估值"标注的持仓不可直接按 ratio 执行，
-需登录对应平台确认估值、交易价差和可操作状态后再手动操作。`fund_nav` 是 T-1 确认净值，
-QDII 还可能额外滞后，不得当作盘中价格。
-
-### 4.3 新增持仓规范
-
-新增手工估值持仓时，必须填写 `classification.product_type` 和 `exposure_tags`，
-否则系统回退到 `full` 模式（会对场外基金发出自动止损/止盈比例）。
-
-```json
-{
-  "position_id": "alipay_example",
-  "account_id": "alipay",
-  "classification": {
-    "asset_class": "equity",
-    "product_type": "qdii_fund",
-    "exposure_tags": ["qdii", "nasdaq100", "tech", "us_equity"]
-  },
-  "valuation_input": {
-    "method": "manual_amount",
-    "manual_amount": 100000,
-    "as_of": "2026-07-11"
-  },
-  "liquidity": {
-    "tradable": true,
-    "rebalance_eligible": true,
-    "tier": "t2_plus"
-  }
-}
-```
-
-exposure_tags 决定情报事件匹配和压力测试冲击系数。标签需具体（如 `nasdaq100`、`gold`），
-避免使用过于宽泛的标签（如 `us_equity` 会导致与不相关的事件主题误匹配）。
-
-## 5. 配置与本地数据
-
-受版本控制的配置位于 `stocks/config/`：
-
-- `engine.yaml`：Provider、缓存、日历、LLM 与日志开关
-- `watchlist.json`：标的、市场、交易所和类别
-- `portfolio_constraints.json`：资产桶目标与约束
-- `news_sources.json`：RSS/Atom 新闻源
-- `markets.json`：市场元数据
-- `event_calendar.json`：官方已公布的未来事件日程（FOMC/CPI/非农等，
-  日期用完的条目被窗口自动过滤；新一批官方日程公布后人工增补）
-- `sector_scan.json`：候选池扫描（50 标的，带 pool 分层:
-  broad/sector/defensive/rates/ai_chain），只参与历史回填、轮动排名与
-  动作信号，不请求实时行情
-- `scheduled_sessions.json`：A 股与美股定时扫描 session、时区、重复运行窗口、
-  免打扰和默认推送策略
-
-配置优先级为环境变量 > YAML > 代码默认值。嵌套环境变量使用双下划线，例如：
-
-```bash
-STOCKS_FETCHER__MAX_RETRIES=3
-```
-
-本地路径：
-
-- `.local/history/`：行情历史缓存
-- `.local/event_cache/`：Finnhub 财报日历 12 小时缓存
-- `.local/snapshots/`：最多 30 份最小上下文快照
-- `.local/scheduled_runs/`：定时扫描 JSON/Markdown 产物与 latest 指针
-- `data/cache/`：非隐私运行缓存，例如汇率
-- `.secret/`：API key、HTTP token；禁止提交
-
-Finnhub 行情/财报日历读取 `FINNHUB_API_KEY`（或
-`.secret/finnhub-key.md`）。SEC EDGAR 要求请求 UA 带可联系邮箱，启用公告源时设置：
-
-```bash
-export SEC_USER_AGENT="stocks-claw/1.0 you@example.com"
-```
-
-缺少该变量不会伪装成功；`data_quality.news.errors` 会逐标的报告配置缺失。
-
-## 5. 个性化配置 (ProfileInterpreter)
-
-### 5.1 概述
-
-用户偏好存储在 `.local/investor_profile.json`（自然语言描述，如"趋势未变时接受浮亏并分批加仓"）。
-ProfileInterpreter 将这些自然语言偏好翻译为量化引擎可消费的数字参数。
-
-**数据流：**
-
-```
-investor_profile.json (自然语言)
-  → --interpret-profile (Agent 读取 prompt)
-  → Agent 直接推理生成参数 JSON
-  → --interpret-profile --confirmed --params-json '...'
-  → 校验写入 .local/computed_profile.json
-  → 每次 session 自动合并进 QuantActionEngine
-  → 报告 persona 按风格定制
-```
-
-### 5.2 Agent 驱动的翻译流程
-
-ProfileInterpreter 由 Agent（而非外部 API）直接完成翻译。
-仅在用户**更新交易偏好后**手动触发。不随 session 自动运行。
-
-**流程：**
-
-1. 预览：Agent 运行 `--interpret-profile`，获取 `system_prompt` 和 `user_prompt`
-2. Agent 阅读 prompt，按专业量化策略师 persona 翻译用户偏好为数值参数
-3. Agent 将生成的 JSON 通过 `--params-json` 传入：
-```bash
-uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
-  --params-json '{"params":{...},"reasoning":{...},"style_summary":"..."}'
-```
-4. 系统校验参数合法性后写入 `.local/computed_profile.json`
-
-**Agent 操作步骤：**
-```bash
-# 步骤 1: 读取 profile 和 prompt
-uv run python -m stocks.adapters.cli --interpret-profile
-# → 阅读输出中的 system_prompt + user_prompt
-
-# 步骤 2: Agent 生成参数 JSON（直接推理，不调外部 API）
-
-# 步骤 3: 写入
-uv run python -m stocks.adapters.cli --interpret-profile --confirmed \
-  --params-json '{"params":{"stop_loss_pct":-18.0,...},"reasoning":{...},"style_summary":"左侧交易"}'
-```
-
-执行后输出包含 `style_summary`、`params`、`reasoning`。
-
-### 5.3 影响的参数
-
-| 参数 | 默认值 | 个性化后的影响 |
-|------|--------|--------------|
-| `stop_loss_pct` | -12.0 | 决定硬止损线。偏好"接受浮亏"→放宽至-15~-20；偏好"果断止损"→收紧至-5~-8 |
-| `take_profit_levels` | [[10,25],[20,25],[30,50]] | 决定止盈阶梯。"让利润奔跑"→阈值提高；"落袋为安"→降低阈值、加大减仓比例 |
-| `ma20_pullback_add_ratios` | [0.02] | 回踩MA20加仓比例阶梯，按MA20偏离选档:偏离≤1%首档、>1%二档、>2%三档(前提是配置有对应档位)。它不是按 PnL 选档。 |
-| `chase_enabled` | false | 画像参数可存储,但当前 QuantActionEngine 未实现追高分支,不要声称 true 会自动产生突破买入。 |
-| `trend_break_extra_deviation_pct` | 0.0 | MA20趋势触发需额外偏离百分点。默认0即标准0.995触发线；设为1.0则要求额外1%偏离（触发线收紧至0.985）。系统不跟踪连续天数，报告不得表述为"已连续N天确认"。 |
-| `profit_pullback_pct` | -2.5 | 盈利回撤阈值（%），触发止盈锁定建议 |
-| `profit_pullback_min_pnl` | 5.0 | 触发盈利回撤保护的最低浮盈（%），低于此值不触发 |
-| ~10 个其他参数 | 见 DEFAULT_PARAMS | 根据偏好自动调整 |
-
-### 5.4 Agent 如何感知
-
-1. **引擎层面**：`scheduled_analysis._merge_profile_config()` 在每次 session 自动读取
-   `.local/computed_profile.json`，合并进 QuantActionEngine。无需 Agent 手动操作。
-2. **报告层面**：`build_agent_task` 的 `persona` 段由 `_build_persona()` 动态生成，
-   包含风格化指令（如"用户容忍较大回撤，不必催促止损"）。
-3. **资金部署**：交易窗口只读取 `portfolio_decision.cash_schedule`。其中
-   `immediate_cash_cny` 是即时现金，`settling_cash_cny` 是在途资金，
-   `strategic_exit_value_cny` 是尚未变现的策略退出资产，`locked_value_cny` 是锁定资产。
-   禁止从五字段契约之外的顶层兼容数据重新计算资金建议。
-4. **无文件时的行为**：若 `.local/computed_profile.json` 不存在，引擎使用默认参数，
-   报告 persona 使用通用模板。不报错、不阻塞。
-
-### 5.5 Agent 操作规范
-
-- 用户说"更新交易风格/偏好"→ 先更新 `.local/investor_profile.json`（通过 `--profile-update`），
-  再运行两步流程（预览 → 生成 → 写入）。
-- 不要在不改偏好的情况下重复运行 `--interpret-profile`。
-- Agent 生成参数时必须：
-  - 逐条引用用户原文作为 reasoning 依据
-  - 只输出用户偏好明确涉及的参数，未涉及的保持默认值
-  - 输出纯 JSON，不附带解释文字
-- 如果用户对某个参数有异议，引导用户说明具体的偏好变更后重新翻译。
-- computed_profile.json 必须通过 `--interpret-profile --confirmed --params-json` 写入，
-  不直接编辑文件。
-
-
-### 5.6 v5 资金到账与边界
-
-交易窗口报告的唯一资金来源是 `portfolio_decision.cash_schedule`：
-
-- `immediate_cash_cny`：已到账、可立即使用的 cash/T0 资金
-- `settling_cash_cny`：已批准动作形成但尚未到账的在途资金
-- `strategic_exit_value_cny`：T+1/T+2、场外基金或其他尚未执行退出的资产价值
-- `locked_value_cny`：不可调仓资产价值
-
-Agent 必须同时读取 `risk_state` 和 `data_boundaries`：风险硬约束 → 数据异常/新鲜度 →
-获批动作 → 资金到账 → 研究候选。若 `suspend_accumulation=true`，研究候选只能说明
-解除暂停后再评估。Watch Window 只报告 `window_delta`；无实质变化且无获批动作时应 SILENT。
-五字段契约之外的顶层数据仅供内部审计，不属于 v5 Agent 契约，禁止用于交易推送。
-
-## 6. HTTP 边界
-
-HTTP 适配器默认只监听回环地址，并默认隐藏精确金额：
-
-```bash
-uv run python -m stocks.adapters.http --host 127.0.0.1 --port 8687
-curl http://127.0.0.1:8687/api/v1/health
-```
-
-非回环监听必须显式加 `--allow-remote`，并提供
-`.secret/http-token`；请求使用 `Authorization: Bearer <token>`。当前实现没有限速和
-CORS，不应直接暴露公网。
-
-## 7. 飞书格式约束
-
-所有推送到飞书的输出必须仅使用以下格式:
-- `**加粗**` 代替标题层级
-- `` `行内代码` `` 代替代码块
-- `- 列表`
-- `[链接](url)`
-- 空行分隔段落
-
-**禁止**(会导致整条消息降级为纯文本):`#` 标题、`|` 表格、` ``` ` 代码块、`>` 引用、
-`---` 分隔线、`- [ ]` 任务列表、HTML 标签。
-
-此约束已编码在 `agent_task.must_not_do` 和 `output_structure.format_rules` 中。
-
-## 8. 报告一致性检查
-
-每份报告发布前必须确认:
-
-- 数据→信号→动作→资产路由→组合约束→风险状态六层没有未解释冲突。
-- "今日动作"与"研究候选"分段,候选不得伪装成可执行建议。
-- 报告中的可用资金按即时现金、卖出回收、T+1/T+2 和锁定资产拆分。
-- Critical 风险说明首次触发/持续状态/解除条件;重复窗口只报告 Delta。
-- Action Card 的 `confidence` 不等于策略历史胜率;当前量化有效性尚未证明。
-
-## 9. 每次修改的验收
+不得把跨市场 stale、复权异常、基金 T-1 净值、手工估值或代理 ETF 当作同一种实时证据。
+
+## 7. 开发协议
+
+1. 读 `VISION → PLAN → ARCHITECTURE → EXECUTION_PLAN`；
+2. 只执行当前阶段；
+3. TDD：先失败测试，再最小实现；
+4. 每任务单独 commit + push；
+5. 当前生产路径改变前必须有 shadow 和回退；
+6. 文档与代码冲突时以当前代码为事实，同时修正文档；
+7. 删除用户数据、修改凭证、切换生产路径或扩大长期记忆写入必须先说明后果。
+
+## 8. 全局验证
 
 ```bash
 .venv/bin/ruff check .
-.venv/bin/python -m pytest -q
+.venv/bin/pytest -q -o 'addopts='
 .venv/bin/python -m compileall -q stocks tests
 .venv/bin/python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
-
-当前实测基线（2026-07-21）：`ruff` 通过，`pytest` 1106 passed / 2 failed，失败位于
-`tests/providers/test_filings.py`，与 SEC EDGAR provider 的网络异常 assertion 相关，
-不影响交易窗口推送主路径。
-
-不得提交 `.local/`、`.secret/`、缓存、快照、虚拟环境或用户资产。新增 Markdown
-必须遵守 `PLAN.md` 的文档冻结规则。

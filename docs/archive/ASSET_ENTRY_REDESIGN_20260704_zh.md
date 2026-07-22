@@ -6,7 +6,7 @@
 
 > 生成日期：2026-07-03
 > 性质：调研/设计稿（对应 PLAN §6 规则，建议放入 `docs/archive/` 并在决策日志登记）
-> 关联文档：`docs/archive/ASSET_DATA_MODEL_REFACTOR_20260704.md`（已有英文初稿，本文是对它的中文化、核验与修订，二者结论大方向一致，差异点见 §8）
+> 关联英文初稿已从工作树删除，仍可通过 Git 历史追溯；本文是核验后的中文归档版本。
 
 ---
 
@@ -243,7 +243,7 @@ amount_cny / conversion_status / conversion_source / conversion_rate  ← 运行
 
 ---
 
-## 8. 与已有英文初稿（ASSET_DATA_MODEL_REFACTOR_20260704.md）的关系
+## 8. 与历史英文初稿的关系
 
 本文与该稿结论一致处直接采纳（accounts/positions 分层、classification 三元组、valuation_input 路由、liquidity 一等公民、completeness 机器可读、派生不落盘）。修订/补充点：
 

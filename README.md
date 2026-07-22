@@ -1,164 +1,82 @@
 # stocks-claw
 
-Personal investment analyst workbench for a single user. It combines confirmed accounts,
-positions, investor preferences, quotes, news, macro data, technical indicators, portfolio
-mapping, PnL/valuation scaffolds, and data-quality metadata, then returns an
-`AnalysisContext` evidence package for an external Agent.
+A single-user personal investment analyst system. It stores user-confirmed accounts, positions, and investment preferences; collects quotes, price history, news, filings, macro data, and events; and prepares traceable evidence for an LLM investment analyst to produce portfolio actions, market assessments, and opportunity candidates. The user remains the sole decision-maker and the system never places orders.
 
-It does not place orders. The engine prepares facts, trigger checks, deterministic action cards,
-and portfolio context; the Agent owns the final reasoning and the user remains the only decision-maker.
-Current review status: risk monitoring and research assistance are usable, but automated actions,
-capital deployment, and reports intended for direct execution have not passed trader-level acceptance.
+The current production path still uses deterministic rule actions plus a constrained Outlook. The next implementation phase, defined in `EXECUTION_PLAN.md`, migrates incrementally to:
 
-[中文](README.zh.md) · [Agent guide](AGENT_GUIDE.md) ·
-[Architecture](ARCHITECTURE.md) · [Plan](PLAN.md) ·
-[Trading-system adversarial review](docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md)
-
-## Documentation map
-
-- `PLAN.md`: direction, decisions, and current status
-- `EXECUTION_PLAN.md`: the only active task and acceptance list
-- `ARCHITECTURE.md`: current implementation architecture
-- `stocks/DATA_MODEL.md`: current schemas and field semantics
-- `AGENT_GUIDE.md`: operating rules for Agents and developers
-- `stocks/VISION.md`: product north star
-- `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`: current trader-level quality boundary and remediation priorities
-- `docs/INTELLIGENCE_FULL_REDESIGN.md`: partially implemented intelligence design
-- `docs/NEWS_MODULE_REDESIGN.md`: active but not fully implemented unified-push design
-- `docs/archive/`: historical evidence only; no current authority
-
-## Requirements
-
-- Python 3.11+
-- `uv`
-- dependencies from `requirements.txt`
-
-```bash
-uv venv --python 3.11 .venv
-uv pip install -r requirements.txt
+```text
+UnifiedAnalysisSnapshot
+→ LLM InvestmentAdvisory
+→ deterministic evidence/feasibility validation
+→ presentation and delivery
 ```
+
+Migration is shadow-first and does not replace production in one step.
+
+[中文](README.zh.md) · [Vision](stocks/VISION.md) · [Plan](PLAN.md) · [Execution](EXECUTION_PLAN.md) · [Architecture](ARCHITECTURE.md) · [Agent guide](AGENT_GUIDE.md)
+
+## Authoritative documentation
+
+- `stocks/VISION.md`: product north star
+- `PLAN.md`: current decisions, state, and migration route
+- `EXECUTION_PLAN.md`: only active implementation checklist
+- `ARCHITECTURE.md`: current and approved target architecture
+- `stocks/DATA_MODEL.md`: current and planned contracts
+- `AGENT_GUIDE.md`: operational and development rules
+- `docs/archive/`: historical evidence only
+
+## Current capabilities
+
+- Account/Position v2 financial memory, cost basis, currency, liquidity, classification, and investor profile
+- A-share, US, fund, and crypto quotes and history with fallback/data-quality metadata
+- News, RSS, GNews, SEC EDGAR, CNInfo, macro data, and event calendars
+- Indicators, rotation, exposure, anomaly detection, and portfolio constraints
+- LLM intelligence clustering and constrained medium-term Outlook
+- Scheduled CN/US sessions, cron generation, and Feishu delivery
+- Advice, execution, forecast, shadow-account, and signal-settlement foundations
+
+## Target capabilities
+
+- Natural-language asset intake with deterministic diff and user confirmation
+- A unified, same-`as_of` market evidence snapshot
+- Full LLM InvestmentAdvisory using portfolio, style, prices, history, news, macro, and constraints
+- Rules as evidence; validators as evidence/feasibility guards rather than substitute decision-makers
+- One report covering portfolio actions, market scenarios, and sector/asset opportunities
+- Execution, rejection, and forecast feedback loops
 
 ## Quick start
 
-Build a local/offline context:
+```bash
+.venv/bin/python -m stocks.adapters.cli --output json --no-news --no-quotes
+.venv/bin/python -m stocks.adapters.cli --output json
+.venv/bin/python -m stocks.adapters.cli --scheduled-run-due
+.venv/bin/python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
+```
+
+The legacy `--llm-analysis` entrypoint is intentionally disabled and is not the target Advisory path.
+
+## Financial memory
+
+Reads do not require confirmation:
 
 ```bash
-uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
+.venv/bin/python -m stocks.adapters.cli --assets-list
+.venv/bin/python -m stocks.adapters.cli --profile-get
 ```
 
-Fetch the configured quotes and news:
+All asset, profile, advice, execution, and forecast writes require explicit user confirmation. Private state lives under `.local/`; credential symlinks under `.secret/` point to `/opt/data/.secret/`. Neither is committed.
 
-```bash
-uv run python -m stocks.adapters.cli --output json
-```
-
-Generate or read scheduled cross-market run artifacts for an external Agent:
-
-```bash
-uv run python -m stocks.adapters.cli --scheduled-run-due
-uv run python -m stocks.adapters.cli --scheduled-run-session cn_pre_close --force
-uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close
-```
-
-Generate the optional internal LLM report:
-
-```bash
-uv run python -m stocks.adapters.cli --output text --llm-analysis
-```
-
-The removed `--llm-enhancer` option is not supported.
-
-## Confirmed memory writes
-
-Reads never need confirmation:
-
-```bash
-uv run python -m stocks.adapters.cli --assets-list
-uv run python -m stocks.adapters.cli --profile-get
-```
-
-Every holdings/profile write requires `--confirmed`:
-
-```bash
-uv run python -m stocks.adapters.cli \
-  --asset-add '{"name":"Cash","platform":"Bank","amount":10000,"currency":"CNY"}' \
-  --confirmed
-
-uv run python -m stocks.adapters.cli \
-  --profile-update '{"risk_tolerance":"moderate"}' \
-  --confirmed
-```
-
-Update and remove are available through `--asset-update` and `--asset-remove`. Equivalent MCP
-tools require `"confirmed": true`.
-
-Private holdings now support v2 `Account` / `Position` files. Preview migration from the old
-v1 asset list before writing it:
-
-```bash
-uv run python -m stocks.adapters.cli --asset-migrate-v2
-uv run python -m stocks.adapters.cli --asset-migrate-v2 --confirmed
-```
-
-## Data and configuration
-
-```text
-.local/financial_assets.json          private holdings
-.local/investor_profile.json          private preferences
-.local/computed_profile.json          interpreted quant parameters
-.local/history/                       quote history cache
-.local/event_cache/                   Finnhub earnings-calendar cache
-.local/snapshots/                     minimal rolling snapshots
-.local/advice/                        confirmed advice summaries
-.local/executions/                    confirmed execution records
-.local/forecasts/                     confirmed forecast ledger
-.local/scheduled_runs/                scheduled Agent handoff artifacts
-.secret/                              local API keys and HTTP token
-stocks/config/engine.yaml             runtime settings
-stocks/config/watchlist.json          tracked instruments
-stocks/config/news_sources.json       RSS/Atom sources
-stocks/config/portfolio_constraints.json
-stocks/config/event_calendar.json     static official event calendar
-stocks/config/sector_scan.json        scan universe for rotation/signals
-stocks/config/exposure_proxy.json     exposure-tag proxy mapping
-stocks/config/scheduled_sessions.json scheduled A-share/US session config
-```
-
-When no private holdings file exists, `stocks/data/financial_assets.json` is used as sample
-input. The profile example is `stocks/data/investor_profile.example.json`.
-
-Nested environment overrides use double underscores:
-
-```bash
-STOCKS_FETCHER__MAX_RETRIES=3
-```
-
-Finnhub requires `FINNHUB_API_KEY`. Optional OpenAI-compatible reporting uses
-`OPENAI_API_KEY` and `OPENAI_BASE_URL`.
-SEC EDGAR filings require a contact-bearing user agent, for example
-`SEC_USER_AGENT="stocks-claw/1.0 you@example.com"`; missing configuration is
-reported in `data_quality.news.errors`.
-
-## Interfaces
-
-- CLI: `python -m stocks.adapters.cli`
-- stdio MCP: `python -m stocks.adapters.mcp`
-- local HTTP: `python -m stocks.adapters.http --host 127.0.0.1 --port 8687`
-
-Remote HTTP binding requires `--allow-remote` plus `.secret/http-token`. The HTTP adapter has
-no rate limiter or CORS policy and is not a public-internet service.
+SEC EDGAR requires a contact-bearing `SEC_USER_AGENT` or `.secret/sec-user-agent.md`.
 
 ## Verification
 
 ```bash
-uv run ruff check .
-uv run python -m pytest -q
-uv run python -m compileall -q stocks tests
-uv run python -m stocks.adapters.cli --output json --no-news --no-quotes
+.venv/bin/ruff check .
+.venv/bin/pytest -q -o 'addopts='
+.venv/bin/python -m compileall -q stocks tests
+.venv/bin/python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-See `stocks/DATA_MODEL.md` for the current schema and
-`docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md` for the current trading-quality boundary.
-Fresh verification at the review baseline: ruff passes; pytest reports 536 passed and 2 failed due
-to time-dependent intelligence fixtures. This software is for analysis and education, not guaranteed
-investment advice.
+Fresh baseline on 2026-07-22: ruff passes, pytest reports `1124 passed`, and live Finnhub, Polygon, and SEC EDGAR smoke checks pass.
+
+This software supports analysis and research. It does not promise returns or execute trades.

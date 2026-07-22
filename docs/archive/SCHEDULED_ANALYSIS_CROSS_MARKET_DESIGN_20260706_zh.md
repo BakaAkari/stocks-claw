@@ -7,7 +7,7 @@
 
 > **状态更新:历史参考,后续路线已被 2026-07-15 对抗性审查重排**
 > 本文中的历史完成证据保留有效;未完成方向不再自动进入现行计划。
-> 当前任务和交易质量边界以 `EXECUTION_PLAN.md` 与 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md` 为准。
+> 当前愿景、路线和任务以 `stocks/VISION.md`、`PLAN.md` 与 `EXECUTION_PLAN.md` 为准。
 
 > 日期:2026-07-06
 > 状态:S3 设计归档；S2.5、S3-1~S3-5 和 S3-E 均已关闭；现行整改入口为根目录 `EXECUTION_PLAN.md` T1
