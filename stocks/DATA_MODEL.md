@@ -36,6 +36,14 @@
 
 计划字段：`accounts_to_add`、`positions_to_add`、`positions_to_update`、`positions_to_remove`、`profile_updates`、`ambiguities`、`source_quotes`、`base_memory_hash`、`draft_hash`。Draft 不是金融记忆，只有用户确认且 hash 未失效时才能原子写入。
 
+### AdvisoryShadowRun v1
+
+**状态：已实现 A0-3（2026-07-22），仅保存快照、Advisory、receipt 和 manifest，不推送。**
+
+实现：`stocks/engine/advisory_shadow_store.py` + `scripts/compare_advisory_paths.py`
+
+每个 shadow run 保存：`snapshot.json`、`advisory.json`、`receipt.json`、`manifest.json`。manifest 包含 hash 、receipt_status 、生产 decision_id 和 artifact 路径，供影子/生产对照、回放和置信度验证。
+
 ## 当前生产模型
 
 ## portfolio_decision.user_view
