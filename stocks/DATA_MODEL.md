@@ -34,7 +34,18 @@
 
 ### AssetIntakeDraft v1
 
-计划字段：`accounts_to_add`、`positions_to_add`、`positions_to_update`、`positions_to_remove`、`profile_updates`、`ambiguities`、`source_quotes`、`base_memory_hash`、`draft_hash`。Draft 不是金融记忆，只有用户确认且 hash 未失效时才能原子写入。
+**状态：已实现 A1-1（2026-07-22），仅解析和 draft，不写入金融记忆。**
+
+实现：`stocks/domain/advisory_models.py` + `stocks/engine/asset_intake_parser.py`
+
+字段：`draft_id`、`base_memory_hash`、`generated_at`、`accounts_to_add`、`positions_to_add`、`positions_to_update`、`positions_to_remove`、`profile_updates`、`ambiguities`、`source_quotes`、`draft_hash`。Draft 不是金融记忆，只有用户确认且 hash 未失效时才能原子写入。
+
+解析策略简例：
+
+- `510300` 识别为 A 股 6 位代码；
+- `一万元` 等中文数量 + `万` 后缀转换为 `amount_cny=10000`；
+- 缺少代码或金额标记为 `ambiguities`；
+- 确认 token = hash(draft_id + current_memory_hash)，防止 stale draft 被写入。
 
 ### AdvisoryShadowRun v1
 

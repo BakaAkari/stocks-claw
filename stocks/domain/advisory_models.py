@@ -218,3 +218,39 @@ class AdvisoryValidationReceipt:
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     validated_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AssetIntakeDraft:
+    """A proposed change to financial memory before user confirmation.
+
+    Drafts are not facts. They must be confirmed by the user with a valid token
+    before being atomically written to the authoritative memory store.
+    """
+
+    draft_id: str
+    base_memory_hash: str
+    generated_at: str
+    accounts_to_add: tuple[dict[str, Any], ...] = ()
+    positions_to_add: tuple[dict[str, Any], ...] = ()
+    positions_to_update: tuple[dict[str, Any], ...] = ()
+    positions_to_remove: tuple[str, ...] = ()
+    profile_updates: tuple[dict[str, Any], ...] = ()
+    ambiguities: tuple[dict[str, Any], ...] = ()
+    source_quotes: tuple[FactRef, ...] = ()
+    draft_hash: str = ""
+    requires_confirmation: bool = True
+
+    def all_confirmed_changes(self) -> list[dict[str, Any]]:
+        changes: list[dict[str, Any]] = []
+        for account in self.accounts_to_add:
+            changes.append({"type": "add_account", "value": account})
+        for position in self.positions_to_add:
+            changes.append({"type": "add_position", "value": position})
+        for update in self.positions_to_update:
+            changes.append({"type": "update_position", "value": update})
+        for position_id in self.positions_to_remove:
+            changes.append({"type": "remove_position", "value": position_id})
+        for profile in self.profile_updates:
+            changes.append({"type": "update_profile", "value": profile})
+        return changes
