@@ -29,7 +29,7 @@
 
 ### InvestmentAdvisory v1
 
-**状态：已实现 A0-2（2026-07-22），包含 action 、scenario 、forecast 契约。**
+**状态：A3 已完成（2026-07-22）— 实现 LLM 投资分析师中枢，按照 InvestmentAdvisory 契约输出结构化 Advisory。**
 
 实现：`stocks/domain/advisory_models.py` + `stocks/engine/advisory_contract.py`
 
@@ -39,7 +39,7 @@
 
 ### AdvisoryValidationReceipt v1
 
-**状态：已实现 A0-2（2026-07-22），仅做结构、证据与可执行性检查，不重新做投资判断。**
+**状态：A3 已完成（2026-07-22）— 与 AdvisorySynthesizer 打通，对每个生成的 Advisory 自动生成 validation receipt。**
 
 实现：`stocks/engine/advisory_contract.py`
 
