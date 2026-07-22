@@ -1518,6 +1518,64 @@ class AnalysisContext:
     # 元信息（带默认值）
     schema_version: int = 12
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "AnalysisContext":
+        """Deserialize from a dict previously produced by `to_dict`."""
+        return cls(
+            generated_at=data.get("generated_at", ""),
+            assets=[FinancialAsset(**a) for a in data.get("assets", [])],
+            asset_count=data.get("asset_count", 0),
+            portfolio_constraints=data.get("portfolio_constraints", {}),
+            portfolio_profile=data.get("portfolio_profile", {}),
+            quotes={
+                k: [Quote(
+                    instrument=Instrument(**q["instrument"]),
+                    price=q.get("price"),
+                    change=q.get("change"),
+                    pct_change=q.get("pct_change"),
+                    volume_lot=q.get("volume_lot"),
+                    amount_10k=q.get("amount_10k"),
+                    open_price=q.get("open_price"),
+                    high=q.get("high"),
+                    low=q.get("low"),
+                    prev_close=q.get("prev_close"),
+                    source=q.get("source"),
+                    stale=q.get("stale", False),
+                    as_of=q.get("as_of"),
+                    indicators=q.get("indicators"),
+                ) for q in v]
+                for k, v in data.get("quotes", {}).items()
+            },
+            news=[NewsItem(**n) for n in data.get("news", [])],
+            news_count=data.get("news_count", 0),
+            market_state=MarketState(**data.get("market_state", {})),
+            portfolio_mapping=PortfolioMapping(**data.get("portfolio_mapping", {})),
+            drift_checks=[DriftCheck(**d) for d in data.get("drift_checks", [])],
+            recent_snapshots=data.get("recent_snapshots", []),
+            raw_prompt_input=data.get("raw_prompt_input", ""),
+            market_events=[MarketEvent(**e) for e in data.get("market_events", [])],
+            news_digest=data.get("news_digest", {}),
+            intelligence_digest=data.get("intelligence_digest", {}),
+            macro_snapshot=data.get("macro_snapshot"),
+            technical_indicators=data.get("technical_indicators", {}),
+            data_quality=data.get("data_quality", {}),
+            recent_advice=data.get("recent_advice", []),
+            upcoming_events=[UpcomingEvent(**e) for e in data.get("upcoming_events", [])],
+            rotation=data.get("rotation", {}),
+            action_signals=data.get("action_signals", {}),
+            rule_scorecard=data.get("rule_scorecard", {}),
+            forecast_summary=data.get("forecast_summary", {}),
+            asset_accounts=data.get("asset_accounts", []),
+            asset_positions=data.get("asset_positions", []),
+            position_valuations=data.get("position_valuations", []),
+            exposure_summary=data.get("exposure_summary", {}),
+            liquidity_summary=data.get("liquidity_summary", {}),
+            asset_data_boundaries=data.get("asset_data_boundaries", {}),
+            advice_granularity=data.get("advice_granularity", {}),
+            engine_config=data.get("engine_config", {}),
+            schema_version=data.get("schema_version", 12),
+        )
+
     def to_dict(self) -> dict:
         return {
             "generated_at": self.generated_at,

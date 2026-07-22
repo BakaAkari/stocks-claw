@@ -74,11 +74,27 @@
 
 ### AdvisoryShadowRun v1
 
-**状态：已实现 A0-3（2026-07-22），仅保存快照、Advisory、receipt 和 manifest，不推送。**
+**状态：A4 已完成（2026-07-22）— 影子管道从生产 AnalysisContext 到 LLM Advisory 再到影子保存 和 生产对照 全程跑通。**
 
-实现：`stocks/engine/advisory_shadow_store.py` + `scripts/compare_advisory_paths.py`
+实现：
+
+- `stocks/engine/advisory_shadow_store.py` — 存储 shadow run
+- `scripts/compare_advisory_paths.py` — 影子 vs 生产对照
+- `scripts/run_shadow_advisory.py` — 端到端影子流水线
 
 每个 shadow run 保存：`snapshot.json`、`advisory.json`、`receipt.json`、`manifest.json`。manifest 包含 hash 、receipt_status 、生产 decision_id 和 artifact 路径，供影子/生产对照、回放和置信度验证。
+
+端到端命令：
+
+```bash
+.venv/bin/python scripts/run_shadow_advisory.py \
+  --artifact .local/scheduled_runs/latest/cn_after_close.json \
+  --session cn_after_close \
+  --market cn \
+  --compare
+```
+
+该命令不会影响生产推送，只会在 `.local/advisory_shadow/` 下产生可审计的 shadow run。
 
 ## 当前生产模型
 

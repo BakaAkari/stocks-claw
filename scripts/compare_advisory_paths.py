@@ -1,5 +1,8 @@
 """Compare a new shadow advisory with the current production decision.
 
+The script assumes the project root is on PYTHONPATH. If invoked directly,
+add the project root to sys.path so that `stocks` is importable.
+
 Usage:
     .venv/bin/python scripts/compare_advisory_paths.py --run-id <run-id>
 
@@ -14,6 +17,12 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 import json
 from pathlib import Path
 from typing import Any
@@ -37,7 +46,9 @@ def _extract_actions(artifact: dict[str, Any]) -> list[str]:
     for key in ("actions", "action_cards", "recommendations"):
         for item in artifact.get(key, []):
             if isinstance(item, dict):
-                actions.append(f"{item.get('action', 'unknown')}:{item.get('target', item.get('code', 'unknown'))}")
+                action = item.get("action", "unknown")
+                target = item.get("target", item.get("code", item.get("instrument_key", "unknown")))
+                actions.append(f"{action}:{target}")
             elif isinstance(item, str):
                 actions.append(item)
     return actions
