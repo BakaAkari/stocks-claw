@@ -10,6 +10,7 @@ action signal。约束条件：
 
 信号语义：
 - accumulate_candidate       趋势与动能配合，可分批布局
+- left_bottom_candidate      深跌超卖且跌势放缓，左侧轻仓试仓
 - wait_for_pullback          趋势好但短线过热，等回踩不追
 - reduce_risk                趋势与动能同步转弱，应降低暴露
 - avoid_catching_falling_knife  加速下跌中，别接下跌刀
@@ -46,6 +47,12 @@ _ACCUMULATE_R20 = 2.0      # 排除仅略高于 0 的横盘噪声
 _ACCUMULATE_RSI_LOW = 40.0
 _ACCUMULATE_RSI_HIGH = 65.0
 _ACCUMULATE_R20_MAX = 15.0   # 短期涨幅过高，即使 RSI 未超买也应等回调
+# 左侧抄底门槛
+_LEFT_BOTTOM_RSI_MAX = 40.0      # 超卖或接近超卖
+_LEFT_BOTTOM_PRICE_POSITION_MAX = 25.0  # 价格位置底部区
+_LEFT_BOTTOM_R20_MAX = -10.0     # 近20根跌幅超过10%
+_LEFT_BOTTOM_R5_FLOOR = -5.0     # 近5根跌幅不再加速
+_LEFT_BOTTOM_PULLBACK_COOLDOWN = 0.02  # 价格低于MA20不超过2%
 
 # 横截面排序权重
 _RANK_WEIGHT_R20 = 0.40        # 中期趋势强度
@@ -55,6 +62,7 @@ _RANK_WEIGHT_VOLUME = 0.10     # 量比加成
 
 _SIGNAL_ACTION_HINTS = {
     "accumulate_candidate": "趋势与动能配合，可分批布局；回踩短均线附近优先于追高",
+    "left_bottom_candidate": "深跌超卖且跌势放缓，左侧轻仓试仓，设止损后等待加仓",
     "wait_for_pullback": "趋势完好但短线过热，等回踩确认再进，不追",
     "reduce_risk": "趋势与动能同步转弱，优先降低该标的暴露",
     "avoid_catching_falling_knife": "下跌未止，任何补仓等收盘重新站回短均线再说",
@@ -82,6 +90,26 @@ def _signal_for_item(
 
     reasons: list[str] = []
 
+    # 1. 左侧抄底：深跌超卖且跌势放缓，轻仓试仓
+    if (
+        ma20 is not None
+        and price < ma20 * (1 + _LEFT_BOTTOM_PULLBACK_COOLDOWN)
+        and ((rsi is not None and rsi <= _LEFT_BOTTOM_RSI_MAX) or
+               (price_position is not None and price_position <= _LEFT_BOTTOM_PRICE_POSITION_MAX))
+        and r20 is not None
+        and r20 <= _LEFT_BOTTOM_R20_MAX
+        and r5 is not None
+        and r5 > r20  # 5-day total跌幅 not worse than 20-day total (stabilizing)
+    ):
+        reasons.append(f"现价 {price:.2f} 低于 MA20 {ma20:.2f}，超迂{_LEFT_BOTTOM_PULLBACK_COOLDOWN*100:.0f}%")
+        if rsi is not None and rsi <= _LEFT_BOTTOM_RSI_MAX:
+            reasons.append(f"RSI {rsi:.1f} 处于超卖或接近超卖区（≤{_LEFT_BOTTOM_RSI_MAX}）")
+        if price_position is not None and price_position <= _LEFT_BOTTOM_PRICE_POSITION_MAX:
+            reasons.append(f"价格位于布林带下轨附近（{price_position:.0f}%≤{_LEFT_BOTTOM_PRICE_POSITION_MAX}%)")
+        reasons.append(f"近20根K线累计 {r20:+.2f}%，跌幅较深")
+        reasons.append(f"近5根K线累计 {r5:+.2f}% 不再加速，跌势放缓")
+        return "left_bottom_candidate", reasons
+
     # 1. 下跌刀：短线加速下跌 + 价格在短均线下方 + RSI 弱势
     if (
         r5 is not None
@@ -95,6 +123,7 @@ def _signal_for_item(
         if rsi is not None:
             reasons.append(f"RSI {rsi:.1f} 处于弱势区")
         return "avoid_catching_falling_knife", reasons
+
 
     # 2. 降低暴露：中期趋势与动能同步转弱
     if (

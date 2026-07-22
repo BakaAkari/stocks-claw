@@ -1890,7 +1890,9 @@ def _build_research_candidates(
             candidate["condition"] = "risk_suspend_accumulation"
         candidates.append(candidate)
 
-    # Max 8 candidates
+    # 优先级：左侧抄底 > 趋势布局 > 轮动候选 > 等回踏
+    priority = {"left_bottom_candidate": 0, "accumulate_candidate": 1, "rotation_candidate": 2, "wait_for_pullback": 3}
+    candidates.sort(key=lambda x: priority.get(x.get("signal"), 99))
     return candidates[:8]
 
 

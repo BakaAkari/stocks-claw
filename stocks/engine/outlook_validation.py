@@ -473,8 +473,8 @@ def _check_numeric_authority(
         # Allow if the number appears anywhere in the evidence (including rounded variants).
         if check_num in evidence_numbers or round(num, 2) in evidence_numbers or round(num, 1) in evidence_numbers:
             continue
-        # Allow small whole numbers that are almost certainly percentages, dates, or counts.
-        if num == int(num) and 1 <= num <= 100:
+        # Allow small numbers in 1-100 range that are almost certainly percentages or counts.
+        if 1 <= num <= 100:
             continue
         # Flag only numbers that are absent from evidence and not in the common
         # 1-100 range, which are likely forecast/claim numbers.
