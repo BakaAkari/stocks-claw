@@ -1,31 +1,30 @@
 """Run one end-to-end shadow advisory pipeline without touching production.
 
-The script assumes the project root is on PYTHONPATH. If invoked directly,
-add the project root to sys.path so that `stocks` is importable.
-
 Usage:
-    .venv/bin/python scripts/run_shadow_advisory.py --artifact .local/scheduled_runs/latest/cn_after_close.json --session cn_after_close --market cn
+    .venv/bin/python scripts/run_shadow_advisory.py --session cn_after_close
 
-The script:
-1. Loads a production AnalysisContext artifact;
+The script auto-detects the latest AnalysisContext (context.json) and report
+artifact in .local/scheduled_runs/latest/.
+
+Steps:
+1. Loads the AnalysisContext;
 2. Builds a UnifiedAnalysisSnapshot;
 3. Synthesizes an InvestmentAdvisory via the LLM analyst;
-4. Validates the advisory and produces a receipt;
-5. Saves the shadow run to .local/advisory_shadow/;
-6. Optionally compares with the original production artifact.
+4. Validates the advisory;
+5. Saves to .local/advisory_shadow/;
+6. Optionally compares with the production report artifact.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-import json
-from pathlib import Path
-from typing import Any
 
 from stocks.domain.models import AnalysisContext
 from stocks.engine.advisory_contract import validate_advisory
@@ -36,6 +35,26 @@ from stocks.logging_utils import get_logger
 
 logger = get_logger("run_shadow_advisory")
 
+_ARTIFACT_DIR = Path(".local/scheduled_runs/latest")
+_CONTEXT_FILE = _ARTIFACT_DIR / "context.json"
+
+
+def _resolve_context_path() -> Path:
+    if _CONTEXT_FILE.exists():
+        return _CONTEXT_FILE
+    raise FileNotFoundError(
+        f"No context file found at {_CONTEXT_FILE}. "
+        "Wait for the next scheduled run to generate it, "
+        "or pass --context explicitly."
+    )
+
+
+def _resolve_report_path(session: str) -> Path:
+    report = _ARTIFACT_DIR / f"{session}.json"
+    if report.exists():
+        return report
+    raise FileNotFoundError(f"No report artifact found: {report}")
+
 
 def _load_context(path: str) -> AnalysisContext:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -43,11 +62,6 @@ def _load_context(path: str) -> AnalysisContext:
 
 
 def _make_llm_client() -> Any | None:
-    """Return a minimal LLM client using the existing OpenAI-compatible provider.
-
-    If the provider is not configured, return None and the synthesizer will fall
-    back to a safe hold advisory.
-    """
     try:
         from stocks.providers.openai_client import get_llm_client
         return get_llm_client()
@@ -58,25 +72,57 @@ def _make_llm_client() -> Any | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run end-to-end shadow advisory pipeline")
-    parser.add_argument("--artifact", required=True, help="Path to AnalysisContext JSON artifact")
-    parser.add_argument("--session", default="unknown", help="Session label, e.g. cn_after_close")
-    parser.add_argument("--market", default="cn", help="Market scope, e.g. cn or us")
-    parser.add_argument("--compare", action="store_true", help="Also compare with production artifact")
+    parser.add_argument(
+        "--session", required=True,
+        help="Session label, e.g. cn_after_close or us_after_close"
+    )
+    parser.add_argument(
+        "--context",
+        help="Path to AnalysisContext JSON (auto-detected if omitted)"
+    )
+    parser.add_argument(
+        "--market", default="cn",
+        help="Market scope, e.g. cn or us"
+    )
+    parser.add_argument(
+        "--compare", action="store_true",
+        help="Compare shadow advisory with production report artifact"
+    )
+    parser.add_argument(
+        "--no-llm", action="store_true",
+        help="Skip LLM and use fallback hold advisory"
+    )
     args = parser.parse_args()
 
-    artifact_path = Path(args.artifact)
-    if not artifact_path.exists():
-        print(json.dumps({"status": "error", "reason": f"artifact not found: {args.artifact}"}, ensure_ascii=False))
+    try:
+        if args.context:
+            context_path = Path(args.context)
+        else:
+            context_path = _resolve_context_path()
+    except FileNotFoundError as e:
+        print(json.dumps({"status": "error", "reason": str(e)}, ensure_ascii=False))
         return 1
 
-    context = _load_context(args.artifact)
+    context = _load_context(str(context_path))
+    logger.info(
+        "loaded context: %d assets, %d quotes, %d valuations",
+        len(context.assets),
+        sum(len(v) for v in context.quotes.values()),
+        len(context.position_valuations),
+    )
+
     snapshot = build_unified_snapshot(
         context,
         trigger="shadow",
         session=args.session,
         market_scope=args.market,
     )
-    llm_client = _make_llm_client()
+    logger.info(
+        "snapshot built: %d facts",
+        len(snapshot.all_facts()),
+    )
+
+    llm_client = None if args.no_llm else _make_llm_client()
     advisory = synthesize_advisory(snapshot, llm_client=llm_client)
     receipt = validate_advisory(
         advisory,
@@ -86,13 +132,20 @@ def main() -> int:
 
     store = AdvisoryShadowStore()
     run_id = f"{args.session}-{snapshot.generated_at.replace(':', '').replace('+', 'z')[:17]}"
+
+    report_path = None
+    try:
+        report_path = _resolve_report_path(args.session)
+    except FileNotFoundError:
+        pass
+
     manifest = store.save(
         run_id,
         snapshot,
         advisory,
         receipt,
-        production_decision_id=Path(args.artifact).stem,
-        production_artifact_path=str(artifact_path.resolve()),
+        production_decision_id=args.session,
+        production_artifact_path=str(report_path.resolve()) if report_path else "",
     )
 
     result = {
@@ -102,14 +155,22 @@ def main() -> int:
         "advisory_id": advisory.advisory_id,
         "receipt_status": receipt.status,
         "shadow_dir": str(Path(".local/advisory_shadow") / run_id),
+        "actions": len(advisory.actions),
+        "hold_decisions": len(advisory.hold_decisions) if advisory.hold_decisions else 0,
+        "scenarios": len(advisory.scenarios),
+        "do_not_do": len(advisory.do_not_do),
+        "data_limitations": len(advisory.data_limitations),
         "manifest": manifest,
     }
 
-    if args.compare:
+    if args.compare and report_path:
         from scripts.compare_advisory_paths import _compare, _load_production_user_view
-        production = _load_production_user_view(Path(args.artifact).stem, str(artifact_path))
-        comparison = _compare(run_id, store, production)
-        result["comparison"] = comparison
+        try:
+            production = _load_production_user_view(args.session, str(report_path))
+            comparison = _compare(run_id, store, production)
+            result["comparison"] = comparison
+        except Exception as e:
+            result["comparison"] = {"status": "error", "reason": str(e)}
 
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0 if receipt.status in {"ok", "warnings"} else 2

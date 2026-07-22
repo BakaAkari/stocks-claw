@@ -100,13 +100,27 @@ def _iso_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _parse_actions(items: list[dict[str, Any]]) -> tuple[AdvisoryAction, ...]:
+def _parse_actions(items: list[Any]) -> tuple[AdvisoryAction, ...]:
     actions = []
     for item in items:
+        if isinstance(item, str):
+            actions.append(
+                AdvisoryAction(
+                    action_id="",
+                    target=item,
+                    action="watch",
+                    size="defer",
+                    size_type="defer",
+                    reasoning="Candidate identified by LLM analyst",
+                )
+            )
+            continue
+        if not isinstance(item, dict):
+            continue
         actions.append(
             AdvisoryAction(
                 action_id=str(item.get("action_id", "")),
-                target=str(item.get("target", "")),
+                target=str(item.get("target", item.get("name", ""))),
                 action=str(item.get("action", "")),
                 size=str(item.get("size", "")),
                 size_type=str(item.get("size_type", "defer")),

@@ -1196,6 +1196,16 @@ class StocksEngine:
         # 保存最小快照，供下一次上下文进行前后对照。
         self.persistence.save_context(context)
 
+        # 保存完整上下文，供影子 Advisory 流水线读取
+        import json as _json
+        from pathlib import Path as _Path
+        _ctx_dir = _Path(".local/scheduled_runs/latest")
+        _ctx_dir.mkdir(parents=True, exist_ok=True)
+        (_ctx_dir / "context.json").write_text(
+            _json.dumps(context.to_dict(), ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+
         # 6. Flush history cache if present (ensure today's data persisted)
         if self.history_cache:
             try:
