@@ -112,3 +112,109 @@ class UnifiedAnalysisSnapshot:
             if s.source_id == source_id:
                 return s
         return None
+
+
+ActionSizeType = Literal["ratio", "shares", "cny_value", "defer"]
+ActionHorizon = Literal["short", "medium", "long"]
+ConfidenceLevel = Literal["low", "medium", "high"]
+
+
+@dataclass(frozen=True, slots=True)
+class AdvisoryAction:
+    """One recommended or rejected action inside an InvestmentAdvisory.
+
+    The LLM may output a `size` semantic such as a ratio or share count; the
+    deterministic layer translates that into a monetary amount only if the
+    evidence supports it. No free-form currency amounts from the LLM are allowed.
+    """
+
+    action_id: str
+    target: str  # market:code, position_id, bucket name, or "none"
+    action: str  # buy, sell, reduce, add, hold, watch, defer
+    size: str  # e.g. "25%", "100 shares", "defer", "info_only"
+    size_type: ActionSizeType
+    reasoning: str
+    evidence_refs: tuple[str, ...] = ()
+    execute_when: str = ""
+    cancel_when: str = ""
+    horizon: ActionHorizon = "medium"
+    confidence: ConfidenceLevel = "low"
+
+
+@dataclass(frozen=True, slots=True)
+class AdvisoryScenario:
+    """A named scenario used in the advisory."""
+
+    name: str  # base, bull, risk, inflation_shock, etc.
+    description: str
+    trigger: str
+    invalidation: str
+    evidence_refs: tuple[str, ...] = ()
+    confidence: ConfidenceLevel = "low"
+
+
+@dataclass(frozen=True, slots=True)
+class AdvisoryForecast:
+    """A testable forecast candidate; requires confirmation before becoming a bet."""
+
+    forecast_id: str
+    statement: str
+    target: str  # market:code or empty
+    metric: str  # close, pnl_pct, etc.
+    comparator: str  # above, below
+    level: str
+    deadline: str  # ISO date
+    confidence: ConfidenceLevel = "low"
+    evidence_refs: tuple[str, ...] = ()
+    requires_confirmation: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class InvestmentAdvisory:
+    """Structured output from the LLM investment analyst.
+
+    It is not the final user-visible report; it must still pass the
+    AdvisoryValidator and produce a receipt before rendering or delivery.
+    """
+
+    advisory_id: str
+    snapshot_id: str
+    generated_at: str
+    market_assessment: str = ""
+    portfolio_assessment: str = ""
+    actions: tuple[AdvisoryAction, ...] = ()
+    hold_decisions: tuple[AdvisoryAction, ...] = ()
+    do_not_do: tuple[str, ...] = ()
+    sector_opportunities: tuple[AdvisoryAction, ...] = ()
+    asset_class_opportunities: tuple[AdvisoryAction, ...] = ()
+    watchlist_candidates: tuple[AdvisoryAction, ...] = ()
+    scenarios: tuple[AdvisoryScenario, ...] = ()
+    forecast_candidates: tuple[AdvisoryForecast, ...] = ()
+    next_checkpoints: tuple[str, ...] = ()
+    data_limitations: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict, compare=False)
+
+    def all_actions(self) -> list[AdvisoryAction]:
+        return list(self.actions) + list(self.hold_decisions)
+
+    def action_by_id(self, action_id: str) -> Optional[AdvisoryAction]:
+        for a in self.all_actions():
+            if a.action_id == action_id:
+                return a
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class AdvisoryValidationReceipt:
+    """Receipt produced after the deterministic validator checks an advisory."""
+
+    status: str  # ok, warnings, errors, review_required
+    schema_version: str
+    validator_version: str
+    prompt_contract_hash: str
+    snapshot_hash: str
+    advisory_content_hash: str
+    validated_at: str
+    warnings: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+    validated_fields: tuple[str, ...] = ()

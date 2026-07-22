@@ -16,13 +16,21 @@
 
 ### InvestmentAdvisory v1
 
-计划顶层字段：`market_assessment`、`portfolio_assessment`、`actions`、`hold_decisions`、`do_not_do`、`sector_opportunities`、`asset_class_opportunities`、`watchlist_candidates`、`scenarios`、`forecast_candidates`、`next_checkpoints`、`data_limitations`。
+**状态：已实现 A0-2（2026-07-22），包含 action 、scenario 、forecast 契约。**
 
-每个 action 至少包含：`action_id`、`target`、`action`、`size`、`reasoning`、`evidence_refs`、`execute_when`、`cancel_when`、`horizon`、`confidence`。自由货币金额禁止由 LLM 输出；预计金额由确定性系统根据已验证比例和持仓事实派生。
+实现：`stocks/domain/advisory_models.py` + `stocks/engine/advisory_contract.py`
+
+顶层字段：`advisory_id`、`snapshot_id`、`generated_at`、`market_assessment`、`portfolio_assessment`、`actions`、`hold_decisions`、`do_not_do`、`sector_opportunities`、`asset_class_opportunities`、`watchlist_candidates`、`scenarios`、`forecast_candidates`、`next_checkpoints`、`data_limitations`。
+
+每个 action 至少包含：`action_id`、`target`、`action`、`size`、`size_type`、`reasoning`、`evidence_refs`、`execute_when`、`cancel_when`、`horizon`、`confidence`。自由货币金额禁止由 LLM 输出；预计金额由确定性系统根据已验证比例和持仓事实派生。
 
 ### AdvisoryValidationReceipt v1
 
-计划字段：`status`、`schema_version`、`validator_version`、`prompt_contract_hash`、`snapshot_hash`、`advisory_content_hash`、`validated_at`、`warnings`。下游通过 receipt 检查完整性，不重复执行信息不足的金融语义判断。
+**状态：已实现 A0-2（2026-07-22），仅做结构、证据与可执行性检查，不重新做投资判断。**
+
+实现：`stocks/engine/advisory_contract.py`
+
+字段：`status`、`schema_version`、`validator_version`、`prompt_contract_hash`、`snapshot_hash`、`advisory_content_hash`、`validated_at`、`warnings`、`errors`、`validated_fields`。下游通过 receipt 检查完整性，不重复执行信息不足的金融语义判断。
 
 ### AssetIntakeDraft v1
 
