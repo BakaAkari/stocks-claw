@@ -6,7 +6,11 @@
 
 ### UnifiedAnalysisSnapshot v1
 
-统一 LLM 证据入口，计划字段：`snapshot_id`、`generated_at`、`trigger`、`session`、`market_scope`、`portfolio`、`profile`、`quotes`、`history_features`、`technical_evidence`、`news_clusters`、`filings`、`macro`、`upcoming_events`、`rotation`、`portfolio_constraints`、`risk_context`、`candidate_signals`、`data_quality`、`source_registry`。
+**状态：已实现 A0-1（2026-07-22），缺省会话。**
+
+实现：`stocks/domain/advisory_models.py` + `stocks/engine/unified_snapshot.py`
+
+统一 LLM 证据入口，字段：`snapshot_id`、`generated_at`、`trigger`、`session`、`market_scope`、`portfolio`、`profile`、`quotes`、`history_features`、`technical_evidence`、`news_clusters`、`filings`、`macro`、`upcoming_events`、`rotation`、`portfolio_constraints`、`risk_context`、`candidate_signals`、`data_quality`、`source_registry`。
 
 高风险事实使用 `fact_id`、`metric`、`value`、`unit`、`as_of`、`source_ref`。Snapshot 是证据，不是最终建议，也不得包含 API key 或模型内部推理。
 
