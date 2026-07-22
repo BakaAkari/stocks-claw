@@ -517,10 +517,9 @@ def _is_span_safe(pos: int, num_str: str, safe_spans: set[tuple[int, int]]) -> b
 def validate_payload_text(payload: dict, text: str) -> list[str]:
     errors = [f"internal token: {m.group(0)}" for m in _FORBIDDEN.finditer(text)]
 
-    # Allowed numbers: any number that appears anywhere in the payload or artifact.
-    # Outlook/outlook_delta are generated from evidence and are authoritative, so their
-    # numbers should be allowed in the rendered text.
-    allowed = _number_values(payload)
+    # Allowed numbers come from deterministic payload fields only. Generated outlook
+    # numbers cannot authorize themselves; the outlook validator is the authority for them.
+    allowed = _number_values(_strip_outlook_from_payload(payload))
 
     numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
     safe_spans = _safe_numeric_spans(numeric_text)

@@ -17,6 +17,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from stocks.engine.economic_event_watcher import EconomicEventWatcher
+from stocks.engine.forecasts import build_forecast_candidates
 from stocks.engine.hypothesis_tracker import (
     HypothesisStore,
     auto_check_hypotheses,
@@ -686,6 +687,7 @@ class ScheduledAnalysisRunner:
                     now=run["generated_at"],
                 )
                 run["structured_outlook"] = outlook
+                run["forecast_candidates"] = build_forecast_candidates(outlook)
                 # Attach outlook to the user-facing brief
                 uv = run.get("portfolio_decision", {}).get("user_view", {})
                 if uv and "assistant_brief" in uv:
@@ -695,6 +697,7 @@ class ScheduledAnalysisRunner:
                 run["structured_outlook"] = sanitize_unavailable_outlook(
                     ["Outlook synthesis failed"], generated_at=run["generated_at"],
                 )
+                run["forecast_candidates"] = []
                 # Also attach unavailable outlook to assistant brief
                 uv = run.get("portfolio_decision", {}).get("user_view", {})
                 if uv and "assistant_brief" in uv:

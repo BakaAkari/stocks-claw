@@ -575,12 +575,27 @@ class FakeSynth:
                 "risk": {"label": "风险情景", "drivers": ["地缘冲突"], "portfolio_effect": "下跌",
                          "validation": ["VIX>25"], "invalidation": ["政策干预"]},
             },
-            "sector_views": [{"sector": "科技", "direction": "bullish", "rationale": "政策支持"}],
+            "sector_views": [{"sector": "科技", "direction": "supportive", "rationale": "政策支持"}],
             "asset_views": [],
             "source_refs": [],
             "confidence": "high",
             "forecast_candidates": [],
         }
+
+
+class FakeSynthWithForecast(FakeSynth):
+    def generate(self, evidence: dict, *, now: str) -> dict:
+        result = super().generate(evidence, now=now)
+        result["source_refs"] = [{
+            "id": "src-vix", "source": "CBOE", "title": "VIX Index",
+            "url": "https://example.test/vix", "published_at": now,
+        }]
+        result["forecast_candidates"] = [{
+            "target": "macro:VIX", "metric": "close", "comparator": "above",
+            "level": 25.0, "deadline": "2026-08-01", "confidence": "low",
+            "source_ref_ids": ["src-vix"], "requires_confirmation": True,
+        }]
+        return result
 
 
 def _engine_with_enough_for_outlook(tmp_path, context_payload=None):
@@ -627,6 +642,35 @@ def test_primary_session_calls_synthesizer_once(tmp_path):
 
     assert fake.calls == 1
     assert artifact["structured_outlook"]["status"] == "ok"
+    assert artifact["forecast_candidates"] == []
+
+
+def test_primary_session_exposes_confirmable_forecast_candidates_without_saving(tmp_path):
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    runner.outlook_synthesizer = FakeSynthWithForecast()
+    now = datetime.fromisoformat("2026-07-06T15:30:00+08:00")
+
+    result = _run(runner.run_session("cn_after_close", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    assert artifact["forecast_candidates"] == [{
+        "target": "macro:VIX",
+        "metric": "close",
+        "comparator": "above",
+        "level": 25.0,
+        "deadline": "2026-08-01",
+        "confidence": "low",
+        "source_ref_ids": ["src-vix"],
+        "statement": "VIX 在 2026-08-01 前高于 25",
+        "requires_confirmation": True,
+    }]
+    assert not (tmp_path / "forecasts").exists()
     assert artifact["portfolio_decision"]["user_view"]["assistant_brief"]["outlook"]["summary"] == "组合研判"
 
 

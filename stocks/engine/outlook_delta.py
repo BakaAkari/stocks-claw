@@ -141,7 +141,7 @@ def _deep_diff(prev: dict, curr: dict) -> dict:
     prev_assets: list[dict] = prev.get("asset_views") or []
     curr_assets: list[dict] = curr.get("asset_views") or []
     asset_changes: dict[str, dict] = _list_diff_by_key(
-        prev_assets, curr_assets, key_field="asset", compare_keys=frozenset({"direction"}),
+        prev_assets, curr_assets, key_field="asset_class", compare_keys=frozenset({"direction"}),
     )
     if asset_changes:
         changes["asset_views"] = asset_changes

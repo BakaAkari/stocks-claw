@@ -185,6 +185,24 @@ def test_delta_changed_sector_direction_concrete():
     assert sv["科技"]["direction"] == {"from": "bullish", "to": "bearish"}
 
 
+def test_delta_changed_asset_class_direction_uses_asset_class_key():
+    """Asset view deltas key by asset_class, matching the outlook schema."""
+    prev = _make_outlook("cn_after_close", {"base": {"label": "B"}})
+    curr = _make_outlook("cn_after_close", {"base": {"label": "B"}})
+    prev["structured_outlook"]["asset_views"] = [
+        {"asset_class": "equity", "direction": "mixed"},
+    ]
+    curr["structured_outlook"]["asset_views"] = [
+        {"asset_class": "equity", "direction": "adverse"},
+    ]
+
+    delta = compute_outlook_delta(prev, curr)
+
+    assert delta["changes"]["asset_views"] == {
+        "equity": {"direction": {"from": "mixed", "to": "adverse"}},
+    }
+
+
 def test_delta_changed_horizon_direction_confidence():
     """Horizon block changes show concrete direction/confidence."""
     prev = _make_outlook("cn_after_close", {"base": {"label": "B"}})

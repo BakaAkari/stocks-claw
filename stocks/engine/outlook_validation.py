@@ -23,14 +23,21 @@ _CONFIDENCE_LEVELS: dict[str, int] = {
     "medium": 2,
     "low": 1,
 }
+_VALID_DIRECTIONS = frozenset({"supportive", "adverse", "mixed"})
+_VALID_ASSET_CLASSES = frozenset({"equity", "commodity", "fixed_income", "cash"})
 
 # ── Forbidden action regex ─────────────────────────────────────────────────
 # Matches a wide range of trade-instruction patterns while allowing
 # descriptive phrases such as "配置风险上升".
 
 _FORBIDDEN_ACTION_RE = re.compile(
-    r"买\s*入\s*具体|卖\s*(?:出|掉)\s*具体|清\s*仓|"
-    r"退出(?:该|此)?标的|做多|做空|换仓|"
+    r"(?:建议|应当|应该|需要|立即|请|可以|可考虑|优先)"
+    r"[^。；;]{0,12}"
+    r"(?:买\s*入|卖\s*(?:出|掉)|加\s*仓|减\s*仓|增持|减持|清\s*仓|"
+    r"退出|做多|做空|换仓|提高[^。；;]{0,6}暴露|降低[^。；;]{0,6}(?:暴露|比例)|配置更多)|"
+    r"(?:^|[。；;：:\s])(?:买\s*入\s*具体|卖\s*(?:出|掉)\s*具体|清\s*仓|"
+    r"增持|减持|退出|做多|做空|换仓|配置更多|提高[^。；;]{0,6}暴露|"
+    r"降低[^。；;]{0,6}(?:暴露|比例)|卖\s*掉|加\s*入仓位)|"
     r"止损\s*\d|止盈\s*\d|仓位\s*\d|¥\s*\d|人民币\s*\d"
 )
 
@@ -136,6 +143,7 @@ def validate_structured_outlook(outlook: dict, evidence: dict) -> list[str]:
     # ── 1. Required top-level fields ──────────────────────────────────
     _check_required_fields(outlook, errors)
     _check_horizon_blocks(outlook, errors)
+    _check_direction_enums(outlook, errors)
     _check_scenario_completeness(outlook, errors)
     _check_forbidden_probability_fields(outlook, errors)
     _check_source_authorization(outlook, evidence, errors)
@@ -240,6 +248,23 @@ def _check_horizon_blocks(outlook: dict, errors: list[str]) -> None:
         h = medium.get("horizon")
         if h and h not in VALID_MEDIUM_HORIZONS:
             errors.append(f"invalid medium_term horizon: {h}")
+
+
+def _check_direction_enums(outlook: dict, errors: list[str]) -> None:
+    for key in ("near_term", "medium_term"):
+        block = outlook.get(key)
+        if isinstance(block, dict) and block.get("direction") not in _VALID_DIRECTIONS:
+            errors.append(f"{key} direction invalid: {block.get('direction')}")
+    for key in ("sector_views", "asset_views"):
+        for index, item in enumerate(outlook.get(key, [])):
+            if not isinstance(item, dict):
+                continue
+            if item.get("direction") not in _VALID_DIRECTIONS:
+                errors.append(f"{key}[{index}] direction invalid: {item.get('direction')}")
+            if key == "asset_views":
+                asset_class = item.get("asset_class") or item.get("asset")
+                if asset_class not in _VALID_ASSET_CLASSES:
+                    errors.append(f"asset_views[{index}] asset_class invalid: {asset_class}")
 
 
 def _check_scenario_completeness(outlook: dict, errors: list[str]) -> None:
@@ -619,6 +644,7 @@ def _check_forecast_candidates(outlook: dict, evidence: dict, errors: list[str])
     evidence_numbers = _collect_evidence_numbers(evidence)
     authorized_sources = _build_authorized_sources(evidence)
     authorized_instruments = _build_authorized_instruments(evidence)
+    authorized_deadlines = _collect_evidence_dates(evidence)
 
     for i, candidate in enumerate(raw):
         if not isinstance(candidate, dict):
@@ -626,14 +652,25 @@ def _check_forecast_candidates(outlook: dict, evidence: dict, errors: list[str])
             continue
         _check_single_candidate(
             candidate, i, evidence_numbers, authorized_sources,
-            authorized_instruments, outlook, errors,
+            authorized_instruments, authorized_deadlines, outlook, errors,
         )
+
+
+def _collect_evidence_dates(evidence: dict) -> set[str]:
+    dates: set[str] = set()
+    for event in evidence.get("upcoming_events", []):
+        if not isinstance(event, dict):
+            continue
+        scheduled_at = str(event.get("scheduled_at") or "")
+        if len(scheduled_at) >= 10 and is_valid_iso_date(scheduled_at[:10]):
+            dates.add(scheduled_at[:10])
+    return dates
 
 
 def _check_single_candidate(
     candidate: dict, idx: int, evidence_numbers: set[float],
     authorized_sources: set[tuple[str, str, str, str]],
-    authorized_instruments: set[str],
+    authorized_instruments: set[str], authorized_deadlines: set[str],
     outlook: dict, errors: list[str],
 ) -> None:
     """Validate a single forecast_candidate."""
@@ -674,6 +711,8 @@ def _check_single_candidate(
         errors.append(f"{prefix}.deadline must be a string")
     elif not is_valid_iso_date(deadline):
         errors.append(f"{prefix}.deadline not valid YYYY-MM-DD: {deadline}")
+    elif deadline not in authorized_deadlines:
+        errors.append(f"{prefix}.deadline not in evidence dates: {deadline}")
 
     confidence = candidate.get("confidence")
     if confidence not in _VALID_CONFIDENCES:
@@ -701,8 +740,8 @@ def _check_single_candidate(
                     break
 
     rc = candidate.get("requires_confirmation")
-    if rc is not None and not isinstance(rc, bool):
-        errors.append(f"{prefix}.requires_confirmation must be bool")
+    if rc is not True:
+        errors.append(f"{prefix}.requires_confirmation must be true")
 
     stmt = candidate.get("statement")
     if stmt is not None and not isinstance(stmt, str):

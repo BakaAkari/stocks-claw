@@ -6,6 +6,7 @@ and graceful degradation to sanitized-unavailable on any failure.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -27,6 +28,8 @@ _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "structured_out
 
 # ── Cache TTL ───────────────────────────────────────────────────────────────
 NEAR_TERM_TTL_SECONDS = 86400  # 24 hours
+OUTLOOK_SCHEMA_VERSION = 2
+OUTLOOK_VALIDATOR_VERSION = 2
 
 
 class OutlookCache:
@@ -44,7 +47,12 @@ class OutlookCache:
     def _path(self, session: str, evidence_hash_str: str) -> Path:
         return self.root / f"{session}__{evidence_hash_str}.json"
 
-    def load(self, session: str, evidence_hash: str | None = None) -> dict | None:
+    def load(
+        self,
+        session: str,
+        evidence_hash: str | None = None,
+        contract_hash: str | None = None,
+    ) -> dict | None:
         """Load a cached outlook.
 
         Parameters
@@ -73,6 +81,8 @@ class OutlookCache:
             cached_at = data.get("_cached_at", 0)
             if time.time() - cached_at > NEAR_TERM_TTL_SECONDS:
                 return None
+            if contract_hash is not None and data.get("contract_hash") != contract_hash:
+                return None
             return data.get("outlook")
 
         # ── Scan (backward-compatible) ─────────────────────────────────
@@ -89,19 +99,31 @@ class OutlookCache:
             cached_at = data.get("_cached_at", 0)
             if time.time() - cached_at > NEAR_TERM_TTL_SECONDS:
                 continue
+            if contract_hash is not None and data.get("contract_hash") != contract_hash:
+                continue
             return data.get("outlook")
         return None
 
-    def save(self, session: str, evidence_hash_str: str, outlook: dict) -> None:
+    def save(
+        self,
+        session: str,
+        evidence_hash_str: str,
+        contract_hash: str | dict,
+        outlook: dict | None = None,
+    ) -> None:
         """Atomically write *outlook* to the cache.
 
         Writes to a ``.tmp`` file first, then ``os.replace`` to the final
         path, and cleans up any leftover ``.tmp`` in a ``finally`` block.
         """
+        if outlook is None:
+            outlook = contract_hash if isinstance(contract_hash, dict) else {}
+            contract_hash = "legacy"
         data: dict[str, Any] = {
             "_cached_at": time.time(),
             "session": session,
             "evidence_hash": evidence_hash_str,
+            "contract_hash": str(contract_hash),
             "outlook": outlook,
         }
         path = self._path(session, evidence_hash_str)
@@ -157,11 +179,21 @@ class OutlookSynthesizer:
         self._prompt_text = (
             _PROMPT_PATH.read_text("utf-8") if _PROMPT_PATH.exists() else ""
         )
+        self._cache_contract_hash = self._compute_cache_contract_hash()
 
         # Resolve API key and base URL
         self._api_key: str | None = None
         self._base_url: str | None = None
         self._resolve_credentials(config)
+
+    def _compute_cache_contract_hash(self) -> str:
+        payload = {
+            "prompt": self._prompt_text,
+            "schema_version": OUTLOOK_SCHEMA_VERSION,
+            "validator_version": OUTLOOK_VALIDATOR_VERSION,
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -181,10 +213,13 @@ class OutlookSynthesizer:
         # ── Check cache (exact hash lookup) ──────────────────────────────
         e_hash = evidence_hash(evidence)
         session = evidence.get("session", "unknown")
-        cached = self.cache.load(session, e_hash)
+        cached = self.cache.load(session, e_hash, self._cache_contract_hash)
         if cached is not None:
-            logger.info("Outlook cache hit for session=%s", session)
-            return cached
+            errors = validate_structured_outlook(cached, evidence)
+            if not errors:
+                logger.info("Outlook cache hit for session=%s", session)
+                return cached
+            logger.warning("Ignoring invalid cached outlook for %s: %s", session, errors)
 
         # ── Build request ────────────────────────────────────────────────
         request = self._build_request(evidence)
@@ -216,11 +251,26 @@ class OutlookSynthesizer:
             errors = validate_structured_outlook(outlook, evidence)
             if errors:
                 logger.warning("Outlook validation failed: %s", errors)
-                outlook = sanitize_unavailable_outlook(errors, generated_at=now)
-            else:
+                retry_request = self._build_validation_retry_request(evidence, errors)
+                retry_response = self._call_transport(retry_request)
+                retry_outlook = self._parse_response(retry_response, now)
+                if retry_outlook is not None:
+                    retry_outlook = dict(retry_outlook)
+                    retry_outlook["status"] = "ok"
+                    retry_outlook["generated_at"] = now
+                    retry_errors = validate_structured_outlook(retry_outlook, evidence)
+                    if not retry_errors:
+                        outlook = retry_outlook
+                        errors = []
+                    else:
+                        logger.warning("Outlook validation retry failed: %s", retry_errors)
+                        errors = retry_errors
+                if errors:
+                    outlook = sanitize_unavailable_outlook(errors, generated_at=now)
+            if not errors:
                 outlook["status"] = "ok"
                 outlook["generated_at"] = now
-                self.cache.save(session, e_hash, outlook)
+                self.cache.save(session, e_hash, self._cache_contract_hash, outlook)
         else:
             outlook = sanitize_unavailable_outlook(
                 ["LLM returned no valid JSON"],
@@ -273,6 +323,17 @@ class OutlookSynthesizer:
             "max_tokens": self.max_tokens,
             "response_format": {"type": "json_object"},
         }
+
+    def _build_validation_retry_request(self, evidence: dict, errors: list[str]) -> dict:
+        request = self._build_request(evidence)
+        feedback = {
+            "VALIDATION_ERRORS": errors[:8],
+            "instruction": "修正这些错误后重新输出完整 JSON；仍只使用原证据，不增加新事实。",
+        }
+        request["messages"] = list(request["messages"]) + [
+            {"role": "user", "content": json.dumps(feedback, ensure_ascii=False)},
+        ]
+        return request
 
     def _call_transport(self, request: dict) -> dict | None:
         """Call the transport (injected callable or real HTTP).

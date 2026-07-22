@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -172,6 +173,54 @@ def test_request_has_json_object_response_format(evidence, monkeypatch, tmp_path
     assert captured["response_format"]["type"] == "json_object"
 
 
+def test_prompt_json_example_is_valid_and_documents_forecast_contract():
+    prompt = Path("stocks/prompts/structured_outlook_prompt.txt").read_text("utf-8")
+    start = prompt.index("```json") + len("```json")
+    end = prompt.index("```", start)
+    example = json.loads(prompt[start:end].strip())
+    assert example["forecast_candidates"]
+    candidate = example["forecast_candidates"][0]
+    assert set(candidate) >= {
+        "target", "metric", "comparator", "level", "deadline",
+        "confidence", "source_ref_ids", "requires_confirmation",
+    }
+
+
+def test_cache_identity_changes_with_prompt_content(evidence, monkeypatch, tmp_path):
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)), transport=lambda _: None)
+    original = synth._cache_contract_hash
+    synth._prompt_text += "\ncontract change"
+    assert synth._compute_cache_contract_hash() != original
+
+
+def test_invalid_cached_outlook_is_revalidated_and_replaced(evidence, monkeypatch, tmp_path):
+    from stocks.engine.outlook_evidence import evidence_hash
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    calls = {"count": 0}
+
+    def transport(_: dict) -> dict:
+        calls["count"] += 1
+        return _chat_response(json.dumps(_valid_outlook_dict(), ensure_ascii=False))
+
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)), transport=transport)
+    bad = _valid_outlook_dict()
+    bad["summary"] = "建议买入具体标的"
+    synth.cache.save(
+        evidence["session"], evidence_hash(evidence), synth._cache_contract_hash, bad,
+    )
+
+    result = synth.generate(evidence, now=NOW)
+
+    assert calls["count"] == 1
+    assert result["status"] == "ok"
+    assert result["summary"] != bad["summary"]
+
+
 def test_request_contains_no_position_id(evidence, monkeypatch, tmp_path):
     from stocks.engine.outlook_synthesizer import OutlookSynthesizer
     captured = {}
@@ -263,6 +312,29 @@ def test_validator_failure_returns_unavailable(evidence, monkeypatch, tmp_path):
     result = synth.generate(evidence, now=NOW)
     assert result["status"] == "unavailable"
     assert "data_limitations" in result
+
+
+def test_validator_failure_retries_once_with_feedback(evidence, monkeypatch, tmp_path):
+    from stocks.engine.outlook_synthesizer import OutlookSynthesizer
+
+    bad = _valid_outlook_dict()
+    bad["summary"] = "组合目标价格300"
+    calls = []
+
+    def transport(req: dict) -> dict:
+        calls.append(req)
+        result = bad if len(calls) == 1 else _valid_outlook_dict()
+        return _chat_response(json.dumps(result, ensure_ascii=False))
+
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
+    synth = OutlookSynthesizer(_valid_cfg(cache_dir=str(tmp_path)), transport=transport)
+
+    result = synth.generate(evidence, now=NOW)
+
+    assert result["status"] == "ok"
+    assert len(calls) == 2
+    retry_messages = calls[1]["messages"]
+    assert any("VALIDATION_ERRORS" in msg["content"] for msg in retry_messages)
 
 
 def test_cache_hit_skips_transport(evidence, monkeypatch, tmp_path):

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # 默认 LLM 超时（秒）
 _LLM_TIMEOUT = 360
-_DEFAULT_PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "personal_advice_prompt.txt"
+_DEFAULT_PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "archive" / "personal_advice_prompt.txt"
 
 
 class LLMAnalysis:

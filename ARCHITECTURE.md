@@ -230,10 +230,11 @@ CLI 写操作要求 `--confirmed`；MCP 写操作要求 `confirmed: true`。确�
 
 ## 7. Prompt 与金额边界
 
-`stocks/prompts/personal_advice_prompt.txt` 是（已废弃的自由文本路径保留的）分析约束。
-`raw_prompt_input` 是本地 Agent 证据包，当前包含真实资产金额、逐持仓市值、盈亏、
-暴露集中度、可动用资金和数据边界；仓位动作仍要求用比例、区间或自然语言表达，
-不得保存具体下单金额。
+生产报告的唯一指令契约是 artifact 内的 `agent_task v5` 和
+`portfolio_decision.user_view`。`raw_prompt_input` 只保留为兼容数据摘要；旧
+`personal_advice_prompt.txt` 与 `daily_report_prompt.txt` 已归档到
+`stocks/prompts/archive/`，不会控制生产推送。结构化中长期研判只读取
+`stocks/prompts/structured_outlook_prompt.txt`。
 
 HTTP 是远程接口边界，默认仍递归移除 `amount`、`amount_cny` 和 `total_value`；
 调用方只有显式使用 `?include_amounts=true` 才能请求精确金额。
@@ -247,7 +248,8 @@ HTTP 是远程接口边界，默认仍递归移除 `amount`、`amount_cny` 和 `
 - `.local/advice_snapshots/`：Shadow Account 建议快照。
 - `.local/hypotheses/`：研究论点与 run 关联索引。
 - `.local/signal_tracker/`：情报方向信号及后续价格结算。
-- `.local/outlook_cache/`：结构化 `outlook` 的 LLM 生成缓存，24 小时 TTL，按 evidence hash 去重；不得提交。
+- `.local/outlook_cache/`：结构化 `outlook` 的 LLM 生成缓存，24 小时 TTL；按
+  evidence hash + prompt/schema/validator contract hash 隔离，命中时重新校验；不得提交。
 - `.local/outlook_delta_state.json`：跨窗口 outlook 差异状态，用于观察窗口只报告变化。
 - `.local/forecasts/`：用户确认保存的预测台账，系统按历史收盘价自动结算。
 - `data/cache/`：非隐私缓存，例如汇率；不与密钥目录混用。
@@ -272,10 +274,15 @@ HTTP 默认监听 `127.0.0.1`。非回环地址必须同时满足：
 生成结构化展望 `structured_outlook`：
 
 1. `outlook_evidence.py` 从 `AnalysisContext` 中提取白名单证据：前 5 持仓/冲突持仓、资产类别和 sector 快照、技术/轮动信号、情报事件、宏观、即将发生事件、风险和数据边界。
-2. `OutlookSynthesizer` 调用 OpenAI 兼容端点，将证据包转换为约束后的 JSON outlook：near_term / medium_term、sector_views、asset_views、scenarios、source_refs、confidence。
-3. `outlook_validation.py` 对 outlook 做多层校验：必填字段、方向词表、不含交易指令/内部 token/概率字段/数字授权、source_refs 必须来自证据包中的可验证新闻、instrument/symbol 必须在证据包的授权列表中。
-4. 校验失败时，`sanitize_unavailable_outlook()` 代替生成一个筛选后的 unavailable 状态，不中断 session。
-5. 观察窗口（`cn_open_watch`、`cn_pre_close`、`us_open_watch`、`us_pre_close`）
+2. `OutlookSynthesizer` 调用 OpenAI 兼容端点，将证据包转换为约束后的 JSON outlook：near_term / medium_term、sector_views、asset_views、scenarios、source_refs、confidence 和可选 `forecast_candidates`。
+3. `outlook_validation.py` 对 outlook 做多层校验：必填字段、方向词表
+   (`supportive/adverse/mixed`)、禁止面向用户的交易指令/内部 token/概率字段、
+   数字授权、来源与 instrument 授权。描述上游“买入/减仓信号”可以出现，但不得写成
+   “建议/应当/立即买入或减仓”等用户指令。
+4. 校验后的 `forecast_candidates` 只进入 artifact 供用户确认，不自动保存；
+   `build_forecast_candidates()` 负责结构化归一化。
+5. 校验失败时，`sanitize_unavailable_outlook()` 代替生成一个筛选后的 unavailable 状态，不中断 session。
+6. 观察窗口（`cn_open_watch`、`cn_pre_close`、`us_open_watch`、`us_pre_close`）
    不生成独立 outlook，而是计算与上一个主窗口 outlook 的语义差异，并展示为 `outlook_delta`。
 
 `outlook` 和 `outlook_delta` 在渲入 `assistant_brief` 之前，经 `presentation.py` 的

@@ -1,3 +1,5 @@
+DEPRECATED: not used by the production scheduled-report pipeline.
+
 你是一个冷静、简洁的市场分析助手。
 
 任务：

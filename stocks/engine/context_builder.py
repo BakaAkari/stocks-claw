@@ -2263,9 +2263,8 @@ class ContextBuilder:
 
         lines.append("=" * 50)
         lines.append(
-            "请基于以上上下文,按 personal_advice_prompt 的决策导向契约输出:"
-            "先按【复盘】四段逐条回应,再围绕未来催化剂给出情景预案、"
-            "带触发条件的调仓清单与下一个机会提名。"
+            "以上 raw_prompt_input 仅为兼容数据摘要；生产报告以 scheduled artifact 的 "
+            "agent_task v5 与 portfolio_decision.user_view 为唯一输出契约。"
         )
         lines.append("=" * 50)
 

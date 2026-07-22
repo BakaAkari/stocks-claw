@@ -20,18 +20,17 @@ Agent 负责读取产物并生成最终分析。系统不下单、不承诺收�
 - 行情、新闻、宏观数据、技术指标和 LLM 推断不得写进长期金融记忆。
 - 用户提到“买了”“卖了”或偏好变化时，先确认是否更新；未确认不得调用写接口。
 - 同一资产冲突时，以用户最后一次明确确认的内容为准。
-- 分析前读取 `stocks/prompts/personal_advice_prompt.txt`，它是统一分析约束。
-  该契约是决策导向的：输出必须围绕 `upcoming_events`（未来催化剂日历）组织
-  情景预案，引用 `rotation`（板块轮动排名）提名机会，并以"触发条件 → 动作 →
-  幅度"三元组给出调仓清单；禁止不带触发条件的"观察/等待"。
+- 生产报告不得读取旧 `personal_advice_prompt`；唯一输出契约是 artifact 内的
+  `agent_task v5` 与 `portfolio_decision.user_view`。旧自由文本 prompt 已移至
+  `stocks/prompts/archive/`，仅供历史兼容和审计。
 - 每次报告先复盘上期建议：`recent_advice` 里的 `trigger_review` 是系统按
   收盘价核对的触发事实（fired / not_fired / no_data），必须逐条回应。
 - `action_signals` 是引擎给出的规则化方向性候选动作（附 reasons），
   是分析的初始底稿：每条方向性信号必须采纳或给理由推翻，不许无视；
   它不是指令，最终动作仍需结合组合结构与用户偏好落定。
-- 默认使用 `AnalysisContext.raw_prompt_input` 做建议输入；本地 Agent 上下文会包含真实
-  金额、逐持仓市值、盈亏、暴露集中度、可动用资金和数据边界。对外 HTTP 接口默认
-  隐藏精确金额是另一条远程安全边界。
+- `AnalysisContext.raw_prompt_input` 只保留为兼容数据摘要，不是生产报告指令来源。
+  本地上下文会包含真实金额、逐持仓市值、盈亏、暴露集中度、可动用资金和数据边界；
+  对外 HTTP 接口默认隐藏精确金额是另一条远程安全边界。
 - 所有结论必须结合 `data_quality`；stale、降级、换算失败和单源风险不可省略。
 - 交易报告的现行质量边界与六层一致性规则见 `docs/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`。
 - 禁止把 `capital_allocation.net_deployable_cny` 直接称为"今天可用现金"；必须拆读 `liquidity_summary.buckets` 的 cash/T0、T1/T2、locked。
@@ -91,11 +90,9 @@ Artifact renderer，不再输出完整 Agent Task、全扫描信号或兼容字�
 场景、来源引用）和观察窗口产生的 `outlook_delta` 差异小结；二者均已经
 `presentation.py` 白名单过滤，Agent 不得在正文中暴露内部 token、position_id 或 decision_id。
 
-可选内部 LLM 报告：
-
-```bash
-uv run python -m stocks.adapters.cli --output text --llm-analysis
-```
+旧 `--llm-analysis` 参数仅为 CLI 兼容入口，当前固定返回 disabled 提示，不参与
+生产报告。中长期 LLM 只走 `outlook_evidence → outlook_synthesizer →
+outlook_validation` 受限路径。
 
 项目不存在 `--llm-enhancer`，也不存在旧的子命令式 CLI。
 

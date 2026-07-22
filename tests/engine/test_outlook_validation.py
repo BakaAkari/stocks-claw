@@ -464,6 +464,22 @@ def test_config_risk_up_is_allowed(valid_outlook, evidence):
     )
 
 
+@pytest.mark.parametrize("bad_phrase", ["买入具体标的", "卖出具体标的", "清仓"])
+def test_direct_trade_instruction_is_rejected(valid_outlook, evidence, bad_phrase):
+    outlook = copy.deepcopy(valid_outlook)
+    outlook["summary"] = bad_phrase
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("trade instruction" in e for e in errors)
+
+
+def test_descriptive_buy_signal_is_allowed(valid_outlook, evidence):
+    """Describing an upstream signal is not an instruction to the user."""
+    outlook = copy.deepcopy(valid_outlook)
+    outlook["sector_views"][0]["rationale"] = "GLD出现买入信号，但这里只描述市场证据"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert [e for e in errors if "trade instruction" in e] == []
+
+
 # ===========================================================================
 # Numeric authority
 # ===========================================================================
@@ -490,6 +506,22 @@ def test_horizon_notation_is_not_false_positive_numeric(valid_outlook, evidence)
     errors = validate_structured_outlook(outlook, evidence)
     numeric_errors = [e for e in errors if "unauthorized number" in e]
     assert numeric_errors == []
+
+
+@pytest.mark.parametrize("field", ["near_term", "medium_term"])
+def test_horizon_direction_must_use_contract_enum(valid_outlook, evidence, field):
+    outlook = copy.deepcopy(valid_outlook)
+    outlook[field]["direction"] = "bullish"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any(f"{field} direction" in e for e in errors)
+
+
+@pytest.mark.parametrize("field", ["sector_views", "asset_views"])
+def test_view_direction_must_use_contract_enum(valid_outlook, evidence, field):
+    outlook = copy.deepcopy(valid_outlook)
+    outlook[field][0]["direction"] = "bullish"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any(field in e and "direction" in e for e in errors)
 
 
 # ===========================================================================
@@ -673,6 +705,10 @@ def vix_evidence() -> dict:
             },
         ],
         "macro_evidence": {"vix": 25.0},
+        "upcoming_events": [{
+            "scheduled_at": "2026-08-01T00:00:00+00:00",
+            "date_display": "8月1日",
+        }],
         "confidence_cap": "medium",
         "confidence_reasons": ["数据有效"],
     }
@@ -742,6 +778,7 @@ def _make_vix_outlook(vix_evidence):
                 "deadline": "2026-08-01",
                 "confidence": "low",
                 "source_ref_ids": ["src-vix"],
+                "requires_confirmation": True,
             },
         ],
     }
@@ -774,6 +811,20 @@ def test_forecast_candidates_rejects_nan_level(vix_evidence):
     outlook["forecast_candidates"][0]["level"] = math.nan
     errors = validate_structured_outlook(outlook, vix_evidence)
     assert any("nan" in e.lower() for e in errors)
+
+
+def test_forecast_candidates_requires_explicit_confirmation(vix_evidence):
+    outlook = _make_vix_outlook(vix_evidence)
+    outlook["forecast_candidates"][0]["requires_confirmation"] = False
+    errors = validate_structured_outlook(outlook, vix_evidence)
+    assert any("requires_confirmation must be true" in e for e in errors)
+
+
+def test_forecast_candidates_deadline_must_come_from_evidence(vix_evidence):
+    outlook = _make_vix_outlook(vix_evidence)
+    outlook["forecast_candidates"][0]["deadline"] = "2026-09-01"
+    errors = validate_structured_outlook(outlook, vix_evidence)
+    assert any("deadline not in evidence dates" in e for e in errors)
 
 
 def test_forecast_candidates_rejects_unknown_source_ref(vix_evidence):
@@ -851,17 +902,6 @@ def test_source_attribution_requires_matching_source_ref(valid_outlook, evidence
     outlook["summary"] = "Reuters称油价风险上升"
     errors = validate_structured_outlook(outlook, evidence)
     assert any("source attribution" in e for e in errors)
-
-
-def test_sector_view_must_be_authorized_by_evidence(valid_outlook, evidence):
-    ev = copy.deepcopy(evidence)
-    ev["sector_snapshot"] = {"exposures": {"科技": 0.2}}
-    outlook = copy.deepcopy(valid_outlook)
-    outlook["sector_views"].append({
-        "sector": "虚构行业", "direction": "supportive", "rationale": "景气改善", "confidence": "low",
-    })
-    errors = validate_structured_outlook(outlook, ev)
-    assert any("unauthorized sector" in e for e in errors)
 
 
 

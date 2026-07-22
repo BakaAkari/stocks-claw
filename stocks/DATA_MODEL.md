@@ -474,14 +474,13 @@ v8 相对 v7 扩展 `UpcomingEvent` 的完整时点、时间精度与生命周�
 v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶层字段，
 `recent_advice` 附加派生 `trigger_review`；其余字段不变。
 
-`raw_prompt_input` 遵循
-`stocks/prompts/personal_advice_prompt.txt`，在本地 Agent 上下文中输出真实资产金额、
-逐持仓市值、盈亏、暴露和流动性边界。仓位动作仍用比例、区间或自然语言表达，
-不得保存具体货币金额。HTTP 适配器默认隐藏精确金额是远程接口安全策略，不改变
-本地 `raw_prompt_input` 的真实金额语义。
+`raw_prompt_input` 是兼容数据摘要，在本地上下文中输出真实资产金额、逐持仓市值、
+盈亏、暴露和流动性边界，但不再携带生产报告指令。生产报告只遵循 artifact 内的
+`agent_task v5` 与 `portfolio_decision.user_view`。HTTP 适配器默认隐藏精确金额是
+远程接口安全策略，不改变本地摘要的真实金额语义。
 
 
-## StructuredOutlook v1
+## StructuredOutlook v2
 
 `structured_outlook` 是主窗口的展望部分，给出中立的方向性研判，不含具体交易指令。
 
@@ -490,7 +489,7 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
 - `status`: `"ok"` 或 `"unavailable"`
 - `generated_at`: UTC ISO 时间
 - `summary`: 一句话展望摘要
-- `near_term`: `{horizon, direction, confidence}`，方向词限于 `bullish/bearish/neutral/uncertain`
+- `near_term`: `{horizon, direction, confidence}`，方向词限于 `supportive/adverse/mixed`
 - `medium_term`: 同 `near_term` 结构
 - `asset_views`: 资产类别观点列表，每项 `{asset_class, direction, rationale}`
 - `sector_views`: 行业/风格观点列表，每项 `{sector, direction, rationale}`
@@ -500,6 +499,9 @@ v7 相对 v6 新增 `upcoming_events`、`rotation`、`action_signals` 三个顶�
   只能引用 `outlook_evidence` 中经过验证的来源，不得编造。
 - `confidence`: 置信度 cap，`high`/`medium`/`low`；系统先根据数据质量、覆盖率、
   来源独立性计算好 cap，LLM 输出不得超越。
+- `forecast_candidates`: 可选、最多 5 条的用户确认候选；每项包含
+  `{target, metric, comparator, level, deadline, confidence, source_ref_ids,
+  statement?, requires_confirmation:true}`。只进入 artifact，不自动写入预测台账。
 
 校验失败时，`sanitize_unavailable_outlook()` 产出：
 

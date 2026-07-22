@@ -767,8 +767,8 @@ class TestRawPromptStructure:
         assert "【引擎动作信号】" in prompt
         assert "【新闻事件摘要】" in prompt
         assert "【相关新闻】" in prompt
-        assert "按 personal_advice_prompt 的决策导向契约输出" in prompt
-        assert "带触发条件的调仓清单与下一个机会提名" in prompt
+        assert "raw_prompt_input 仅为兼容数据摘要" in prompt
+        assert "agent_task v5" in prompt
 
     async def test_v12_position_valuation_exposure_liquidity_and_boundaries(
         self,

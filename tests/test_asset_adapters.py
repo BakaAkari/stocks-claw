@@ -810,5 +810,5 @@ def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engin
     assert "risk_tolerance: conservative" in context["raw_prompt_input"]
     assert "保留应急流动性" in context["raw_prompt_input"]
     assert "12,345.00 CNY" in context["raw_prompt_input"]
-    assert "按 personal_advice_prompt 的决策导向契约输出" in context["raw_prompt_input"]
-    assert "带触发条件的调仓清单与下一个机会提名" in context["raw_prompt_input"]
+    assert "raw_prompt_input 仅为兼容数据摘要" in context["raw_prompt_input"]
+    assert "agent_task v5" in context["raw_prompt_input"]
