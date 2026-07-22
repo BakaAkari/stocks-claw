@@ -62,20 +62,21 @@ class TestSignalRules:
         item = _by_symbol(result)["us:AAA"]
         assert item["signal"] == "wait_for_pullback"
 
-    def test_downtrend_is_reduce_risk_or_knife(self):
-        # 持续下跌:价格低于 MA20,MACD 负,20 根累计 < -5%
+    def test_deep_downtrend_with_slowing_decline_is_left_bottom_candidate(self):
+        # 深跌但近5根未继续加速，符合左侧轻仓观察条件。
         prices = [150 - i * 1.2 for i in range(40)]
         result = _run({"us:AAA": prices}, {"us:AAA": _inst("AAA")})
         item = _by_symbol(result)["us:AAA"]
-        assert item["signal"] in ("reduce_risk", "avoid_catching_falling_knife")
+        assert item["signal"] == "left_bottom_candidate"
+        assert any("跌势放缓" in reason for reason in item["reasons"])
 
-    def test_crash_is_falling_knife(self):
-        # 高位横盘后连续急跌
+    def test_crash_that_stops_accelerating_is_left_bottom_candidate(self):
+        # 高位急跌后末段跌速稳定，不再满足“加速下跌”条件，转为左侧候选。
         prices = [150.0] * 30 + [150 - i * 4 for i in range(1, 11)]
         result = _run({"us:AAA": prices}, {"us:AAA": _inst("AAA")})
         item = _by_symbol(result)["us:AAA"]
-        assert item["signal"] == "avoid_catching_falling_knife"
-        assert any("5根K线" in reason or "MA5" in reason for reason in item["reasons"])
+        assert item["signal"] == "left_bottom_candidate"
+        assert any("跌势放缓" in reason for reason in item["reasons"])
 
     def test_flat_is_neutral_hold(self):
         # 单标的宇宙(排名无统计意义)+横盘 → 不得误判为轮动候选

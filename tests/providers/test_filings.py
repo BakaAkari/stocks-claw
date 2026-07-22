@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
 from stocks.domain.models import Instrument, NewsItem
@@ -40,6 +41,17 @@ CNINFO_RESPONSE = {
 }
 
 
+def _fresh_sec_response():
+    today = datetime.now(timezone.utc).date()
+    payload = json.loads(json.dumps(SEC_RESPONSE))
+    payload["filings"]["recent"]["filingDate"] = [
+        (today - timedelta(days=2)).isoformat(),
+        (today - timedelta(days=12)).isoformat(),
+        (today - timedelta(days=2)).isoformat(),
+    ]
+    return payload
+
+
 def _response(payload):
     response = MagicMock()
     response.read.return_value = json.dumps(payload).encode("utf-8")
@@ -57,7 +69,7 @@ async def test_sec_parses_recent_supported_forms_and_builds_archive_url():
         min_request_interval=0.1,
     )
 
-    with patch("urllib.request.urlopen", return_value=_response(SEC_RESPONSE)) as urlopen:
+    with patch("urllib.request.urlopen", return_value=_response(_fresh_sec_response())) as urlopen:
         items = await provider.fetch(max_items=10)
 
     assert [item.raw_metadata["form"] for item in items] == ["8-K", "10-Q"]
@@ -93,7 +105,7 @@ async def test_sec_symbol_failure_does_not_drop_other_symbols():
 
     with patch(
         "urllib.request.urlopen",
-        side_effect=[OSError("temporary failure"), _response(SEC_RESPONSE)],
+        side_effect=[OSError("temporary failure"), _response(_fresh_sec_response())],
     ):
         items = await provider.fetch(max_items=10)
 

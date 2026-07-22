@@ -844,7 +844,9 @@ class TestEquityUnderWeightReduceNoAlternative:
         )
 
         assert decision.status == "review_required"
-        assert len(decision.approved_actions) == 0
+        assert len(decision.approved_actions) == 1
+        assert decision.approved_actions[0].position_id == "cn_588000"
+        assert decision.approved_actions[0].ratio == 0.15
         assert len(decision.unresolved_conflicts) > 0
 
     def test_unresolved_conflict_mentions_equity_bucket(self):

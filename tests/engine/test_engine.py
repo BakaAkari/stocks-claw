@@ -83,6 +83,29 @@ def minimal_engine(tmp_path):
 class TestEngineInit:
     """Engine 初始化测试"""
 
+    def test_sec_user_agent_falls_back_to_secret_file(self, tmp_path, monkeypatch):
+        config = deepcopy(MINIMAL_CONFIG)
+        secret_dir = tmp_path / "secret"
+        secret_dir.mkdir()
+        (secret_dir / "sec-user-agent.md").write_text(
+            "stocks-claw test@example.com", encoding="utf-8"
+        )
+        config["paths"]["local_data_dir"] = str(tmp_path / "local")
+        config["paths"]["secret_dir"] = str(secret_dir)
+        config["filings"] = {"enabled": True, "sec": {"enabled": True}}
+        monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+
+        with patch("stocks.engine.load_engine_config", return_value=config):
+            engine = StocksEngine()
+
+        sec = next(
+            provider
+            for provider in engine.news_aggregator._providers
+            if getattr(provider, "name", "") == "sec_edgar"
+        )
+        assert sec._config_error is None
+        assert sec._headers["User-Agent"] == "stocks-claw test@example.com"
+
     def test_init_loads_minimal_config(self, minimal_engine):
         """最小配置下成功初始化"""
         assert minimal_engine._config is not None

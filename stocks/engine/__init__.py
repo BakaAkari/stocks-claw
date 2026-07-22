@@ -235,12 +235,15 @@ class StocksEngine:
                     SecEdgarFilingsProvider(
                         instruments_getter,
                         filing_symbols.get("sec_cik", {}),
-                        user_agent=os.environ.get(
-                            filing_symbols.get(
-                                "sec_user_agent_env", "SEC_USER_AGENT"
-                            ),
-                            "",
-                        ).strip(),
+                        user_agent=(
+                            os.environ.get(
+                                filing_symbols.get(
+                                    "sec_user_agent_env", "SEC_USER_AGENT"
+                                ),
+                                "",
+                            ).strip()
+                            or self._read_optional_secret("sec-user-agent.md")
+                        ),
                     )
                 )
             if filings_cfg.get("cninfo", {}).get("enabled", True):
@@ -407,6 +410,12 @@ class StocksEngine:
                     url = url_file.read_text(encoding="utf-8").strip()
 
         return (key or None, url or None)
+
+    def _read_optional_secret(self, filename: str) -> str:
+        path = self._secret_dir / filename
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
 
     def _load_json(self, filename: str) -> Optional[dict]:
         """从配置目录加载 JSON 文件。"""
