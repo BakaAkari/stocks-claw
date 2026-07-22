@@ -34,9 +34,14 @@
 
 ### AssetIntakeDraft v1
 
-**状态：已实现 A1-1（2026-07-22），仅解析和 draft，不写入金融记忆。**
+**状态：A1 已完成（2026-07-22）— A1-1 简单解析、A1-2 LLM 增强解析、A1-3 确认与原子写入边界。**
 
-实现：`stocks/domain/advisory_models.py` + `stocks/engine/asset_intake_parser.py`
+实现：
+
+- `stocks/domain/advisory_models.py` — 模型
+- `stocks/engine/asset_intake_parser.py` — 简单/确定性解析
+- `stocks/engine/llm_asset_intake.py` — LLM 增强解析
+- `stocks/engine/asset_intake_writer.py` — 确认 token 与原子写入边界
 
 字段：`draft_id`、`base_memory_hash`、`generated_at`、`accounts_to_add`、`positions_to_add`、`positions_to_update`、`positions_to_remove`、`profile_updates`、`ambiguities`、`source_quotes`、`draft_hash`。Draft 不是金融记忆，只有用户确认且 hash 未失效时才能原子写入。
 
@@ -45,7 +50,14 @@
 - `510300` 识别为 A 股 6 位代码；
 - `一万元` 等中文数量 + `万` 后缀转换为 `amount_cny=10000`；
 - 缺少代码或金额标记为 `ambiguities`；
-- 确认 token = hash(draft_id + current_memory_hash)，防止 stale draft 被写入。
+- LLM 解析可处理更复杂表达（如 “把红利低波减 10%”），但缺少客户端时为整体标记 ambiguity。
+
+确认与写入规则：
+
+- 确认 token = hash(draft_id + current_memory_hash)；
+- 如果当前记忆 hash 与 draft 的 base_memory_hash 不一致，拒绝写入；
+- 如果 draft 仍含 `ambiguities`，拒绝写入；
+- 写入委托给现有金融记忆层（`apply_change`），本模块只做契约校验。
 
 ### AdvisoryShadowRun v1
 
