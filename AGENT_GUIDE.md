@@ -11,7 +11,7 @@ Agent 负责读取产物并生成最终分析。系统不下单、不承诺收�
 - 读取定时产物:`uv run python -m stocks.adapters.cli --scheduled-run-latest cn_pre_close`
 - JSON 中的 `agent_task` 字段是运行时自包含指令——严格按其执行即可，不需要外部 prompt
 - 生成自定义上下文:`uv run python -m stocks.adapters.cli --output json`
-- 生产定时任务使用 worktree `/mnt/user/code-project/stocks-claw-trust-t1`；本地开发以当前 Git 工作树根目录为准
+- 生产定时任务与本地开发统一使用 `/mnt/user/code-project/stocks-claw` 的 `master` 分支；不得引用已退役的 feature worktree
 - 飞书输出仅用 `**加粗**`、`` `行内代码` ``、`- 列表`、`[链接](url)`，禁用 `#` `|` ` ``` ` `>` `---` HTML
 
 ## 1. 必须遵守的边界
