@@ -6,11 +6,24 @@
 
 ### UnifiedAnalysisSnapshot v1
 
-**状态：已实现 A0-1（2026-07-22），缺省会话。**
+**状态：A2 已完成（2026-07-22）— 完整覆盖 AnalysisContext 可导出字段，统一时间戳与来源注册。**
 
 实现：`stocks/domain/advisory_models.py` + `stocks/engine/unified_snapshot.py`
 
 统一 LLM 证据入口，字段：`snapshot_id`、`generated_at`、`trigger`、`session`、`market_scope`、`portfolio`、`profile`、`quotes`、`history_features`、`technical_evidence`、`news_clusters`、`filings`、`macro`、`upcoming_events`、`rotation`、`portfolio_constraints`、`risk_context`、`candidate_signals`、`data_quality`、`source_registry`。
+
+导出策略：
+
+- `portfolio` — 从 `position_valuations` 提取 market_value / pnl / quantity；
+- `quotes` — 从 `AnalysisContext.quotes` 提取 price / pct_change / volume / change；
+- `technical_evidence` — 从 `technical_indicators` 导出；
+- `news_clusters` — 从 `news_digest` + `intelligence_digest` 导出；
+- `macro` — 从 `macro_snapshot` 导出；
+- `upcoming_events` — 从 `upcoming_events` 导出；
+- `rotation` — 从 `rotation` 导出；
+- `candidate_signals` — 从 `action_signals` 导出；
+- `data_quality` — 从 `data_quality` 导出 provider 状态；
+- `source_registry` — 统一记录 quotes / news / history / macro provider 的 as_of、freshness、status。
 
 高风险事实使用 `fact_id`、`metric`、`value`、`unit`、`as_of`、`source_ref`。Snapshot 是证据，不是最终建议，也不得包含 API key 或模型内部推理。
 
