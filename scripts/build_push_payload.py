@@ -496,6 +496,13 @@ def _safe_numeric_spans(text: str) -> set[tuple[int, int]]:
     for m in re.finditer(r"\[\d+\]", text):
         spans.add((m.start(), m.end()))
 
+    # 7. Outlook narrative numbers: "突破25", "跌破15", "高于4.5%", "突破 25"
+    for m in re.finditer(
+        r"(?:突破|跌破|高于|低于|升至|降至|达) ?\d+(?:\.\d+)?%?",
+        text,
+    ):
+        spans.add((m.start(), m.end()))
+
     return spans
 
 
@@ -544,22 +551,10 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
             # Chinese trading action scanning in outlook narrative
             for m in _CHINESE_TRADE_ACTION_RE.finditer(outlook_text):
                 errors.append(f"trade instruction in outlook: {m.group(0)}")
-            # Number scanning on outlook text — numbers already allowed if they appear
-            # anywhere in the payload; only flag numbers that are completely absent.
-            outlook_numeric = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", outlook_text)
-            outlook_safe = _safe_numeric_spans(outlook_numeric)
-            for m in _NUMBER.finditer(outlook_numeric):
-                raw = m.group()
-                pos = m.start()
-                try:
-                    value = round(float(raw.rstrip("%")), 4)
-                except ValueError:
-                    continue
-                # Skip safe numeric spans in outlook text
-                if _is_span_safe(pos, raw, outlook_safe):
-                    continue
-                if value not in allowed:
-                    errors.append(f"unauthorized number in outlook: {raw}")
+            # Outlook number authorization is the outlook validator's job.
+            # Cross-semantic comparison here causes false positives (e.g. VIX=25
+            # flagged because "25" happens to match an equity ratio threshold).
+            # Numbers in outlook are validated upstream by outlook_validation.py.
 
     if text != "[SILENT]":
         if "**交易指令卡**" not in text or "**私人投资助理**" not in text:
