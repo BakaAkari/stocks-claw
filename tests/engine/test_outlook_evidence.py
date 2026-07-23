@@ -498,9 +498,9 @@ def test_outlook_session_constants():
     assert isinstance(PRIMARY_OUTLOOK_SESSIONS, set)
     assert len(PRIMARY_OUTLOOK_SESSIONS) >= 4
     assert "cn_after_close" in PRIMARY_OUTLOOK_SESSIONS
-    assert "cn_pre_open" in PRIMARY_OUTLOOK_SESSIONS
+    assert "cn_post_open" in PRIMARY_OUTLOOK_SESSIONS
     assert "us_after_close" in PRIMARY_OUTLOOK_SESSIONS
-    assert "us_pre_open" in PRIMARY_OUTLOOK_SESSIONS
+    assert "us_post_open" in PRIMARY_OUTLOOK_SESSIONS
 
 
 # ---------------------------------------------------------------------------

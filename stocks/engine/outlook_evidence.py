@@ -15,19 +15,14 @@ from stocks.engine.presentation import display_label
 
 # ── Sessions that produce a full outlook ──────────────────────────────────
 PRIMARY_OUTLOOK_SESSIONS: set[str] = {
-    "cn_pre_open",
+    "cn_post_open",
     "cn_after_close",
-    "us_pre_open",
+    "us_post_open",
     "us_after_close",
 }
 
 # ── Sessions that only produce a delta ────────────────────────────────────
-OBSERVATION_OUTLOOK_SESSIONS: set[str] = {
-    "cn_open_watch",
-    "cn_pre_close",
-    "us_open_watch",
-    "us_pre_close",
-}
+OBSERVATION_OUTLOOK_SESSIONS: set[str] = set()
 
 # ── Asset-class aggregation map ───────────────────────────────────────────
 _ASSET_CLASS_ORDER = ("equity", "commodity", "fixed_income", "cash")

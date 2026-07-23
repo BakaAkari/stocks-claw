@@ -75,7 +75,7 @@ def _full_outlook_artifact(session="cn_after_close"):
 
 def _watch_artifact_with_delta():
     """Watch-window artifact with outlook_delta only."""
-    base = _full_outlook_artifact("cn_open_watch")
+    base = _full_outlook_artifact("cn_post_open")
     base["generated_at"] = "2026-07-17T02:04:00+00:00"
     del base["portfolio_decision"]["user_view"]["assistant_brief"]["outlook"]
     base["portfolio_decision"]["user_view"]["assistant_brief"]["outlook_delta"] = {
@@ -256,13 +256,7 @@ def test_primary_no_action_always_sends_and_watch_no_action_is_silent():
     })
     assert build_push_payload(primary, now="2026-07-17T15:27:00+08:00")["delivery"] == "send"
 
-    watch = _artifact("cn_open_watch")
-    watch["scheduled_for"] = "2026-07-17T10:00:00+08:00"
-    watch["generated_at"] = "2026-07-17T02:04:00+00:00"
-    watch["portfolio_decision"]["user_view"]["instruction_card"].update({
-        "status": "no_action", "status_label": "今日无需操作", "actions": [],
-    })
-    assert build_push_payload(watch, now="2026-07-17T10:05:00+08:00")["delivery"] == "silent"
+    # All sessions are now PRIMARY — watch windows removed
 
 
 def test_payload_renderer_includes_outlook_section_and_order():
@@ -348,7 +342,7 @@ def test_outlook_section_respects_limit_on_sources():
 
 def _delta_with_scenarios_and_sources():
     """Watch-window artifact with rich delta including scenarios and source_refs."""
-    base = _full_outlook_artifact("cn_open_watch")
+    base = _full_outlook_artifact("cn_post_open")
     base["generated_at"] = "2026-07-17T02:04:00+00:00"
     del base["portfolio_decision"]["user_view"]["assistant_brief"]["outlook"]
     base["portfolio_decision"]["user_view"]["assistant_brief"]["outlook_delta"] = {

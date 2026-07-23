@@ -14,20 +14,14 @@ from pathlib import Path
 from typing import Any
 
 _SESSION_LABELS = {
-    "cn_pre_open": "A股盘前",
-    "cn_open_watch": "A股开盘观察",
-    "cn_morning_close": "A股午间检查",
-    "cn_afternoon_open": "A股午后检查",
-    "cn_pre_close": "A股收盘前",
+    "cn_post_open": "A股开盘后",
     "cn_after_close": "A股盘后复盘",
-    "us_pre_open": "美股盘前",
-    "us_open_watch": "美股开盘观察",
-    "us_mid_session": "美股盘中检查",
-    "us_pre_close": "美股收盘前",
+    "us_post_open": "美股开盘后",
     "us_after_close": "美股盘后复盘",
+    "global_intelligence_watch": "每日全球情报",
 }
-_PRIMARY = frozenset({"cn_pre_open", "cn_after_close", "us_pre_open", "us_after_close"})
-_WATCH = frozenset({"cn_open_watch", "cn_pre_close", "us_open_watch", "us_pre_close"})
+_PRIMARY = frozenset({"cn_post_open", "cn_after_close", "us_post_open", "us_after_close", "global_intelligence_watch"})
+_WATCH = frozenset()
 _FORBIDDEN = re.compile(
     r"\b(?:manual_review|approved_actions|suppressed_actions|unresolved_conflicts|position_id|decision_id|research_only|review_required)\b|(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
 )

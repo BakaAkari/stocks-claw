@@ -17,45 +17,15 @@
       "holidays": [],
       "sessions": [
         {
-          "id": "cn_pre_open",
-          "time": "08:50",
-          "intent": "pre_open_plan",
-          "push": "normal",
+          "id": "cn_post_open",
+          "time": "09:55",
+          "intent": "post_open_decision",
+          "push": "digest",
           "primary_market": "cn"
-        },
-        {
-          "id": "cn_open_watch",
-          "time": "10:00",
-          "intent": "open_watch",
-          "push": "normal",
-          "primary_market": "cn",
-          "delta_silent_when_unchanged": true
-        },
-        {
-          "id": "cn_morning_close",
-          "time": "11:00",
-          "intent": "morning_close_check",
-          "push": "normal",
-          "primary_market": "cn"
-        },
-        {
-          "id": "cn_afternoon_open",
-          "time": "13:05",
-          "intent": "afternoon_open_check",
-          "push": "normal",
-          "primary_market": "cn"
-        },
-        {
-          "id": "cn_pre_close",
-          "time": "14:35",
-          "intent": "pre_close_decision",
-          "push": "normal",
-          "primary_market": "cn",
-          "delta_silent_when_unchanged": true
         },
         {
           "id": "cn_after_close",
-          "time": "15:20",
+          "time": "15:00",
           "intent": "after_close_review",
           "push": "digest",
           "primary_market": "cn"
@@ -68,39 +38,15 @@
       "holidays": [],
       "sessions": [
         {
-          "id": "us_pre_open",
-          "time": "09:00",
-          "intent": "pre_open_plan",
-          "push": "normal",
+          "id": "us_post_open",
+          "time": "09:55",
+          "intent": "post_open_decision",
+          "push": "digest",
           "primary_market": "us"
         },
         {
-          "id": "us_open_watch",
-          "time": "10:00",
-          "intent": "open_watch",
-          "push": "normal",
-          "primary_market": "us",
-          "delta_silent_when_unchanged": true
-        },
-        {
-          "id": "us_mid_session",
-          "time": "12:30",
-          "intent": "mid_session_check",
-          "push": "digest",
-          "primary_market": "us",
-          "enabled": true
-        },
-        {
-          "id": "us_pre_close",
-          "time": "15:30",
-          "intent": "pre_close_decision",
-          "push": "digest",
-          "primary_market": "us",
-          "delta_silent_when_unchanged": true
-        },
-        {
           "id": "us_after_close",
-          "time": "16:20",
+          "time": "16:00",
           "intent": "after_close_review",
           "push": "digest",
           "primary_market": "us"
@@ -114,7 +60,7 @@
       "sessions": [
         {
           "id": "global_intelligence_watch",
-          "time": "07:00",
+          "time": "07:55",
           "intent": "intelligence_patrol",
           "push": "normal",
           "primary_market": "global",

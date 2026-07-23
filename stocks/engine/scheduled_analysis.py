@@ -1993,12 +1993,9 @@ def format_run_markdown(run: dict) -> str:
     card = view.get("instruction_card") or {}
     assistant = view.get("assistant_brief") or {}
     session_labels = {
-        "cn_pre_open": "A股盘前", "cn_open_watch": "A股开盘观察",
-        "cn_morning_close": "A股午间检查", "cn_afternoon_open": "A股午后检查",
-        "cn_pre_close": "A股收盘前", "cn_after_close": "A股盘后复盘",
-        "us_pre_open": "美股盘前", "us_open_watch": "美股开盘观察",
-        "us_mid_session": "美股盘中检查", "us_pre_close": "美股收盘前",
-        "us_after_close": "美股盘后复盘",
+        "cn_post_open": "A股开盘后", "cn_after_close": "A股盘后复盘",
+        "us_post_open": "美股开盘后", "us_after_close": "美股盘后复盘",
+        "global_intelligence_watch": "每日全球情报",
     }
     session_label = session_labels.get(str(run.get("session") or ""), "交易窗口")
     lines = [
