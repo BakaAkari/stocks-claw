@@ -1049,7 +1049,7 @@ class TestArtifactStoreHardening:
             "market": "cn",
             "market_date": "2026-07-17",
             "generated_at": "2026-07-17T02:00:00+00:00",
-            "agent_task": {"task_version": 4},
+            "agent_task": {"task_version": 5},
         }
         with pytest.raises(ValueError, match="trusted v5 contract"):
             store.save(legacy)

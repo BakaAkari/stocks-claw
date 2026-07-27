@@ -278,7 +278,7 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
   分组的 from/to)。
 - `mandatory_blocks`：兼容字段，供历史 Markdown/内部审计使用；交易窗口 v5 Agent 不得读取。
 - `context_digest`：情报 session 和内部审计上下文；交易窗口 v5 Agent 不得读取。
-- 交易窗口已不再支持 `agent_task.task_version == 4`；存储层和推送守门均拒绝 v4。
+- 所有会话（含情报和交易窗口）均要求 `agent_task.task_version == 5`；存储层和推送守门均拒绝 v4。
 - `write_policy`：固定声明后台运行不得写长期金融记忆，写入必须用户确认
 - `notification`：推荐推送策略，通知层只发消息不写金融记忆
 

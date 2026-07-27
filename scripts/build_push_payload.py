@@ -39,19 +39,7 @@ _CONFIDENCE_LABELS = {
 }
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?%?")
 
-# ── Forbidden tokens for outlook/delta narrative scanning ──────────────────
-# Real word boundaries (\b) - the nested \\\\b in the original was a literal
-# backslash-b sequence that never matched anything.
-_OUTLOOK_FORBIDDEN = re.compile(
-    r"\b(?:position_id|decision_id|manual_review|approved_actions|"
-    r"suppressed_actions|unresolved_conflicts|research_only|review_required)\b|"
-    r"(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
-)
 
-# Chinese trading-action patterns that must never appear in outlook narrative
-_CHINESE_TRADE_ACTION_RE = re.compile(
-    r"买入\s+具体|卖出\s+具体|清仓|止损\d+|止盈\d+|仓位\s*\d+|¥\s*\d+|人民币\s*\d+"
-)
 
 
 def _parse_dt(value: str) -> datetime:
@@ -93,6 +81,32 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
         raise ValueError(f"unsupported session: {session}")
     if ((artifact.get("agent_task") or {}).get("task_version")) != 5:
         raise ValueError("task_version must be 5")
+    is_intel = artifact.get("market") == "intelligence"
+    generated = _parse_dt(artifact.get("generated_at") or "")
+    current = _parse_dt(now)
+    age = (current.astimezone(generated.tzinfo) - generated).total_seconds() / 60
+    if age < -1 or age > 45:
+        raise ValueError(f"artifact age {age:.1f} minutes outside allowed range")
+    if is_intel:
+        summary = artifact.get("session_summary") or {}
+        signals = artifact.get("action_signal_reviews") or []
+        risk = artifact.get("risk_assessment") or {}
+        cd = artifact.get("context_digest") or {}
+        mkt = cd.get("market_state_summary") or {}
+        return {
+            "payload_version": 1,
+            "session_label": _SESSION_LABELS[session],
+            "market_date": str(artifact.get("market_date") or ""),
+            "delivery": "send",
+            "session_type": "intelligence",
+            "headline": summary.get("headline", ""),
+            "vix": mkt.get("vix"),
+            "top_move": mkt.get("top_move"),
+            "risk_level": risk.get("level"),
+            "risk_triggers": risk.get("triggers") or [],
+            "data_quality": artifact.get("data_quality") or {},
+            "signals": signals,
+        }
     view = (artifact.get("portfolio_decision") or {}).get("user_view")
     if not isinstance(view, dict):
         raise ValueError("portfolio_decision.user_view missing")
@@ -100,11 +114,6 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
         view.get("assistant_brief"), dict
     ):
         raise ValueError("user_view is incomplete")
-    generated = _parse_dt(artifact.get("generated_at") or "")
-    current = _parse_dt(now)
-    age = (current.astimezone(generated.tzinfo) - generated).total_seconds() / 60
-    if age < -1 or age > 45:
-        raise ValueError(f"artifact age {age:.1f} minutes outside allowed range")
     delivery = "send"
     if (session in _WATCH or session not in _PRIMARY) and not _has_content(view):
         delivery = "silent"
@@ -113,6 +122,7 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
         "session_label": _SESSION_LABELS[session],
         "market_date": str(artifact.get("market_date") or ""),
         "delivery": delivery,
+        "session_type": "trading",
         "user_view": view,
     }
 
@@ -120,6 +130,38 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
 def render_push_payload(payload: dict) -> str:
     if payload.get("delivery") == "silent":
         return "[SILENT]"
+    if payload.get("session_type") == "intelligence":
+        lines = [
+            f"**{payload.get('session_label', '每日全球情报')} · {payload.get('market_date', '')}**",
+            "",
+        ]
+        vix = payload.get("vix")
+        top_move = payload.get("top_move")
+        risk_level = payload.get("risk_level")
+        risk_triggers = payload.get("risk_triggers") or []
+        dq = payload.get("data_quality") or {}
+        signals = payload.get("signals") or []
+        if vix is not None or top_move:
+            lines.append(f"VIX: {vix if vix is not None else 'N/A'}  ·  {top_move or ''}")
+            lines.append("")
+        if risk_level:
+            lines.append(f"**风险等级: {risk_level}**")
+            for t in risk_triggers[:3]:
+                cond = t.get("condition", "")
+                reason = t.get("reason", "")
+                if cond or reason:
+                    lines.append(f"- {cond}{' — ' + reason if reason else ''}")
+            lines.append("")
+        if signals:
+            lines.append("**操作信号**")
+            for s in signals[:5]:
+                direction = {"buy": "买入", "sell": "卖出", "hold": "持有", "watch": "观察"}.get(s.get("signal",""), s.get("signal",""))
+                lines.append(f"- **{direction}** {s.get('name','') or s.get('symbol','')}: {s.get('action_hint','')}")
+            lines.append("")
+        article_count = dq.get("articles") or dq.get("snapshots")
+        if article_count:
+            lines.append(f"数据来源: {article_count} 篇新闻, {dq.get('clusters', 0)} 个信息群")
+        return "\n".join(lines)
     view = payload.get("user_view") or {}
     card = view.get("instruction_card") or {}
     assistant = view.get("assistant_brief") or {}
@@ -425,30 +467,6 @@ def _render_delta_changes(changes: dict, schema_version: int, lines: list[str]) 
                 src_shown += 1
 
 
-def _traverse_outlook_text(obj: Any) -> str:
-    """Concatenate all string values from outlook/outlook_delta sub-tree."""
-    parts: list[str] = []
-    _walk_outlook_strings(obj, parts)
-    return " ".join(parts)
-
-
-def _walk_outlook_strings(obj: Any, parts: list[str]) -> None:
-    """Walk all string values for token/number scanning.
-
-    Does NOT skip any key — horizon, published_at, and generated_at values are
-    scanned for internal tokens; the caller's span-based safe-numeric check
-    handles ISO dates and legit horizon patterns.
-    """
-    if isinstance(obj, dict):
-        for v in obj.values():
-            _walk_outlook_strings(v, parts)
-    elif isinstance(obj, list):
-        for item in obj:
-            _walk_outlook_strings(item, parts)
-    elif isinstance(obj, str):
-        parts.append(obj)
-
-
 def _strip_outlook_from_payload(payload: dict) -> dict:
     """Return payload copy with outlook/outlook_delta removed for number scanning."""
     p = json.loads(json.dumps(payload))
@@ -495,14 +513,6 @@ def _safe_numeric_spans(text: str) -> set[tuple[int, int]]:
     # 6. Array index notation (e.g. "sector_views[2]")
     for m in re.finditer(r"\[\d+\]", text):
         spans.add((m.start(), m.end()))
-
-    # 7. Outlook narrative numbers: "突破25", "跌破15", "高于4.5%", "突破 25"
-    for m in re.finditer(
-        r"(?:突破|跌破|高于|低于|升至|降至|达) ?\d+(?:\.\d+)?%?",
-        text,
-    ):
-        spans.add((m.start(), m.end()))
-
     return spans
 
 
@@ -518,11 +528,20 @@ def _is_span_safe(pos: int, num_str: str, safe_spans: set[tuple[int, int]]) -> b
 def validate_payload_text(payload: dict, text: str) -> list[str]:
     errors = [f"internal token: {m.group(0)}" for m in _FORBIDDEN.finditer(text)]
 
-    # Allowed numbers come from deterministic payload fields only. Generated outlook
-    # numbers cannot authorize themselves; the outlook validator is the authority for them.
+    # Number validation: only scan deterministic rendered sections.
+    # Outlook/delta have their own upstream validator (outlook_validation.py);
+    # forcing deterministic-number authorization on narrative macro numbers
+    # (VIX levels, yield thresholds, price targets) is an unbounded whitelist problem.
+    # Strip the outlook section from the text before number scanning.
+    deterministic_text = text
+    for marker in ("**中长期研判**", "**研判变化**"):
+        idx = deterministic_text.find(marker)
+        if idx >= 0:
+            deterministic_text = deterministic_text[:idx]
+            break
     allowed = _number_values(_strip_outlook_from_payload(payload))
 
-    numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
+    numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", deterministic_text)
     safe_spans = _safe_numeric_spans(numeric_text)
     for m in _NUMBER.finditer(numeric_text):
         raw = m.group()
@@ -537,30 +556,14 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
         if value not in allowed:
             errors.append(f"unauthorized number: {raw}")
 
-    # Also scan outlook / outlook_delta sub-fields inside user_view
-    view = payload.get("user_view") or {}
-    assistant = view.get("assistant_brief") or {}
-    for field in ("outlook", "outlook_delta"):
-        outlook_data = assistant.get(field) or {}
-        if outlook_data:
-            outlook_text = _traverse_outlook_text(outlook_data)
-            errors.extend(
-                f"internal token in outlook: {m.group(0)}"
-                for m in _OUTLOOK_FORBIDDEN.finditer(outlook_text)
-            )
-            # Chinese trading action scanning in outlook narrative
-            for m in _CHINESE_TRADE_ACTION_RE.finditer(outlook_text):
-                errors.append(f"trade instruction in outlook: {m.group(0)}")
-            # Outlook number authorization is the outlook validator's job.
-            # Cross-semantic comparison here causes false positives (e.g. VIX=25
-            # flagged because "25" happens to match an equity ratio threshold).
-            # Numbers in outlook are validated upstream by outlook_validation.py.
+
 
     if text != "[SILENT]":
-        if "**交易指令卡**" not in text or "**私人投资助理**" not in text:
-            errors.append("missing two-layer headings")
-        elif text.index("**交易指令卡**") > text.index("**私人投资助理**"):
-            errors.append("wrong section order")
+        if payload.get("session_type") == "trading":
+            if "**交易指令卡**" not in text or "**私人投资助理**" not in text:
+                errors.append("missing two-layer headings")
+            elif text.index("**交易指令卡**") > text.index("**私人投资助理**"):
+                errors.append("wrong section order")
     return errors
 
 

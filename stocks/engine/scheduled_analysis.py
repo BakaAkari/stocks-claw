@@ -1657,7 +1657,7 @@ def build_intelligence_run(
 def build_intelligence_agent_task(session: ScheduledSession) -> dict:
     """构建自包含的情报巡逻 Agent 任务说明书。"""
     return {
-        "task_version": 4,
+        "task_version": 5,
         "language": "zh-CN",
         "audience": "single_user",
         "session_intent": session.intent,

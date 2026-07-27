@@ -167,6 +167,7 @@ def test_payload_contains_only_delivery_metadata_and_user_view():
         "market_date",
         "delivery",
         "user_view",
+        "session_type",
     }
     text = json.dumps(payload, ensure_ascii=False)
     for forbidden in (
