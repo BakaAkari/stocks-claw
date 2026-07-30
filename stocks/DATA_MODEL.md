@@ -280,7 +280,7 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `portfolio_decision.cash_schedule` 区分 `immediate_cash_cny`、`settling_cash_cny`、`strategic_exit_value_cny`、`locked_value_cny`，不得把持仓总值直接称为"今天可动用"。同一结构额外输出五个规范字段 `available_now`、`confirmed_settling`、`planned_release`、`strategic_exit`、`locked`（`locked` = `locked_value_cny - planned_release_cny`，即计划内到期释放已从锁定值中剔除，不重复计入）与 `unresolved_settlement`（未确认结算方式的卖出资金，绝不计入 `available_now` 或 `confirmed_settling`）；`user_view.assistant_brief.cash` 逐字投影这五个规范字段，`unresolved_settlement` 只作为 `data_notes` 提示出现，不构成第六个资金分类。
 - category fallback `hold` 可提高 intelligence driver 字段覆盖率,但不等于独立方向情报。
 - `confidence` 表示当前证据与新鲜度,不表示历史胜率或未来收益概率。
-- 2026-07-15 历史交易质量审查见 `../docs/archive/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`；现行边界以 `VISION.md`、`../PLAN.md` 和 `../EXECUTION_PLAN.md` 为准。
+- 2026-07-15 历史交易质量审查见 `../docs/archive/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`；现行边界以 `VISION.md`、`../PLAN.md` 和 `../ROADMAP.md` 为准。
 
 ## AdviceRecord
 

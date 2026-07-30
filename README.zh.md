@@ -18,8 +18,7 @@
 - `stocks/DATA_MODEL.md`：schema 字段参考；
 - `AGENT_GUIDE.md`：操作与金融数据安全规则；
 - `PLAN.md`：决策历史，非当前状态；
-- `docs/archive/`：历史证据，无现行效力；
-- `EXECUTION_PLAN.md`：已废弃，仅为避免旧链接 404 而保留，见 `docs/tasks/`。
+- `docs/archive/`：历史证据，无现行效力。
 
 ## 当前能力
 

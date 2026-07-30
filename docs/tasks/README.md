@@ -1,8 +1,8 @@
 # docs/tasks/
 
-One bounded coding task per file: `TASK-NNN-short-slug.md`. This is where a
-coding agent finds *exactly one thing to do* — no re-deriving scope from
-`ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
+One bounded coding task per file: `TASK-<milestone>-short-slug.md`. This is
+where a coding agent finds *exactly one thing to do* — no re-deriving scope
+from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Rules
 
@@ -11,9 +11,8 @@ coding agent finds *exactly one thing to do* — no re-deriving scope from
   stop criteria. An agent should not need to open `ROADMAP.md` to know what
   to build — only to understand *why*, if curious.
 - A task file must not describe work belonging to a later task. If you find
-  yourself writing "and then also...", that's a new `TASK-NNN` file, not a
-  section.
-- Numbering is sequential (`TASK-001`, `TASK-002`, ...) and never reused.
+  yourself writing "and then also...", that's a new task file.
+- Milestone slugs (`M1`, `M2`, `M3`) prefix current tasks and never overlap.
 - When a task is complete, its outcome is recorded in `STATUS.md`, not by
   editing the task file's objective. You may append a short "Outcome" note
   at the bottom of the task file itself, but the task file's plan sections
@@ -22,13 +21,28 @@ coding agent finds *exactly one thing to do* — no re-deriving scope from
 
 ## Current task
 
-No active `TASK-001` sub-task remains. `TASK-001E1` and `TASK-001E2` are done
-and committed (tag `v2.8-e1e2-complete`). See `STATUS.md` § "Remaining work
-(after TASK-001E1/E2)" for the next concrete units of work.
+`TASK-M1-report-structure-upgrade.md` — the report structure upgrade
+covering VISION §2.3 questions 1, 2, 3, 5, 6, 7 (question 4 waits for M2).
 
-## Backlog
+## Backlog (do not start before the current task closes)
 
-- TASK-002 — user-confirmed advice records (A6 execution feedback entry).
-- TASK-003 — execution adapter skeleton and mock execution sink.
-- TASK-004 — end-to-end smoke from payload to advice record to mock receipt.
-- TASK-005 — A2/A5 production migration feasibility audit.
+- **M1** — Report structure upgrade *(current)*.
+- **M2** — Outlook mainline: `advisory_synthesizer` into production push,
+  short-term (3-7d) + medium-term (1-3m) judgment with source_refs and
+  freshness gate.
+- **M3** — Feedback loop: user marks each recommendation accepted / partial
+  / rejected / deferred, feedback flows into next Outlook run as evidence.
+
+## Retired
+
+The following were on the previous backlog and are retired as of
+2026-07-31 direction reset (`docs/analysis/direction-2026-07-31.md`):
+
+- TASK-002 (AdviceRecord draft writer) — folded into M3 with a redefined
+  role as feedback ledger.
+- TASK-003 (execution adapter + mock sink) — user places orders manually;
+  no execution surface required.
+- TASK-004 (E2E smoke payload→receipt) — downstream of retired TASK-003.
+- TASK-005 (A2/A5 migration audit) — migration is M2 itself.
+
+Completed TASK-001 sub-tasks are in `docs/archive/tasks-completed-2026-07/`.

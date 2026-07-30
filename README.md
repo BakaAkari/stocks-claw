@@ -34,8 +34,6 @@ this README makes.
 - `AGENT_GUIDE.md`: operational and financial-data safety rules.
 - `PLAN.md`: decision history, not current status.
 - `docs/archive/`: historical record only, no active authority.
-- `EXECUTION_PLAN.md`: superseded, kept only so old links don't 404 — see
-  `docs/tasks/` instead.
 
 ## Current capabilities
 
