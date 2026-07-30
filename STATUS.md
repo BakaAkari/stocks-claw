@@ -8,15 +8,64 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-07-30 for E1/E2 commit + tag.
+> Last updated: 2026-07-30 for the audit-baseline repair (fixture
+> reconstruction + STATUS correction + report-quality re-audit).
 
-## Baseline (as of 2026-07-30)
+## Baseline (as of 2026-07-30, corrected this session)
 
-- HEAD: `96ed43d` — "feat: complete TASK-001E1 truth gate and TASK-001E2
-  concise report renderer"
-- Tag: `v2.8-e1e2-complete`
-- Branch: `master`, 2 commits ahead of `origin/master` (not pushed).
-- Working tree: **clean**.
+- HEAD: `ae8abc6` — "feat: complete TASK-001E1 truth gate and TASK-001E2
+  concise report renderer". (The hash previously recorded here, `96ed43d`,
+  never existed in this repository — the E1/E2 history was rewritten after
+  the previous STATUS update; this entry is the correction.)
+- Tag: `v2.8-e1e2-complete` → `cc1eaa0`, which is **not** the current HEAD
+  (the tag predates the history rewrite; left untouched — re-tagging is a
+  git-history decision for the user, not for an agent session).
+- Branch: `master` == `origin/master` at `ae8abc6` (the rewritten history
+  was force-pushed; the earlier "2 commits ahead, not pushed" note was
+  equally stale).
+- Working tree: **dirty** with this session's audit-baseline repair
+  (modified `tests/engine/test_data_quality_gate.py`; new
+  `tests/fixtures/a512480_split_jump_fixture.json`; new
+  `docs/analysis/system-consistency-review-2026-07-30.md`) — **not yet
+  committed**; commit only on explicit user authorization.
+
+## Audit-baseline repair (2026-07-30)
+
+Triggered by the adversarial consistency review saved at
+`docs/analysis/system-consistency-review-2026-07-30.md` (new in the dirty
+tree above). That review's §0 found the self-audit baseline itself was
+broken; this section records what was repaired and what remains open.
+
+- **Test suite was not reproducible from a clean checkout — fixed.** Six
+  tests in `tests/engine/test_data_quality_gate.py` loaded
+  `.superpowers/sdd/task-2-a512480-fixture.json`, a file never committed to
+  git and absent from `.gitignore`; any clean clone failed those 6 tests
+  (6 failed / 1247 passed) despite the "1253 passed, 0 failed" figures
+  quoted elsewhere in this file. The fixture (semiconductor ETF a_512480,
+  15 bars 2026-06-25→2026-07-15 with the 2.70→1.33 split jump, deliberately
+  not settling at the new level so the anomaly stays critical/high) was
+  reconstructed as the git-tracked
+  `tests/fixtures/a512480_split_jump_fixture.json`, and the test now
+  references it. Verified this session: full suite **1253 passed, 7
+  skipped, 0 failed** — same counts as previously claimed, now actually
+  reproducible.
+- **117 P0 / 17 P1 report-truth baseline: re-audit attempted, NOT
+  conclusively re-measurable.** Ran
+  `scripts/audit_report_quality.py --start 2026-07-01 --end 2026-07-30`:
+  result **0 P0 / 1 P1** — but only two dated artifacts survive under
+  `.local/scheduled_runs/` (2026-07-06 `cn_pre_close` and
+  `us_after_close`), and the artifact population the original 117/17
+  baseline was measured on no longer exists locally. This re-run proves the
+  two surviving artifacts are clean (the single P1 is
+  `advisory_receipt_coverage`: no shadow trial for us_after_close on
+  2026-07-06, expected — the shadow pipeline is not scheduled), it does
+  **not** prove the 117/17 baseline shrank. That baseline stays open until
+  a comparable artifact population is audited (e.g. on the deployment host
+  the original run targeted) or enough new production history accumulates.
+- Verified in this session (2026-07-30): full repo suite
+  `.venv/bin/python -m pytest -q -o 'addopts='` → **1253 passed, 7 skipped,
+  0 failed**; `ruff check .` — clean; the audit command above — read-only,
+  exit 0.
 
 ## Report mode
 

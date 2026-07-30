@@ -16,7 +16,10 @@ from typing import Any
 from stocks.engine.data_quality_gate import DEFAULT_THRESHOLDS, detect_price_anomalies
 
 # ── Fixture 路径 ──
-FIXTURE_PATH = Path(__file__).parents[2] / ".superpowers/sdd/task-2-a512480-fixture.json"
+# git 跟踪的最小真实形态 fixture（15 根 bar，含 2.70→1.33 拆细跳变）。
+# 历史说明：该 fixture 原位于未入库的 .superpowers/sdd/ 路径，导致干净
+# checkout 上 6 个测试失败；2026-07-30 重建并移入 tests/fixtures/。
+FIXTURE_PATH = Path(__file__).parents[1] / "fixtures/a512480_split_jump_fixture.json"
 
 
 # ============================================================
