@@ -105,18 +105,27 @@ def _platform_display(institution_type: str, account_id: str) -> str:
 
 
 def _settlement_timing_for_institution(institution_type: str, routing: str) -> str:
-    """Return settlement timing for a given institution type and routing."""
+    """Card-level settlement fallback aligned with engine.yaml execution_rules.
+
+    Adversarial review P1-5: this function used to be a second, contradictory
+    settlement authority (fund_platform -> "T+1" while the config resolves
+    T+2; unknown institutions defaulted to a dangerous "T+1"). It now emits
+    only the canonical token vocabulary used by execution_rules and fails
+    closed to "" for anything it cannot map. Approved actions always get
+    their settlement from resolve_execution(); this fallback is card
+    metadata only.
+    """
     if routing in ("info_only", "skip"):
-        return "不可交易"
+        return ""
     if institution_type == "brokerage":
         return "T+1"
     if institution_type == "fund_platform":
-        return "T+1"
+        return "T+2"
     if institution_type == "bank":
-        return "按产品开放期"
+        return "periodic_open"
     if institution_type == "insurance":
-        return "锁定"
-    return "T+1"
+        return "locked"
+    return ""
 
 
 def _operation_channel(institution_type: str, account_id: str, routing: str) -> str:
@@ -2105,7 +2114,7 @@ def format_run_markdown(run: dict) -> str:
 
     lines.extend(["", "**资金状态**"])
     cash = assistant.get("cash") or {}
-    for key in ("available_now", "confirmed_settling", "planned_release", "strategic_exit", "locked"):
+    for key in ("available_now", "confirmed_settling", "planned_release", "strategic_exit", "locked", "safety_buffer"):
         item = cash.get(key) or {}
         lines.append(f"- {item.get('label', '资金待确认')}: ¥{float(item.get('amount_cny') or 0.0):,.0f}")
 

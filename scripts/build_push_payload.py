@@ -245,9 +245,13 @@ def _render_intelligence_payload(payload: dict) -> str:
                 lines.append(f"- {cond}{' — ' + reason if reason else ''}")
         lines.append("")
     if signals:
-        lines.append("**操作信号**")
+        # Adversarial review P1-6: the intelligence channel bypasses the
+        # trading truth gate by design, so it must not speak in trade-
+        # instruction vocabulary. These are watch-tlist attention hints from
+        # the news analyzer, not approved actions.
+        lines.append("**情报关注信号**")
         for s in signals[:5]:
-            direction = {"buy": "买入", "sell": "卖出", "hold": "持有", "watch": "观察"}.get(s.get("signal",""), s.get("signal",""))
+            direction = {"buy": "偏多关注", "sell": "偏空回避", "hold": "中性", "watch": "观察"}.get(s.get("signal",""), s.get("signal",""))
             lines.append(f"- **{direction}** {s.get('name','') or s.get('symbol','')}: {s.get('action_hint','')}")
         lines.append("")
     article_count = dq.get("articles") or dq.get("snapshots")
@@ -485,6 +489,9 @@ def _section_executable_actions(card: dict) -> list[str]:
         cancel = action.get("cancel_condition") or "触发条件不再成立时取消"
         lines.append(f"- **{signal}｜{label}**：{pct_text}{qty_text}{amount_text}")
         lines.append(f"  通道: {platform_line}；取消条件: {cancel}")
+    overflow = card.get("actions_overflow")
+    if isinstance(overflow, int) and not isinstance(overflow, bool) and overflow > 0:
+        lines.append(f"- 另有 {overflow} 个获批动作超出展示上限，详见当日审计产物")
     return lines
 
 
@@ -582,6 +589,11 @@ def _section_portfolio_impact(assistant: dict) -> list[str]:
     strategic_amount = float(strategic.get("amount_cny") or 0)
     if strategic_amount > 0:
         cash_parts.append(f"卖出后可释放 ¥{strategic_amount:,.0f}")
+
+    safety = cash.get("safety_buffer") or {}
+    safety_amount = float(safety.get("amount_cny") or 0)
+    if safety_amount > 0:
+        cash_parts.append(f"安全垫 ¥{safety_amount:,.0f}（不计入可用）")
 
     if cash_parts:
         lines.append(f"- 资金: {'；'.join(cash_parts)}")
@@ -790,6 +802,37 @@ def _is_span_safe(pos: int, num_str: str, safe_spans: set[tuple[int, int]]) -> b
 _E2_REQUIRED_HEADINGS = ("本窗口变化", "可执行动作", "禁止与延后", "组合影响", "下一检查点")
 
 
+def _remove_outlook_sections(text: str) -> str:
+    """Remove only the outlook-bearing section(s) from the rendered text.
+
+    The number-authorization scan must cover every deterministic section
+    (可执行动作 / 禁止与延后 / 组合影响 / 下一检查点) — amounts, quantities
+    and percentages there must trace back to the payload. The E2 layout puts
+    the outlook narrative inside 本窗口变化, so only that one section is
+    removed (outlook numbers have their own upstream validator,
+    outlook_validation.py). The pre-E2 implementation truncated the text at
+    the first section heading, which silently disabled the scan for every
+    section in the E2 layout (adversarial review P0-2).
+    """
+    start = text.find("**本窗口变化**")
+    if start < 0:
+        stripped = text
+    else:
+        end = len(text)
+        for marker in ("**可执行动作**", "**禁止与延后**", "**组合影响**", "**下一检查点**"):
+            idx = text.find(marker, start)
+            if idx >= 0:
+                end = min(end, idx)
+        stripped = text[:start] + text[end:]
+    # Legacy layouts appended outlook sections at the end; keep cutting there.
+    for marker in ("**中长期研判**", "**研判变化**"):
+        idx = stripped.find(marker)
+        if idx >= 0:
+            stripped = stripped[:idx]
+            break
+    return stripped
+
+
 def validate_payload_text(payload: dict, text: str) -> list[str]:
     errors = [f"internal token: {m.group(0)}" for m in _FORBIDDEN.finditer(text)]
 
@@ -797,14 +840,15 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
     # Outlook/delta have their own upstream validator (outlook_validation.py);
     # forcing deterministic-number authorization on narrative macro numbers
     # (VIX levels, yield thresholds, price targets) is an unbounded whitelist problem.
-    # Strip the outlook section from the text before number scanning.
-    deterministic_text = text
-    for marker in ("**本窗口变化**", "**中长期研判**", "**研判变化**"):
-        idx = deterministic_text.find(marker)
-        if idx >= 0:
-            deterministic_text = deterministic_text[:idx]
-            break
+    # Remove only the outlook-bearing section(s) before number scanning.
+    deterministic_text = _remove_outlook_sections(text)
     allowed = _number_values(_strip_outlook_from_payload(payload))
+    # Render-time computed counts that are deterministic given the payload but
+    # not stored as values inside it (trading payloads only — the research
+    # list lives under user_view).
+    if payload.get("session_type") == "trading":
+        research = ((payload.get("user_view") or {}).get("assistant_brief") or {}).get("research") or []
+        allowed.add(round(float(len(research)), 4))
 
     numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", deterministic_text)
     safe_spans = _safe_numeric_spans(numeric_text)

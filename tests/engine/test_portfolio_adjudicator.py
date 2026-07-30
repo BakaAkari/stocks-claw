@@ -927,7 +927,10 @@ class TestEquityUnderWeightReduceNoAlternative:
     """Equity under min with reduce signal but no alternative -> review_required."""
 
     def test_review_required_when_no_alternative(self):
-        """Equity under min + reduce signal + no alternative equity buy -> review_required."""
+        """Equity under min + reduce signal + no alternative equity buy ->
+        review_required, and NO fabricated partial action (P1-1: the
+        conflict is handed to the user unresolved; the old 50%-default
+        execution was removed)."""
         cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
                             raw_signal="reduce", raw_ratio=0.3)]
         positions = [
@@ -949,10 +952,9 @@ class TestEquityUnderWeightReduceNoAlternative:
         )
 
         assert decision.status == "review_required"
-        assert len(decision.approved_actions) == 1
-        assert decision.approved_actions[0].position_id == "cn_588000"
-        assert decision.approved_actions[0].ratio == 0.15
+        assert decision.approved_actions == []
         assert len(decision.unresolved_conflicts) > 0
+        assert decision.unresolved_conflicts[0]["position_id"] == "cn_588000"
 
     def test_unresolved_conflict_mentions_equity_bucket(self):
         """The unresolved conflict must reference the equity bucket."""
@@ -1225,6 +1227,30 @@ class TestReplacementChainSemantics:
             _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
         )
         assert decision.replacement_chains[0].buy_leg.ratio == 0.05
+
+    def test_buy_leg_estimated_amount_uses_portfolio_basis(self):
+        """Buy-leg ratio is portfolio-basis, so its estimated amount must be
+        total_portfolio x ratio (= sale proceeds), not alt_position_value x
+        ratio (adversarial review P0-1: 50k x 0.05 = 2.5k would be wrong;
+        1M x 0.05 = 50k = sale proceeds is right)."""
+        cards = [
+            _make_card("sell", signal="reduce", ratio=0.5,
+                       raw_signal="reduce", raw_ratio=0.5),
+            _make_card("buy", signal="add", ratio=0.02,
+                       raw_signal="add", raw_ratio=0.02),
+        ]
+        positions = [
+            _make_position("sell", exposure_tags=["a_share"], market_value_cny=100_000.0),
+            _make_position("buy", exposure_tags=["us_equity"], market_value_cny=50_000.0),
+            _make_position("fixed", product_type="fixed_income_plus_fund",
+                           exposure_tags=["fixed_income"], market_value_cny=850_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(equity_min=0.25),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        buy_leg = decision.replacement_chains[0].buy_leg
+        assert buy_leg.estimated_amount_cny == 50_000.0
 
 
 # ── Fixture 5: 风险暂停加仓 ──────────────────────────────────────────
@@ -1720,3 +1746,51 @@ def test_task001b_adjudicator_has_no_presentation_dependency():
     source = Path("stocks/engine/portfolio_adjudicator.py").read_text(encoding="utf-8")
     assert "from stocks.engine.presentation" not in source
     assert "import stocks.engine.presentation" not in source
+
+
+# ── Adversarial review P1-7: multi-tag bucket split ────────────────────
+
+
+class TestMultiTagBucketSplit:
+    def test_multi_tag_position_value_split_evenly_across_buckets(self):
+        """A position mapped to two buckets must contribute half its value to
+        each (previously its full value to both, so ratios summed >100%)."""
+        from stocks.engine.portfolio_adjudicator import (
+            _build_bucket_ratios_from_evidences,
+        )
+        positions = [
+            _make_position("mixed", exposure_tags=["gold", "fixed_income"],
+                           market_value_cny=100_000.0),
+            _make_position("cash_pos", product_type="cash",
+                           exposure_tags=["cash_like"], market_value_cny=100_000.0),
+        ]
+        ratios = _build_bucket_ratios_from_evidences(_evidences(positions))
+        assert ratios["黄金"] == 0.25
+        assert ratios["固收"] == 0.25
+        assert ratios["现金"] == 0.5
+        assert abs(sum(ratios.values()) - 1.0) < 1e-9
+
+    def test_gold_constraint_uses_split_ratio_not_inflated(self):
+        """gold_max=0.30 with a 50k pure-gold + 50k mixed(gold/fixed) position
+        out of 200k total: split gold = 25k+50k/2=50k? no: pure 50k + mixed
+        50k/2 = 75k -> 37.5% > 30% -> suppress; inflated would be 75% —
+        either way suppressed, so use the boundary case: gold_max=0.40,
+        split=37.5% (allowed), inflated=75% (suppressed)."""
+        cards = [_make_card("mixed", signal="add", ratio=0.1,
+                            raw_signal="add", raw_ratio=0.1)]
+        positions = [
+            _make_position("pure_gold", exposure_tags=["gold"],
+                           market_value_cny=50_000.0),
+            _make_position("mixed", product_type="mixed_fund",
+                           exposure_tags=["gold", "fixed_income"],
+                           market_value_cny=50_000.0),
+            _make_position("cash_pos", product_type="cash",
+                           exposure_tags=["cash_like"], market_value_cny=100_000.0),
+        ]
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(gold_max=0.40),
+            _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+            execution_rules=_production_execution_rules(),
+        )
+        suppressed_ids = {a.position_id for a in decision.suppressed_actions}
+        assert "mixed" not in suppressed_ids

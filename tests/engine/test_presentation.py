@@ -338,7 +338,9 @@ def test_unresolved_settlement_excluded_from_cash_and_surfaced_as_data_note():
         session_id="cn_pre_open", session_intent="pre_open_plan",
     )
     cash = view["assistant_brief"]["cash"]
-    assert set(cash) == {"available_now", "confirmed_settling", "planned_release", "strategic_exit", "locked"}
+    # Five canonical buckets + the visible safety-buffer carve-out (P1-8).
+    # unresolved_settlement is still never a bucket.
+    assert set(cash) == {"available_now", "confirmed_settling", "planned_release", "strategic_exit", "locked", "safety_buffer"}
     assert cash["available_now"]["amount_cny"] == 10_000.0
     assert cash["confirmed_settling"]["amount_cny"] == 2_000.0
     assert "unresolved_settlement" not in str(view)
@@ -728,3 +730,95 @@ def test_outlook_delta_projection_strips_unknown_nested_fields():
         "horizon": {"from": "1-2w", "to": "2-3w"},
     }
     assert "position_id" not in changes["near_term"]
+
+
+def test_executable_actions_beyond_display_cap_are_counted_not_dropped():
+    """P0-3: executable approved actions past the 3-card cap must surface as
+    an actions_overflow count, never vanish silently."""
+    approved = []
+    positions = []
+    for i in range(5):
+        pid = f"a_51602{i}"
+        approved.append({
+            "position_id": pid, "signal": "reduce", "ratio": 0.2,
+            "reason": "趋势走弱", "action_description": "减仓",
+            "cancel_condition": "", "settlement_timing": "T+1",
+            "next_checkpoint": "",
+            "final_ratio": 0.2, "original_ratio": 0.2,
+            "decision_reason": "趋势走弱", "evidence_summary": "signal=reduce",
+            "settlement_rule": "T+1", "executable_quantity": 1000.0,
+            "execution_status": "full",
+            "estimated_amount_cny": 2_000.0, "amount_is_estimate": False,
+        })
+        positions.append(_position(pid, f"标的{i}", f"a:51602{i}", 10_000, "fresh"))
+    decision = {
+        "status": "approved", "approved_actions": approved,
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, positions, [], [],
+        {"level": "normal", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+        session_id="cn_post_open", session_intent="post_open_decision",
+    )
+    card = view["instruction_card"]
+    assert len(card["actions"]) == 3
+    assert card["actions_overflow"] == 2
+
+
+def test_no_overflow_when_all_executable_actions_fit():
+    decision = {
+        "status": "approved",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "reduce", "ratio": 0.25,
+            "reason": "趋势走弱", "action_description": "减仓",
+            "cancel_condition": "", "settlement_timing": "T+1", "next_checkpoint": "",
+            "final_ratio": 0.25, "original_ratio": 0.25,
+            "decision_reason": "趋势走弱", "evidence_summary": "signal=reduce",
+            "settlement_rule": "T+1", "executable_quantity": 2100.0,
+            "execution_status": "full",
+            "estimated_amount_cny": 4_200.0, "amount_is_estimate": False,
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020", 20_000, "fresh")],
+        [], [], {"level": "normal", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+        session_id="cn_post_open", session_intent="post_open_decision",
+    )
+    assert view["instruction_card"]["actions_overflow"] == 0
+
+
+def test_replacement_buy_leg_deferred_text_is_chain_aware():
+    """P1-4: a replacement-chain buy leg (review_required by design) must say
+    it waits for sale proceeds, not the generic 'constraints unmet' text."""
+    decision = {
+        "status": "review_required",
+        "approved_actions": [{
+            "position_id": "us_qqq", "signal": "add", "ratio": 0.05,
+            "reason": "卖出资金到账后转买替代标的，维持权益敞口",
+            "action_description": "替代链买入",
+            "cancel_condition": "", "settlement_timing": None,
+            "next_checkpoint": "",
+            "final_ratio": 0.05, "original_ratio": 0.05,
+            "decision_reason": "卖出资金到账后转买替代标的，维持权益敞口；quantity basis portfolio is not modeled",
+            "evidence_summary": "signal=add",
+            "settlement_rule": "T+1", "executable_quantity": None,
+            "execution_status": "review_required",
+            "estimated_amount_cny": 50_000.0, "amount_is_estimate": False,
+            "alternative_position_id": "a_588000",
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("us_qqq", "纳指ETF", "us:QQQ", 50_000, "fresh")],
+        [], [], {"level": "normal", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"us": {"freshness": "fresh"}}}}},
+        session_id="us_post_open", session_intent="post_open_decision",
+    )
+    card = view["instruction_card"]
+    assert card["actions"] == []
+    assert card["no_action_reasons"] == [
+        "纳指ETF（QQQ）：换仓买入腿——等待卖出资金到账后执行，维持权益敞口"
+    ]

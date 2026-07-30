@@ -72,12 +72,22 @@ def test_data_freshness_fresh_no_modifier():
     assert vote.facts == []
 
 
-def test_data_freshness_stale_reduces_ratio():
-    """stale 数据对非 hold/wait 信号 ×0.5。"""
+def test_data_freshness_stale_blocks_action():
+    """stale 数据与非止损信号 = 阻断（与呈现层 fail-closed 语义统一，P1-9）。"""
     rule = DataFreshnessRule()
     vote = rule.evaluate({}, current_signal="reduce", current_ratio=0.10,
                          data_freshness="stale")
-    assert vote.ratio_modifier == 0.5
+    assert vote.signal_override == "hold"
+    assert vote.ratio_modifier == 0.0
+
+
+def test_data_freshness_stale_does_not_block_stop_loss():
+    """stale 数据不应阻断硬止损（与 missing 同处理）。"""
+    rule = DataFreshnessRule()
+    vote = rule.evaluate({}, current_signal="stop_loss", current_ratio=1.0,
+                         data_freshness="stale")
+    assert vote.signal_override == ""
+    assert vote.ratio_modifier == 1.0
 
 
 def test_data_freshness_very_stale_blocks_action():

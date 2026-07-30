@@ -721,3 +721,58 @@ def test_concise_report_research_is_one_line():
     research_lines = [ln for ln in blocked.splitlines() if "研究候选" in ln]
     assert len(research_lines) == 1, f"research compressed to one line, got {len(research_lines)}"
     assert "2 个" in research_lines[0]
+
+
+# ── Adversarial review P0-2 / P0-3 regressions ─────────────────────────
+
+
+def _executable_action_payload():
+    artifact = _artifact()
+    card = artifact["portfolio_decision"]["user_view"]["instruction_card"]
+    card["status"] = "action_required"
+    card["status_label"] = "需要操作"
+    card["actions"] = [
+        _action(
+            estimated_amount_cny=50000.0,
+            amount_is_estimate=False,
+            cancel_condition="条件不再成立时取消",
+            settlement_display="T+1",
+            settlement_rule="T+1",
+            next_checkpoint="下一交易窗口复核",
+            platform="A股证券账户",
+            operation_channel="登录证券账户执行",
+            decision_reason="通过裁决",
+            evidence_summary="signal=reduce",
+            original_ratio=0.25,
+        )
+    ]
+    card["actions_overflow"] = 2
+    card["no_action_reasons"] = []
+    artifact["portfolio_decision"]["user_view"]["assistant_brief"]["why"] = [
+        "化工ETF（516020）：减仓 25%"
+    ]
+    return artifact
+
+
+def test_number_gate_scans_executable_action_section_after_e2():
+    """P0-2: pre-fix, validate_payload_text truncated the text at the first
+    本窗口变化 heading, so tampered amounts inside 可执行动作 were never
+    scanned. The gate must now catch them."""
+    artifact = _executable_action_payload()
+    payload = build_push_payload(artifact, now="2026-07-17T15:27:00+08:00")
+    text = render_push_payload(payload)
+    assert validate_payload_text(payload, text) == []
+    tampered = text.replace("约 ¥50,000", "约 ¥88,888")
+    assert tampered != text
+    errors = validate_payload_text(payload, tampered)
+    assert any("88888" in e for e in errors)
+
+
+def test_overflow_actions_line_renders_and_passes_number_gate():
+    """P0-3: the overflow count is shown on the card and its number is
+    authorized (it is a payload value)."""
+    artifact = _executable_action_payload()
+    payload = build_push_payload(artifact, now="2026-07-17T15:27:00+08:00")
+    text = render_push_payload(payload)
+    assert "另有 2 个获批动作超出展示上限" in text
+    assert validate_payload_text(payload, text) == []

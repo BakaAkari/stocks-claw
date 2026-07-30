@@ -851,20 +851,24 @@ def finalize_decision(
         warn = f'⚠️ 低置信度{reason}'
         facts.insert(0, warn)
 
-    # Determine settlement timing and account info from position metadata
+    # Determine settlement timing and account info from position metadata.
+    # Canonical token vocabulary aligned with engine.yaml execution_rules
+    # (adversarial review P1-5): fail closed to "" when unmappable instead of
+    # guessing "T+1"; approved actions get their authoritative settlement from
+    # resolve_execution() in the adjudicator, this is card metadata only.
     account = (position or {}).get("account") or {}
     account_id = account.get("account_id", "")
     institution_type = account.get("institution_type", "")
     if institution_type == "brokerage":
         settlement_timing = "T+1"
     elif institution_type == "fund_platform":
-        settlement_timing = "T+1"
+        settlement_timing = "T+2"
     elif institution_type == "bank":
-        settlement_timing = "按产品开放期"
+        settlement_timing = "periodic_open"
     elif institution_type == "insurance":
-        settlement_timing = "锁定，不可交易"
+        settlement_timing = "locked"
     else:
-        settlement_timing = "T+1"
+        settlement_timing = ""
 
     return FinalDecision(
         position_id=tech.position_id, signal=signal, action=action,

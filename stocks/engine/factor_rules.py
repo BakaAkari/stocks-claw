@@ -136,18 +136,21 @@ class EventClusterRule(FactorRule):
 
 
 class DataFreshnessRule(FactorRule):
-    """数据时效性降权。"""
+    """数据时效性处理（与呈现层 fail-closed 语义统一，adversarial review P1-9）。
+
+    统一后的语义：数据不可用（stale/very_stale/unknown/missing）= 阻断非
+    止损信号——与 presentation._market_quote_stale 的完全阻断一致；数据
+    可用但非实时（previous_close）= 需要盘中精度的信号降权 50%。旧实现
+    对 stale 只降权 50%，与呈现层的全阻断形成双重语义。
+    """
     name = "data_freshness"
     priority = 60
 
     def evaluate(self, position, *, current_signal, current_ratio, data_freshness="fresh", **kwargs):
-        if data_freshness == "stale" and current_signal not in ("hold", "wait"):
-            return FactorVote("data_freshness", current_signal, 0.5,
-                              facts=["行情延迟（非实时），信号降权 50%"], priority=self.priority)
-        if data_freshness in ("very_stale", "unknown") and current_signal not in ("hold", "wait", "stop_loss"):
+        if data_freshness in ("stale", "very_stale", "unknown") and current_signal not in ("hold", "wait", "stop_loss"):
             return FactorVote("data_freshness", "hold", 0.0, signal_override="hold",
-                              action_text="行情严重延迟，仅止损信号保留",
-                              facts=["行情严重延迟，仅止损信号保留"], priority=self.priority)
+                              action_text="行情延迟或严重延迟，仅止损信号保留",
+                              facts=["行情延迟（非实时或不可用），仅止损信号保留"], priority=self.priority)
         if data_freshness == "missing" and current_signal not in ("hold", "wait", "stop_loss"):
             return FactorVote("data_freshness", "hold", 0.0, signal_override="hold",
                               action_text="行情缺失，仅止损信号保留",

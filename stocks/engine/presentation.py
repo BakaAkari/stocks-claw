@@ -218,6 +218,10 @@ def _cash_view(schedule: dict) -> dict:
         "planned_release": {"label": "计划内到期释放", "amount_cny": round(values.get("planned_release", 0.0) or 0.0, 2)},
         "strategic_exit": {"label": "卖出后才能用", "amount_cny": round(values.get("strategic_exit", 0.0) or 0.0, 2)},
         "locked": {"label": "不能动", "amount_cny": round(values.get("locked", 0.0) or 0.0, 2)},
+        # The safety buffer is carved out of available_now by the adjudicator
+        # (5% of portfolio). It must be visible, or "现在能用" looks silently
+        # discounted and the buckets don't add up (adversarial review P1-8).
+        "safety_buffer": {"label": "预留安全垫（不计入可用）", "amount_cny": round(values.get("safety_buffer_cny", 0.0) or 0.0, 2)},
     }
 
 
@@ -369,6 +373,11 @@ def _deferred_action_text(raw: dict, item: dict, by_market: dict) -> str:
     failed the executable gate (TASK-001E1 defect 2/3) -- it must never be
     rendered as an executable card."""
     label = _display_for_position(item)
+    # Replacement-chain buy legs are deliberately review_required (their
+    # portfolio-basis quantity is resolved only after the sale settles), not
+    # "constraints unmet" — say so explicitly (adversarial review P1-4).
+    if raw.get("alternative_position_id"):
+        return f"{label}：换仓买入腿——等待卖出资金到账后执行，维持权益敞口"
     market = _instrument_market(item.get("instrument_key", ""))
     if _market_quote_stale(market, by_market):
         return f"{label}：目标市场行情数据过时或缺失，暂缓执行，等待数据恢复"
@@ -779,6 +788,17 @@ def build_user_view(
         no_action_reasons.append("当前没有满足执行条件的获批动作")
     no_action_reasons = no_action_reasons[:2]
 
+    # TASK-001E2 display cap is 3 action cards, but approved actions beyond
+    # the cap must never vanish silently (adversarial review P0-3): count the
+    # executable ones that did not fit and surface the count on the card so
+    # the user knows the report is a subset.
+    executable_total = 0
+    for raw in all_approved:
+        item = by_id.get(str(raw.get("position_id") or ""), {})
+        if _is_executable(raw, item, by_market):
+            executable_total += 1
+    actions_overflow = max(0, executable_total - len(actions))
+
     raw_status = str(decision.get("status") or "")
     if actions:
         card_status, card_label = "action_required", "需要操作"
@@ -856,6 +876,7 @@ def build_user_view(
             "status": card_status,
             "status_label": card_label,
             "actions": actions,
+            "actions_overflow": actions_overflow,
             "no_action_reasons": no_action_reasons[:2] if not actions else [],
             "next_checkpoint": actions[0]["next_checkpoint"] if actions else _session_checkpoint(session_id, session_intent),
         },
@@ -864,14 +885,15 @@ def build_user_view(
 
 
 def _session_checkpoint(session_id: str, session_intent: str) -> str:
+    # Keys are the five sessions that actually exist in
+    # stocks/config/scheduled_sessions.json (P1-10: the previous map used
+    # pre-consolidation session ids that no longer exist, so every real run
+    # fell through to the generic default).
     checkpoints = {
-        "cn_pre_open": "A股开盘观察窗口复核",
-        "cn_open_watch": "A股收盘前窗口复核",
-        "cn_pre_close": "A股盘后复盘",
-        "cn_after_close": "下一交易日盘前复核",
-        "us_pre_open": "美股开盘观察窗口复核",
-        "us_open_watch": "美股收盘前窗口复核",
-        "us_pre_close": "美股盘后复盘",
-        "us_after_close": "下一交易日盘前复核",
+        "cn_post_open": "A股收盘后复盘窗口复核",
+        "cn_after_close": "下一交易日 A股开盘后复核",
+        "us_post_open": "美股收盘后复盘窗口复核",
+        "us_after_close": "下一交易日 美股开盘后复核",
+        "global_intelligence_watch": "下一情报巡逻窗口",
     }
     return checkpoints.get(session_id, "下一交易窗口复核")

@@ -441,14 +441,25 @@ def _build_evidence_from_cards(
 
 
 def _build_bucket_ratios_from_evidences(evidences: dict[str, dict]) -> dict[str, float]:
+    """Bucket ratios with multi-tag positions split evenly across buckets.
+
+    A position carrying several exposure tags previously contributed its
+    FULL market value to every mapped bucket, so bucket ratios could sum to
+    more than 100% and constraint checks (gold_max / equity_min) were
+    evaluated against inflated numbers (adversarial review P1-7). Splitting
+    evenly keeps the ratios' sum at 100% and the constraint math honest.
+    """
     bucket_values: dict[str, float] = {}
     total = 0.0
     for pid, ev in evidences.items():
         mv = ev.get("market_value_cny", 0.0) or 0.0
         total += mv
         buckets = _get_exposure_buckets(ev)
+        if not buckets:
+            continue
+        share = mv / len(buckets)
         for b in buckets:
-            bucket_values[b] = bucket_values.get(b, 0.0) + mv
+            bucket_values[b] = bucket_values.get(b, 0.0) + share
     if total <= 0:
         return {}
     return {b: v / total for b, v in bucket_values.items()}
@@ -469,6 +480,7 @@ def _finalize_approved_action(
     alternative_position_id: Optional[str] = None,
     execution_rules: Optional[dict] = None,
     ratio_basis: str = "position",
+    portfolio_value_cny: Optional[float] = None,
 ) -> PortfolioAction:
     """Single producer of an approved PortfolioAction's derived fields.
 
@@ -477,6 +489,12 @@ def _finalize_approved_action(
     the position's own evidence — never re-derived downstream. Every
     approve-path call site in adjudicate_portfolio routes through here so
     there is exactly one place these fields are computed (item 2/9).
+
+    estimated_amount_cny must use the same basis as the ratio: a
+    position-basis ratio multiplies the position's market value; a
+    portfolio-basis ratio (replacement-chain buy legs) multiplies the total
+    portfolio value. Mixing the two understates the buy leg's amount by
+    portfolio_value/position_value (adversarial review P0-1).
     """
     resolution = resolve_execution(
         evidence=ev,
@@ -501,8 +519,12 @@ def _finalize_approved_action(
         decision_reason = f"{reason}；{resolution.reason}"
 
     market_value = ev.get("market_value_cny")
+    if ratio_basis == "portfolio":
+        amount_base = portfolio_value_cny
+    else:
+        amount_base = market_value
     estimated_amount_cny = (
-        round(float(market_value) * abs(final_ratio), 2) if market_value is not None else None
+        round(float(amount_base) * abs(final_ratio), 2) if amount_base is not None else None
     )
     amount_is_estimate = freshness_is_estimate(
         ev.get("evidence") or {}, ev.get("valuation_method", "")
@@ -756,6 +778,7 @@ def adjudicate_portfolio(
                     settlement_timing="after_sale_proceeds",
                     execution_rules=execution_rules,
                     ratio_basis="portfolio",
+                    portfolio_value_cny=total_after,
                     post_trade_ratio=post_trade_ratio_val,
                     alternative_position_id=reduce_pid,
                 )
@@ -808,28 +831,14 @@ def adjudicate_portfolio(
                     ))
                     suppressed_pids.add(reduce_pid)
                 else:
-                    # Phase 2: 对于权益低配+减仓冲突，不完全阻断，
-                    # 而是给出默认动作（执行 50% 仓位）并标注需人工确认，
-                    # 让投资者看到具体建议。
-                    default_ratio = round(card.get("ratio", 0.0) * 0.5, 4)
-                    if default_ratio <= 0:
-                        default_ratio = 0.0
+                    # Adversarial review P1-1: a directional conflict
+                    # (equity under-weight vs reduce signal, no replacement)
+                    # must be handed to the user unresolved. The previous
+                    # "execute 50% by default" rule fabricated an arbitrary
+                    # number in exactly the situation where VISION §3.3
+                    # forbids default-rule answers. No approved action is
+                    # produced; the conflict above is the only output.
                     suppressed_pids.add(reduce_pid)
-                    # reason text carries no percentage: _finalize_approved_action's
-                    # execution_rules resolution can round default_ratio further
-                    # (or to zero), so a number baked in here could contradict the
-                    # eventual final_ratio (TASK-001E1 defect 1).
-                    approved.append(_finalize_approved_action(
-                        position_id=reduce_pid, signal=card["signal"],
-                        action_description=card.get("action", ""),
-                        ratio=default_ratio, decision_id=did,
-                        reason="权益低配+减仓冲突；默认先执行部分仓位，剩余等待人工确认",
-                        ev=evidences.get(reduce_pid, {}), card=card,
-                        execution_rules=execution_rules,
-                    ))
-                    # Phase 2: do not append the remaining portion to suppressed_actions.
-                    # The default action is the executable slice; the rest is simply held.
-                    # This avoids showing the same position in both action and do-not-do lists.
 
     # Remaining non-suppressed cards -> approve
     for item in merged:
@@ -876,18 +885,24 @@ def adjudicate_portfolio(
     )
     for ev in evidences.values():
         value = ev.get("market_value_cny", 0.0) or 0.0
-        for bucket in _get_exposure_buckets(ev):
-            projected_values[bucket] = projected_values.get(bucket, 0.0) + value
+        buckets = _get_exposure_buckets(ev)
+        if not buckets:
+            continue
+        # Even split across buckets, same basis as before_ratios (P1-7).
+        share = value / len(buckets)
+        for bucket in buckets:
+            projected_values[bucket] = projected_values.get(bucket, 0.0) + share
 
     approved_sales: list[dict] = []
     for action in approved:
         ev = evidences.get(action.position_id, {})
         buckets = _get_exposure_buckets(ev)
+        n_buckets = len(buckets) or 1
         if action.signal in _REDUCE_SIGNALS:
             proceeds = (ev.get("market_value_cny", 0.0) or 0.0) * abs(action.ratio)
             for bucket in buckets:
                 projected_values[bucket] = max(
-                    0.0, projected_values.get(bucket, 0.0) - proceeds
+                    0.0, projected_values.get(bucket, 0.0) - proceeds / n_buckets
                 )
             approved_sales.append({
                 "position_id": action.position_id,
@@ -901,7 +916,7 @@ def adjudicate_portfolio(
         elif action.signal in _ADD_SIGNALS:
             added_value = total_value * abs(action.ratio)
             for bucket in buckets:
-                projected_values[bucket] = projected_values.get(bucket, 0.0) + added_value
+                projected_values[bucket] = projected_values.get(bucket, 0.0) + added_value / n_buckets
 
     after_ratios = {
         bucket: value / total_value
