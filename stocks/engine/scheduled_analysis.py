@@ -39,11 +39,7 @@ from stocks.engine.outlook_evidence import (
 )
 from stocks.engine.outlook_synthesizer import OutlookSynthesizer
 from stocks.engine.outlook_validation import sanitize_unavailable_outlook
-from stocks.engine.presentation import (
-    build_user_view,
-    project_outlook_delta_for_display,
-    project_outlook_for_display,
-)
+from stocks.engine.presentation import build_user_view
 from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
 from stocks.engine.quant_action import (
     _TAG_TO_BUCKET,
@@ -245,11 +241,10 @@ class MarketSessionCalendar:
             tzinfo=session.exchange_tz,
         )
         run_every = getattr(session, "run_every_minutes", None)
-        if run_every:
-            midnight = scheduled_for.replace(hour=0, minute=0, second=0, microsecond=0)
-            since_midnight = int((local_now - midnight).total_seconds()) // 60
-            boundary_minutes = (since_midnight // run_every) * run_every
-            scheduled_for = midnight + timedelta(minutes=boundary_minutes)
+        if run_every and local_now >= scheduled_for:
+            since_start = int((local_now - scheduled_for).total_seconds()) // 60
+            boundary_minutes = (since_start // run_every) * run_every
+            scheduled_for = scheduled_for + timedelta(minutes=boundary_minutes)
         return SessionOccurrence(
             session=session,
             market_date=scheduled_for.date(),
@@ -373,6 +368,12 @@ class RunArtifactStore:
     def has_run_for_market_date(self, session_id: str, market_date: str) -> Optional[dict]:
         latest = self.latest(session_id)
         if latest and latest.get("market_date") == market_date:
+            return latest
+        return None
+
+    def has_run_for_occurrence(self, session_id: str, run_id: str) -> Optional[dict]:
+        latest = self.latest(session_id)
+        if latest and latest.get("run_id") == run_id:
             return latest
         return None
 
@@ -583,7 +584,10 @@ class ScheduledAnalysisRunner:
             return _skipped_result("skipped_market_closed", occurrence, now)
 
         market_date = occurrence.market_date.isoformat()
-        existing = self.store.has_run_for_market_date(occurrence.session.id, market_date)
+        if occurrence.session.run_every_minutes:
+            existing = self.store.has_run_for_occurrence(occurrence.session.id, occurrence.run_id)
+        else:
+            existing = self.store.has_run_for_market_date(occurrence.session.id, market_date)
         if existing and not force:
             return {
                 "success": True,
@@ -624,6 +628,7 @@ class ScheduledAnalysisRunner:
             generated_at=now,
             config=self.config,
             previous_run=previous_run,
+            attach_user_view=False,
         )
 
         # Shadow Account: 保存本期建议快照 + 注入诊断
@@ -668,8 +673,12 @@ class ScheduledAnalysisRunner:
             except Exception:
                 pass  # 非关键路径
 
-        # Outlook synthesis for primary windows; delta for observation windows
+        # Outlook synthesis for primary windows; delta for observation windows.
+        # These feed the single build_user_view() call below — no field is
+        # ever patched into user_view after it is built.
         session_id = run["session"]
+        structured_outlook_for_view: Optional[dict] = None
+        outlook_delta_for_view: Optional[dict] = None
         if session_id in PRIMARY_OUTLOOK_SESSIONS:
             try:
                 evidence = build_outlook_evidence(
@@ -688,20 +697,14 @@ class ScheduledAnalysisRunner:
                 )
                 run["structured_outlook"] = outlook
                 run["forecast_candidates"] = build_forecast_candidates(outlook)
-                # Attach outlook to the user-facing brief
-                uv = run.get("portfolio_decision", {}).get("user_view", {})
-                if uv and "assistant_brief" in uv:
-                    uv["assistant_brief"]["outlook"] = project_outlook_for_display(outlook)
+                structured_outlook_for_view = outlook
             except Exception:
                 logger.exception("Outlook synthesis failed for %s", session_id)
                 run["structured_outlook"] = sanitize_unavailable_outlook(
                     ["Outlook synthesis failed"], generated_at=run["generated_at"],
                 )
                 run["forecast_candidates"] = []
-                # Also attach unavailable outlook to assistant brief
-                uv = run.get("portfolio_decision", {}).get("user_view", {})
-                if uv and "assistant_brief" in uv:
-                    uv["assistant_brief"]["outlook"] = project_outlook_for_display(run["structured_outlook"])
+                structured_outlook_for_view = run["structured_outlook"]
         elif session_id in OBSERVATION_OUTLOOK_SESSIONS:
             # Observation window: compute delta from latest two primary outlooks
             try:
@@ -711,11 +714,24 @@ class ScheduledAnalysisRunner:
                     if delta:
                         state = self._get_delta_state()
                         if state.should_emit(run["market"], delta):
-                            uv = run.get("portfolio_decision", {}).get("user_view", {})
-                            if uv and "assistant_brief" in uv:
-                                uv["assistant_brief"]["outlook_delta"] = project_outlook_delta_for_display(delta)
+                            outlook_delta_for_view = delta
             except Exception:
                 logger.exception("Outlook delta failed for %s", session_id)
+
+        # Single authoritative build of user_view for this run — constructed
+        # exactly once, after outlook/delta are known, never mutated after.
+        run["portfolio_decision"]["user_view"] = build_user_view(
+            run["portfolio_decision"],
+            context_dict.get("position_valuations") or [],
+            run.get("position_reviews") or [],
+            run.get("research_candidates") or [],
+            run.get("risk_state") or {},
+            data_boundaries=run.get("data_boundaries") or {},
+            session_id=run["session"],
+            session_intent=occurrence.session.intent,
+            structured_outlook=structured_outlook_for_view,
+            outlook_delta=outlook_delta_for_view,
+        )
 
         paths = self.store.save(run)
         return {
@@ -1061,6 +1077,51 @@ def _persist_risk_state(assessment: dict, *, generated_at: datetime, config: dic
     return result
 
 
+def _evidence_holding(pv: dict) -> dict:
+    """Copy holding facts (quantity, unit) from a position_valuations record.
+
+    ``position_valuations`` records carry either a nested ``holding`` dict or
+    a flat ``quantity``/``unit`` pair depending on producer; both are copied
+    verbatim, never recomputed. A missing quantity stays missing (empty dict)
+    so downstream minimum-unit logic sees it as absent rather than zero.
+    """
+    holding = pv.get("holding")
+    if isinstance(holding, dict):
+        return dict(holding)
+    quantity = pv.get("quantity")
+    if quantity is None:
+        return {}
+    return {"quantity": quantity, "unit": pv.get("unit", "")}
+
+
+def _build_adjudicator_evidences(pv_list: list[dict]) -> dict[str, dict]:
+    """Build the complete authoritative evidence the adjudicator needs per position.
+
+    Copies fields straight from the single ``position_valuations`` record
+    without recomputation: position_id, instrument_key, holding, valuation
+    method, market value, classification, liquidity (tier/redemption_rule/
+    lockup_until/maturity_date/tradable/rebalance_eligible all pass through
+    inside the liquidity dict), and evidence (price freshness/data anomalies).
+    """
+    evidences: dict[str, dict] = {}
+    for pv in pv_list:
+        pid = pv.get("position_id", "")
+        if not pid:
+            continue
+        evidences[pid] = {
+            "position_id": pid,
+            "instrument_key": pv.get("instrument_key", ""),
+            "holding": _evidence_holding(pv),
+            "valuation_method": pv.get("valuation_method", ""),
+            "classification": pv.get("classification", {}),
+            "liquidity": pv.get("liquidity", {}),
+            "market_value_cny": pv.get("market_value_cny", 0.0),
+            "evidence": pv.get("evidence", {}),
+            "product_type": (pv.get("classification") or {}).get("product_type", ""),
+        }
+    return evidences
+
+
 def build_scheduled_run(
     context: dict,
     *,
@@ -1068,6 +1129,9 @@ def build_scheduled_run(
     generated_at: datetime,
     config: dict,
     previous_run: Optional[dict] = None,
+    attach_user_view: bool = True,
+    structured_outlook: Optional[dict] = None,
+    outlook_delta: Optional[dict] = None,
 ) -> dict:
     session = occurrence.session
     generated_at_iso = _iso_utc(generated_at)
@@ -1148,19 +1212,10 @@ def build_scheduled_run(
     cash_schedule = build_cash_schedule(
         context.get("position_valuations") or [], [], total_value
     )
-    # Build adjudicator evidences from position valuations
+    # Build the adjudicator bridge by copying the single authoritative
+    # position_valuations records; do not recompute or silently default facts.
     pv_list = context.get("position_valuations") or []
-    evidences = {}
-    for pv in pv_list:
-        pid = pv.get("position_id", "")
-        if pid:
-            evidences[pid] = {
-                "classification": pv.get("classification", {}),
-                "liquidity": pv.get("liquidity", {}),
-                "market_value_cny": pv.get("market_value_cny", 0.0),
-                "evidence": pv.get("evidence", {}),
-                "product_type": (pv.get("classification") or {}).get("product_type", ""),
-            }
+    evidences = _build_adjudicator_evidences(pv_list)
     # Adjudicate portfolio actions against the persistent risk state.
     risk_assessment = _compute_risk_assessment(context)
     risk_state = _persist_risk_state(
@@ -1175,6 +1230,7 @@ def build_scheduled_run(
             risk_state,
             cash_schedule,
             run_id=occurrence.run_id,
+            execution_rules=(context.get("engine_config") or {}).get("execution_rules"),
         )
     except Exception:
         from stocks.engine.portfolio_adjudicator import (
@@ -1231,16 +1287,19 @@ def build_scheduled_run(
         },
     }
     portfolio_decision_dict = portfolio_decision.to_dict() if portfolio_decision else {}
-    portfolio_decision_dict["user_view"] = build_user_view(
-        portfolio_decision_dict,
-        context.get("position_valuations") or [],
-        position_reviews,
-        research_candidates,
-        risk_state,
-        data_boundaries=data_boundaries,
-        session_id=session.id,
-        session_intent=session.intent,
-    )
+    if attach_user_view:
+        portfolio_decision_dict["user_view"] = build_user_view(
+            portfolio_decision_dict,
+            context.get("position_valuations") or [],
+            position_reviews,
+            research_candidates,
+            risk_state,
+            data_boundaries=data_boundaries,
+            session_id=session.id,
+            session_intent=session.intent,
+            structured_outlook=structured_outlook,
+            outlook_delta=outlook_delta,
+        )
     run = {
         "schema_version": SCHEDULED_RUN_SCHEMA_VERSION,
         "run_id": occurrence.run_id,
@@ -2046,7 +2105,7 @@ def format_run_markdown(run: dict) -> str:
 
     lines.extend(["", "**资金状态**"])
     cash = assistant.get("cash") or {}
-    for key in ("immediate", "settling", "strategic_exit", "locked"):
+    for key in ("available_now", "confirmed_settling", "planned_release", "strategic_exit", "locked"):
         item = cash.get(key) or {}
         lines.append(f"- {item.get('label', '资金待确认')}: ¥{float(item.get('amount_cny') or 0.0):,.0f}")
 

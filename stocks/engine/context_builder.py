@@ -131,18 +131,6 @@ class ContextBuilder:
         positions = list(asset_positions_v2 or [])
         if not positions and assets:
             positions = [financial_asset_to_position_v2(asset) for asset in assets]
-        position_valuations = self._build_position_valuations(
-            positions=positions,
-            quotes=quotes,
-            generated_at=generated_at,
-            exposure_proxy=exposure_proxy or {},
-            action_signals=None,
-        )
-        valuation_assets = self._assets_from_position_valuations(
-            positions,
-            position_valuations,
-        )
-        analysis_assets = valuation_assets if positions else assets
 
         # 3. 获取宏观数据
         macro_snapshot = None
@@ -158,23 +146,7 @@ class ContextBuilder:
         # 4. 接收规则事件提取使用的原始新闻
         news = news or []
 
-        market_events, news_digest = self.market_event_extractor.extract(
-            news,
-            assets=analysis_assets,
-            instruments=instruments,
-            generated_at=generated_at,
-        )
-
-        # 5. 构建 PortfolioMapping
-        mapping = self.portfolio_scaffold.build(analysis_assets, constraints)
-
-        # 6. 检查 Drift
-        drift_checks = self.portfolio_scaffold.check_drift(mapping, constraints)
-
-        # 7. 构建 MarketState
-        market_state = self.market_scaffold.build(quotes)
-
-        # 7.5 未来催化剂日历（官方日程 + 财报日历）
+        # 5. 未来催化剂日历（官方日程 + 财报日历）—— 先于唯一估值构建，供 action_signals 使用
         upcoming_events: list = []
         calendar_quality: Optional[dict] = None
         if self.event_calendar is not None:
@@ -192,6 +164,63 @@ class ContextBuilder:
                     "event_count": 0,
                     "errors": {"calendar": f"{type(e).__name__}: {e}"},
                 }
+
+        # 6. 板块轮动脚手架（watchlist + 扫描池，基于历史收盘）
+        # 只依赖历史缓存，不依赖实时行情，因此 --no-quotes 时仍以 watchlist 计算
+        rotation, rotation_frames, rotation_universe, scan_keys = (
+            await self._build_rotation(
+                list(watchlist or instruments),
+                list(scan_instruments or []),
+            )
+        )
+
+        # 7. 加载全局情报巡逻聚合结果（时间事实源）
+        intelligence_digest = self._build_intelligence_digest(
+            repo_root=Path(__file__).resolve().parents[2],
+            generated_at=generated_at,
+            positions=[position.to_dict() for position in positions],
+        )
+
+        # 8. 引擎动作信号（方向性候选动作，2026-07-02 用户裁决启用）
+        action_signals = compute_action_signals(
+            rotation_frames,
+            rotation_universe,
+            rotation,
+            upcoming_events=upcoming_events,
+            scan_keys=scan_keys,
+        )
+        rule_scorecard = self._build_rule_scorecard(
+            rotation_frames, action_signals
+        )
+
+        # 9. 唯一权威估值构建 —— action_signals/technical_indicators 已就绪，
+        # 后续所有消费者（规则事件提取、PortfolioMapping、汇总字段、raw_prompt）
+        # 都读取这一份 position_valuations，不再重建。
+        position_valuations = self._build_position_valuations(
+            positions=positions,
+            quotes=quotes,
+            generated_at=generated_at,
+            exposure_proxy=exposure_proxy or {},
+            action_signals=action_signals,
+            technical_indicators=technical_indicators,
+        )
+        valuation_assets = self._assets_from_position_valuations(
+            positions,
+            position_valuations,
+        )
+        analysis_assets = valuation_assets if positions else assets
+        exposure_summary = self._build_exposure_summary(position_valuations)
+        liquidity_summary = self._build_liquidity_summary(position_valuations)
+        asset_data_boundaries = self._build_asset_data_boundaries(position_valuations)
+        advice_granularity = self._build_advice_granularity_summary(position_valuations)
+
+        # 10. 规则事件提取（使用最终估值资产）
+        market_events, news_digest = self.market_event_extractor.extract(
+            news,
+            assets=analysis_assets,
+            instruments=instruments,
+            generated_at=generated_at,
+        )
 
         # 财报日历复用同一事件对象投影到 market_events，不另建平行模块。
         for event in upcoming_events:
@@ -219,52 +248,16 @@ class ContextBuilder:
                 )
             )
 
-        # 7.6 板块轮动脚手架（watchlist + 扫描池，基于历史收盘）
-        # 只依赖历史缓存，不依赖实时行情，因此 --no-quotes 时仍以 watchlist 计算
-        rotation, rotation_frames, rotation_universe, scan_keys = (
-            await self._build_rotation(
-                list(watchlist or instruments),
-                list(scan_instruments or []),
-            )
-        )
+        # 11. 构建 PortfolioMapping（使用最终估值资产）
+        mapping = self.portfolio_scaffold.build(analysis_assets, constraints)
 
-        # 7.65 加载全局情报巡逻聚合结果（时间事实源）
-        intelligence_digest = self._build_intelligence_digest(
-            repo_root=Path(__file__).resolve().parents[2],
-            generated_at=generated_at,
-            positions=[position.to_dict() for position in positions],
-        )
+        # 12. 检查 Drift
+        drift_checks = self.portfolio_scaffold.check_drift(mapping, constraints)
 
-        # 7.7 引擎动作信号（方向性候选动作，2026-07-02 用户裁决启用）
-        action_signals = compute_action_signals(
-            rotation_frames,
-            rotation_universe,
-            rotation,
-            upcoming_events=upcoming_events,
-            scan_keys=scan_keys,
-        )
-        rule_scorecard = self._build_rule_scorecard(
-            rotation_frames, action_signals
-        )
-        position_valuations = self._build_position_valuations(
-            positions=positions,
-            quotes=quotes,
-            generated_at=generated_at,
-            exposure_proxy=exposure_proxy or {},
-            action_signals=action_signals,
-            technical_indicators=technical_indicators,
-        )
-        valuation_assets = self._assets_from_position_valuations(
-            positions,
-            position_valuations,
-        )
-        analysis_assets = valuation_assets if positions else assets
-        exposure_summary = self._build_exposure_summary(position_valuations)
-        liquidity_summary = self._build_liquidity_summary(position_valuations)
-        asset_data_boundaries = self._build_asset_data_boundaries(position_valuations)
-        advice_granularity = self._build_advice_granularity_summary(position_valuations)
+        # 13. 构建 MarketState
+        market_state = self.market_scaffold.build(quotes)
 
-        # 8. 对最近建议做历史表现事实回看与触发器核对
+        # 14. 对最近建议做历史表现事实回看与触发器核对
         reviewed_advice = await attach_advice_performance(
             recent_advice or [],
             watchlist=_dedupe_instruments(list(watchlist or []) + list(instruments)),
@@ -276,7 +269,7 @@ class ContextBuilder:
             execution_records or [],
         )
 
-        # 9. 生成 raw_prompt_input（人类可读文本）
+        # 15. 生成 raw_prompt_input（人类可读文本）
         raw_prompt = self._build_raw_prompt(
             assets=analysis_assets,
             quotes=quotes,
@@ -335,7 +328,7 @@ class ContextBuilder:
             advice_granularity=advice_granularity,
         )
 
-        # 10. 组装 AnalysisContext
+        # 16. 组装 AnalysisContext
         return AnalysisContext(
             generated_at=generated_at,
             assets=analysis_assets,

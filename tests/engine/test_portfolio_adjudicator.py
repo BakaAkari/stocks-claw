@@ -7,8 +7,10 @@ from __future__ import annotations
 import copy
 import hashlib
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+import yaml
 
 from stocks.engine.portfolio_adjudicator import (
     adjudicate_portfolio,
@@ -411,6 +413,43 @@ class TestCashSchedule:
         assert schedule.get("settling_cash_cny", 0) > 0
         assert "cn_588000" in schedule.get("settling_cash_position_ids", [])
 
+    def test_sale_with_missing_timing_is_unresolved_not_settling(self):
+        """A sale dict with no settlement timing at all must not be
+        fabricated into a T+1 confirmed_settling classification."""
+        positions = [
+            _make_position("cn_588000", product_type="exchange_traded_fund",
+                           liquidity_tier="t1", market_value_cny=100_000.0),
+        ]
+        sales = [{"position_id": "cn_588000", "ratio": 0.3, "settlement": {}}]
+        schedule = build_cash_schedule(positions, sales, 100_000.0)
+        assert schedule["settling_cash_cny"] == 0.0
+        assert schedule["immediate_cash_cny"] == 0.0
+        assert schedule["unresolved_settlement_cny"] == 30_000.0
+        assert schedule["unresolved_settlement_position_ids"] == ["cn_588000"]
+        assert (
+            schedule["strategic_exit_value_cny"]
+            + schedule["settling_cash_cny"]
+            + schedule["locked_value_cny"]
+            + schedule["immediate_cash_cny"]
+            + schedule["safety_buffer_cny"]
+            + schedule["unresolved_settlement_cny"]
+        ) == 100_000.0
+
+    def test_sale_with_non_executable_timing_token_is_unresolved(self):
+        """A settlement timing that is a non-executable machine token
+        (review_required/periodic_open/locked) must classify the same as a
+        missing timing: unresolved, never confirmed_settling."""
+        positions = [
+            _make_position("gold", product_type="precious_metal_account",
+                           liquidity_tier="periodic_open", market_value_cny=100_000.0),
+        ]
+        for token in ("review_required", "periodic_open", "locked"):
+            sales = [{"position_id": "gold", "ratio": 0.4,
+                      "settlement": {"timing": token}}]
+            schedule = build_cash_schedule(positions, sales, 100_000.0)
+            assert schedule["settling_cash_cny"] == 0.0, token
+            assert schedule["unresolved_settlement_cny"] == 40_000.0, token
+
     def test_safety_buffer_deducts_only_from_immediate_cash(self):
         """Safety buffer must only reduce immediate_cash_cny."""
         positions = [
@@ -435,7 +474,8 @@ class TestCashSchedule:
                     "strategic_exit_value_cny", "locked_value_cny",
                     "immediate_cash_position_ids", "settling_cash_position_ids",
                     "strategic_exit_position_ids", "locked_position_ids",
-                    "safety_buffer_cny"):
+                    "safety_buffer_cny", "unresolved_settlement_cny",
+                    "unresolved_settlement_position_ids"):
             assert key in schedule, f"Missing key: {key}"
 
     def test_locked_items_reported_separately(self):
@@ -524,6 +564,63 @@ class TestScheduledCashScheduleIntegration:
             "cash_hkd", "cash_usd", "alipay_mmf"
         }
         assert "cn_588000" not in run["cash_schedule"]["immediate_cash_position_ids"]
+
+    def test_user_view_cash_matches_adjudicator_schedule_without_recomputation(
+        self, sample_portfolio
+    ):
+        """The full pipeline (build_cash_schedule -> build_scheduled_run ->
+        build_user_view) must project the same canonical amounts end-to-end
+        (TASK-001D item 1). presentation.py must not recompute or diverge
+        from the authoritative adjudicator cash_schedule.
+        """
+        from stocks.engine.scheduled_analysis import (
+            ScheduledSession,
+            SessionOccurrence,
+            build_scheduled_run,
+        )
+
+        positions, _ = sample_portfolio
+        cards_context = []
+        for item in positions:
+            item = copy.deepcopy(item)
+            item.setdefault("display_name", item["position_id"])
+            item.setdefault("evidence", {"price_freshness": "current"})
+            cards_context.append(item)
+        now = datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc)
+        occurrence = SessionOccurrence(
+            session=ScheduledSession(
+                id="cn_pre_close", market="cn", exchange_timezone="Asia/Shanghai",
+                user_timezone="Asia/Shanghai", time="14:35",
+                intent="pre_close_decision", push="normal", enabled=True,
+                duplicate_window_minutes=90, holidays=frozenset(), primary_market="cn",
+            ),
+            market_date=now.date(), scheduled_for=now,
+        )
+        context = {
+            "schema_version": 12, "generated_at": now.isoformat(),
+            "data_quality": {"quotes": {"freshness": "current"}},
+            "position_valuations": cards_context,
+            "intelligence_digest": {
+                "intelligence_health": {"status": "missing", "age_minutes": None, "risk_eligible": False},
+                "intelligence_coverage": {}, "top_signals": [], "top_clusters": [],
+            },
+            "market_state": {}, "rotation": {},
+            "portfolio_mapping": {"ratios": {}},
+            "liquidity_summary": _liquidity_summary(), "action_signals": {},
+        }
+        run = build_scheduled_run(
+            context, occurrence=occurrence, generated_at=now,
+            config={"quiet_hours": {"enabled": False}},
+        )
+        authoritative = run["cash_schedule"]
+        cash = run["portfolio_decision"]["user_view"]["assistant_brief"]["cash"]
+        assert cash["available_now"]["amount_cny"] == round(authoritative["available_now"], 2)
+        assert cash["confirmed_settling"]["amount_cny"] == round(authoritative["confirmed_settling"], 2)
+        assert cash["planned_release"]["amount_cny"] == round(authoritative["planned_release"], 2)
+        assert cash["strategic_exit"]["amount_cny"] == round(authoritative["strategic_exit"], 2)
+        assert cash["locked"]["amount_cny"] == round(authoritative["locked"], 2)
+        assert "immediate" not in cash
+        assert "settling" not in cash
 
 
 class TestScheduledAdjudicationFailure:
@@ -633,6 +730,7 @@ def _make_card(
     raw_ratio: float = 0.0,
     evidence_status: str = "ok",
     liquidity_tier: str = "t1",
+    institution_type: str = "",
 ) -> dict:
     return {
         "position_id": position_id,
@@ -641,6 +739,7 @@ def _make_card(
         "product_type": product_type,
         "routing": "full",
         "account_type": "broker",
+        "institution_type": institution_type,
         "signal": signal,
         "action": action,
         "ratio": ratio,
@@ -702,6 +801,8 @@ def _evidences(positions: list[dict]) -> dict[str, dict]:
     for p in positions:
         pid = p["position_id"]
         ev[pid] = {
+            "instrument_key": p.get("instrument_key", ""),
+            "holding": p.get("holding", {}),
             "classification": p.get("classification", {}),
             "liquidity": p.get("liquidity", {}),
             "market_value_cny": p.get("market_value_cny", 0.0),
@@ -709,6 +810,10 @@ def _evidences(positions: list[dict]) -> dict[str, dict]:
             "product_type": p.get("classification", {}).get("product_type", ""),
         }
     return ev
+
+
+def _production_execution_rules() -> dict:
+    return yaml.safe_load(Path("stocks/config/engine.yaml").read_text())["execution_rules"]
 
 
 # ── Fixture 1: 数据异常 ──────────────────────────────────────────────
@@ -880,9 +985,11 @@ class TestEquityUnderWeightReduceWithAlternative:
     def _setup(self):
         cards = [
             _make_card("cn_588000", signal="reduce", ratio=0.3,
-                       raw_signal="reduce", raw_ratio=0.3),
+                       raw_signal="reduce", raw_ratio=0.3,
+                       institution_type="brokerage"),
             _make_card("us_qqq", signal="add", ratio=0.02,
-                       raw_signal="add", raw_ratio=0.02),
+                       raw_signal="add", raw_ratio=0.02,
+                       institution_type="brokerage"),
         ]
         positions = [
             _make_position("cn_588000", exposure_tags=["a_share"],
@@ -957,7 +1064,10 @@ class TestEquityUnderWeightReduceWithAlternative:
             assert chain.buy_leg.position_id == "us_qqq"
 
     def test_status_can_be_approved_with_chain(self):
-        """With a valid replacement chain, status may be approved."""
+        """A replacement chain's buy leg always needs review (its ratio is
+        portfolio-value based, not position based), so overall status must
+        be review_required whenever a chain is present — even though the
+        sale leg itself resolves to a normal, fully-executable action."""
         cards, positions = self._setup()
         evidences = _evidences(positions)
         constraints = _constraints(equity_min=0.25, equity_max=0.55)
@@ -966,20 +1076,30 @@ class TestEquityUnderWeightReduceWithAlternative:
         decision = adjudicate_portfolio(
             cards, evidences, constraints, risk, _liquidity(settling=30_000.0),
             run_id=_run_id(), rule_version=RULE_VERSION,
+            execution_rules=_production_execution_rules(),
         )
 
-        if len(decision.unresolved_conflicts) == 0:
-            assert decision.status == "approved"
+        if len(decision.unresolved_conflicts) == 0 and decision.replacement_chains:
+            assert decision.status == "review_required"
             assert len(decision.approved_actions) > 0
+            chain = decision.replacement_chains[0]
+            assert chain.sale_leg.execution_status != "review_required"
+            assert chain.buy_leg.execution_status == "review_required"
+            assert chain.buy_leg.executable_quantity is None
 
 
 class TestReplacementChainSemantics:
     def test_sale_settlement_comes_from_reduce_position(self):
+        """Only fund_platform+t2_plus resolves to T+2 in production config —
+        the sale leg's settlement is a config match, not an institution-
+        agnostic "any t2_plus" guess."""
         cards = [
             _make_card("sell_t2", signal="reduce", ratio=0.25,
-                       raw_signal="reduce", raw_ratio=0.25),
+                       raw_signal="reduce", raw_ratio=0.25,
+                       institution_type="fund_platform"),
             _make_card("buy_t1", signal="add", ratio=0.02,
-                       raw_signal="add", raw_ratio=0.02),
+                       raw_signal="add", raw_ratio=0.02,
+                       institution_type="fund_platform"),
             _make_card("last_t0", signal="hold", ratio=0.0),
         ]
         positions = [
@@ -993,6 +1113,7 @@ class TestReplacementChainSemantics:
         decision = adjudicate_portfolio(
             cards, _evidences(positions), _constraints(equity_min=0.25),
             _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
+            execution_rules=_production_execution_rules(),
         )
         assert decision.replacement_chains[0].settlement_timing == "T+2"
         assert decision.replacement_chains[0].sale_leg.settlement_timing == "T+2"
@@ -1062,7 +1183,7 @@ class TestReplacementChainSemantics:
             _risk_state(), _liquidity(), run_id=_run_id(), rule_version=RULE_VERSION,
         )
         chain = decision.replacement_chains[0]
-        assert chain.buy_leg.settlement_timing == "after_T+2_proceeds"
+        assert chain.buy_leg.settlement_timing == "after_sale_proceeds"
         assert "到账" in chain.buy_leg.reason
 
     def test_hold_card_is_not_promoted_to_replacement_buy(self):
@@ -1323,7 +1444,8 @@ class TestDecisionCompleteness:
     def test_approved_sale_updates_decision_cash_schedule(self):
         cards = [_make_card("gold", signal="reduce", ratio=0.5,
                             raw_signal="reduce", raw_ratio=0.5,
-                            product_type="precious_metal_account")]
+                            product_type="precious_metal_account",
+                            institution_type="brokerage")]
         positions = [
             _make_position("gold", product_type="precious_metal_account",
                            exposure_tags=["gold"], liquidity_tier="t1",
@@ -1335,11 +1457,44 @@ class TestDecisionCompleteness:
         decision = adjudicate_portfolio(
             cards, _evidences(positions), _constraints(gold_max=0.15),
             _risk_state(), initial, run_id=_run_id(), rule_version=RULE_VERSION,
+            execution_rules=_production_execution_rules(),
         )
         schedule = decision.to_dict()["cash_schedule"]
         assert schedule["settling_cash_cny"] == 100_000.0
         assert "gold" in schedule["settling_cash_position_ids"]
         assert schedule["strategic_exit_value_cny"] == 100_000.0
+        assert schedule["unresolved_settlement_cny"] == 0.0
+
+    def test_approved_sale_with_unresolved_settlement_is_not_confirmed_settling(self):
+        """A reduce action whose settlement_rule can't be resolved (no
+        matching production rule for this institution/tier combination)
+        must not have its sale proceeds fabricated into confirmed_settling
+        cash — they must land in unresolved_settlement_cny instead."""
+        cards = [_make_card("gold", signal="reduce", ratio=0.5,
+                            raw_signal="reduce", raw_ratio=0.5,
+                            product_type="precious_metal_account",
+                            institution_type="brokerage")]
+        positions = [
+            _make_position("gold", product_type="precious_metal_account",
+                           exposure_tags=["gold"], liquidity_tier="t2_plus",
+                           market_value_cny=200_000.0),
+            _make_position("cash", product_type="cash", exposure_tags=["cash_like"],
+                           liquidity_tier="cash", market_value_cny=800_000.0),
+        ]
+        initial = build_cash_schedule(positions, [], 1_000_000.0)
+        decision = adjudicate_portfolio(
+            cards, _evidences(positions), _constraints(gold_max=0.15),
+            _risk_state(), initial, run_id=_run_id(), rule_version=RULE_VERSION,
+            execution_rules=_production_execution_rules(),
+        )
+        approved = next(a for a in decision.approved_actions if a.position_id == "gold")
+        assert approved.settlement_rule == "review_required"
+        assert approved.settlement_timing is None
+        schedule = decision.to_dict()["cash_schedule"]
+        assert schedule["settling_cash_cny"] == 0.0
+        assert schedule["unresolved_settlement_cny"] == 100_000.0
+        assert "gold" in schedule["unresolved_settlement_position_ids"]
+        assert "gold" not in schedule["settling_cash_position_ids"]
 
 
 # ── Status mutual exclusion ──────────────────────────────────────────
@@ -1530,3 +1685,38 @@ def test_adjudicator_rejects_research_only_qdii_action_even_if_signal_leaks():
     assert decision.approved_actions == []
     assert len(decision.suppressed_actions) == 1
     assert "research_only" in decision.suppressed_actions[0].reason
+
+
+# ── TASK-001B: evidence bridge and dependency direction ───────────────
+
+
+def test_task001b_complete_evidence_produces_quantity_and_authoritative_amount():
+    evidence = _make_position(
+        "cn_588000", product_type="stock", liquidity_tier="t1",
+        market_value_cny=10_000.0,
+    )
+    evidence["holding"] = {"quantity": 1000, "unit": "share"}
+    evidence["valuation_method"] = "market_quote"
+    card = _make_action_card("cn_588000", signal="add", action="加仓", ratio=0.2)
+    card["institution_type"] = "brokerage"
+
+    decision = adjudicate_portfolio(
+        [card], {"cn_588000": evidence}, {},
+        {"level": "normal", "suspend_accumulation": False}, {},
+        run_id="task001b",
+        execution_rules=_production_execution_rules(),
+    )
+
+    action = decision.approved_actions[0].to_dict()
+    assert action["executable_quantity"] == 200
+    assert action["execution_status"] == "full"
+    assert action["estimated_amount_cny"] == 2000.0
+    assert action["amount_is_estimate"] is False
+
+
+def test_task001b_adjudicator_has_no_presentation_dependency():
+    from pathlib import Path
+
+    source = Path("stocks/engine/portfolio_adjudicator.py").read_text(encoding="utf-8")
+    assert "from stocks.engine.presentation" not in source
+    assert "import stocks.engine.presentation" not in source

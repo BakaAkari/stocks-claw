@@ -646,6 +646,61 @@ def test_primary_session_calls_synthesizer_once(tmp_path):
     assert artifact["forecast_candidates"] == []
 
 
+def test_runner_builds_user_view_exactly_once_with_outlook(tmp_path, monkeypatch):
+    """TASK-001A: production runner constructs user_view once, with outlook supplied."""
+    import stocks.engine.scheduled_analysis as scheduled_module
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    runner.outlook_synthesizer = FakeSynth()
+
+    original = scheduled_module.build_user_view
+    calls = []
+
+    def counting_build_user_view(*args, **kwargs):
+        calls.append(kwargs.copy())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(scheduled_module, "build_user_view", counting_build_user_view)
+    now = datetime.fromisoformat("2026-07-06T15:00:00+08:00")
+    result = _run(runner.run_session("cn_after_close", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    assert len(calls) == 1
+    assert calls[0]["structured_outlook"]["summary"] == "组合研判"
+    assert calls[0]["outlook_delta"] is None
+    assert artifact["portfolio_decision"]["user_view"]["assistant_brief"]["outlook"]["summary"] == "组合研判"
+
+
+def test_build_scheduled_run_compatibility_builds_user_view_exactly_once(tmp_path, monkeypatch):
+    """TASK-001A: direct compatibility caller also constructs user_view once."""
+    import stocks.engine.scheduled_analysis as scheduled_module
+
+    calendar = MarketSessionCalendar(_config(tmp_path))
+    occurrence = calendar.occurrence_for(
+        "cn_after_close", datetime.fromisoformat("2026-07-06T15:00:00+08:00")
+    )
+    original = scheduled_module.build_user_view
+    calls = []
+
+    def counting_build_user_view(*args, **kwargs):
+        calls.append(kwargs.copy())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(scheduled_module, "build_user_view", counting_build_user_view)
+    run = build_scheduled_run(
+        _context(), occurrence=occurrence,
+        generated_at=datetime.fromisoformat("2026-07-06T15:00:00+08:00"),
+        config=_config(tmp_path),
+        structured_outlook={"status": "ok", "summary": "兼容调用研判"},
+    )
+
+    assert len(calls) == 1
+    assert run["portfolio_decision"]["user_view"]["assistant_brief"]["outlook"]["summary"] == "兼容调用研判"
+
+
 def test_primary_session_exposes_confirmable_forecast_candidates_without_saving(tmp_path):
     from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
     from tests.engine.test_scheduled_analysis import _run
@@ -1042,3 +1097,60 @@ def test_observation_delta_projection_strips_unknown_nested(tmp_path):
         assert "extra_top_key" not in od
     finally:
         sa_mod.compute_outlook_delta = original
+
+
+# ── TASK-001B: complete adjudicator evidence bridge ──────────────────
+
+
+def test_task001b_evidence_bridge_copies_authoritative_position_facts():
+    from stocks.engine.scheduled_analysis import _build_adjudicator_evidences
+
+    valuation = {
+        "position_id": "cn_588000",
+        "instrument_key": "a:588000",
+        "holding": {"quantity": 1200, "unit": "share"},
+        "valuation_method": "market_quote",
+        "market_value_cny": 2520.0,
+        "classification": {"product_type": "exchange_traded_fund", "exposure_tags": ["equity"]},
+        "liquidity": {
+            "tier": "t1", "redemption_rule": "exchange T+1",
+            "lockup_until": None, "maturity_date": None,
+            "tradable": True, "rebalance_eligible": True,
+        },
+        "evidence": {"price_freshness": "current", "data_anomalies": []},
+    }
+
+    bridged = _build_adjudicator_evidences([valuation])["cn_588000"]
+    assert bridged["position_id"] == valuation["position_id"]
+    assert bridged["instrument_key"] == valuation["instrument_key"]
+    assert bridged["holding"] == valuation["holding"]
+    assert bridged["valuation_method"] == valuation["valuation_method"]
+    assert bridged["market_value_cny"] == valuation["market_value_cny"]
+    assert bridged["classification"] == valuation["classification"]
+    assert bridged["liquidity"] == valuation["liquidity"]
+    assert bridged["evidence"] == valuation["evidence"]
+
+
+def test_task001b_evidence_bridge_preserves_missing_quantity():
+    from stocks.engine.scheduled_analysis import _build_adjudicator_evidences
+
+    bridged = _build_adjudicator_evidences([{
+        "position_id": "manual_asset", "instrument_key": "",
+        "valuation_method": "manual_amount", "market_value_cny": 1000.0,
+        "classification": {}, "liquidity": {"tier": "unknown"}, "evidence": {},
+    }])["manual_asset"]
+    assert bridged["holding"] == {}
+
+
+def test_task001c_evidence_bridge_never_fabricates_unit_for_flat_quantity():
+    """A flat pv record with quantity but no unit key must not be guessed as 'share'."""
+    from stocks.engine.scheduled_analysis import _build_adjudicator_evidences
+
+    bridged = _build_adjudicator_evidences([{
+        "position_id": "ccb_gold", "instrument_key": "bank:ccb_gold",
+        "quantity": 139.2733,
+        "valuation_method": "market_quote", "market_value_cny": 90000.0,
+        "classification": {"product_type": "precious_metal_account"},
+        "liquidity": {"tier": "t1"}, "evidence": {},
+    }])["ccb_gold"]
+    assert bridged["holding"] == {"quantity": 139.2733, "unit": ""}

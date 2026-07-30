@@ -104,6 +104,12 @@ DEFAULT_ENGINE_CONFIG = {
         "reduce_actions": ["暂停权益加仓", "关注防御板块", "检查高beta暴露"],
         "watch_actions": ["关注风险指标", "不新增高beta仓位"],
     },
+    "execution_rules": {
+        # Fail closed by default. Production rules are declared in engine.yaml.
+        "settlement_rules": [],
+        "quantity_rules": [],
+        "redemption_rule_map": {},
+    },
     "quant_action": {
         "stop_loss_pct": -12.0,
         "mid_stop_pct": -10.0,

@@ -12,7 +12,7 @@ from __future__ import annotations
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pandas as pd
 import pytest
@@ -358,6 +358,49 @@ class TestBasicBuild:
         assert quality["failed_count"] == 1
         assert quality["items"][0]["source"] == "unsupported_currency"
         assert "换算失败（未计入合计）" in context.raw_prompt_input
+
+    async def test_build_position_valuations_called_exactly_once(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+        sample_assets,
+        sample_instruments,
+    ):
+        """TASK-001A: build() must produce position_valuations from a single
+        authoritative call, not a preliminary + final pair."""
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+
+        original = ContextBuilder._build_position_valuations
+        calls = []
+
+        def counting_wrapper(self, *args, **kwargs):
+            result = original(self, *args, **kwargs)
+            calls.append(result)
+            return result
+
+        with patch.object(ContextBuilder, "_build_position_valuations", counting_wrapper):
+            context = await builder.build(
+                assets=sample_assets,
+                constraints={},
+                profile={"risk_tolerance": "moderate"},
+                instruments=sample_instruments,
+                recent_snapshots=[],
+            )
+
+        assert len(calls) == 1
+        final_valuations = calls[0]
+
+        # The single call's output must be the one referenced everywhere
+        # downstream — not a separately recomputed list.
+        assert context.position_valuations == final_valuations
+        assert context.exposure_summary == builder._build_exposure_summary(final_valuations)
+        assert context.liquidity_summary == builder._build_liquidity_summary(final_valuations)
+        assert context.asset_data_boundaries == builder._build_asset_data_boundaries(final_valuations)
+        assert context.advice_granularity == builder._build_advice_granularity_summary(final_valuations)
+
+        as_dict = context.to_dict()
+        assert as_dict["position_valuations"] == final_valuations
 
     async def test_stale_currency_conversion_is_visible(
         self,

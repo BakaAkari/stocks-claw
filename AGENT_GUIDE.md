@@ -1,10 +1,15 @@
 # Agent 使用指南
 
-> 本文供 AI Agent 和开发者操作当前系统，并约束下一阶段 Advisory 重构。
+> 本文只覆盖**运行操作**和**金融数据安全**规则，供 AI Agent 和开发者操作当前
+> 系统时参考。开发流程、任务范围、文档权威顺序、session 纪律和 commit/push
+> 规则的唯一来源是 `AGENTS.md`——本文不重复、不覆盖、也不与之竞争那些规则。
+> 如果这两份文档看起来对"接下来做什么"给出不同答案，以 `AGENTS.md` 为准。
 
 ## 1. 当前产品边界
 
-stocks-claw 是个人投资分析师系统。当前生产仍使用确定性规则动作 + 受限 Outlook；目标架构见 `stocks/VISION.md` 和 `ARCHITECTURE.md`，实施清单见 `EXECUTION_PLAN.md`。
+stocks-claw 是个人投资分析师系统。当前生产仍使用确定性规则动作 + 受限 Outlook；
+目标架构见 `ARCHITECTURE.md`（按组件标注 `[PRODUCTION]`/`[SHADOW]`/`[PLANNED]`/
+`[DEPRECATED]`），当前要做的具体任务见 `docs/tasks/`，开发流程见 `AGENTS.md`。
 
 - 系统不下单，不承诺收益。
 - 用户是唯一决策人。
@@ -23,9 +28,9 @@ stocks-claw 是个人投资分析师系统。当前生产仍使用确定性规�
 
 资产和画像读取不需确认；写入必须使用 CLI `--confirmed` 或 MCP `confirmed:true`。
 
-## 3. 当前生产报告规则
+## 3. 当前生产报告规则（安全边界）
 
-在 A5 切换前：
+在 Advisory 主窗口切换（ROADMAP A5）前：
 
 - 交易窗口产物仍以 `portfolio_decision.user_view` 为用户可见主结构；
 - 主窗口可以附加已过滤 `outlook`，观察窗口可以附加 `outlook_delta`；
@@ -37,30 +42,22 @@ stocks-claw 是个人投资分析师系统。当前生产仍使用确定性规�
 
 旧 `LLMAnalysis` 和 archive prompts 不参与生产。
 
-## 4. 新 Advisory 实施规则
+## 4. Advisory shadow 数据边界（安全约束，非开发流程）
 
-### 4.1 职责
+职责如何划分（Provider/Engine/Rule/LLM/Validator/Renderer/Push）是架构问题，见
+`ARCHITECTURE.md`；本节只列运行时不可违反的安全边界。
 
-- Provider/Engine：事实、计算和来源；
-- Rule modules：候选信号和约束证据；
-- LLM：InvestmentAdvisory 综合判断；
-- Validator：证据与可执行性检查；
-- Renderer：纯展示；
-- Push：时效、receipt、完整性和渠道格式。
+### 4.1 Shadow-first（数据边界，不可绕过）
 
-禁止在多个模块重复实现同一种语义验证。禁止通过全局裸数字集合授权金融声明。
+当前 Advisory shadow 链路：
 
-### 4.2 Shadow-first
-
-A0–A4 的新 Advisory：
-
-- 不进入生产 user_view；
+- 不进入生产 `user_view`；
 - 不推送；
 - 不自动保存 advice/execution/forecast；
 - 只写 `.local/advisory_shadow/`；
-- 必须能按 run_id 与当前规则路径对比。
+- 必须能按 `run_id` 与当前规则路径对比。
 
-### 4.3 LLM 输出约束
+### 4.2 LLM 输出约束
 
 LLM 不得：
 
@@ -79,20 +76,16 @@ LLM 必须：
 - 区分今日动作、持有决策和研究候选；
 - 标注数据限制和置信度。
 
-### 4.4 Validator 约束
+### 4.3 Validator 约束
 
-Validator 可以拒绝、警告、计算确定性金额或要求 LLM 修正一次；不得静默把动作 A 改成动作 B。仍无法通过时输出 `review_required`。
+Validator 可以拒绝、警告、计算确定性金额或要求 LLM 修正一次；不得静默把动作 A
+改成动作 B。仍无法通过时输出 `review_required`。当前独立 validator 模块的实现
+状态见 `ARCHITECTURE.md` §5.6（不要假设 `advisory_validator.py` 已存在）。
 
-### 4.5 文件和 schema
+## 5. 金融记忆写入规则
 
-- 新 schema 只增不减，必须同步 `stocks/DATA_MODEL.md`；
-- 计划文件中的路径和接口为实施约束，变更前更新 `EXECUTION_PLAN.md`；
-- 大文件新增功能优先拆到独立模块，不继续堆入 `scheduled_analysis.py`；
-- 不提交 `.local/`、`.secret/`、缓存、快照和模型原始响应。
-
-## 5. 金融记忆
-
-自然语言资产入口完成前，外部 Agent 可以帮助用户组织资产写接口，但必须：
+自然语言资产入口的用户可见入口点还不存在（见 `ARCHITECTURE.md`）。在它落地前，
+外部 Agent 可以帮助用户组织资产写接口，但必须：
 
 1. 先列出将新增、修改、删除的字段；
 2. 对代码、币种、成本、数量、账户和流动性不确定项提问；
@@ -100,7 +93,7 @@ Validator 可以拒绝、警告、计算确定性金额或要求 LLM 修正一�
 4. 写入后读回验证；
 5. 不根据行情或推断修改用户持仓事实。
 
-## 6. 数据质量
+## 6. 数据质量处理顺序
 
 所有分析必须读取 `data_quality`。正确顺序：
 
@@ -111,23 +104,10 @@ Validator 可以拒绝、警告、计算确定性金额或要求 LLM 修正一�
 → 降低置信度或 review_required
 ```
 
-不得把跨市场 stale、复权异常、基金 T-1 净值、手工估值或代理 ETF 当作同一种实时证据。
+不得把跨市场 stale、复权异常、基金 T-1 净值、手工估值或代理 ETF 当作同一种实时
+证据。
 
-## 7. 开发协议
+## 7. 开发流程与验证
 
-1. 读 `VISION → PLAN → ARCHITECTURE → EXECUTION_PLAN`；
-2. 只执行当前阶段；
-3. TDD：先失败测试，再最小实现；
-4. 每任务单独 commit + push；
-5. 当前生产路径改变前必须有 shadow 和回退；
-6. 文档与代码冲突时以当前代码为事实，同时修正文档；
-7. 删除用户数据、修改凭证、切换生产路径或扩大长期记忆写入必须先说明后果。
-
-## 8. 全局验证
-
-```bash
-.venv/bin/ruff check .
-.venv/bin/pytest -q -o 'addopts='
-.venv/bin/python -m compileall -q stocks tests
-.venv/bin/python -m stocks.adapters.cli --output json --no-news --no-quotes
-```
+不在本文重复。开发流程、当前任务、文档权威顺序、session 纪律和 commit/push
+规则见 `AGENTS.md`；验证命令见 `README.md`。

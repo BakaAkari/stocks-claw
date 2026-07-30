@@ -127,227 +127,489 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
     }
 
 
+
+_IDENTITY_CODE = re.compile(r"[（(]([^（）()]+)[）)]\s*$")
+_EXECUTABLE_STATUS = frozenset({"full", "adjusted_to_step"})
+
+
+def _instrument_identity(display_label: str) -> str:
+    """Extract the trailing (code) instrument identity from a rendered label."""
+    m = _IDENTITY_CODE.search(str(display_label or ""))
+    return m.group(1).strip() if m else ""
+
+
+def validate_push_truth(payload: dict) -> list[str]:
+    """Deterministic pre-delivery truth gate (TASK-001E1 scope item 7).
+
+    Defense-in-depth re-check of the same invariants ``presentation.
+    build_user_view`` is responsible for enforcing, applied directly to the
+    built payload so a regression there cannot silently reach delivery:
+    action text percentages must agree with ``final_ratio``, every action in
+    ``instruction_card.actions`` must actually be executable, no instrument
+    identity may appear in both actions and research, and a successful
+    Outlook narrative must carry at least one source_ref.
+    """
+    errors: list[str] = []
+    if payload.get("session_type") != "trading":
+        return errors
+    view = payload.get("user_view") or {}
+    card = view.get("instruction_card") or {}
+    assistant = view.get("assistant_brief") or {}
+
+    action_identities: set[str] = set()
+    for action in card.get("actions") or []:
+        final_ratio = action.get("final_ratio")
+        is_number = isinstance(final_ratio, (int, float)) and not isinstance(final_ratio, bool)
+        if not is_number or final_ratio <= 0:
+            errors.append(f"action has zero or missing final_ratio: {action.get('display_label')}")
+        if action.get("execution_status") not in _EXECUTABLE_STATUS:
+            errors.append(
+                f"non-executable action present in instruction_card.actions: "
+                f"{action.get('display_label')} execution_status={action.get('execution_status')}"
+            )
+        qty = action.get("executable_quantity")
+        if qty is not None and not (isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0):
+            errors.append(f"action has non-positive executable_quantity: {action.get('display_label')}")
+        if is_number:
+            expected_pct = round(final_ratio * 100)
+            for m in _NUMBER.finditer(str(action.get("reason_summary") or "")):
+                raw = m.group()
+                if not raw.endswith("%"):
+                    continue
+                try:
+                    value = round(float(raw.rstrip("%")))
+                except ValueError:
+                    continue
+                if value != expected_pct:
+                    errors.append(
+                        f"action text percentage {raw} disagrees with final_ratio "
+                        f"{final_ratio}: {action.get('display_label')}"
+                    )
+        identity = _instrument_identity(action.get("display_label"))
+        if identity:
+            action_identities.add(identity)
+
+    # Defect 1 also covers assistant_brief.why, which is rendered as its own
+    # push section. It must carry each card action's finalized sentence
+    # verbatim; if the two layers ever drift apart, one of them is lying about
+    # the ratio even when each is internally self-consistent.
+    why_texts = [w for w in (assistant.get("why") or []) if isinstance(w, str)]
+    for action in card.get("actions") or []:
+        sentence = action.get("reason_summary")
+        if isinstance(sentence, str) and sentence and sentence not in why_texts:
+            errors.append(
+                f"assistant_brief.why omits the finalized action sentence for "
+                f"{action.get('display_label')}"
+            )
+
+    for research in assistant.get("research") or []:
+        identity = _instrument_identity(research.get("display_label"))
+        if identity and identity in action_identities:
+            errors.append(f"instrument {identity} appears in both actions and research")
+
+    outlook = assistant.get("outlook")
+    if isinstance(outlook, dict) and outlook.get("status") == "ok":
+        if not (outlook.get("source_refs") or []):
+            errors.append("successful outlook with no source_refs")
+
+    return errors
+
 def render_push_payload(payload: dict) -> str:
     if payload.get("delivery") == "silent":
         return "[SILENT]"
     if payload.get("session_type") == "intelligence":
-        lines = [
-            f"**{payload.get('session_label', '每日全球情报')} · {payload.get('market_date', '')}**",
-            "",
-        ]
-        vix = payload.get("vix")
-        top_move = payload.get("top_move")
-        risk_level = payload.get("risk_level")
-        risk_triggers = payload.get("risk_triggers") or []
-        dq = payload.get("data_quality") or {}
-        signals = payload.get("signals") or []
-        if vix is not None or top_move:
-            lines.append(f"VIX: {vix if vix is not None else 'N/A'}  ·  {top_move or ''}")
-            lines.append("")
-        if risk_level:
-            lines.append(f"**风险等级: {risk_level}**")
-            for t in risk_triggers[:3]:
-                cond = t.get("condition", "")
-                reason = t.get("reason", "")
-                if cond or reason:
-                    lines.append(f"- {cond}{' — ' + reason if reason else ''}")
-            lines.append("")
-        if signals:
-            lines.append("**操作信号**")
-            for s in signals[:5]:
-                direction = {"buy": "买入", "sell": "卖出", "hold": "持有", "watch": "观察"}.get(s.get("signal",""), s.get("signal",""))
-                lines.append(f"- **{direction}** {s.get('name','') or s.get('symbol','')}: {s.get('action_hint','')}")
-            lines.append("")
-        article_count = dq.get("articles") or dq.get("snapshots")
-        if article_count:
-            lines.append(f"数据来源: {article_count} 篇新闻, {dq.get('clusters', 0)} 个信息群")
-        return "\n".join(lines)
+        return _render_intelligence_payload(payload)
+    return _render_trading_payload(payload)
+
+
+def _render_intelligence_payload(payload: dict) -> str:
+    lines = [
+        f"**{payload.get('session_label', '每日全球情报')} · {payload.get('market_date', '')}**",
+        "",
+    ]
+    vix = payload.get("vix")
+    top_move = payload.get("top_move")
+    risk_level = payload.get("risk_level")
+    risk_triggers = payload.get("risk_triggers") or []
+    dq = payload.get("data_quality") or {}
+    signals = payload.get("signals") or []
+    if vix is not None or top_move:
+        lines.append(f"VIX: {vix if vix is not None else 'N/A'}  ·  {top_move or ''}")
+        lines.append("")
+    if risk_level:
+        lines.append(f"**风险等级: {risk_level}**")
+        for t in risk_triggers[:3]:
+            cond = t.get("condition", "")
+            reason = t.get("reason", "")
+            if cond or reason:
+                lines.append(f"- {cond}{' — ' + reason if reason else ''}")
+        lines.append("")
+    if signals:
+        lines.append("**操作信号**")
+        for s in signals[:5]:
+            direction = {"buy": "买入", "sell": "卖出", "hold": "持有", "watch": "观察"}.get(s.get("signal",""), s.get("signal",""))
+            lines.append(f"- **{direction}** {s.get('name','') or s.get('symbol','')}: {s.get('action_hint','')}")
+        lines.append("")
+    article_count = dq.get("articles") or dq.get("snapshots")
+    if article_count:
+        lines.append(f"数据来源: {article_count} 篇新闻, {dq.get('clusters', 0)} 个信息群")
+    return "\n".join(lines)
+
+
+def _render_trading_payload(payload: dict) -> str:
     view = payload.get("user_view") or {}
     card = view.get("instruction_card") or {}
     assistant = view.get("assistant_brief") or {}
-    lines = [
+
+    sections: list[list[str]] = []
+
+    # 1. 本窗口变化
+    delta_section = _section_window_changes(assistant)
+    if delta_section:
+        sections.append(delta_section)
+
+    # 2. 可执行动作
+    action_section = _section_executable_actions(card)
+    if action_section:
+        sections.append(action_section)
+
+    # 3. 禁止与延后
+    blocked_section = _section_blocked_and_deferred(card, assistant)
+    if blocked_section:
+        sections.append(blocked_section)
+
+    # 4. 组合影响
+    impact_section = _section_portfolio_impact(assistant)
+    if impact_section:
+        sections.append(impact_section)
+
+    # 5. 下一检查点
+    checkpoint_section = _section_next_checkpoint(card, assistant)
+    if checkpoint_section:
+        sections.append(checkpoint_section)
+
+    lines: list[str] = [
         f"**{payload.get('session_label', '交易窗口')} · {payload.get('market_date', '')}**",
-        "",
-        "**交易指令卡**",
-        f"- **{card.get('status_label', '等待人工确认')}**",
     ]
-    actions = card.get("actions") or []
-    if actions:
-        for action in actions[:3]:
-            lines.append(
-                f"- **{action.get('action_label', '待确认动作')}｜{action.get('display_label', '未命名持仓')}**"
-            )
-            lines.append(f"  - 比例: {float(action.get('ratio') or 0) * 100:.0f}%")
-            amount = action.get("estimated_amount_cny")
-            amount_text = "金额待确认" if amount is None else f"¥{float(amount):,.0f}"
-            if amount is not None and action.get("amount_is_estimate"):
-                amount_text += "（估算）"
-            lines.extend(
-                [
-                    f"  - 预计金额: {amount_text}",
-                    f"  - 平台: {action.get('platform', '待确认')}",
-                    f"  - 操作: {action.get('operation_channel', '在平台内执行')}",
-                    f"  - 取消条件: {action.get('cancel_condition', '条件不再成立时取消')}",
-                    f"  - 到账: {action.get('settlement_display', '到账时间待确认')}",
-                    f"  - 下次检查: {action.get('next_checkpoint', '下一交易窗口复核')}",
-                ]
-            )
-    else:
-        for reason in (card.get("no_action_reasons") or ["当前没有可直接执行的获批动作"])[:2]:
-            lines.append(f"- 原因: {reason}")
-        lines.append(f"- 下次检查: {card.get('next_checkpoint', '下一交易窗口复核')}")
-    lines.extend(["", "**私人投资助理**", "", "**为什么这样安排**"])
-    for reason in (assistant.get("why") or ["当前决策以组合裁决结果为准"])[:5]:
-        lines.append(f"- {reason}")
-    conflicts = assistant.get("conflict_summary") or []
-    if conflicts:
-        lines.extend(["", "**待人工确认的信号分类**"])
-        for item in conflicts:
-            lines.append(
-                f"- {item.get('action_label', '待确认动作')}: {int(item.get('count') or 0)} 项"
-            )
-    lines.extend(["", "**现在不要做什么**"])
-    for item in (assistant.get("do_not_do") or ["无额外禁止事项"])[:5]:
-        lines.append(f"- {item}")
-    lines.extend(["", "**资金状态**"])
-    for key in ("immediate", "settling", "strategic_exit", "locked"):
-        item = (assistant.get("cash") or {}).get(key) or {}
-        lines.append(
-            f"- {item.get('label', '资金待确认')}: ¥{float(item.get('amount_cny') or 0):,.0f}"
-        )
-    risk = assistant.get("risk") or {}
-    lines.extend(
-        [
-            "",
-            "**组合与风险**",
-            f"- 当前状态: {risk.get('label', '风险状态待确认')}（{risk.get('transition', '状态待确认')}）",
-        ]
-    )
-    if risk.get("suspend_accumulation"):
-        lines.append("- 当前暂停加仓")
-    for reason in risk.get("reasons") or []:
-        lines.append(f"- 触发原因: {reason}")
-    lines.append(f"- 解除条件: {risk.get('release_condition', '等待风险条件明确')}")
-    notes = assistant.get("data_notes") or []
-    if notes:
-        lines.extend(["", "**数据说明**"])
-        lines.extend(f"- {note}" for note in notes)
-    lines.extend(["", "**仅供观察**"])
-    research = assistant.get("research") or []
-    if research:
-        for item in research[:8]:
-            lines.append(
-                f"- **{item.get('display_label', '未命名标的')}**: {item.get('action_hint', '仅供观察')}"
-            )
-            if item.get("reassess_after"):
-                lines.append(f"  - 再评估: {item['reassess_after']}")
-    else:
-        lines.append("- 暂无需要重点跟踪的研究候选")
+    if not sections:
+        lines.append("")
+        lines.append("当前无输出内容")
+        return "\n".join(lines)
 
-    # ── 中长期研判 section ──────────────────────────────────────────────────
-    outlook = assistant.get("outlook") or {}
-    outlook_delta = assistant.get("outlook_delta") or {}
-    if outlook_delta:
-        # ── 研判变化 (delta) ──────────────────────────────────────────
-        lines.extend(["", "**研判变化**"])
-        changes = outlook_delta.get("changes", {})
-        _render_delta_changes(changes, int(outlook_delta.get("schema_version", 1)), lines)
-    elif outlook and outlook.get("status") == "unavailable":
-        lines.extend(["", "**中长期研判**"])
-        lines.append(f"- {outlook.get('message', '研判暂不可用')}")
-        for limit in (outlook.get("data_limitations") or [])[:3]:
-            lines.append(f"  - {limit}")
-    elif outlook and outlook.get("status") == "ok":
-        lines.extend(["", "**中长期研判**"])
-        lines.append(f"- 综合置信度: {_CONFIDENCE_LABELS.get(outlook.get('confidence', ''), outlook.get('confidence', ''))}")
-        if outlook.get("summary"):
-            lines.append(f"- 综合判断: {outlook['summary']}")
-
-        # ── Near term (1-2w) ──────────────────────────────────────────
-        near = outlook.get("near_term") or {}
-        if near:
-            lines.append("")
-            lines.append("**未来1–2周**")
-            near_dir = _DIRECTION_LABELS.get(near.get("direction", ""), near.get("direction", ""))
-            near_conf = _CONFIDENCE_LABELS.get(near.get("confidence", ""), near.get("confidence", ""))
-            horizon_str = f"（{near.get('horizon', '')}）" if near.get("horizon") else ""
-            lines.append(f"- 方向: {near_dir}，置信度: {near_conf}{horizon_str}")
-
-        # ── Medium term (1-3m) ────────────────────────────────────────
-        medium = outlook.get("medium_term") or {}
-        if medium:
-            lines.append("")
-            lines.append("**未来1–3个月**")
-            med_dir = _DIRECTION_LABELS.get(medium.get("direction", ""), medium.get("direction", ""))
-            med_conf = _CONFIDENCE_LABELS.get(medium.get("confidence", ""), medium.get("confidence", ""))
-            horizon_str = f"（{medium.get('horizon', '')}）" if medium.get("horizon") else ""
-            lines.append(f"- 方向: {med_dir}，置信度: {med_conf}{horizon_str}")
-
-        # ── Asset views (top level, limit 4) ──────────────────────────
-        av_list = outlook.get("asset_views") or []
-        if av_list:
-            lines.append("")
-            lines.append("**资产类别**")
-        for av in av_list[:4]:
-            asset_key = av.get("asset_class", "") or av.get("asset", "")
-            d = _DIRECTION_LABELS.get(av.get("direction", ""), av.get("direction", ""))
-            rationale = av.get("rationale", "")
-            if rationale:
-                lines.append(f"- {asset_key}: {d} — {rationale}")
-            else:
-                lines.append(f"- {asset_key}: {d}")
-
-        # ── Sector views (top level, limit 5) ─────────────────────────
-        sv_list = outlook.get("sector_views") or []
-        if sv_list:
-            lines.append("")
-            lines.append("**行业观察**")
-        for sv in sv_list[:5]:
-            sector_key = sv.get("sector", "")
-            d = _DIRECTION_LABELS.get(sv.get("direction", ""), sv.get("direction", ""))
-            rationale = sv.get("rationale", "")
-            if rationale:
-                lines.append(f"- {sector_key}行业: {d} — {rationale}")
-            else:
-                lines.append(f"- {sector_key}行业: {d}")
-
-        # ── Scenarios ─────────────────────────────────────────────────
-        scenarios = outlook.get("scenarios") or {}
-        for key, label in (("base", "基准情景"), ("bull", "乐观情景"), ("risk", "风险情景")):
-            scene = scenarios.get(key) or {}
-            if not scene:
-                continue
-            lines.append("")
-            lines.append(f"**{label}**")
-            for driver in (scene.get("drivers") or [])[:3]:
-                lines.append(f"- 驱动因素: {driver}")
-            if scene.get("portfolio_effect"):
-                lines.append(f"- 组合影响: {scene['portfolio_effect']}")
-            # validation / invalidation are lists; render up to 3 items each
-            validation = scene.get("validation", []) if isinstance(scene.get("validation"), list) else ([scene["validation"]] if scene.get("validation") else [])
-            for item in validation[:3]:
-                lines.append(f"- 验证条件: {item}")
-            invalidation = scene.get("invalidation", []) if isinstance(scene.get("invalidation"), list) else ([scene["invalidation"]] if scene.get("invalidation") else [])
-            for item in invalidation[:3]:
-                lines.append(f"- 否定条件: {item}")
-
-        # ── Source references (limit 5) ───────────────────────────────
-        sources = outlook.get("source_refs") or []
-        if sources:
-            lines.append("")
-            lines.append("**来源**")
-            for src in sources[:5]:
-                s = src.get("source", "")
-                t = src.get("title", "")
-                u = src.get("url", "")
-                p = src.get("published_at", "")
-                if s and t and u:
-                    if p:
-                        lines.append(f"- [{s}｜{t}]({u}) — {p}")
-                    else:
-                        lines.append(f"- [{s}｜{t}]({u})")
+    for section in sections:
+        lines.append("")
+        lines.extend(section)
 
     return "\n".join(lines)
+
+
+def _section_heading(title: str) -> str:
+    return f"**{title}**"
+
+
+def _section_window_changes(assistant: dict) -> list[str]:
+    lines: list[str] = [_section_heading("本窗口变化")]
+    outlook_delta = assistant.get("outlook_delta") or {}
+    changes = (outlook_delta.get("changes") or {}) if isinstance(outlook_delta, dict) else {}
+
+    if changes:
+        rendered = _render_delta_changes_concise(changes)
+        for line in rendered[:4]:
+            lines.append(f"- {line}")
+        # Source refs changes (added/removed IDs)
+        source_changes = changes.get("source_refs") or {}
+        if isinstance(source_changes, dict):
+            added = source_changes.get("added") or []
+            removed = source_changes.get("removed") or []
+            if added:
+                lines.append(f"- 来源新增: {', '.join(str(x) for x in added[:3])}")
+            if removed:
+                lines.append(f"- 来源移除: {', '.join(str(x) for x in removed[:3])}")
+        return lines
+
+    outlook = assistant.get("outlook") or {}
+    if isinstance(outlook, dict) and outlook.get("status") == "unavailable":
+        lines.append("- 中长期研判暂不可用")
+        return lines
+
+    if isinstance(outlook, dict) and outlook.get("status") == "ok":
+        if outlook.get("summary"):
+            lines.append(f"- 综合判断: {outlook['summary']}")
+        near = outlook.get("near_term") or {}
+        medium = outlook.get("medium_term") or {}
+        parts: list[str] = []
+        if near:
+            d = _DIRECTION_LABELS.get(near.get("direction"), near.get("direction", ""))
+            c = _CONFIDENCE_LABELS.get(near.get("confidence"), near.get("confidence", ""))
+            if d or c:
+                parts.append(f"未来1-2周: {d}" + (f"（{c}）" if c else ""))
+        if medium:
+            d = _DIRECTION_LABELS.get(medium.get("direction"), medium.get("direction", ""))
+            c = _CONFIDENCE_LABELS.get(medium.get("confidence"), medium.get("confidence", ""))
+            if d or c:
+                parts.append(f"未来1-3个月: {d}" + (f"（{c}）" if c else ""))
+        for av in (outlook.get("asset_views") or [])[:4]:
+            key = av.get("asset_class") or av.get("asset") or ""
+            d = _DIRECTION_LABELS.get(av.get("direction"), av.get("direction", ""))
+            if key and d:
+                parts.append(f"{key}: {d}")
+        for sv in (outlook.get("sector_views") or [])[:4]:
+            key = sv.get("sector") or ""
+            d = _DIRECTION_LABELS.get(sv.get("direction"), sv.get("direction", ""))
+            if key and d:
+                parts.append(f"{key}行业: {d}")
+        for line in parts[:4]:
+            lines.append(f"- {line}")
+        return lines
+
+    lines.append("- 本窗口未发现需要改变计划的新证据")
+    return lines
+
+
+def _render_delta_changes_concise(changes: dict) -> list[str]:
+    rendered: list[str] = []
+    summary = changes.get("summary")
+    if isinstance(summary, dict):
+        from_val = summary.get("from")
+        to_val = summary.get("to")
+        if from_val and to_val:
+            rendered.append(f"综合判断: {from_val} → {to_val}")
+        elif to_val:
+            rendered.append(f"综合判断更新为: {to_val}")
+
+    confidence = changes.get("confidence")
+    if isinstance(confidence, dict):
+        from_c = _CONFIDENCE_LABELS.get(confidence.get("from"), confidence.get("from"))
+        to_c = _CONFIDENCE_LABELS.get(confidence.get("to"), confidence.get("to"))
+        if from_c and to_c:
+            rendered.append(f"置信度: {from_c} → {to_c}")
+
+    for hkey, hlabel in (("near_term", "未来1-2周"), ("medium_term", "未来1-3个月")):
+        hc = changes.get(hkey)
+        if not isinstance(hc, dict):
+            continue
+        parts = []
+        for subkey, sublabel in (("direction", "方向"), ("confidence", "置信度"), ("horizon", "时间范围")):
+            sub = hc.get(subkey)
+            if not isinstance(sub, dict):
+                continue
+            from_v = sub.get("from")
+            to_v = sub.get("to")
+            if from_v is None and to_v is None:
+                continue
+            if subkey == "direction":
+                from_v = _DIRECTION_LABELS.get(from_v, from_v)
+                to_v = _DIRECTION_LABELS.get(to_v, to_v)
+            if from_v and to_v:
+                parts.append(f"{sublabel}: {from_v} → {to_v}")
+            elif to_v:
+                parts.append(f"{sublabel}: 新→ {to_v}")
+        if parts:
+            rendered.append(f"{hlabel}: {'；'.join(parts)}")
+
+    sector_changes = changes.get("sector_views") or {}
+    if isinstance(sector_changes, dict):
+        for sector, sc in list(sector_changes.items())[:3]:
+            if not isinstance(sc, dict):
+                continue
+            direction = sc.get("direction")
+            if isinstance(direction, dict):
+                d_from = _DIRECTION_LABELS.get(direction.get("from"), direction.get("from"))
+                d_to = _DIRECTION_LABELS.get(direction.get("to"), direction.get("to"))
+                if d_from and d_to:
+                    rendered.append(f"{sector}行业: {d_from} → {d_to}")
+
+    asset_changes = changes.get("asset_views") or {}
+    if isinstance(asset_changes, dict):
+        for asset, ac in list(asset_changes.items())[:3]:
+            if not isinstance(ac, dict):
+                continue
+            direction = ac.get("direction")
+            if isinstance(direction, dict):
+                d_from = _DIRECTION_LABELS.get(direction.get("from"), direction.get("from"))
+                d_to = _DIRECTION_LABELS.get(direction.get("to"), direction.get("to"))
+                if d_from and d_to:
+                    rendered.append(f"{asset}: {d_from} → {d_to}")
+
+    scenario_changes = changes.get("scenarios") or {}
+    if isinstance(scenario_changes, dict):
+        for sname, slabel in (("base", "基准情景"), ("bull", "乐观情景"), ("risk", "风险情景")):
+            scene = scenario_changes.get(sname)
+            if not isinstance(scene, dict):
+                continue
+            scene_parts = []
+            for sf, sf_label in (("label", "研判"), ("validation", "验证条件"), ("invalidation", "否定条件")):
+                sfv = scene.get(sf)
+                if isinstance(sfv, dict):
+                    from_v = sfv.get("from")
+                    to_v = sfv.get("to")
+                    if from_v and to_v:
+                        scene_parts.append(f"{sf_label}: {from_v} → {to_v}")
+            if scene_parts:
+                rendered.append(f"{slabel}: {'；'.join(scene_parts[:2])}")
+
+    return rendered[:8]
+
+
+def _section_executable_actions(card: dict) -> list[str]:
+    lines: list[str] = [_section_heading("可执行动作")]
+    actions = card.get("actions") or []
+    if not actions:
+        no_action_reasons = card.get("no_action_reasons") or []
+        status = card.get("status_label") or "等待人工确认"
+        lines.append(f"- 状态: {status}")
+        for reason in (no_action_reasons or ["当前没有满足执行条件的获批动作"])[:2]:
+            lines.append(f"- {reason}")
+        return lines
+
+    for action in actions[:3]:
+        label = action.get("display_label") or action.get("action_label") or "未命名持仓"
+        signal = action.get("action_label") or "动作"
+        ratio = action.get("final_ratio")
+        pct_text = "比例待确认"
+        if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
+            pct_text = f"{float(ratio) * 100:.0f}%"
+        qty = action.get("executable_quantity")
+        qty_text = ""
+        if isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0:
+            qty_text = f"，{int(qty)} 单位"
+        amount = action.get("estimated_amount_cny")
+        amount_text = ""
+        if amount is not None:
+            amount_text = f"，约 ¥{float(amount):,.0f}"
+            if action.get("amount_is_estimate"):
+                amount_text += "（估算）"
+        platform = action.get("platform") or ""
+        settlement = action.get("settlement_display") or ""
+        platform_line = " | ".join(x for x in [platform, settlement] if x) or "平台待确认"
+        cancel = action.get("cancel_condition") or "触发条件不再成立时取消"
+        lines.append(f"- **{signal}｜{label}**：{pct_text}{qty_text}{amount_text}")
+        lines.append(f"  通道: {platform_line}；取消条件: {cancel}")
+    return lines
+
+
+def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
+    lines: list[str] = [_section_heading("禁止与延后")]
+    collected: list[str] = []
+
+    no_action_reasons = card.get("no_action_reasons") or []
+    if no_action_reasons:
+        collected.extend(no_action_reasons)
+
+    why = assistant.get("why") or []
+    action_sentences = {a.get("reason_summary") for a in (card.get("actions") or []) if a.get("reason_summary")}
+    for text in why:
+        if text in action_sentences:
+            continue
+        if text not in collected:
+            collected.append(text)
+
+    do_not_do = assistant.get("do_not_do") or []
+    for text in do_not_do:
+        if text and text not in collected:
+            collected.append(text)
+
+    data_notes = assistant.get("data_notes") or []
+    for note in data_notes:
+        if note and note not in collected:
+            collected.append(note)
+
+    risk = assistant.get("risk") or {}
+    if risk.get("suspend_accumulation"):
+        msg = "风险状态暂停加仓"
+        if msg not in collected:
+            collected.append(msg)
+
+    if not collected:
+        lines.append("- 无")
+
+    # Sort by priority groups
+    priority0 = []
+    priority1 = []
+    priority2 = []
+    priority3 = []
+    for text in collected[:8]:
+        lowered = text.lower()
+        if any(k in lowered for k in ["行情数据过时", "数据异常", "暂缓", "需人工", "等待人工", "冲突", "最小交易单位", "review", "锁定"]):
+            priority0.append(text)
+        elif any(k in lowered for k in ["风险", "暂停加仓", "suspend"]):
+            priority1.append(text)
+        elif any(k in lowered for k in ["长期配置", "仅供观察", "研究候选", "研究", "观察"]):
+            priority3.append(text)
+        else:
+            priority2.append(text)
+
+    ordered = (priority0 + priority1 + priority2 + priority3)[:4]
+    for text in ordered:
+        lines.append(f"- {text}")
+
+    # E2: research is always compressed to a single trailing line if present
+    research = assistant.get("research") or []
+    if research:
+        lines.append(f"- 研究候选 {len(research)} 个，当前均不构成交易动作")
+
+    return lines
+
+
+def _section_portfolio_impact(assistant: dict) -> list[str]:
+    lines: list[str] = [_section_heading("组合影响")]
+    risk = assistant.get("risk") or {}
+    label = risk.get("label") or "风险状态待确认"
+    transition = risk.get("transition") or "状态未变"
+    lines.append(f"- 风险状态: {label}（{transition}）")
+    reasons = risk.get("reasons") or []
+    for reason in reasons[:2]:
+        lines.append(f"- 触发原因: {reason}")
+    if not reasons and risk.get("level") in ("hedge", "reduce"):
+        lines.append("- 触发原因: 风险等级判定缺少可读证据，已转人工复核")
+
+    cash = assistant.get("cash") or {}
+    cash_parts = []
+    for key, label_text in (
+        ("available_now", "现在能用"),
+        ("confirmed_settling", "到账途中"),
+        ("planned_release", "计划内到期释放"),
+    ):
+        item = cash.get(key) or {}
+        if item.get("amount_cny") is not None:
+            cash_parts.append(f"{label_text} ¥{float(item.get('amount_cny') or 0):,.0f}")
+    locked = cash.get("locked") or {}
+    locked_amount = float(locked.get("amount_cny") or 0)
+    if locked_amount > 0:
+        cash_parts.append(f"不能动 ¥{locked_amount:,.0f}")
+
+    strategic = cash.get("strategic_exit") or {}
+    strategic_amount = float(strategic.get("amount_cny") or 0)
+    if strategic_amount > 0:
+        cash_parts.append(f"卖出后可释放 ¥{strategic_amount:,.0f}")
+
+    if cash_parts:
+        lines.append(f"- 资金: {'；'.join(cash_parts)}")
+    return lines
+
+
+def _section_next_checkpoint(card: dict, assistant: dict) -> list[str]:
+    lines: list[str] = [_section_heading("下一检查点")]
+    checkpoint = card.get("next_checkpoint") or "下一交易窗口复核"
+    lines.append(f"- {checkpoint}")
+
+    actions = card.get("actions") or []
+    if actions:
+        cancel = actions[0].get("cancel_condition") or "触发条件不再成立时取消"
+        lines.append(f"- 条件: {cancel}")
+        return lines
+
+    risk = assistant.get("risk") or {}
+    release = risk.get("release_condition")
+    if release:
+        lines.append(f"- 条件: {release}")
+        return lines
+
+    data_notes = assistant.get("data_notes") or []
+    if data_notes:
+        lines.append(f"- 注意: {data_notes[0]}")
+    return lines
+
 
 
 _SUBKEY_LABELS = {
@@ -525,6 +787,9 @@ def _is_span_safe(pos: int, num_str: str, safe_spans: set[tuple[int, int]]) -> b
     return False
 
 
+_E2_REQUIRED_HEADINGS = ("本窗口变化", "可执行动作", "禁止与延后", "组合影响", "下一检查点")
+
+
 def validate_payload_text(payload: dict, text: str) -> list[str]:
     errors = [f"internal token: {m.group(0)}" for m in _FORBIDDEN.finditer(text)]
 
@@ -534,7 +799,7 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
     # (VIX levels, yield thresholds, price targets) is an unbounded whitelist problem.
     # Strip the outlook section from the text before number scanning.
     deterministic_text = text
-    for marker in ("**中长期研判**", "**研判变化**"):
+    for marker in ("**本窗口变化**", "**中长期研判**", "**研判变化**"):
         idx = deterministic_text.find(marker)
         if idx >= 0:
             deterministic_text = deterministic_text[:idx]
@@ -556,14 +821,28 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
         if value not in allowed:
             errors.append(f"unauthorized number: {raw}")
 
-
-
-    if text != "[SILENT]":
-        if payload.get("session_type") == "trading":
-            if "**交易指令卡**" not in text or "**私人投资助理**" not in text:
-                errors.append("missing two-layer headings")
-            elif text.index("**交易指令卡**") > text.index("**私人投资助理**"):
-                errors.append("wrong section order")
+    if text == "[SILENT]":
+        return errors
+    if payload.get("session_type") == "trading":
+        # Concise report schema (TASK-001E2): exactly five ordered sections.
+        positions = []
+        for heading in _E2_REQUIRED_HEADINGS:
+            marker = f"**{heading}**"
+            if marker not in text:
+                errors.append(f"missing required section: {heading}")
+            else:
+                positions.append(text.index(marker))
+        if len(positions) == len(_E2_REQUIRED_HEADINGS) and positions != sorted(positions):
+            errors.append("wrong section order")
+        for banned in (
+            "交易指令卡", "私人投资助理", "为什么这样安排", "待人工确认的信号分类",
+            "仅供观察", "中长期研判", "资产类别", "行业观察", "基准情景", "乐观情景", "风险情景",
+        ):
+            if f"**{banned}**" in text:
+                errors.append(f"banned legacy heading: {banned}")
+        # Conflict count lines are rendered in the old schema only.
+        if re.search(r"[:：]\s*\d+\s*项\s*$", text, re.MULTILINE):
+            errors.append("legacy conflict count line present")
     return errors
 
 
@@ -594,6 +873,9 @@ def main() -> int:
         if artifact.get("session") != args.session:
             raise ValueError("session mismatch")
         payload = build_push_payload(artifact, now=args.now)
+        truth_errors = validate_push_truth(payload)
+        if truth_errors:
+            raise ValueError("; ".join(truth_errors))
         payload_text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         _atomic_write(Path(args.output), payload_text)
         output = payload_text if args.format == "json" else render_push_payload(payload)

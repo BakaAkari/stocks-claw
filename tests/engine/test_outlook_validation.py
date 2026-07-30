@@ -191,6 +191,30 @@ def test_missing_source_refs_is_rejected(valid_outlook, evidence):
     assert any("missing top-level field: source_refs" in e for e in errors)
 
 
+def test_empty_source_refs_with_narrative_content_is_rejected(valid_outlook, evidence):
+    """TASK-001E1 defect 5: source_refs=[] must fail, not merely go unchecked,
+    whenever summary/sector_views/asset_views/scenarios carry narrative
+    content — an empty list previously produced zero errors here because
+    the source-authorization check only validates refs that already exist."""
+    outlook = dict(valid_outlook)
+    outlook["source_refs"] = []
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("narrative outlook has no source_refs" in e for e in errors)
+
+
+def test_empty_source_refs_without_narrative_content_is_accepted(valid_outlook, evidence):
+    """No narrative content at all means nothing needs supporting — the
+    empty-source-refs gate must not fire on a fully empty outlook shell."""
+    outlook = dict(valid_outlook)
+    outlook["source_refs"] = []
+    outlook["summary"] = ""
+    outlook["sector_views"] = []
+    outlook["asset_views"] = []
+    outlook["scenarios"] = {}
+    errors = validate_structured_outlook(outlook, evidence)
+    assert not any("narrative outlook has no source_refs" in e for e in errors)
+
+
 def test_missing_confidence_is_rejected(valid_outlook, evidence):
     outlook = dict(valid_outlook)
     outlook.pop("confidence")
@@ -506,6 +530,20 @@ def test_horizon_notation_is_not_false_positive_numeric(valid_outlook, evidence)
     errors = validate_structured_outlook(outlook, evidence)
     numeric_errors = [e for e in errors if "unauthorized number" in e]
     assert numeric_errors == []
+
+
+def test_date_adjacent_hostile_number_is_still_rejected(valid_outlook, evidence):
+    """A hostile number sharing a sentence with an ISO date must still be caught.
+
+    Regression guard for the skippable-context fix: safety now requires the
+    number's own span to overlap the date/horizon/version/URL span, not merely
+    sit within a fixed lookback window of one. 99999 does not overlap the
+    "2026-07-17" date span here and must be rejected.
+    """
+    outlook = copy.deepcopy(valid_outlook)
+    outlook["summary"] = "2026-07-17\u76ee\u6807\u4ef7\u683c99999\u5143"
+    errors = validate_structured_outlook(outlook, evidence)
+    assert any("unauthorized number" in e and "99999" in e for e in errors), errors
 
 
 @pytest.mark.parametrize("field", ["near_term", "medium_term"])

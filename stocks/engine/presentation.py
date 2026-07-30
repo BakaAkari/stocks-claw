@@ -45,7 +45,7 @@ _STATUS_LABELS = {
     "review_required": "等待人工确认",
 }
 _RISK_LABELS = {
-    "hedge": "防御状态", "reduce": "降低风险", "watch": "观察状态",
+    "hedge": "对冲/高风险", "reduce": "降风险", "watch": "观察",
     "normal": "常态",
 }
 _ANOMALY_MESSAGES = {
@@ -64,10 +64,6 @@ _EVIDENCE_LABELS = {
     "ratio": "价格比值", "deviation_pct": "偏离百分比",
     "threshold_pct": "告警阈值", "pct_change": "涨跌幅",
 }
-_ESTIMATE_FRESHNESS = frozenset({"previous_close", "stale", "old", "unknown", "missing", "no_data"})
-_ESTIMATE_VALUATION_METHODS = frozenset({"manual_amount", "fund_nav", "insurance_value"})
-
-
 def public_instrument_code(instrument_key: str, product_type: str = "") -> str:
     """Return a public trading/fund code, never a position id."""
     del product_type
@@ -105,13 +101,6 @@ def status_label(status: str) -> str:
 
 def risk_label(level: str) -> str:
     return _RISK_LABELS.get(str(level or ""), "风险状态待确认")
-
-
-def freshness_is_estimate(evidence: dict, valuation_method: str) -> bool:
-    if str(valuation_method or "") in _ESTIMATE_VALUATION_METHODS:
-        return True
-    freshness = str((evidence or {}).get("price_freshness") or "unknown")
-    return freshness in _ESTIMATE_FRESHNESS
 
 
 def _evidence_summary(evidence: dict[str, Any]) -> str:
@@ -213,12 +202,22 @@ def _display_for_position(item: dict) -> str:
 
 
 def _cash_view(schedule: dict) -> dict:
+    """Project the adjudicator's canonical cash-schedule fields verbatim.
+
+    Sources every amount from CashSchedule.to_dict()'s canonical fields
+    (available_now/confirmed_settling/planned_release/strategic_exit/locked)
+    rather than the pre-canonical duplicate fields, with no recomputation.
+    The user_view keys match the canonical field names exactly. Unresolved
+    settlement is intentionally excluded from every bucket here (see
+    _data_notes).
+    """
     values = schedule or {}
     return {
-        "immediate": {"label": "现在能用", "amount_cny": round(values.get("immediate_cash_cny", 0.0) or 0.0, 2)},
-        "settling": {"label": "到账途中", "amount_cny": round(values.get("settling_cash_cny", 0.0) or 0.0, 2)},
-        "strategic_exit": {"label": "卖出后才能用", "amount_cny": round(values.get("strategic_exit_value_cny", 0.0) or 0.0, 2)},
-        "locked": {"label": "不能动", "amount_cny": round(values.get("locked_value_cny", 0.0) or 0.0, 2)},
+        "available_now": {"label": "现在能用", "amount_cny": round(values.get("available_now", 0.0) or 0.0, 2)},
+        "confirmed_settling": {"label": "到账途中", "amount_cny": round(values.get("confirmed_settling", 0.0) or 0.0, 2)},
+        "planned_release": {"label": "计划内到期释放", "amount_cny": round(values.get("planned_release", 0.0) or 0.0, 2)},
+        "strategic_exit": {"label": "卖出后才能用", "amount_cny": round(values.get("strategic_exit", 0.0) or 0.0, 2)},
+        "locked": {"label": "不能动", "amount_cny": round(values.get("locked", 0.0) or 0.0, 2)},
     }
 
 
@@ -266,16 +265,31 @@ def _conflict_summary(conflicts: list[dict]) -> list[dict]:
 
 
 def _risk_reasons(risk_state: dict) -> list[str]:
-    mapping = {
-        "cluster:geopolitics": "地缘政治风险达到临界级别",
-        "cluster:macro": "宏观风险达到临界级别",
-        "cluster:liquidity": "市场流动性风险达到临界级别",
-    }
-    reasons = []
-    for key in (risk_state or {}).get("evidence_keys") or []:
-        text = mapping.get(str(key))
-        if text and text not in reasons:
+    """Build human-readable risk reasons from actual risk triggers.
+
+    ``risk_warning.assess_risk`` already renders each trigger's ``condition``/
+    ``value`` as plain, non-machine-ID text (e.g. "VIX > 35" / "VIX=36.2"), so
+    this reads that evidence directly instead of matching a static, easily
+    incomplete evidence-key vocabulary (TASK-001E1 defect 6). ``hedge``/
+    ``reduce`` must never render with an empty reasons list; when the risk
+    state carries no derivable trigger evidence, that state is itself
+    invalid, so this fails closed to an explicit review message rather than
+    silently returning nothing.
+    """
+    reasons: list[str] = []
+    for trigger in (risk_state or {}).get("triggers") or []:
+        if not isinstance(trigger, dict):
+            continue
+        condition = str(trigger.get("condition") or "").strip()
+        if not condition:
+            continue
+        value = str(trigger.get("value") or "").strip()
+        text = f"{condition}：{value}" if value else condition
+        if text not in reasons:
             reasons.append(text)
+    level = str((risk_state or {}).get("level") or "")
+    if level in ("hedge", "reduce") and not reasons:
+        return ["风险等级判定缺少可读证据，已转人工复核"]
     return reasons
 
 
@@ -286,6 +300,84 @@ def _display_timestamp(value: str) -> str:
     except ValueError:
         return raw or "时间待确认"
     return parsed.strftime("%Y-%m-%d %H:%M UTC")
+
+
+_STALE_FRESHNESS = frozenset({"stale", "old", "missing", "no_data", "unknown", ""})
+_EXECUTABLE_STATUS = frozenset({"full", "adjusted_to_step"})
+
+
+def _instrument_market(instrument_key: str) -> str:
+    value = str(instrument_key or "")
+    if ":" not in value:
+        return ""
+    market, _, _ = value.partition(":")
+    return market.strip().lower()
+
+
+def _quote_by_market(data_boundaries: dict) -> dict:
+    quality = (data_boundaries or {}).get("data_quality") or {}
+    return ((quality.get("quotes") or {}).get("by_market") or {})
+
+
+def _market_quote_stale(market: str, by_market: dict) -> bool:
+    """Fail closed: an unknown market, a missing quote entry, or any
+    non-fresh freshness value all count as stale (TASK-001E1 defect 3)."""
+    if not market:
+        return True
+    item = by_market.get(market)
+    if not isinstance(item, dict):
+        return True
+    return str(item.get("freshness") or "") in _STALE_FRESHNESS
+
+
+def _is_executable(raw: dict, item: dict, by_market: dict) -> bool:
+    """Executable iff execution_rules approved it AND its market's quotes are
+    fresh. Folds scope item 2 (execution_status/final_ratio/executable_
+    quantity) and scope item 3 (per-market freshness fail-closed, including
+    cross-market positions) into a single gate: only actions passing both
+    may enter instruction_card.actions or drive card_status=action_required.
+    """
+    if raw.get("execution_status") not in _EXECUTABLE_STATUS:
+        return False
+    ratio = raw.get("final_ratio")
+    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or ratio <= 0:
+        return False
+    qty = raw.get("executable_quantity")
+    if qty is not None and not (isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0):
+        return False
+    market = _instrument_market(item.get("instrument_key", ""))
+    return not _market_quote_stale(market, by_market)
+
+
+def _action_sentence(raw: dict, label: str) -> str:
+    """Generate the action sentence entirely from finalized fields.
+
+    Never reuses ``action_description``/``reason`` text: those originate
+    from the raw pre-adjudication signal card and can embed a percentage
+    that execution_rules has since revised (TASK-001E1 defect 1). The
+    displayed percentage always equals ``final_ratio``.
+    """
+    signal = signal_label(raw.get("signal", ""))
+    ratio = raw.get("final_ratio")
+    pct = f"{float(ratio) * 100:.0f}%" if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) else "比例待确认"
+    suffix = "（已按最小交易单位调整）" if raw.get("execution_status") == "adjusted_to_step" else ""
+    return f"{label}：{signal} {pct}{suffix}"
+
+
+def _deferred_action_text(raw: dict, item: dict, by_market: dict) -> str:
+    """Concise no-action/manual-review text for a finalized action that
+    failed the executable gate (TASK-001E1 defect 2/3) -- it must never be
+    rendered as an executable card."""
+    label = _display_for_position(item)
+    market = _instrument_market(item.get("instrument_key", ""))
+    if _market_quote_stale(market, by_market):
+        return f"{label}：目标市场行情数据过时或缺失，暂缓执行，等待数据恢复"
+    status = raw.get("execution_status")
+    if status == "deferred_min_unit":
+        return f"{label}：获批比例低于最小交易单位，暂不构成可执行动作"
+    if status in ("review_required", "locked"):
+        return f"{label}：{_safe_reason_text(raw.get('decision_reason') or raw.get('reason') or '')}"
+    return f"{label}：当前不满足可执行条件，等待人工复核"
 
 
 def _data_notes(data_boundaries: dict) -> list[str]:
@@ -304,6 +396,20 @@ def _data_notes(data_boundaries: dict) -> list[str]:
     if str(macro.get("freshness") or "") in {"old", "stale"}:
         notes.append(f"宏观数据较旧（截止 {_display_timestamp(macro.get('as_of'))}）")
     return notes
+
+
+def _unresolved_settlement_note(schedule: dict) -> str | None:
+    """Surface unresolved sale-settlement proceeds as a review/data boundary.
+
+    Unresolved settlement is never available_now or confirmed_settling cash
+    (fail-closed by design); it also does not get a sixth cash bucket. It is
+    instead surfaced as a plain data note with the aggregate CNY amount only
+    (no position IDs).
+    """
+    amount = round(float((schedule or {}).get("unresolved_settlement") or 0.0), 2)
+    if amount <= 0:
+        return None
+    return f"¥{amount:,.0f} 的卖出资金结算方式待确认，未计入“现在能用”或“到账途中”"
 
 
 _OUTLOOK_ALLOWED_TOP = frozenset({
@@ -590,43 +696,78 @@ def build_user_view(
     decision = portfolio_decision or {}
     by_id, by_key = _position_maps(position_valuations)
     reviews_by_id = _position_review_map(position_reviews)
-    actions = []
-    for raw in (decision.get("approved_actions") or [])[:3]:
+    by_market = _quote_by_market(data_boundaries or {})
+    all_approved = decision.get("approved_actions") or []
+    approved_cards = all_approved[:3]
+
+    # TASK-001E1 defect 4: the research-dedup identity set covers *every*
+    # finalized action -- executable, deferred, and the ones beyond the
+    # display cap -- not just the three that become cards. An instrument the
+    # engine has already adjudicated is not a research idea, regardless of
+    # whether the card had room to show it.
+    approved_keys: set[str] = set()
+    for raw in all_approved:
         item = by_id.get(str(raw.get("position_id") or ""), {})
-        market_value = item.get("market_value_cny")
-        ratio = float(raw.get("ratio") or 0.0)
-        amount = round(float(market_value) * ratio, 2) if market_value is not None else None
+        key = str(item.get("instrument_key") or "")
+        if key:
+            approved_keys.add(key)
+
+    actions = []
+    deferred_reasons = []
+    for raw in approved_cards:
+        item = by_id.get(str(raw.get("position_id") or ""), {})
+        # TASK-001E1 defect 2/3: only executable actions (execution_status
+        # full/adjusted_to_step, final_ratio>0, executable_quantity>0, and a
+        # fresh quote for the instrument's own market) may become a card
+        # action. Everything else is a concise deferred/review reason, never
+        # a silently dropped or contradictorily-labelled action_required card.
+        if not _is_executable(raw, item, by_market):
+            text = _deferred_action_text(raw, item, by_market)
+            if text not in deferred_reasons:
+                deferred_reasons.append(text)
+            continue
+        label = _display_for_position(item)
+        ratio = float(raw.get("final_ratio") or 0.0)
         platform = str(raw.get("platform_display") or _PLATFORM_NAME.get(raw.get("institution_type", ""), ""))
         op_hint = _operation_hint_for(raw)
+        # TASK-001D: amount, estimate-flag, ratio provenance, and execution
+        # facts are computed once by the adjudicator (_finalize_approved_action)
+        # and projected here verbatim -- no valuation x ratio recomputation,
+        # no freshness re-derivation, no fallback to a display-time default.
         actions.append({
-            "display_label": _display_for_position(item),
+            "display_label": label,
             "action_label": signal_label(raw.get("signal", "")),
             "ratio": ratio,
-            "estimated_amount_cny": amount,
-            "amount_is_estimate": freshness_is_estimate(
-                item.get("evidence") or {}, item.get("valuation_method", "")
-            ) if item else True,
-            "reason_summary": str(raw.get("action_description") or raw.get("reason") or "按获批条件执行"),
+            "final_ratio": raw.get("final_ratio"),
+            "original_ratio": raw.get("original_ratio"),
+            "estimated_amount_cny": raw.get("estimated_amount_cny"),
+            "amount_is_estimate": raw.get("amount_is_estimate"),
+            "reason_summary": _action_sentence(raw, label),
+            "decision_reason": raw.get("decision_reason"),
+            "evidence_summary": raw.get("evidence_summary"),
             "cancel_condition": str(raw.get("cancel_condition") or "触发条件不再成立时取消"),
             "settlement_display": str(raw.get("settlement_timing") or "到账时间待确认"),
+            "settlement_rule": raw.get("settlement_rule"),
+            "executable_quantity": raw.get("executable_quantity"),
+            "execution_status": raw.get("execution_status"),
             "next_checkpoint": str(raw.get("next_checkpoint") or "下一交易窗口复核"),
             "platform": platform,
             "operation_channel": op_hint,
         })
 
-    no_action_reasons = []
-    approved_pids = {str(raw.get("position_id") or "") for raw in (decision.get("approved_actions") or [])[:3]}
+    no_action_reasons = list(deferred_reasons)
+    approved_pids = {str(raw.get("position_id") or "") for raw in approved_cards}
     for conflict in decision.get("unresolved_conflicts") or []:
+        if len(no_action_reasons) >= 2:
+            break
         pid = str(conflict.get("position_id") or "")
         if pid in approved_pids:
             continue
         reason = _conflict_reason(conflict, by_id)
         if reason not in no_action_reasons:
             no_action_reasons.append(reason)
-        if len(no_action_reasons) == 2:
-            break
     for raw in decision.get("suppressed_actions") or []:
-        if len(no_action_reasons) == 2:
+        if len(no_action_reasons) >= 2:
             break
         pid = str(raw.get("position_id") or "")
         if pid in approved_pids:
@@ -636,18 +777,30 @@ def build_user_view(
             no_action_reasons.append(reason)
     if not no_action_reasons and not actions:
         no_action_reasons.append("当前没有满足执行条件的获批动作")
+    no_action_reasons = no_action_reasons[:2]
 
     raw_status = str(decision.get("status") or "")
     if actions:
         card_status, card_label = "action_required", "需要操作"
-    elif raw_status == "review_required" and decision.get("unresolved_conflicts"):
+    elif deferred_reasons or (raw_status == "review_required" and decision.get("unresolved_conflicts")):
         card_status, card_label = "manual_review", "等待人工确认"
     else:
         card_status, card_label = "no_action", "今日无需操作"
 
+    # TASK-001E1 defect 4: an instrument that is already a finalized approved
+    # or deferred action must never also appear as a research candidate.
+    # Dedup by the authoritative instrument_key before capping at 8, so a
+    # duplicate never displaces a genuinely distinct candidate.
     research = []
-    for candidate in (research_candidates or [])[:8]:
+    seen_research_keys: set[str] = set()
+    for candidate in research_candidates or []:
         symbol = str(candidate.get("symbol") or "")
+        if symbol and symbol in approved_keys:
+            continue
+        if symbol and symbol in seen_research_keys:
+            continue
+        if symbol:
+            seen_research_keys.add(symbol)
         item = by_key.get(symbol, {})
         name = candidate.get("name") or item.get("display_name") or "未命名标的"
         reassess_after = str(candidate.get("reassess_after") or "下一交易窗口复核")
@@ -658,6 +811,8 @@ def build_user_view(
             "action_hint": str(candidate.get("action_hint") or "仅供观察，不形成交易动作"),
             "reassess_after": reassess_after,
         })
+        if len(research) >= 8:
+            break
 
     level = str((risk_state or {}).get("level") or "normal")
     transition = str((risk_state or {}).get("transition") or "stable")
@@ -665,14 +820,23 @@ def build_user_view(
         "escalated": "风险升级", "deescalated": "风险缓和", "stable": "状态未变",
         "unchanged": "状态未变", "candidate": "候选状态待确认",
     }.get(transition, "状态待确认")
+    cash_schedule = decision.get("cash_schedule") or {}
+    data_notes = _data_notes(data_boundaries or {})
+    unresolved_note = _unresolved_settlement_note(cash_schedule)
+    if unresolved_note:
+        data_notes = [unresolved_note, *data_notes]
+    why_texts = [a["reason_summary"] for a in actions]
+    for text in no_action_reasons:
+        if text not in why_texts:
+            why_texts.append(text)
     assistant = {
-        "why": [a["reason_summary"] for a in actions] or no_action_reasons[:2],
+        "why": why_texts or ["当前没有满足执行条件的获批动作"],
         "conflict_summary": _conflict_summary(decision.get("unresolved_conflicts") or []),
         "do_not_do": [
             _suppressed_user_text(x, by_id, reviews_by_id)
             for x in (decision.get("suppressed_actions") or [])[:5]
         ],
-        "cash": _cash_view(decision.get("cash_schedule") or {}),
+        "cash": _cash_view(cash_schedule),
         "risk": {
             "label": risk_label(level),
             "transition": transition_text,
@@ -680,7 +844,7 @@ def build_user_view(
             "reasons": _risk_reasons(risk_state or {}),
             "release_condition": str((risk_state or {}).get("release_condition") or "等待风险状态满足解除条件"),
         },
-        "data_notes": _data_notes(data_boundaries or {}),
+        "data_notes": data_notes,
         "research": research,
         "outlook": _project_outlook(structured_outlook) if structured_outlook is not None else _no_value,
         "outlook_delta": _project_outlook_delta(outlook_delta) if outlook_delta is not None else _no_value,

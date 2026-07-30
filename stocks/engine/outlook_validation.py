@@ -76,7 +76,7 @@ _NUMERIC_FORECAST_RE = re.compile(
 
 # Patterns to exclude from number scanning
 _DATE_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}")
-_URL_PROTOCOL = re.compile(r"https?://")
+_URL_LITERAL = re.compile(r"https?://\S+")
 _HORIZON_PATTERN = re.compile(r"\d[wmdy]|\d-\d+[wmdy]")
 _VERSION_PATTERN = re.compile(r"v\d+(?:\.\d+)*")
 
@@ -146,6 +146,7 @@ def validate_structured_outlook(outlook: dict, evidence: dict) -> list[str]:
     _check_direction_enums(outlook, errors)
     _check_scenario_completeness(outlook, errors)
     _check_forbidden_probability_fields(outlook, errors)
+    _check_source_refs_presence(outlook, errors)
     _check_source_authorization(outlook, evidence, errors)
     _check_instrument_authorization(outlook, evidence, errors)
     _check_confidence_cap(outlook, evidence, errors)
@@ -295,6 +296,26 @@ def _check_forbidden_probability_fields(outlook: dict, errors: list[str]) -> Non
     for name, scenario in scenarios.items():
         if isinstance(scenario, dict) and "probability" in scenario:
             errors.append(f"forbidden probability field in scenario: {name}")
+
+
+def _check_source_refs_presence(outlook: dict, errors: list[str]) -> None:
+    """Require at least one source_ref whenever narrative content is present.
+
+    ``_check_source_authorization`` only validates refs that exist; an empty
+    ``source_refs`` list produces zero errors there, letting an outlook
+    publish summary/sector/asset/scenario narrative with no supporting
+    evidence at all (TASK-001E1 defect 5). Fail closed instead: any of
+    summary, sector_views, asset_views, or scenarios being non-empty makes
+    at least one source_ref mandatory.
+    """
+    has_narrative = bool(
+        outlook.get("summary")
+        or outlook.get("sector_views")
+        or outlook.get("asset_views")
+        or outlook.get("scenarios"),
+    )
+    if has_narrative and not outlook.get("source_refs"):
+        errors.append("narrative outlook has no source_refs")
 
 
 def _build_authorized_sources(evidence: dict) -> set[tuple[str, str, str, str]]:
@@ -459,9 +480,16 @@ def _check_trade_instructions(outlook: dict, errors: list[str]) -> None:
 def _check_numeric_authority(
     outlook: dict, evidence: dict, errors: list[str],
 ) -> None:
-    """Reject numeric claims in narrative fields not backed by evidence."""
+    """Reject numeric claims in narrative fields not backed by evidence.
+
+    Each narrative field is scanned independently (not on the ``_narrative_text``
+    concatenation) so that ``_is_skippable_context``'s proximity windows (ISO
+    date/URL/horizon/version) can never bleed across unrelated field boundaries
+    — e.g. a bad number at the end of ``summary`` must not be exempted just
+    because ``near_term.horizon`` ("1-2w") happens to be the next field joined
+    after it.
+    """
     evidence_numbers = _collect_evidence_numbers(evidence)
-    narrative = _narrative_text(outlook)
 
     summary = outlook.get("summary")
     if isinstance(summary, str) and _NUMERIC_FORECAST_RE.search(summary):
@@ -472,42 +500,57 @@ def _check_numeric_authority(
         if any("numeric claim" in error for error in errors):
             return
 
-    # Exclude instrument keys (a:159110) and source_refs.id from numeric scanning
-    narrative = _INSTRUMENT_KEY_RE.sub("", narrative)
-    for ref in outlook.get("source_refs", []):
-        if isinstance(ref, dict):
-            rid = ref.get("id", "")
-            if isinstance(rid, str) and rid:
-                narrative = narrative.replace(rid, "")
+    source_ref_ids = [
+        ref.get("id", "")
+        for ref in outlook.get("source_refs", [])
+        if isinstance(ref, dict) and isinstance(ref.get("id", ""), str) and ref.get("id")
+    ]
 
-    for m in _NUMBER_RE.finditer(narrative):
-        num_str = m.group()
-        pos = m.start()
+    for field in _narrative_fields(outlook):
+        # Exclude instrument keys (a:159110) and source_refs.id from numeric scanning
+        field = _INSTRUMENT_KEY_RE.sub("", field)
+        for rid in source_ref_ids:
+            field = field.replace(rid, "")
 
-        # Skip numbers in contexts that shouldn't be scanned
-        if _is_skippable_context(narrative, pos, num_str):
-            continue
+        for m in _NUMBER_RE.finditer(field):
+            num_str = m.group()
+            pos = m.start()
 
-        try:
-            num = float(num_str)
-        except ValueError:
-            continue
+            # Skip numbers in contexts that shouldn't be scanned
+            if _is_skippable_context(field, pos, num_str):
+                continue
 
-        # Round-trip through int if whole number for matching
-        check_num = float(int(num)) if num == int(num) else num
-        # Allow if the number appears anywhere in the evidence (including rounded variants).
-        if check_num in evidence_numbers or round(num, 2) in evidence_numbers or round(num, 1) in evidence_numbers:
-            continue
-        # Allow small numbers in 1-100 range that are almost certainly percentages or counts.
-        if 1 <= num <= 100:
-            continue
-        # Flag only numbers that are absent from evidence and not in the common
-        # 1-100 range, which are likely forecast/claim numbers.
-        errors.append(f"unauthorized number: {num_str}")
+            try:
+                num = float(num_str)
+            except ValueError:
+                continue
+
+            # Round-trip through int if whole number for matching
+            check_num = float(int(num)) if num == int(num) else num
+            # Allow if the number appears anywhere in the evidence (including rounded variants).
+            if check_num in evidence_numbers or round(num, 2) in evidence_numbers or round(num, 1) in evidence_numbers:
+                continue
+            # Allow small numbers in 1-100 range that are almost certainly percentages or counts.
+            if 1 <= num <= 100:
+                continue
+            # Flag only numbers that are absent from evidence and not in the common
+            # 1-100 range, which are likely forecast/claim numbers.
+            errors.append(f"unauthorized number: {num_str}")
 
 
 def _narrative_text(outlook: dict) -> str:
     """Concatenate all narrative fields from the outlook into a single string."""
+    return " ".join(_narrative_fields(outlook))
+
+
+def _narrative_fields(outlook: dict) -> list[str]:
+    """Return each narrative field's text as an independent string (not joined).
+
+    Used by checks that must reason about position-within-a-field (e.g. the
+    numeric-authority proximity windows in ``_is_skippable_context``), where
+    concatenating unrelated fields would let one field's safe context (a date,
+    a horizon token) wrongly exempt a number in an adjacent, unrelated field.
+    """
     parts: list[str] = []
 
     # Top-level
@@ -561,7 +604,7 @@ def _narrative_text(outlook: dict) -> str:
                 if isinstance(val, str):
                     parts.append(val)
 
-    return " ".join(parts)
+    return parts
 
 
 def _collect_evidence_numbers(evidence: dict) -> set[float]:
@@ -597,30 +640,20 @@ def _collect_evidence_numbers(evidence: dict) -> set[float]:
 
 
 def _is_skippable_context(text: str, pos: int, num_str: str) -> bool:
-    """Check whether a number at *pos* in *text* should be excluded."""
-    # Skip if part of ISO date (4-digit year followed by -, then 2-digit month)
-    lookback = text[max(0, pos - 20):pos + len(num_str) + 20]
-    if re.search(r"\d{4}-\d{2}-\d{2}", lookback):
-        return True
+    """Check whether the number at *pos* is part of a safe context.
 
-    # Skip if number is inside a URL
-    before = text[max(0, pos - 100):pos]
-    proto_match = _URL_PROTOCOL.search(before)
-    if proto_match:
-        proto_start = max(0, pos - 100) + proto_match.start()
-        after_proto = text[proto_start:pos + len(num_str)]
-        if " " not in after_proto:
-            return True
+    Safety requires the number's own span to *overlap* the safe pattern's
+    span (ISO date / URL / horizon / version) — not merely sit within a
+    fixed character distance of one. A same-sentence lookback window would
+    exempt an unrelated hostile number just because some date or horizon
+    token happens to appear nearby in the same field.
+    """
+    end = pos + len(num_str)
 
-    # Skip horizon patterns like "1-2w" or "1-3m"
-    lookback = text[max(0, pos - 5):pos + len(num_str) + 5]
-    if _HORIZON_PATTERN.search(lookback):
-        return True
-
-    # Skip version numbers like v3.1.4
-    lookback = text[max(0, pos - 5):pos + len(num_str) + 5]
-    if _VERSION_PATTERN.search(lookback):
-        return True
+    for pattern in (_DATE_LIKE, _URL_LITERAL, _HORIZON_PATTERN, _VERSION_PATTERN):
+        for m in pattern.finditer(text):
+            if pos < m.end() and end > m.start():
+                return True
 
     return False
 

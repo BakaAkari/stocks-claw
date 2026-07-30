@@ -2,13 +2,13 @@ from stocks.engine.presentation import (
     anomaly_display,
     build_user_view,
     display_label,
-    freshness_is_estimate,
     public_instrument_code,
     risk_label,
     signal_label,
     status_label,
     suppression_reason_display,
 )
+from stocks.engine.valuation_freshness import freshness_is_estimate
 
 
 def test_public_instrument_codes_and_labels_hide_machine_ids():
@@ -28,7 +28,11 @@ def test_user_facing_enum_labels_are_chinese_and_safe():
     assert signal_label("reduce") == "减仓"
     assert signal_label("add") == "加仓"
     assert status_label("review_required") == "等待人工确认"
-    assert risk_label("hedge") == "防御状态"
+    assert risk_label("hedge") == "对冲/高风险"
+    assert risk_label("reduce") == "降风险"
+    assert risk_label("watch") == "观察"
+    assert risk_label("normal") == "常态"
+    assert risk_label("totally_unknown_level") == "风险状态待确认"
     assert signal_label("totally_new_signal") == "待确认动作"
 
 
@@ -70,6 +74,10 @@ def _position(pid, name, key, value=10_000.0, freshness="fresh", method="market_
 
 
 def test_build_user_view_renders_approved_action_and_estimated_amount():
+    # market_value_cny=20_000 * ratio=0.25 would naively be 5_000.0; the
+    # supplied estimated_amount_cny is deliberately different (4_200.0) to
+    # prove presentation projects the adjudicator's authoritative amount
+    # verbatim instead of recomputing valuation x ratio (TASK-001D item 2/3).
     decision = {
         "status": "approved",
         "approved_actions": [{
@@ -77,14 +85,23 @@ def test_build_user_view_renders_approved_action_and_estimated_amount():
             "reason": "趋势走弱", "action_description": "趋势走弱，减仓25%",
             "cancel_condition": "重新站回20日均线", "settlement_timing": "T+1",
             "next_checkpoint": "A股收盘前",
+            "final_ratio": 0.21, "original_ratio": 0.25,
+            "decision_reason": "趋势走弱；执行规则调整至可交易份数",
+            "evidence_summary": "signal=reduce, requested_ratio=0.25, product_type=exchange_traded_fund, liquidity_tier=t0, execution_rule=etf_t0",
+            "settlement_rule": "T+1", "executable_quantity": 2100.0,
+            "execution_status": "adjusted_to_step",
+            "estimated_amount_cny": 4_200.0, "amount_is_estimate": False,
         }],
         "suppressed_actions": [], "unresolved_conflicts": [],
-        "cash_schedule": {"immediate_cash_cny": 40_000, "settling_cash_cny": 2_500,
-                          "strategic_exit_value_cny": 60_000, "locked_value_cny": 20_000},
+        "cash_schedule": {
+            "available_now": 40_000, "confirmed_settling": 2_500,
+            "planned_release": 3_000, "strategic_exit": 60_000, "locked": 20_000,
+        },
     }
     view = build_user_view(
         decision, [_position("a_516020", "化工ETF", "a:516020", 20_000, "previous_close")],
         [], [], {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
         session_id="cn_pre_open", session_intent="pre_open_plan",
     )
     card = view["instruction_card"]
@@ -94,10 +111,239 @@ def test_build_user_view_renders_approved_action_and_estimated_amount():
     action = card["actions"][0]
     assert action["display_label"] == "化工ETF（516020）"
     assert action["action_label"] == "减仓"
-    assert action["estimated_amount_cny"] == 5_000.0
-    assert action["amount_is_estimate"] is True
+    assert action["estimated_amount_cny"] == 4_200.0
+    assert action["amount_is_estimate"] is False
+    assert action["ratio"] == 0.21
+    assert action["final_ratio"] == 0.21
+    assert action["original_ratio"] == 0.25
+    assert action["decision_reason"] == "趋势走弱；执行规则调整至可交易份数"
+    assert action["evidence_summary"] == (
+        "signal=reduce, requested_ratio=0.25, product_type=exchange_traded_fund, "
+        "liquidity_tier=t0, execution_rule=etf_t0"
+    )
+    assert action["settlement_rule"] == "T+1"
+    assert action["executable_quantity"] == 2100.0
+    assert action["execution_status"] == "adjusted_to_step"
     assert "a_516020" not in str(view)
-    assert view["assistant_brief"]["cash"]["immediate"]["label"] == "现在能用"
+    cash = view["assistant_brief"]["cash"]
+    assert cash["available_now"] == {"label": "现在能用", "amount_cny": 40_000.0}
+    assert cash["confirmed_settling"] == {"label": "到账途中", "amount_cny": 2_500.0}
+    assert cash["planned_release"] == {"label": "计划内到期释放", "amount_cny": 3_000.0}
+    assert cash["strategic_exit"] == {"label": "卖出后才能用", "amount_cny": 60_000.0}
+    assert cash["locked"] == {"label": "不能动", "amount_cny": 20_000.0}
+    assert "immediate" not in cash
+    assert "settling" not in cash
+
+
+def test_build_user_view_never_synthesizes_missing_final_action_fields():
+    """When the adjudicator omits final-action fields, presentation must project
+    None/absence verbatim rather than falling back to ratio, reason, or a
+    default estimate flag (TASK-001D correction item 2). final_ratio and
+    execution_status must be supplied here (as "full") purely to clear
+    TASK-001E1's executable gate so the action still reaches
+    instruction_card.actions; every other final-action field stays absent
+    and must not be synthesized."""
+    decision = {
+        "status": "approved",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "reduce", "ratio": 0.25,
+            "reason": "趋势走弱", "action_description": "趋势走弱，减仓25%",
+            "cancel_condition": "重新站回20日均线", "settlement_timing": "T+1",
+            "next_checkpoint": "A股收盘前",
+            "final_ratio": 0.25, "execution_status": "full",
+            # original_ratio, decision_reason, evidence_summary,
+            # settlement_rule, executable_quantity, estimated_amount_cny,
+            # amount_is_estimate are all deliberately absent from the raw
+            # adjudicator record here.
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [],
+        "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020", 20_000, "previous_close")],
+        [], [], {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+        session_id="cn_pre_open", session_intent="pre_open_plan",
+    )
+    action = view["instruction_card"]["actions"][0]
+    assert action["final_ratio"] == 0.25
+    assert action["original_ratio"] is None
+    assert action["decision_reason"] is None
+    assert action["evidence_summary"] is None
+    assert action["settlement_rule"] is None
+    assert action["executable_quantity"] is None
+    assert action["execution_status"] == "full"
+    assert action["estimated_amount_cny"] is None
+    assert action["amount_is_estimate"] is None
+
+
+_FRESH_A_MARKET = {"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}}
+
+
+def test_action_sentence_always_agrees_with_final_ratio_not_raw_percentage():
+    """TASK-001E1 defect 1: a raw 50% requested ratio that execution_rules
+    revises down to a finalized 25% must render 25% everywhere user-visible
+    (reason_summary and assistant_brief.why), never the raw 50% text baked
+    into the pre-adjudication action_description/reason."""
+    decision = {
+        "status": "approved",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "reduce", "ratio": 0.25,
+            "reason": "趋势走弱，减仓50%", "action_description": "趋势走弱，减仓50%",
+            "final_ratio": 0.25, "original_ratio": 0.5,
+            "execution_status": "full", "executable_quantity": 2100.0,
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020")],
+        [], [], {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries=_FRESH_A_MARKET,
+        session_id="cn_pre_open", session_intent="pre_open_plan",
+    )
+    action = view["instruction_card"]["actions"][0]
+    assert "25%" in action["reason_summary"]
+    assert "50%" not in action["reason_summary"]
+    assert any("25%" in why for why in view["assistant_brief"]["why"])
+    assert not any("50%" in why for why in view["assistant_brief"]["why"])
+
+
+def test_action_displayed_ratio_field_matches_final_ratio_not_raw_ratio():
+    """The projected action["ratio"] must be sourced from final_ratio, never
+    the raw pre-adjudication ratio, so ratio/final_ratio cannot diverge."""
+    decision = {
+        "status": "approved",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "reduce", "ratio": 0.5,
+            "final_ratio": 0.25,
+            "execution_status": "full", "executable_quantity": 2100.0,
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020")],
+        [], [], {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries=_FRESH_A_MARKET,
+        session_id="cn_pre_open", session_intent="pre_open_plan",
+    )
+    action = view["instruction_card"]["actions"][0]
+    assert action["ratio"] == 0.25
+    assert action["ratio"] == action["final_ratio"]
+
+
+def test_deferred_min_unit_action_excluded_from_executable_actions():
+    """Defect 2: execution_status=deferred_min_unit / final_ratio=0 /
+    executable_quantity=0 must never appear in instruction_card.actions,
+    and the card must not become action_required solely because of it."""
+    decision = {
+        "status": "approved",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "reduce", "ratio": 0.02,
+            "reason": "小幅减仓", "final_ratio": 0.0, "executable_quantity": 0.0,
+            "execution_status": "deferred_min_unit",
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020")],
+        [], [], {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries=_FRESH_A_MARKET,
+        session_id="cn_pre_open", session_intent="pre_open_plan",
+    )
+    card = view["instruction_card"]
+    assert card["actions"] == []
+    assert card["status"] != "action_required"
+    assert any("最小交易单位" in reason for reason in card["no_action_reasons"])
+
+
+def test_stale_market_quote_blocks_action_even_for_cross_market_position():
+    """Defect 3: an action targeting a market whose quote freshness is
+    stale/missing must not be executable, including when the position
+    belongs to a market other than the session's own (cross-market)."""
+    decision = {
+        "status": "approved",
+        "approved_actions": [{
+            "position_id": "us_ita", "signal": "reduce", "ratio": 0.2,
+            "reason": "美股信号", "final_ratio": 0.2, "executable_quantity": 10.0,
+            "execution_status": "full",
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    data_boundaries = {"data_quality": {"quotes": {"by_market": {
+        "us": {"freshness": "stale"}, "a": {"freshness": "fresh"},
+    }}}}
+    view = build_user_view(
+        decision, [_position("us_ita", "ITA", "us:ITA")],
+        [], [], {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries=data_boundaries,
+        session_id="cn_after_close", session_intent="after_close_review",
+    )
+    card = view["instruction_card"]
+    assert card["actions"] == []
+    assert card["status"] != "action_required"
+    assert any("行情数据过时或缺失" in reason for reason in card["no_action_reasons"])
+
+    # Missing market entry (no_data) must fail closed the same way.
+    view2 = build_user_view(
+        decision, [_position("us_ita", "ITA", "us:ITA")],
+        [], [], {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+        session_id="cn_after_close", session_intent="after_close_review",
+    )
+    assert view2["instruction_card"]["actions"] == []
+
+
+def test_research_candidate_deduplicated_against_finalized_action_identity():
+    """Defect 4: an instrument already present as a finalized approved or
+    deferred action must never also appear as a research candidate."""
+    decision = {
+        "status": "approved",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "reduce", "ratio": 0.25,
+            "reason": "趋势走弱", "final_ratio": 0.25, "executable_quantity": 2100.0,
+            "execution_status": "full",
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020", 20_000, "previous_close")],
+        [], [
+            {"symbol": "a:516020", "name": "化工ETF", "action_hint": "仅供观察"},
+            {"symbol": "a:512480", "name": "半导体ETF", "action_hint": "仅供观察"},
+        ],
+        {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries=_FRESH_A_MARKET,
+        session_id="cn_pre_open", session_intent="pre_open_plan",
+    )
+    research_labels = [item["display_label"] for item in view["assistant_brief"]["research"]]
+    assert not any("516020" in label for label in research_labels)
+    assert any("512480" in label for label in research_labels)
+
+
+def test_unresolved_settlement_excluded_from_cash_and_surfaced_as_data_note():
+    """Unresolved sale-settlement proceeds must never count as available_now
+    or confirmed_settling cash, and must not become a sixth cash bucket
+    (TASK-001D item 1)."""
+    decision = {
+        "status": "approved", "approved_actions": [], "suppressed_actions": [],
+        "unresolved_conflicts": [],
+        "cash_schedule": {
+            "available_now": 10_000, "confirmed_settling": 2_000,
+            "planned_release": 0, "strategic_exit": 5_000, "locked": 1_000,
+            "unresolved_settlement": 7_500,
+        },
+    }
+    view = build_user_view(
+        decision, [], [], [], {"level": "normal", "transition": "stable", "suspend_accumulation": False},
+        session_id="cn_pre_open", session_intent="pre_open_plan",
+    )
+    cash = view["assistant_brief"]["cash"]
+    assert set(cash) == {"available_now", "confirmed_settling", "planned_release", "strategic_exit", "locked"}
+    assert cash["available_now"]["amount_cny"] == 10_000.0
+    assert cash["confirmed_settling"]["amount_cny"] == 2_000.0
+    assert "unresolved_settlement" not in str(view)
+    notes = view["assistant_brief"]["data_notes"]
+    assert any("¥7,500" in note for note in notes)
 
 
 def test_build_user_view_no_action_card_has_two_human_reasons():
@@ -132,6 +378,53 @@ def test_build_user_view_no_action_card_has_two_human_reasons():
 
     assert "periodic_open" not in str(view)
     assert "research_only" not in str(view)
+
+
+def test_hedge_reduce_without_triggers_fails_closed_to_review_message():
+    """Defect 6: hedge/reduce risk must never render with an empty reasons list.
+    When the risk_state carries no derivable trigger evidence, the level is
+    itself invalid and must fail closed to a readable review message."""
+    decision = {"status": "approved", "approved_actions": [], "suppressed_actions": [],
+                "unresolved_conflicts": [], "cash_schedule": {}}
+    view = build_user_view(
+        decision, [], [], [],
+        {"level": "hedge", "transition": "escalated", "suspend_accumulation": True, "triggers": []},
+        session_id="cn_pre_open", session_intent="pre_open_plan",
+    )
+    reasons = view["assistant_brief"]["risk"]["reasons"]
+    assert len(reasons) == 1
+    assert "缺少可读证据" in reasons[0]
+
+
+def test_stale_a_market_action_blocked_in_us_session():
+    """Defect 3 symmetric: an A-share action in a US session must be blocked if
+    A-market quotes are stale, just as a US action in a CN session is blocked."""
+    decision = {
+        "status": "approved",
+        "approved_actions": [{
+            "position_id": "a_510300", "signal": "reduce", "ratio": 0.1,
+            "reason": "A股信号", "final_ratio": 0.1, "executable_quantity": 1000.0,
+            "execution_status": "full",
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [], "cash_schedule": {},
+    }
+    data_boundaries = {"data_quality": {"quotes": {"by_market": {
+        "a": {"freshness": "stale"}, "us": {"freshness": "fresh"},
+    }}}}
+    view = build_user_view(
+        decision, [
+            {"position_id": "a_510300", "display_name": "沪深300ETF", "instrument_key": "a:510300",
+             "market_value_cny": 100_000, "valuation_method": "market_quote",
+             "classification": {"product_type": "exchange_traded_fund"},
+             "evidence": {"price_freshness": "stale"}},
+        ], [], [], {"level": "watch", "transition": "stable", "suspend_accumulation": False},
+        data_boundaries=data_boundaries,
+        session_id="us_after_close", session_intent="after_close_review",
+    )
+    card = view["instruction_card"]
+    assert card["actions"] == []
+    assert card["status"] != "action_required"
+    assert any("行情数据过时或缺失" in reason for reason in card["no_action_reasons"])
 
 
 def test_outlook_params_are_projected_into_assistant_brief():
@@ -289,7 +582,7 @@ def test_user_view_contains_deterministic_conflict_counts_risk_reasons_and_data_
     view = build_user_view(
         decision, positions, [], [],
         {"level": "hedge", "transition": "unchanged", "suspend_accumulation": True,
-         "evidence_keys": ["cluster:geopolitics"]},
+         "triggers": [{"condition": "Geopolitical crisis", "value": "geopolitics critical", "severity": "hedge"}]},
         data_boundaries=data_boundaries,
         session_id="cn_after_close", session_intent="after_close_review",
     )
@@ -297,7 +590,7 @@ def test_user_view_contains_deterministic_conflict_counts_risk_reasons_and_data_
     assert brief["conflict_summary"] == [
         {"action_label": "减仓", "count": 3}, {"action_label": "止盈", "count": 1}
     ]
-    assert brief["risk"]["reasons"] == ["地缘政治风险达到临界级别"]
+    assert brief["risk"]["reasons"] == ["Geopolitical crisis：geopolitics critical"]
     assert brief["data_notes"] == [
         "美股行情数据已过时（截止 2026-07-16 20:00 UTC）",
         "宏观数据较旧（截止 2026-06-01 00:00 UTC）",

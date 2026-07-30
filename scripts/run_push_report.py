@@ -9,7 +9,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from build_push_payload import build_push_payload, render_push_payload, validate_payload_text
+from build_push_payload import (
+    build_push_payload,
+    render_push_payload,
+    validate_payload_text,
+    validate_push_truth,
+)
 
 
 def main() -> int:
@@ -25,6 +30,9 @@ def main() -> int:
     try:
         artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
         payload = build_push_payload(artifact, now=now)
+        truth_errors = validate_push_truth(payload)
+        if truth_errors:
+            raise ValueError("; ".join(truth_errors))
         text = render_push_payload(payload)
         errors = validate_payload_text(payload, text)
         if errors:

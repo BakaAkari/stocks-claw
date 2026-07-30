@@ -1,7 +1,8 @@
 # stocks-claw 产品愿景
 
 > 版本：v3.0（2026-07-22）
-> 本文是产品北极星。当前实现、迁移路线和执行清单分别以 `ARCHITECTURE.md`、`PLAN.md`、`EXECUTION_PLAN.md` 为准。
+> 本文是产品北极星。当前实现以 `ARCHITECTURE.md` 为准，长期迁移路线以 `ROADMAP.md` 为准，
+> 决策历史以 `PLAN.md` 为准，当前唯一有约束力的任务以 `docs/tasks/` 为准。
 
 ## 1. 产品定位
 

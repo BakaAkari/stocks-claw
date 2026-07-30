@@ -2,19 +2,24 @@
 
 服务单一用户的个人投资分析师系统。它保存用户确认的账户、持仓和投资偏好，定时采集行情、历史价格、新闻、公告、宏观和事件，构建可追踪的数据证据，并由 LLM 投资分析师综合形成持仓建议、市场研判和机会候选。用户始终是唯一决策人，系统不自动下单。
 
-当前生产仍使用确定性规则动作和受限 Outlook；下一阶段正在按 `EXECUTION_PLAN.md` 迁移到“统一证据快照 → LLM InvestmentAdvisory → 确定性可执行性验证 → 推送”的目标架构。迁移采用 shadow-first，不会一次性替换现有生产路径。
+当前生产仍使用确定性规则动作和受限 Outlook；长期迁移方向见 `ROADMAP.md`，目标是逐步迁移到“统一证据快照 → LLM InvestmentAdvisory → 确定性可执行性验证 → 推送”的架构。迁移采用 shadow-first，不会一次性替换现有生产路径。某一阶段是否已经落地，只看 `STATUS.md`，本文不作动态状态声明。
 
-[English](README.md) · [愿景](stocks/VISION.md) · [计划](PLAN.md) · [执行清单](EXECUTION_PLAN.md) · [架构](ARCHITECTURE.md) · [Agent 指南](AGENT_GUIDE.md)
+[English](README.md) · [Agents](AGENTS.md) · [现状](STATUS.md) · [路线图](ROADMAP.md) · [愿景](stocks/VISION.md) · [架构](ARCHITECTURE.md) · [Agent 指南](AGENT_GUIDE.md) · [计划](PLAN.md)
 
-## 文档权威
+## 文档地图
 
-- `stocks/VISION.md`：产品北极星；
-- `PLAN.md`：当前状态、裁决和路线；
-- `EXECUTION_PLAN.md`：唯一实施清单；
-- `ARCHITECTURE.md`：当前与目标架构；
-- `stocks/DATA_MODEL.md`：当前和计划 schema；
-- `AGENT_GUIDE.md`：操作与开发规则；
-- `docs/archive/`：历史证据，无现行效力。
+- `AGENTS.md`：coding agent 的入口文档，文档权威顺序和 session 规则由此开始；
+- `STATUS.md`：当前动态项目状态的唯一来源（已落地、脏工作区、待办）；
+- `docs/tasks/`：当前唯一有约束力的任务文件；
+- `stocks/VISION.md`：产品北极星（参考，极少变化）；
+- `ROADMAP.md`：长期迁移方向（参考，不是清单）；
+- `ARCHITECTURE.md`：当前与目标架构，按组件标注 `[PRODUCTION]`/`[SHADOW]`/`[PLANNED]`/`[DEPRECATED]`（参考）；
+- `docs/contracts/`：数据契约生命周期索引；
+- `stocks/DATA_MODEL.md`：schema 字段参考；
+- `AGENT_GUIDE.md`：操作与金融数据安全规则；
+- `PLAN.md`：决策历史，非当前状态；
+- `docs/archive/`：历史证据，无现行效力；
+- `EXECUTION_PLAN.md`：已废弃，仅为避免旧链接 404 而保留，见 `docs/tasks/`。
 
 ## 当前能力
 
@@ -93,6 +98,6 @@ SEC EDGAR 需要带联系邮箱的 `SEC_USER_AGENT` 或 `.secret/sec-user-agent.
 .venv/bin/python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
 
-2026-07-22 新鲜基线：ruff 通过，pytest `1124 passed`，Finnhub、Polygon 和 SEC EDGAR 真实 smoke 通过。
+当前验证证据（最新 ruff/pytest/smoke 结果）见 `STATUS.md`；本文不维护某一时点的通过基线。
 
 本项目用于分析、研究和辅助决策，不构成收益承诺或自动交易服务。

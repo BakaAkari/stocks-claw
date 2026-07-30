@@ -193,8 +193,9 @@ def test_markdown_monetary_values_traceable_to_artifact(tmp_path: Path):
     md = format_run_markdown(run)
 
     view = run["portfolio_decision"]["user_view"]
-    immediate = view["assistant_brief"]["cash"]["immediate"]["amount_cny"]
-    assert f"¥{immediate:,.0f}" in md
+    available_now = view["assistant_brief"]["cash"]["available_now"]["amount_cny"]
+    assert f"¥{available_now:,.0f}" in md
+    assert "immediate" not in view["assistant_brief"]["cash"]
     for action in view["instruction_card"]["actions"]:
         assert f"{action['ratio'] * 100:.0f}%" in md
         if action["estimated_amount_cny"] is not None:

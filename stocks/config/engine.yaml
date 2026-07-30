@@ -100,6 +100,45 @@ llm:
     max_tokens: 8000
     cache_dir: .local/outlook_cache
 
+execution_rules:
+  # Ordered, explicit production execution rules. First matching rule wins.
+  settlement_rules:
+    - id: cash-t0
+      match: {liquidity_tier: cash}
+      settlement_rule: T+0
+    - id: liquid-t0
+      match: {liquidity_tier: t0}
+      settlement_rule: T+0
+    - id: brokerage-t1
+      match: {institution_type: brokerage, liquidity_tier: t1}
+      settlement_rule: T+1
+    - id: fund-platform-t2
+      match: {institution_type: fund_platform, liquidity_tier: t2_plus}
+      settlement_rule: T+2
+    - id: bank-periodic-open
+      match: {institution_type: bank, liquidity_tier: periodic_open}
+      settlement_rule: periodic_open
+    - id: insurance-locked
+      match: {institution_type: insurance, liquidity_tier: locked}
+      settlement_rule: locked
+  quantity_rules:
+    - id: a-brokerage-add-lot
+      match: {market: a, institution_type: brokerage, side: add}
+      quantity_step: 100
+    - id: a-brokerage-reduce-share
+      match: {market: a, institution_type: brokerage, side: reduce}
+      quantity_step: 1
+    - id: us-brokerage-share
+      match: {market: us, institution_type: brokerage}
+      quantity_step: 1
+    - id: fund-platform-share
+      match: {institution_type: fund_platform}
+      quantity_step: 0.01
+    - id: bank-gram
+      match: {institution_type: bank, product_type: precious_metal_account}
+      quantity_step: 0.01
+  redemption_rule_map: {}
+
 risk_state:
   critical_ttl_minutes: 360
   hedge_independent_evidence: 2

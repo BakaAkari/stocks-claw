@@ -19,7 +19,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
+from stocks.engine.execution_rules import resolve_execution
 from stocks.engine.quant_action import _TAG_TO_BUCKET
+from stocks.engine.valuation_freshness import freshness_is_estimate
 
 logger = logging.getLogger(__name__)
 
@@ -46,19 +48,50 @@ _REDUCE_SIGNALS = frozenset({"reduce", "stop_loss", "take_profit"})
 # Signals that are add/increase directions
 _ADD_SIGNALS = frozenset({"add"})
 
+# settlement_rule tokens safe to surface verbatim as human-facing settlement_timing;
+# non-executable tokens (periodic_open, locked, review_required) fall back to the
+# presentation layer's placeholder instead of leaking a raw machine enum.
+_EXECUTABLE_SETTLEMENT_DISPLAY = frozenset({"T+0", "T+1", "T+2"})
+
 
 @dataclass
 class CashSchedule:
-    """Four-category cash schedule classification."""
+    """Cash schedule classification.
+
+    The legacy four fields (immediate_cash_cny / settling_cash_cny /
+    strategic_exit_value_cny / locked_value_cny / safety_buffer_cny) are kept
+    verbatim for existing consumers (audit tool, outlook evidence,
+    presentation). The five canonical, exactly-named buckets required by
+    TASK-001 — available_now / confirmed_settling / planned_release /
+    strategic_exit / locked — are the authoritative decomposition emitted by
+    to_dict(): every cash-bearing position lands in exactly one of the five.
+    available_now/confirmed_settling/strategic_exit alias the legacy fields
+    (identical membership); locked_value_cny is the pure aggregate of the new
+    locked + planned_release split (a position with a known future release —
+    periodic_open tier, or a locked position with a lockup_until/
+    maturity_date — is planned_release, not indefinitely locked).
+
+    An approved sale's proceeds land in unresolved_settlement_cny, never in
+    settling_cash_cny (confirmed_settling) or immediate_cash_cny
+    (available_now), whenever its settlement timing is not one of the
+    confirmed executable tokens (T+0/cash/same_day/T+1/T+2) — e.g. a missing
+    timing, or a review_required/periodic_open/locked settlement_rule.
+    Fabricating a settlement date for money that has no resolved settlement
+    would misrepresent it as spendable or on a known clock.
+    """
     immediate_cash_cny: float = 0.0
     settling_cash_cny: float = 0.0
     strategic_exit_value_cny: float = 0.0
     locked_value_cny: float = 0.0
     safety_buffer_cny: float = 0.0
+    planned_release_cny: float = 0.0
+    unresolved_settlement_cny: float = 0.0
     immediate_cash_position_ids: list[str] = field(default_factory=list)
     settling_cash_position_ids: list[str] = field(default_factory=list)
     strategic_exit_position_ids: list[str] = field(default_factory=list)
     locked_position_ids: list[str] = field(default_factory=list)
+    planned_release_position_ids: list[str] = field(default_factory=list)
+    unresolved_settlement_position_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -67,10 +100,19 @@ class CashSchedule:
             "strategic_exit_value_cny": round(self.strategic_exit_value_cny, 2),
             "locked_value_cny": round(self.locked_value_cny, 2),
             "safety_buffer_cny": round(self.safety_buffer_cny, 2),
+            "unresolved_settlement_cny": round(self.unresolved_settlement_cny, 2),
             "immediate_cash_position_ids": self.immediate_cash_position_ids,
             "settling_cash_position_ids": self.settling_cash_position_ids,
             "strategic_exit_position_ids": self.strategic_exit_position_ids,
             "locked_position_ids": self.locked_position_ids,
+            "planned_release_position_ids": self.planned_release_position_ids,
+            "unresolved_settlement_position_ids": self.unresolved_settlement_position_ids,
+            "available_now": round(self.immediate_cash_cny, 2),
+            "confirmed_settling": round(self.settling_cash_cny, 2),
+            "planned_release": round(self.planned_release_cny, 2),
+            "strategic_exit": round(self.strategic_exit_value_cny, 2),
+            "locked": round(self.locked_value_cny - self.planned_release_cny, 2),
+            "unresolved_settlement": round(self.unresolved_settlement_cny, 2),
         }
 
 
@@ -95,6 +137,17 @@ class PortfolioAction:
     platform_display: str = ""
     institution_type: str = ""
     account_id: str = ""
+    # TASK-001 item 3: final vs. original ratio and decision provenance.
+    final_ratio: Optional[float] = None
+    original_ratio: Optional[float] = None
+    decision_reason: str = ""
+    evidence_summary: str = ""
+    settlement_rule: Optional[str] = None
+    executable_quantity: Optional[float] = None
+    execution_status: str = "full"
+    # TASK-001 item 8: amount derivation moved out of presentation.py.
+    estimated_amount_cny: Optional[float] = None
+    amount_is_estimate: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -112,6 +165,15 @@ class PortfolioAction:
             "platform_display": self.platform_display,
             "institution_type": self.institution_type,
             "account_id": self.account_id,
+            "final_ratio": self.final_ratio if self.final_ratio is not None else self.ratio,
+            "original_ratio": self.original_ratio if self.original_ratio is not None else self.ratio,
+            "decision_reason": self.decision_reason or self.reason,
+            "evidence_summary": self.evidence_summary,
+            "settlement_rule": self.settlement_rule,
+            "executable_quantity": self.executable_quantity,
+            "execution_status": self.execution_status,
+            "estimated_amount_cny": self.estimated_amount_cny,
+            "amount_is_estimate": self.amount_is_estimate,
         }
 
 
@@ -201,6 +263,18 @@ def _is_locked(ev: dict) -> bool:
     return tier in _LOCKED_LIQUIDITY_TIERS or liquidity.get("tradable") is False
 
 
+def _has_known_release(tier: str, liquidity: dict) -> bool:
+    """True when a non-immediate position has a deterministic future release.
+
+    periodic_open positions redeem on a known cadence; a locked position with
+    a lockup_until or maturity_date has a known release date. Both are
+    "planned_release", not indefinitely "locked" (TASK-001 item 4/5).
+    """
+    if tier == "periodic_open":
+        return True
+    return bool(liquidity.get("lockup_until")) or bool(liquidity.get("maturity_date"))
+
+
 def _has_data_anomaly(card: dict, ev: dict) -> bool:
     """Return True only if there is a blocking-level (critical/high) data anomaly.
 
@@ -250,13 +324,20 @@ def build_cash_schedule(
             ratio = min(requested_ratio, remaining_sale_ratio)
             remaining_sale_ratio -= ratio
             sale_value = value * ratio
-            timing = (sale.get("settlement") or {}).get("timing", "T+1")
+            timing = (sale.get("settlement") or {}).get("timing")
             if timing in ("T+0", "cash", "same_day"):
                 schedule.immediate_cash_cny += sale_value
                 schedule.immediate_cash_position_ids.append(pid)
-            else:
+            elif timing in ("T+1", "T+2"):
                 schedule.settling_cash_cny += sale_value
                 schedule.settling_cash_position_ids.append(pid)
+            else:
+                # Missing timing, or a non-executable settlement token
+                # (review_required/periodic_open/locked): the proceeds are
+                # real but their settlement is unresolved, so they must not
+                # be counted as confirmed_settling or available cash.
+                schedule.unresolved_settlement_cny += sale_value
+                schedule.unresolved_settlement_position_ids.append(pid)
 
         if residual_value <= 0:
             continue
@@ -269,7 +350,11 @@ def build_cash_schedule(
             )
         ):
             schedule.locked_value_cny += residual_value
-            schedule.locked_position_ids.append(pid)
+            if _has_known_release(tier, liq):
+                schedule.planned_release_cny += residual_value
+                schedule.planned_release_position_ids.append(pid)
+            else:
+                schedule.locked_position_ids.append(pid)
         elif product_type in _NON_IMMEDIATE_PRODUCT_TYPES:
             schedule.strategic_exit_value_cny += residual_value
             schedule.strategic_exit_position_ids.append(pid)
@@ -369,6 +454,93 @@ def _build_bucket_ratios_from_evidences(evidences: dict[str, dict]) -> dict[str,
     return {b: v / total for b, v in bucket_values.items()}
 
 
+def _finalize_approved_action(
+    *,
+    position_id: str,
+    signal: str,
+    action_description: str,
+    ratio: float,
+    decision_id: str,
+    reason: str,
+    ev: dict,
+    card: dict,
+    settlement_timing: Optional[str] = None,
+    post_trade_ratio: Optional[float] = None,
+    alternative_position_id: Optional[str] = None,
+    execution_rules: Optional[dict] = None,
+    ratio_basis: str = "position",
+) -> PortfolioAction:
+    """Single producer of an approved PortfolioAction's derived fields.
+
+    Computes settlement_rule (item 5), executable_quantity/execution_status
+    (item 7), and estimated_amount_cny/amount_is_estimate (item 8) once, from
+    the position's own evidence — never re-derived downstream. Every
+    approve-path call site in adjudicate_portfolio routes through here so
+    there is exactly one place these fields are computed (item 2/9).
+    """
+    resolution = resolve_execution(
+        evidence=ev,
+        card=card,
+        side="add" if signal in _ADD_SIGNALS else "reduce",
+        ratio=ratio,
+        ratio_basis=ratio_basis,
+        config=execution_rules,
+    )
+    settlement_rule = resolution.settlement_rule
+    # settlement_rule may hold a non-executable machine token (periodic_open,
+    # locked, review_required); those must never leak into the human-facing
+    # settlement_timing field verbatim, so only executable tokens pass through.
+    resolved_settlement_timing = settlement_timing or (
+        settlement_rule if settlement_rule in _EXECUTABLE_SETTLEMENT_DISPLAY else None
+    )
+    executable_quantity = resolution.executable_quantity
+    execution_status = resolution.execution_status
+    final_ratio = resolution.final_ratio
+    decision_reason = reason
+    if resolution.reason:
+        decision_reason = f"{reason}；{resolution.reason}"
+
+    market_value = ev.get("market_value_cny")
+    estimated_amount_cny = (
+        round(float(market_value) * abs(final_ratio), 2) if market_value is not None else None
+    )
+    amount_is_estimate = freshness_is_estimate(
+        ev.get("evidence") or {}, ev.get("valuation_method", "")
+    )
+    classification = ev.get("classification") or {}
+    product_type = classification.get("product_type", "unknown")
+    liq_tier = (ev.get("liquidity") or {}).get("tier", "unknown")
+    evidence_summary = (
+        f"signal={signal}, requested_ratio={round(ratio, 4)}, "
+        f"product_type={product_type}, liquidity_tier={liq_tier}, "
+        f"execution_rule={resolution.rule_id or 'none'}"
+    )
+
+    return PortfolioAction(
+        position_id=position_id,
+        signal=signal,
+        action_description=action_description,
+        ratio=final_ratio,
+        decision_id=decision_id,
+        reason=reason,
+        settlement_timing=resolved_settlement_timing,
+        post_trade_ratio=post_trade_ratio,
+        alternative_position_id=alternative_position_id,
+        platform_display=card.get("platform_display", ""),
+        institution_type=card.get("institution_type", ""),
+        account_id=card.get("account_id", ""),
+        final_ratio=final_ratio,
+        original_ratio=ratio,
+        decision_reason=decision_reason,
+        evidence_summary=evidence_summary,
+        settlement_rule=settlement_rule,
+        executable_quantity=executable_quantity,
+        execution_status=execution_status,
+        estimated_amount_cny=estimated_amount_cny,
+        amount_is_estimate=amount_is_estimate,
+    )
+
+
 def adjudicate_portfolio(
     raw_cards: list[dict],
     evidences: dict[str, dict],
@@ -378,6 +550,7 @@ def adjudicate_portfolio(
     *,
     run_id: str = "unknown",
     rule_version: str = _DEFAULT_RULE_VERSION,
+    execution_rules: Optional[dict] = None,
 ) -> PortfolioDecision:
     """Adjudicate portfolio action cards. No LLM calls. Deterministic rules only."""
     gold_max = None
@@ -528,18 +701,16 @@ def adjudicate_portfolio(
                 reduce_did = make_decision_id(run_id, reduce_pid, card.get("raw_signal", ""),
                                               card.get("raw_ratio", 0.0), rule_version)
                 reduce_evidence = evidences.get(reduce_pid, {})
-                liq_tier = reduce_evidence.get("liquidity", {}).get("tier", "t1")
-                settlement = (
-                    "T+0" if liq_tier in ("cash", "t0")
-                    else ("T+1" if liq_tier == "t1" else "T+2")
-                )
+                settlement = None
 
-                sale_leg = PortfolioAction(
+                sale_leg = _finalize_approved_action(
                     position_id=reduce_pid, signal=card["signal"],
                     action_description=card.get("action", ""),
                     ratio=card.get("ratio", 0.0), decision_id=reduce_did,
-                    reason=f"\u66ff\u6362\u94fe\u5356\u51fa\uff1a{reduce_pid} \u2192 {alt}",
+                    reason="\u66ff\u6362\u94fe\u5356\u51fa\uff1a\u8d44\u91d1\u5230\u8d26\u540e\u8f6c\u5165\u66ff\u4ee3\u6807\u7684",
+                    ev=reduce_evidence, card=card,
                     settlement_timing=settlement,
+                    execution_rules=execution_rules,
                 )
 
                 reduce_ratio = abs(card.get("ratio", 0.0))
@@ -573,22 +744,25 @@ def adjudicate_portfolio(
                     equity_value_before / total_after if total_after > 0 else 0.0
                 )
 
-                buy_leg = PortfolioAction(
+                alt_card = next(
+                    (item["card"] for item in merged if item["position_id"] == alt), {}
+                )
+                buy_leg = _finalize_approved_action(
                     position_id=alt, signal="add",
-                    action_description=f"\u66ff\u4ee3 {reduce_pid}",
+                    action_description="替代链买入",
                     ratio=round(buy_ratio, 6), decision_id=alt_did,
-                    reason=(
-                        f"卖出 {reduce_pid} 的 {settlement} 资金到账后转买 {alt}，"
-                        "维持权益敞口"
-                    ),
-                    settlement_timing=f"after_{settlement}_proceeds",
+                    reason="卖出资金到账后转买替代标的，维持权益敞口",
+                    ev=evidences.get(alt, {}), card=alt_card,
+                    settlement_timing="after_sale_proceeds",
+                    execution_rules=execution_rules,
+                    ratio_basis="portfolio",
                     post_trade_ratio=post_trade_ratio_val,
                     alternative_position_id=reduce_pid,
                 )
 
                 chain = ReplacementChain(
                     sale_leg=sale_leg, buy_leg=buy_leg,
-                    settlement_timing=settlement,
+                    settlement_timing=sale_leg.settlement_rule or "review_required",
                     post_trade_ratio=round(post_trade_ratio_val, 4),
                     reason=f"\u6743\u76ca {equity_pct*100:.1f}% < \u4e0b\u9650 {equity_min*100:.0f}%\uff0c"
                            f"{reduce_pid} {card['signal']}\uff0c\u6362\u4ed3\u2192{alt}",
@@ -624,12 +798,13 @@ def adjudicate_portfolio(
                     "decision_id": did,
                 })
                 if card.get("signal") == "stop_loss":
-                    approved.append(PortfolioAction(
+                    approved.append(_finalize_approved_action(
                         position_id=reduce_pid, signal=card["signal"],
                         action_description=card.get("action", ""),
                         ratio=card.get("ratio", 0.0), decision_id=did,
                         reason="硬止损不受约束限制，但权益低配需复核",
-                        settlement_timing="T+0",
+                        ev=evidences.get(reduce_pid, {}), card=card,
+                        execution_rules=execution_rules,
                     ))
                     suppressed_pids.add(reduce_pid)
                 else:
@@ -640,15 +815,17 @@ def adjudicate_portfolio(
                     if default_ratio <= 0:
                         default_ratio = 0.0
                     suppressed_pids.add(reduce_pid)
-                    approved.append(PortfolioAction(
+                    # reason text carries no percentage: _finalize_approved_action's
+                    # execution_rules resolution can round default_ratio further
+                    # (or to zero), so a number baked in here could contradict the
+                    # eventual final_ratio (TASK-001E1 defect 1).
+                    approved.append(_finalize_approved_action(
                         position_id=reduce_pid, signal=card["signal"],
                         action_description=card.get("action", ""),
                         ratio=default_ratio, decision_id=did,
-                        reason=f"权益低配+减仓冲突；默认先执行 {int(default_ratio * 100)}%，剩余等待人工确认",
-                        settlement_timing=card.get("settlement_timing") or "T+1",
-                        platform_display=card.get("platform_display", ""),
-                        institution_type=card.get("institution_type", ""),
-                        account_id=card.get("account_id", ""),
+                        reason="权益低配+减仓冲突；默认先执行部分仓位，剩余等待人工确认",
+                        ev=evidences.get(reduce_pid, {}), card=card,
+                        execution_rules=execution_rules,
                     ))
                     # Phase 2: do not append the remaining portion to suppressed_actions.
                     # The default action is the executable slice; the rest is simply held.
@@ -665,18 +842,19 @@ def adjudicate_portfolio(
             continue
         did = make_decision_id(run_id, pid, card.get("raw_signal", ""),
                                card.get("raw_ratio", 0.0), rule_version)
-        liq_tier = item["evidence"].get("liquidity", {}).get("tier", "t1")
-        timing = "T+0" if liq_tier in ("cash", "t0") else ("T+1" if liq_tier == "t1" else "T+2")
-        approved.append(PortfolioAction(
+        # reason text carries no raw pre-adjudication ratio: execution_rules
+        # may still revise card["ratio"] down to final_ratio (TASK-001E1 defect 1).
+        approved.append(_finalize_approved_action(
             position_id=pid, signal=sig,
             action_description=card.get("action", ""),
             ratio=card.get("ratio", 0.0), decision_id=did,
-            reason=f"\u901a\u8fc7\u88c1\u51b3\uff1a{sig} {card.get('ratio', 0.0)}",
-            settlement_timing=timing,
+            reason=f"\u901a\u8fc7\u88c1\u51b3\uff1a{sig}",
+            ev=item["evidence"], card=card,
+            execution_rules=execution_rules,
         ))
 
     # Determine overall status
-    if conflicts:
+    if conflicts or any(a.execution_status == "review_required" for a in approved):
         status = "review_required"
     elif not approved and suppressed:
         status = "suppressed"
@@ -714,7 +892,11 @@ def adjudicate_portfolio(
             approved_sales.append({
                 "position_id": action.position_id,
                 "ratio": abs(action.ratio),
-                "settlement": {"timing": action.settlement_timing or "T+1"},
+                # action.settlement_timing is None whenever the resolver
+                # could not confirm an executable settlement token; that
+                # must reach build_cash_schedule as unresolved, not be
+                # fabricated into a specific settlement date here.
+                "settlement": {"timing": action.settlement_timing},
             })
         elif action.signal in _ADD_SIGNALS:
             added_value = total_value * abs(action.ratio)
