@@ -13,27 +13,26 @@ none of them record phase/completion status — that lives here only.
 
 ## Baseline (as of 2026-07-30, corrected this session)
 
-- HEAD: `ae8abc6` — "feat: complete TASK-001E1 truth gate and TASK-001E2
-  concise report renderer". (The hash previously recorded here, `96ed43d`,
+- HEAD: `b80e229` — "fix: restore reproducible test baseline, correct
+  STATUS audit anchors" (the audit-baseline repair below, committed and
+  pushed on explicit user authorization). Its parent `ae8abc6` is the
+  E1/E2 commit. (The hash recorded here before this repair, `96ed43d`,
   never existed in this repository — the E1/E2 history was rewritten after
   the previous STATUS update; this entry is the correction.)
-- Tag: `v2.8-e1e2-complete` → `cc1eaa0`, which is **not** the current HEAD
-  (the tag predates the history rewrite; left untouched — re-tagging is a
-  git-history decision for the user, not for an agent session).
-- Branch: `master` == `origin/master` at `ae8abc6` (the rewritten history
-  was force-pushed; the earlier "2 commits ahead, not pushed" note was
-  equally stale).
-- Working tree: **dirty** with this session's audit-baseline repair
-  (modified `tests/engine/test_data_quality_gate.py`; new
-  `tests/fixtures/a512480_split_jump_fixture.json`; new
-  `docs/analysis/system-consistency-review-2026-07-30.md`) — **not yet
-  committed**; commit only on explicit user authorization.
+- Tag: `v2.8-e1e2-complete` → `cc1eaa0`, which is **not** an ancestor of
+  the current HEAD (the tag predates the history rewrite; left untouched —
+  re-tagging is a git-history decision for the user, not for an agent
+  session).
+- Branch: `master` == `origin/master` at `b80e229` (the rewritten E1/E2
+  history was force-pushed earlier; the earlier "2 commits ahead, not
+  pushed" note was equally stale).
+- Working tree: **clean**.
 
 ## Audit-baseline repair (2026-07-30)
 
 Triggered by the adversarial consistency review saved at
-`docs/analysis/system-consistency-review-2026-07-30.md` (new in the dirty
-tree above). That review's §0 found the self-audit baseline itself was
+`docs/analysis/system-consistency-review-2026-07-30.md` (committed in
+`b80e229`). That review's §0 found the self-audit baseline itself was
 broken; this section records what was repaired and what remains open.
 
 - **Test suite was not reproducible from a clean checkout — fixed.** Six
