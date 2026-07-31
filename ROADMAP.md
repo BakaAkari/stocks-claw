@@ -133,6 +133,55 @@ forward if constraint-driven advice errors show up in real reports.
 Non-goals: multi-period glide-path planning (depends on M3 feedback
 data), execution surface, auto-tuning.
 
+### M5 — Advisory terminal (agent operating surface)
+
+The product goal — 个人资产投资信息渠道汇总分析报告系统 + 专业的交易分析
+研判终端 — is two layers, and only one of them is this repo's code:
+
+- **Engine layer (this repo):** deterministic data, rules, ledgers,
+  scheduled analysis, push reports, and confirmed-write financial memory.
+  Everything the agent reads or writes goes through typed, audited
+  surfaces (CLI/MCP/HTTP adapters, `_confirmed` gates).
+- **Agent layer (not this repo's runtime):** the conversational analyst —
+  ad-hoc multi-source research ("why did X drop"), personalized judgment,
+  behavioral mirroring against the user's own rules, and driving the
+  engine through its adapters. An LLM agent with the repo's MCP/CLI
+  mounted plus an operating manual covers this; no new agent runtime is
+  built here.
+
+Engine-side enablers, sequenced as bounded tasks:
+
+- **A1 — Natural-language asset intake entry.** Wire the SHADOW
+  `AssetIntakeDraft` library (`asset_intake_parser.py`,
+  `llm_asset_intake.py`, `asset_intake_writer.py`) into the CLI with the
+  token-confirmation flow, so "我买入了 5 股 AAPL，成本 301.4" becomes a
+  draft → user confirm → audited write. Direct hand-edits of
+  `financial_assets.json` bypass the `_confirmed` gate and are not a
+  supported path.
+- **W1 — Watchlist productization.** User-designated instruments
+  persisted as financial memory, pulled into daily context and
+  action-signal scans, and surfaced in the push — so "把 AAPL 加入
+  watchlist 每天跟踪" is a one-command operation.
+- **D1 — US quotes freshness verification.** The M2 mainline freshness
+  gate fails closed on stale/missing quotes (verified 2026-07-31 smoke).
+  Finnhub/Polygon providers exist and a Finnhub key is present in
+  `.secret/`; D1 verifies the US chain end-to-end in real scheduled runs
+  and records freshness in the artifact.
+
+Agent-layer deliverables (docs, not engine code): an operating manual
+(system-prompt rules: user's style/discipline, confirm-before-write,
+never bypass confirmed-write paths) and the user's investor profile kept
+current as the personalization source.
+
+Non-goals: building an agent runtime, broker connectivity, automated
+order placement, moving conversational logic into the engine.
+
+Sequencing decision (2026-08-01): **A1 → M3 → W1 → M4**, with D1 folded
+into whichever task next touches the US quote path. A1 first because the
+conversational asset-update pattern is the terminal's core write loop and
+the library is already built; M3 next per the original plan; M4 stays
+backlog until constraint-driven errors appear in real reports.
+
 ## Acceptance gates (apply per milestone)
 
 1. **Engineering gate** — lint, tests, compile pass on the touched
@@ -164,11 +213,9 @@ has actually been run.
 ## Known structural gaps (stable description, not a task list)
 
 - Intelligence collection and portfolio-context collection are still two
-  partially separate paths. M2 will consume `UnifiedAnalysisSnapshot`,
-  which merges them, but the harvester itself may still land later.
-- Natural-language asset intake exists as library code
-  (`asset_intake_parser.py`, `llm_asset_intake.py`, `asset_intake_writer.py`)
-  with no user-facing CLI/MCP adapter entry point. Not part of M1-M3.
+  partially separate paths. M2 consumes `UnifiedAnalysisSnapshot`,
+  which merges them for the advisory path, but the harvester itself may
+  still land later.
 - `DecisionEnvelope` is deprecated but its tests still run; scheduled for
   removal only when its removal is otherwise motivated.
 

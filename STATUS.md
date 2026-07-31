@@ -8,33 +8,33 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-07-31 (fourth update) — M2 outlook mainline landed at
-> `7c35c7f`; VISION §2.3 score 5/1/1 → 7/0/0 (pipeline); M3 is next.
-> Earlier same-day updates: M1 (`382207b`), de-hardcode verification
-> (`03ee449`), direction reset (`docs/analysis/adversarial-review-2026-07-31.md`,
-> `docs/analysis/direction-2026-07-31.md`).
+> Last updated: 2026-08-01 (fifth update) — A1 asset intake entry landed
+> at `c313d22`; M2 live-LLM verification done (real us_post_close-side
+> run); M5 advisory-terminal milestone added to ROADMAP; M3 is next.
+> Earlier updates: M2 (`7c35c7f`), M1 (`382207b`), de-hardcode (`03ee449`).
 
-## Baseline (as of 2026-07-31, fourth verification)
+## Baseline (as of 2026-08-01, fifth verification)
 
-- HEAD (code baseline, verified): `7c35c7f` — "feat(M2): wire advisory
-  mainline into production push outlook"
+- HEAD (code baseline, verified): `c313d22` — "feat(A1): natural-language
+  asset intake entry — draft, token, audited v2 write"
 - Branch: `master` == `origin/master`
 - Working tree: **clean** (verified this session — `git status --short --branch`)
-- Full pytest: **1287 passed, 7 skipped, 0 failed** (verified on `7c35c7f`;
-  1285 unit + 2 integration)
+- Full pytest: **1300 passed, 7 skipped, 0 failed** (verified on `c313d22`;
+  1298 unit + 2 integration; `tests/test_asset_adapters.py` runs ~220s
+  standalone and passed the same session)
 - ruff: **clean**; compileall: **clean**; git diff --check: **clean**
-- Smoke (M2 acceptance, no-LLM-endpoint case): forced `cn_after_close`
-  2026-07-30 run → `structured_outlook.status == "unavailable"` with
-  message `研判待复核：目标市场行情数据过旧或缺失` (freshness gate fired
-  on stale forced-date quotes — gate works as designed); push report
-  renders `走势研判 - 中长期研判：研判待复核：…` and completes through
-  the push validators. The configured-endpoint case (real short/medium
-  judgments) is covered by fake-client unit/integration tests; a live-LLM
-  run has **not** been performed (no endpoint configured locally).
-- Smoke (M1 acceptance, earlier): regenerated `cn_after_close` 2026-07-30
-  report — six sections in order, 40 non-empty lines (gate ≤55), 697
-  Chinese chars (gate ≤1800), `validate_payload_text` clean. Sample:
-  `.local/m1-sample-cn_after_close-20260730.md`.
+- Smoke (M2, configured-endpoint case — **live LLM verified 2026-07-31**):
+  real `us_post_open` run (`20260731T135500Z`) → `structured_outlook.status
+  == "ok"`, near/medium-term judgments with 验证/证伪 lines rendered in
+  走势研判, `advisory_receipt.status == "ok"`, 5 source_refs. Advisory
+  prompt now requires Simplified Chinese free-text (this first live run
+  rendered English rationale — fixed at `c313d22`).
+- Smoke (M2, no-endpoint case, earlier): forced `cn_after_close` 2026-07-30
+  → freshness gate fired, 走势研判 shows 研判待复核, push validators clean.
+- Smoke (A1): draft stage against the real assets file writes nothing
+  (LLM 429 → ambiguities fallback, as designed); confirm flow verified on
+  a sandbox copy — position added, cash delta applied, timestamped backup
+  created; real `.local/financial_assets.json` hash unchanged.
 - Tag: `v2.8-e1e2-complete` remains at `cc1eaa0` (not an ancestor of HEAD;
   left untouched — re-tagging is the user's call).
 
@@ -127,36 +127,42 @@ Advisory contracts (`UnifiedAnalysisSnapshot`, `InvestmentAdvisory`,
 stays SHADOW. Rule engine adjudicator and instruction_card actions are
 untouched: advisory informs judgment only, never action selection.
 
-## Roadmap now: M1 ✅ → M2 ✅ → M3 (+ M4 candidate)
+**Financial-memory write surface (A1, landed `c313d22`):** conversational
+asset updates go through `--asset-intake "自然语言"` (draft + confirmation
+token, never writes) → `--asset-intake-confirm --draft-json --token`
+(token-validated, ambiguity-free drafts only, timestamped backup, v2
+`Position`/`Account` validation before persist). Direct hand-edits of
+`.local/financial_assets.json` bypass this audit path and are unsupported;
+legacy v1 CRUD remains disabled on v2 files.
 
-Full description in `ROADMAP.md`. Rationale in
-`docs/analysis/direction-2026-07-31.md`.
+## Roadmap now: M1 ✅ → M2 ✅ → A1 ✅ → M3 (+ W1/D1 under M5, M4 backlog)
+
+Full description in `ROADMAP.md` (M5 advisory-terminal milestone added
+2026-08-01). Rationale in `docs/analysis/direction-2026-07-31.md`.
 
 - **M1 — Report structure upgrade. ✅ landed 2026-07-31 (`382207b`).**
-  Six-section report is live: 走势研判 (sanitized fallback until M2),
-  提前布局 first-class, manual-review choice space with 参考: audit lines,
-  cash-bucket collapse, data-notes capital gaps, post-trade projection
-  line. VISION §2.3 score moved 2/2/3 → 5/1/1.
 - **M2 — Outlook mainline. ✅ landed 2026-07-31 (`7c35c7f`).**
-  `advisory_mainline.py` wires the LLM Investment Analyst into primary
-  sessions behind `llm.advisory_mainline.enabled` (default true): freshness
-  gate → snapshot → synthesis → receipt validation → projection into the
-  whitelisted `structured_outlook` shape (delta/forecast pipelines
-  unchanged). Short-term (3–7 day) + medium-term (1–3 month) judgments
-  carry direction/confidence/rationale/validation/falsification and typed
-  source_refs; falsification absence is a hard validation error. All
-  failure paths render 研判待复核 — never fabricate. VISION §2.3 score
-  moved 5/1/1 → 7/0/0 (pipeline level).
+  Advisory mainline drives primary-session `structured_outlook`; freshness
+  gate / client gate / receipt gate all degrade to 研判待复核.
+  **Live-LLM verified 2026-07-31** (real `us_post_open` run, receipt ok).
+  VISION §2.3 score 5/1/1 → 7/0/0 (pipeline level).
+- **A1 (M5) — Asset intake entry. ✅ landed 2026-08-01 (`c313d22`).**
+  "我买入了 5 股 AAPL，成本 301.4" now has a正规通道: CLI draft → token →
+  confirm, LLM-assisted parsing with the current account/position ids
+  injected, conservative v2 translation, audited writes with backup.
+  `AssetIntakeDraft` is PRODUCTION.
 - **M3 — Feedback loop.** User marks each recommendation (accepted /
   partial / rejected / deferred). Feedback becomes evidence for future
   outlook runs, not an auto-tuner. **This is the next task.**
+- **W1 (M5) — Watchlist productization.** User-designated instruments
+  persisted, scanned daily, surfaced in push. After M3.
+- **D1 (M5) — US quotes freshness verification.** Finnhub key present;
+  fold into the next task touching the US quote path.
 - **M4 — Constraint model upgrade (backlog candidate, added 2026-07-31).**
   Irreversibility (no-buyback), segregated pools, hard caps. Motivation:
   `docs/analysis/kimi-report-constraint-comparison-2026-07-31.md`; scope:
-  `docs/tasks/TASK-M4-constraint-model-upgrade.md`. Sequencing was
-  re-evaluated when M1 closed: kept as backlog behind M2/M3 — the
-  constraint semantics matter most once M2's richer advice is live, and no
-  constraint-driven advice error has been observed in real reports yet.
+  `docs/tasks/TASK-M4-constraint-model-upgrade.md`. Stays backlog until
+  constraint-driven advice errors show up in real reports.
 
 ## Deprecated / removed
 
@@ -198,9 +204,19 @@ Both retained as verification concepts for M2; **status after M2 landing:**
 
 ## Next concrete task
 
-M2 is done. Next is **M3 — Feedback loop** (task file to be written before
+A1 is done. Next is **M3 — Feedback loop** (task file to be written before
 starting; direction: CLI feedback channel `--advice-feedback <id>
 <accepted|partial|rejected|deferred>` + AdviceRecord ledger + weekly rollup
 flowing back into `recent_advice` in `AnalysisContext`; scope lives in
-`ROADMAP.md` §M3). `TASK-M4-constraint-model-upgrade.md` stays backlog
-behind M3.
+`ROADMAP.md` §M3). Then **W1** (watchlist productization) under M5.
+`TASK-M4-constraint-model-upgrade.md` stays backlog.
+
+Known pending items (recorded honestly, not waived):
+- **Shadow gate** (M2): 5 consecutive trading days of live main-window
+  advisory runs — first live run done 2026-07-31, 4+ remain.
+- **User-value gate** (M2/M3): user confirms reduced decision cost.
+- **D1**: US quotes freshness end-to-end verification (Finnhub key
+  present; the 2026-07-31 live us_post_open run produced fresh quotes —
+  formal verification folded into the next US-path task).
+- **MCP wiring for A1 intake** (CLI landed first; MCP is the agent's
+  primary surface — natural follow-up, no task file yet).

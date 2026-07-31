@@ -21,20 +21,27 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-None open. M1 closed 2026-07-31 (outcome in `STATUS.md`); **M2 — Outlook
-mainline** is next (task file to be written before starting).
+None open. M2 closed 2026-07-31 (`7c35c7f`); A1 closed 2026-08-01
+(`c313d22`). **M3 — Feedback loop** is next (task file to be written
+before starting).
 
 ## Backlog (do not start before the current task closes)
 
 - **M1** — Report structure upgrade *(done 2026-07-31, `382207b`)*.
-- **M2** — Outlook mainline: `advisory_synthesizer` into production push,
-  short-term (3-7d) + medium-term (1-3m) judgment with source_refs and
-  freshness gate. *(next)*
+- **M2** — Outlook mainline *(done 2026-07-31, `7c35c7f`; live-LLM
+  verified same day)*.
+- **A1** — Asset intake entry *(done 2026-08-01, `c313d22`)*:
+  `TASK-A1-asset-intake-entry.md`.
 - **M3** — Feedback loop: user marks each recommendation accepted / partial
   / rejected / deferred, feedback flows into next Outlook run as evidence.
+  *(next)*
+- **W1** — Watchlist productization (M5): user-designated instruments
+  persisted, scanned daily, surfaced in push.
+- **D1** — US quotes freshness verification (M5): fold into the next task
+  touching the US quote path.
 - **M4** — Constraint model upgrade (candidate): irreversibility
   (no-buyback), segregated pools, hard caps. See
-  `TASK-M4-constraint-model-upgrade.md`; kept behind M2/M3.
+  `TASK-M4-constraint-model-upgrade.md`; kept behind M3/W1.
 
 ## Retired
 
