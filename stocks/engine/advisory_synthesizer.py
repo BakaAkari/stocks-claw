@@ -31,6 +31,11 @@ You are given a UnifiedAnalysisSnapshot containing evidence: portfolio facts,
 quotes, technical indicators, news digest, macro data, upcoming events, rotation
 signals, and action signals. Produce an InvestmentAdvisory in JSON only.
 
+Language rule: write every free-text field (assessments, rationale, drivers,
+validation, falsification, scenario descriptions, statements, limitations,
+checkpoints) in Simplified Chinese — the output is rendered verbatim into a
+Chinese push report. Keep tickers, instrument codes, and metric names as-is.
+
 Output JSON format:
 {{
   "advisory_id": "auto-generated-by-system",

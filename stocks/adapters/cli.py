@@ -87,6 +87,26 @@ class CLIAdapter:
             help="预览或确认迁移 financial_assets.json 到 schema_version=2",
         )
         asset_actions.add_argument(
+            "--asset-intake",
+            metavar="TEXT",
+            help="自然语言资产登记：生成草稿 + 确认 token（不写文件）",
+        )
+        asset_actions.add_argument(
+            "--asset-intake-confirm",
+            action="store_true",
+            help="确认资产登记草稿；配合 --draft-json 与 --token 使用",
+        )
+        parser.add_argument(
+            "--draft-json",
+            default=None,
+            help="--asset-intake 输出的草稿 JSON（配合 --asset-intake-confirm）",
+        )
+        parser.add_argument(
+            "--token",
+            default=None,
+            help="--asset-intake 输出的 confirmation_token（配合 --asset-intake-confirm）",
+        )
+        asset_actions.add_argument(
             "--profile-get",
             action="store_true",
             help="读取投资者画像并退出",
@@ -332,6 +352,19 @@ class CLIAdapter:
             return {"success": True, "data": data}
         if args.asset_migrate_v2:
             return self.engine.migrate_assets_v2(confirmed=args.confirmed)
+        if args.asset_intake:
+            return self.engine.asset_intake_draft(args.asset_intake)
+        if args.asset_intake_confirm:
+            if not args.draft_json or not args.token:
+                return {
+                    "success": False,
+                    "error": "--asset-intake-confirm 需要 --draft-json 与 --token",
+                }
+            try:
+                draft = json.loads(args.draft_json)
+            except json.JSONDecodeError as exc:
+                return {"success": False, "error": f"--draft-json 解析失败: {exc}"}
+            return self.engine.asset_intake_apply(draft, args.token)
 
         write_requested = any(
             (

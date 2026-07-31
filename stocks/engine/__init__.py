@@ -22,7 +22,7 @@ import shutil
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from stocks.domain.models import (
     Account,
@@ -40,6 +40,7 @@ from stocks.domain.models import (
     financial_asset_to_position_v2,
     position_v2_to_financial_asset,
 )
+from stocks.engine.asset_intake_service import apply_intake_draft, build_intake_draft
 from stocks.engine.config_loader import load_engine_config
 from stocks.engine.context_builder import ContextBuilder
 from stocks.engine.economic_event_watcher import EconomicEventWatcher
@@ -659,6 +660,14 @@ class StocksEngine:
     def load_assets(self) -> list[FinancialAsset]:
         """加载并返回用户资产列表。"""
         return list(self._assets)
+
+    def asset_intake_draft(self, text: str, *, llm_client: Any = "auto") -> dict:
+        """A1：自然语言 → 资产登记草稿 + 确认 token。绝不写文件。"""
+        return build_intake_draft(self, text, llm_client=llm_client)
+
+    def asset_intake_apply(self, draft: dict, token: str) -> dict:
+        """A1：校验 token 并把草稿写入 v2 资产文件（带备份与审计）。"""
+        return apply_intake_draft(self, draft, token)
 
     def get_profile(self) -> dict:
         """返回投资者偏好记忆副本。"""

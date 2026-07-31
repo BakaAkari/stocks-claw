@@ -32,7 +32,7 @@ actually consumes it, verified against code rather than plan intent.
 | `InvestmentAdvisory` v1 | PRODUCTION | `stocks/domain/advisory_models.py`, `stocks/engine/advisory_contract.py`, `stocks/engine/advisory_synthesizer.py` | `stocks/engine/advisory_mainline.py` (production `structured_outlook`), shadow scripts |
 | `AdvisoryValidationReceipt` v1 | PRODUCTION | `stocks/engine/advisory_contract.py` | `advisory_mainline` gates on receipt errors; stored as `run["advisory_receipt"]`; read by `audit_report_quality.check_advisory_receipt_coverage` |
 | `AdvisoryShadowRun` v1 | SHADOW | `stocks/engine/advisory_shadow_store.py` | Writes to `.local/advisory_shadow/`; read by `scripts/compare_advisory_paths.py` |
-| `AssetIntakeDraft` v1 | SHADOW (library-only) | `stocks/engine/asset_intake_parser.py`, `llm_asset_intake.py`, `asset_intake_writer.py` | Unit tests only — **no CLI/MCP adapter calls this yet** (verified by grep in this session; A1's user-facing entry point does not exist) |
+| `AssetIntakeDraft` v1 | PRODUCTION | `stocks/engine/asset_intake_parser.py`, `llm_asset_intake.py`, `asset_intake_writer.py`, `asset_intake_service.py` (A1 translation layer) | CLI `--asset-intake` / `--asset-intake-confirm` (draft → token → audited v2 write) |
 | `DecisionEnvelope` v1 | DEPRECATED | `stocks/domain/models.py` (`DecisionEnvelope` class), `stocks/engine/decision_contract.py` | None — no adapter or runner produces or consumes it (verified by grep). Predates the 2026-07-22 Advisory-direction pivot; not part of `ARCHITECTURE.md`'s target architecture. Kept for its tests only; do not build on it. |
 
 ## How to keep this current

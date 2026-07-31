@@ -23,8 +23,9 @@ logger = get_logger("llm_asset_intake")
 DEFAULT_INTAKE_PROMPT = """You are a conservative financial memory parser.
 
 The user has sent a message about their portfolio. Convert it into a structured
-diff relative to the current financial memory. Respond ONLY with a JSON object
-(no markdown, no comments).
+diff relative to the current financial memory (the reference list of existing
+accounts and positions is prepended to the user message). Respond ONLY with a
+JSON object (no markdown, no comments).
 
 Output JSON format:
 {{
@@ -37,14 +38,31 @@ Output JSON format:
   "source_quotes": []
 }}
 
-Rules:
-- Each position must include `instrument_key` or `name` plus `amount_cny` or `quantity`.
-- `amount_cny` must be a number, not a sentence.
-- If the user says "reduce" or "sell", use `positions_to_update` with a negative `delta_amount_cny` or `delta_quantity`.
-- If the user says "buy" or "add", use `positions_to_add` or positive `positions_to_update`.
-- Unknown product names, missing amounts, unclear direction go to `ambiguities`.
-- `confidence` is "low" for anything you infer beyond exact matching.
-- Do not invent account numbers, prices, or market values.
+Field rules (v2 financial memory):
+- positions_to_add items: instrument_key (e.g. "us:AAPL", "a:510300") when a
+  ticker/code is known, display_name, account_id (from the reference list when
+  resolvable), currency, quantity and/or amount, cost_basis (unit cost when
+  the user states a price), product_type (stock / exchange_traded_fund /
+  cash / manual_asset ...), notes.
+- positions_to_update items: position_id or instrument_key from the reference
+  list, plus one or more of: quantity, cost_basis, delta_quantity,
+  delta_amount, notes.
+- positions_to_remove items: position_id from the reference list.
+- If the user says "reduce" or "sell", use positions_to_update with a negative
+  delta_quantity / delta_amount.
+- If the user says "buy" or "add", use positions_to_add or a positive
+  positions_to_update.
+- CASH RULE: a buy/sell of a non-cash position that states a total cost or
+  proceeds must ALSO emit a positions_to_update with delta_amount on the
+  funding account's cash position (negative for buys, positive for sells),
+  in that cash position's own currency. If the funding cash position cannot
+  be identified from the reference list, add an ambiguity instead of guessing.
+- amount / cost_basis / deltas must be numbers, not sentences.
+- Unknown product names, missing amounts, unclear direction, unresolvable
+  accounts go to ambiguities — never guess an account_id or position_id that
+  is not in the reference list.
+- confidence is "low" for anything you infer beyond exact matching.
+- Do not invent account numbers, prices, market values, or commission figures.
 
 User message: {text}
 """
