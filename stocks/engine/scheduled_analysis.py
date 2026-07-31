@@ -1932,6 +1932,10 @@ def _build_research_candidates(
 
     research_only signals go here, never into the action section.
     When suspend_accumulation is active, candidates must note reassessment condition.
+
+    Diversity rule: one signal class (e.g., left_bottom_candidate) must not
+    monopolize the display list. We round-robin across signal types so the user
+    sees a mix of layouts: trend/rotation, left-bottom, and pullback ideas.
     """
     from stocks.engine.action_signals import _research_sizing_hint
 
@@ -1957,6 +1961,8 @@ def _build_research_candidates(
             "action_hint": item.get("action_hint"),
             "reasons": (item.get("reasons") or [])[:2],
             "priority": "research_only",
+            "score": item.get("_score"),
+            "rank": item.get("rank"),
         }
         if suspend:
             candidate["reassess_after"] = f"风险解除后再评估（当前状态: {risk_level}）"
@@ -1965,10 +1971,32 @@ def _build_research_candidates(
         candidate["sizing_hint"] = _research_sizing_hint(signal, risk_level, suspend)
         candidates.append(candidate)
 
-    # 优先级：左侧抄底 > 趋势布局 > 轮动候选 > 等回踏
-    priority = {"left_bottom_candidate": 0, "accumulate_candidate": 1, "rotation_candidate": 2, "wait_for_pullback": 3}
-    candidates.sort(key=lambda x: priority.get(x.get("signal"), 99))
-    return candidates[:8]
+    # Round-robin across signal types to avoid a single theme (e.g., deep
+    # oversold) dominating the research list. Within each type, prefer higher
+    # scores and lower ranks.
+    order = [
+        "accumulate_candidate", "rotation_candidate", "left_bottom_candidate",
+        "wait_for_pullback", "reduce_risk", "avoid_catching_falling_knife",
+    ]
+    by_signal: dict[str, list[dict]] = {s: [] for s in order}
+    for c in candidates:
+        by_signal.setdefault(c.get("signal"), []).append(c)
+    for group in by_signal.values():
+        group.sort(
+            key=lambda x: (
+                -(x.get("score") or 0),
+                x.get("rank") or 999,
+                str(x.get("symbol") or ""),
+            )
+        )
+    diverse: list[dict] = []
+    while len(diverse) < 8 and any(by_signal.values()):
+        for s in order:
+            if len(diverse) >= 8:
+                break
+            if by_signal[s]:
+                diverse.append(by_signal[s].pop(0))
+    return diverse
 
 
 def build_agent_task(session: ScheduledSession) -> dict:

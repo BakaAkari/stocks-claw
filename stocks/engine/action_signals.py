@@ -118,6 +118,7 @@ def _signal_for_item(
     r5: Optional[float],
     r20: Optional[float],
     data_points: int,
+    is_leader: bool = False,
 ) -> tuple[str, list[str]]:
     """按固定顺序匹配规则，返回 (signal, reasons)。首个命中的规则生效。"""
     if data_points < 15 or price is None:
@@ -144,6 +145,23 @@ def _signal_for_item(
         reasons.append(f"近20根K线累计 {r20:+.2f}%，跌幅较深")
         reasons.append(f"近5根K线累计 {r5:+.2f}% 不再加速，跌势放缓")
         return "left_bottom_candidate", reasons
+
+    # 1b. 轮动领先者早醒：强势回调但未走坏，给排名靠前的轮动标的一个
+    # 避免被 wait_for_pullback 过早过滤的通道。
+    if (
+        is_leader
+        and ma20 is not None
+        and price > ma20
+        and r20 is not None
+        and r20 >= _PULLBACK_R20
+        and (macd_hist is None or macd_hist >= 0)
+        and (rsi is None or rsi < _PULLBACK_RSI)
+    ):
+        reasons.append(f"轮动排名前段且趋势未破：现价 {price:.2f} > MA20 {ma20:.2f}")
+        reasons.append(f"近20根 {r20:+.2f}%，MACD 未走坏")
+        if rsi is not None:
+            reasons.append(f"RSI {rsi:.1f} 未超买")
+        return "accumulate_candidate", reasons
 
     # 1. 下跌刀：短线加速下跌 + 价格在短均线下方 + RSI 弱势
     if (
@@ -314,7 +332,6 @@ def _rank_signals(items: list[dict]) -> list[dict]:
             item["symbol"],
         )
     )
-
     # 为有序信号分配 rank
     rank_counter: dict[str, int] = {}
     for item in ranked_items:
@@ -322,8 +339,10 @@ def _rank_signals(items: list[dict]) -> list[dict]:
             rank_counter.setdefault(item["signal"], 0)
             rank_counter[item["signal"]] += 1
             item["rank"] = rank_counter[item["signal"]]
-            score_str = f"，综合得分 {item['_score']:.3f}"
-            item["action_hint"] = item.get("action_hint", "") + score_str
+            # Do not append the numeric score to user-facing text; it will
+            # leak decimal numbers into the rendered report and can trigger
+            # outlook-style numeric forecast validation (M1 hardening).
+            item["action_hint"] = item.get("action_hint", "")
         else:
             item["rank"] = None
 
@@ -404,6 +423,7 @@ def compute_action_signals(
             r5=rotation_item.get("r5"),
             r20=rotation_item.get("r20"),
             data_points=int(indicators.get("data_points") or 0),
+            is_leader=(key in leaders),
         )
 
         # 轮动领先且尚无方向信号 → rotation_candidate

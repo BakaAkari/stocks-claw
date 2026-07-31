@@ -706,6 +706,7 @@ def adjudicate_portfolio(
 
     # Priority 5: Equity under-weight + reduce -> chain or review_required
     if equity_min is not None and equity_pct < equity_min and equity_reduce_positions:
+        equity_min_pct = float(equity_min)  # type: ignore[arg-type]
         for reduce_pid in equity_reduce_positions:
             if reduce_pid in suppressed_pids:
                 continue
@@ -787,8 +788,8 @@ def adjudicate_portfolio(
                     sale_leg=sale_leg, buy_leg=buy_leg,
                     settlement_timing=sale_leg.settlement_rule or "review_required",
                     post_trade_ratio=round(post_trade_ratio_val, 4),
-                    reason=f"\u6743\u76ca {equity_pct*100:.1f}% < \u4e0b\u9650 {equity_min*100:.0f}%\uff0c"
-                           f"{reduce_pid} {card['signal']}\uff0c\u6362\u4ed3\u2192{alt}",
+                    reason=f"权益 {equity_pct*100:.1f}% < 下限 {equity_min_pct*100:.0f}%，"
+                           f"{reduce_pid} {card['signal']}，换仓→{alt}",
                 )
                 chains.append(chain)
                 approved.append(sale_leg)
@@ -809,14 +810,15 @@ def adjudicate_portfolio(
                 conflicts.append({
                     "position_id": reduce_pid,
                     "signal": card.get("signal", ""),
-                    "bucket": "\u6743\u76ca",
+                    "bucket": "权益",
                     "bucket_ratio": round(equity_pct, 6),
+                    "bucket_min": round(equity_min_pct, 6),
                     "bucket_value_cny": round(equity_value, 2),
                     "portfolio_value_cny": round(portfolio_value, 2),
                     "calculation": "position-deduplicated exposure_tags -> bucket",
                     "message": (
-                        f"\u6743\u76ca\u5360\u6bd4 {equity_pct*100:.1f}% \u4f4e\u4e8e\u4e0b\u9650 {equity_min*100:.0f}%\uff0c"
-                        f"\u4f46 {reduce_pid} \u89e6\u53d1 {card.get('signal', '')}\u3002\u672a\u627e\u5230\u66ff\u4ee3\uff0c\u9700\u4eba\u5de5\u5ba1\u6838\u3002"
+                        f"权益占比 {equity_pct*100:.1f}% 低于下限 {equity_min_pct*100:.0f}%，"
+                        f"但 {reduce_pid} 触发 {card.get('signal', '')}。未找到替代，需人工审核。"
                     ),
                     "decision_id": did,
                 })

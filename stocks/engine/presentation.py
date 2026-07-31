@@ -238,7 +238,31 @@ def _conflict_reason(conflict: dict, by_id: dict[str, dict]) -> str:
     ratio = conflict.get("bucket_ratio")
     ratio_text = f"{float(ratio) * 100:.1f}%" if isinstance(ratio, (int, float)) else "待确认"
     action = signal_label(conflict.get("signal", ""))
-    return f"{label}：{bucket}当前占组合{ratio_text}，低于目标下限，但技术信号要求{action}；方向冲突，需人工确认"
+    bucket_min = conflict.get("bucket_min")
+    bucket_min_text = f"{float(bucket_min) * 100:.0f}%" if isinstance(bucket_min, (int, float)) else "目标下限"
+    return f"{label}：{bucket}当前占组合{ratio_text}，低于{bucket_min_text}，但技术信号要求{action}；方向冲突，需人工确认"
+
+
+def _conflict_detail(conflict: dict, by_id: dict[str, dict]) -> dict[str, Any]:
+    """Structured conflict for render layers and future programmatic handling."""
+    item = by_id.get(str(conflict.get("position_id") or ""), {})
+    label = _display_for_position(item)
+    code = public_instrument_code(item.get("instrument_key", ""), "")
+    bucket = str(conflict.get("bucket") or "组合")
+    ratio = conflict.get("bucket_ratio")
+    bucket_min = conflict.get("bucket_min")
+    action = signal_label(conflict.get("signal", ""))
+    return {
+        "label": label,
+        "code": code,
+        "type": "方向冲突",
+        "bucket": bucket,
+        "bucket_ratio": ratio,
+        "bucket_min": bucket_min,
+        "action": action,
+        "reason": _conflict_reason(conflict, by_id),
+        "branch": "默认：维持现状，等待人工确认方向",
+    }
 
 
 def _position_review_map(position_reviews: list[dict]) -> dict[str, dict]:
@@ -406,7 +430,13 @@ def _deferred_action_text(raw: dict, item: dict, by_market: dict) -> str:
     if status == "deferred_min_unit":
         return f"{label}：获批比例低于最小交易单位，暂不构成可执行动作"
     if status in ("review_required", "locked"):
-        return f"{label}：{_safe_reason_text(raw.get('decision_reason') or raw.get('reason') or '')}"
+        # Preserve the adjudicator's concrete reason; do not fold every review
+        # into the generic "constraints unmet" placeholder (M1: the reason may
+        # carry bucket_min / direction conflict / settlement specific details).
+        reason_text = raw.get("decision_reason") or raw.get("reason") or ""
+        if reason_text:
+            return f"{label}：{reason_text}"
+        return f"{label}：当前不满足可执行条件，等待人工复核"
     return f"{label}：当前不满足可执行条件，等待人工复核"
 
 
@@ -861,6 +891,12 @@ def build_user_view(
         if len(research) >= 8:
             break
 
+    # Structured conflicts for programmatic render layers.
+    conflict_details = [
+        _conflict_detail(c, by_id)
+        for c in (decision.get("unresolved_conflicts") or [])
+    ]
+
     level = str((risk_state or {}).get("level") or "normal")
     transition = str((risk_state or {}).get("transition") or "stable")
     transition_text = {
@@ -879,6 +915,7 @@ def build_user_view(
     assistant = {
         "why": why_texts or ["当前没有满足执行条件的获批动作"],
         "conflict_summary": _conflict_summary(decision.get("unresolved_conflicts") or []),
+        "conflict_details": conflict_details,
         "do_not_do": [
             _suppressed_user_text(x, by_id, reviews_by_id)
             for x in (decision.get("suppressed_actions") or [])[:5]
