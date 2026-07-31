@@ -62,13 +62,48 @@ _RANK_WEIGHT_VOLUME = 0.10     # 量比加成
 
 _SIGNAL_ACTION_HINTS = {
     "accumulate_candidate": "趋势与动能配合，可分批布局；回踩短均线附近优先于追高",
-    "left_bottom_candidate": "深跌超卖且跌势放缓，左侧轻仓试仓，设止损后等待加仓",
+    "left_bottom_candidate": "深跌超卖且跌势放缓，左侧轻仓试仓，跌破前低或 RSI 持续恶化则止损",
     "wait_for_pullback": "趋势完好但短线过热，等回踩确认再进，不追",
     "reduce_risk": "趋势与动能同步转弱，优先降低该标的暴露",
     "avoid_catching_falling_knife": "下跌未止，任何补仓等收盘重新站回短均线再说",
     "rotation_candidate": "相对强弱领先，若与组合缺口匹配可作为轮入候选",
     "neutral_hold": "无明确方向信号，维持现状，等待新信号",
     "no_data": "历史或指标不足，本轮不给方向",
+}
+
+# 占位：candidate-level risk sizing and stop-loss rules are emitted by the
+# research pipeline; research candidates are never executable actions, so these
+# are displayed as sizing/stop conditions for human reference only.
+_RESEARCH_SIZING_HINTS = {
+    "left_bottom_candidate": "轻仓试仓（建议占组合不超过1-3%）；止损：跌破触发前低或20日低点继续下移",
+    "accumulate_candidate": "回踩确认后分批布局（建议单批占组合不超过2-4%）；止损：跌破MA20且MACD柱转负",
+    "rotation_candidate": "仅在组合有对应缺口时轮入（建议占组合不超过1-3%）；止损：轮动排名掉出前3或趋势破MA20",
+    "wait_for_pullback": "等回踩MA5/MA10附近观察，不追高；未触发不建仓",
+    "reduce_risk": "优先降低暴露，减仓后观察是否止跌",
+    "avoid_catching_falling_knife": "禁止抄底，等待站回短均线或RSI脱离超卖区",
+    "neutral_hold": "维持现有仓位，不主动调仓",
+    "no_data": "无数据支持，不形成任何观点",
+}
+
+
+_RESEARCH_CONFLICT_HINTS = {
+    "suspend_accumulation": "当前风险状态暂停加仓，风险解除后再评估",
+    "risk_high": "当前风险状态为{level}，需先观察风险触发条件是否缓解",
+}
+
+
+def _research_sizing_hint(signal: str, risk_level: str, suspend: bool) -> str:
+    base = _RESEARCH_SIZING_HINTS.get(str(signal or ""), "仅供参考，不形成交易动作")
+    if suspend:
+        base += "；当前风险状态暂停加仓，风险解除后再评估"
+    elif risk_level in ("hedge", "reduce"):
+        base += f"；当前风险状态为{risk_level}，优先观察风险触发条件"
+    return base
+
+
+RESEARCH_CONFLICT_HINTS = {
+    "suspend_accumulation": "当前风险状态暂停加仓，风险解除后再评估",
+    "risk_high": "当前风险状态为{level}，需先观察风险触发条件是否缓解",
 }
 
 
@@ -101,7 +136,7 @@ def _signal_for_item(
         and r5 is not None
         and r5 > r20  # 5-day total跌幅 not worse than 20-day total (stabilizing)
     ):
-        reasons.append(f"现价 {price:.2f} 低于 MA20 {ma20:.2f}，超迂{_LEFT_BOTTOM_PULLBACK_COOLDOWN*100:.0f}%")
+        reasons.append(f"现价 {price:.2f} 低于 MA20 {ma20:.2f}，不超过{_LEFT_BOTTOM_PULLBACK_COOLDOWN*100:.0f}%")
         if rsi is not None and rsi <= _LEFT_BOTTOM_RSI_MAX:
             reasons.append(f"RSI {rsi:.1f} 处于超卖或接近超卖区（≤{_LEFT_BOTTOM_RSI_MAX}）")
         if price_position is not None and price_position <= _LEFT_BOTTOM_PRICE_POSITION_MAX:

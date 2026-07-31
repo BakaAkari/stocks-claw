@@ -207,9 +207,12 @@ def _cash_view(schedule: dict) -> dict:
     Sources every amount from CashSchedule.to_dict()'s canonical fields
     (available_now/confirmed_settling/planned_release/strategic_exit/locked)
     rather than the pre-canonical duplicate fields, with no recomputation.
-    The user_view keys match the canonical field names exactly. Unresolved
-    settlement is intentionally excluded from every bucket here (see
-    _data_notes).
+    The user_view keys match the canonical field names exactly.
+
+    unresolved_settlement is surfaced here as an amount field so downstream
+    render layers can quote the figure (M1: 组合与检查点 §6 renders the
+    ¥N,NNN gap when data_notes flags it). It still is not a spendable bucket
+    — the six-bucket cash-part rendering explicitly skips it.
     """
     values = schedule or {}
     return {
@@ -222,6 +225,9 @@ def _cash_view(schedule: dict) -> dict:
         # (5% of portfolio). It must be visible, or "现在能用" looks silently
         # discounted and the buckets don't add up (adversarial review P1-8).
         "safety_buffer": {"label": "预留安全垫（不计入可用）", "amount_cny": round(values.get("safety_buffer_cny", 0.0) or 0.0, 2)},
+        # Not spendable — surfaced only so the render layer can report the
+        # awaiting-clearing-rule gap (M1: 资金缺口 line in §6).
+        "unresolved_settlement": {"label": "结算方式待确认", "amount_cny": round(values.get("unresolved_settlement", 0.0) or 0.0, 2)},
     }
 
 
@@ -241,6 +247,21 @@ def _position_review_map(position_reviews: list[dict]) -> dict[str, dict]:
         for item in (position_reviews or [])
         if item.get("position_id")
     }
+
+
+_RESEARCH_SIGNAL_LABELS = {
+    "left_bottom_candidate": "左侧超跌",
+    "accumulate_candidate": "趋势布局",
+    "rotation_candidate": "轮动候选",
+    "wait_for_pullback": "等回踩",
+    "reduce_risk": "趋势转弱",
+    "avoid_catching_falling_knife": "下跌未止",
+}
+
+
+def _research_signal_label(signal: str) -> str:
+    """Human-safe research signal label; never expose internal enum tokens."""
+    return _RESEARCH_SIGNAL_LABELS.get(str(signal or ""), "观察")
 
 
 def _suppressed_user_text(raw: dict, by_id: dict[str, dict], reviews_by_id: dict[str, dict]) -> str:
@@ -426,7 +447,7 @@ _OUTLOOK_ALLOWED_TOP = frozenset({
     "summary", "confidence", "near_term", "medium_term",
     "asset_views", "sector_views", "scenarios", "source_refs",
 })
-_OUTLOOK_HORIZON_ALLOWED = frozenset({"horizon", "direction", "confidence"})
+_OUTLOOK_HORIZON_ALLOWED = frozenset({"horizon", "direction", "confidence", "rationale"})
 _OUTLOOK_VIEW_ALLOWED = frozenset({"asset_class", "asset", "sector", "direction", "rationale"})
 _OUTLOOK_SCENARIO_ALLOWED = frozenset({
     "label", "drivers", "portfolio_effect", "validation", "invalidation",
@@ -830,6 +851,12 @@ def build_user_view(
             "display_label": display_label(name, symbol),
             "action_hint": str(candidate.get("action_hint") or "仅供观察，不形成交易动作"),
             "reassess_after": reassess_after,
+            "category": str(candidate.get("category") or ""),
+            "pool": str(candidate.get("pool") or ""),
+            "setup_tag": _research_signal_label(str(candidate.get("signal") or "")),
+            "reasons": [str(r) for r in (candidate.get("reasons") or []) if r][:2],
+            "score": candidate.get("score") or candidate.get("composite_score") or None,
+            "sizing_hint": str(candidate.get("sizing_hint") or ""),
         })
         if len(research) >= 8:
             break

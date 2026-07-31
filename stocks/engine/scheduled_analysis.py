@@ -1933,6 +1933,8 @@ def _build_research_candidates(
     research_only signals go here, never into the action section.
     When suspend_accumulation is active, candidates must note reassessment condition.
     """
+    from stocks.engine.action_signals import _research_sizing_hint
+
     suspend = risk_state.get("suspend_accumulation", False)
     risk_level = risk_state.get("level", "normal")
 
@@ -1959,6 +1961,8 @@ def _build_research_candidates(
         if suspend:
             candidate["reassess_after"] = f"风险解除后再评估（当前状态: {risk_level}）"
             candidate["condition"] = "risk_suspend_accumulation"
+        # Inject human-readable sizing + stop-loss + risk conflict guidance.
+        candidate["sizing_hint"] = _research_sizing_hint(signal, risk_level, suspend)
         candidates.append(candidate)
 
     # 优先级：左侧抄底 > 趋势布局 > 轮动候选 > 等回踏

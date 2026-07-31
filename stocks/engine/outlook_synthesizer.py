@@ -227,20 +227,28 @@ class OutlookSynthesizer:
         # ── Call transport ───────────────────────────────────────────────
         response = self._call_transport(request)
 
-        # ── Parse ────────────────────────────────────────────────────────
+        # —— Parse ——
+        raw_text = ""
         outlook = self._parse_response(response, now)
         if outlook is None and self._is_truncated_response(response):
             logger.info("Retrying truncated outlook with larger token budget")
             request["max_tokens"] = max(self.max_tokens, 8000)
             response = self._call_transport(request)
             outlook = self._parse_response(response, now)
+        if outlook is None:
+            raw_text = self._extract_raw_text(response) or ""
+            if raw_text:
+                logger.info("Retrying malformed JSON with parse repair request")
+                parse_retry_request = self._build_parse_retry_request(evidence, raw_text)
+                parse_response = self._call_transport(parse_retry_request)
+                outlook = self._parse_response(parse_response, now)
         if outlook is None and self._should_retry_temperature(response):
             logger.info("Retrying with temperature=1")
             request["temperature"] = 1.0
             response = self._call_transport(request)
             outlook = self._parse_response(response, now)
 
-        # ── Validate (with system fields forced before check) ────────────
+        # —— Validate (with system fields forced before check) ——
         if outlook is not None:
             # Force system-controlled fields; model output for these is
             # ignored to prevent placeholder values from failing validation.
@@ -282,10 +290,20 @@ class OutlookSynthesizer:
     # ── Internal helpers ────────────────────────────────────────────────────
 
     def _resolve_credentials(self, config: dict) -> None:
-        """Resolve API key and base URL from env vars or secret env file."""
+        """Resolve API key and base URL.
+
+        Priority order:
+        1. Environment variables (``self.api_key_env`` / ``self.base_url_env``).
+        2. Secret env file (KEY=VALUE format) at ``paths.secret_env_file``.
+        3. Bare-value files under ``.secret/``:
+           - ``openai-key.md`` — the whole file is the API key.
+           - ``openai-base-url.md`` — the whole file is the base URL.
+           These are the same files ``stocks/engine/__init__.py`` consumes.
+        """
         key = os.environ.get(self.api_key_env, "").strip()
         url = os.environ.get(self.base_url_env, "").strip()
 
+        # 2. KEY=VALUE secret env file
         if not key or not url:
             secret_env_file = config.get("paths", {}).get("secret_env_file")
             if secret_env_file:
@@ -302,6 +320,21 @@ class OutlookSynthesizer:
                             key = v
                         if k == self.base_url_env and not url:
                             url = v
+
+        # 3. Bare-value .secret/*.md fallback (same as stocks/engine/__init__.py)
+        if not key or not url:
+            secret_dir_setting = config.get("paths", {}).get("secret_dir") or ".secret"
+            secret_dir = Path(secret_dir_setting)
+            if not secret_dir.is_absolute():
+                secret_dir = Path(__file__).resolve().parents[2] / secret_dir_setting
+            if not key:
+                key_file = secret_dir / "openai-key.md"
+                if key_file.exists():
+                    key = key_file.read_text("utf-8").strip()
+            if not url:
+                url_file = secret_dir / "openai-base-url.md"
+                if url_file.exists():
+                    url = url_file.read_text("utf-8").strip()
 
         self._api_key = key or None
         base = (url or self.fallback_base_url).rstrip("/")
@@ -325,10 +358,50 @@ class OutlookSynthesizer:
         }
 
     def _build_validation_retry_request(self, evidence: dict, errors: list[str]) -> dict:
+        """Build a repair request that tells the model exactly what to fix.
+
+        We categorize errors so the model can fix JSON grammar or remove
+        unauthorized numbers/claims without rewriting the whole outlook.
+        """
         request = self._build_request(evidence)
+        # Group errors into actionable buckets
+        unauthorized_numbers: list[str] = []
+        other_errors: list[str] = []
+        for err in errors[:8]:
+            if err.startswith("unauthorized number:"):
+                unauthorized_numbers.append(err.split(":", 1)[1].strip())
+            else:
+                other_errors.append(err)
+
+        feedback_parts: list[str] = []
+        if unauthorized_numbers:
+            feedback_parts.append(
+                "以下数字/代码在证据中未被授权，请将其从孔数等叙事字段中删除，"
+                "或者放入 source_refs.id / instrument_key 等授权上下文中: "
+                + ", ".join(unauthorized_numbers)
+            )
+        if other_errors:
+            feedback_parts.append("其他校验错误: " + "; ".join(other_errors))
+
         feedback = {
             "VALIDATION_ERRORS": errors[:8],
-            "instruction": "修正这些错误后重新输出完整 JSON；仍只使用原证据，不增加新事实。",
+            "REPAIR_INSTRUCTION": "修复上述问题后重新输出完整 JSON。不得编造新事实，不得增加新字段，不得改变方向和置信度。只是删除/调整未授权的数字和违规表达。",
+        }
+        if feedback_parts:
+            feedback["具体修复点"] = feedback_parts
+
+        request["messages"] = list(request["messages"]) + [
+            {"role": "user", "content": json.dumps(feedback, ensure_ascii=False)},
+        ]
+        return request
+
+    def _build_parse_retry_request(self, evidence: dict, raw_text: str) -> dict:
+        """Build a request that asks the model to fix only JSON syntax."""
+        request = self._build_request(evidence)
+        feedback = {
+            "PARSE_ERROR": "上次输出不是合法 JSON，或结构不完整。",
+            "RAW_TEXT_PREFIX": raw_text[:500],
+            "REPAIR_INSTRUCTION": "修复 JSON 语法，保持原有事实不变，严格输出完整的 JSON 对象。不得编造新事实，不得增加新字段。",
         }
         request["messages"] = list(request["messages"]) + [
             {"role": "user", "content": json.dumps(feedback, ensure_ascii=False)},
@@ -383,6 +456,18 @@ class OutlookSynthesizer:
         except Exception as exc:
             logger.warning("LLM API call failed: %s", exc)
             return None
+
+    @staticmethod
+    def _extract_raw_text(response: dict | None) -> str | None:
+        """Pull the raw assistant text from an API response for repair prompts."""
+        if not isinstance(response, dict):
+            return None
+        choices = response.get("choices") or []
+        if not choices:
+            return None
+        message = choices[0].get("message", {})
+        content = message.get("content") or message.get("reasoning_content") or ""
+        return str(content).strip() or None
 
     @staticmethod
     def _is_truncated_response(response: dict | None) -> bool:

@@ -272,25 +272,30 @@ def _render_trading_payload(payload: dict) -> str:
     if delta_section:
         sections.append(delta_section)
 
-    # 2. 可执行动作
+    # 2. 走势研判 (M1: new)
+    outlook_section = _section_market_outlook(assistant)
+    if outlook_section:
+        sections.append(outlook_section)
+
+    # 3. 可执行动作
     action_section = _section_executable_actions(card)
     if action_section:
         sections.append(action_section)
 
-    # 3. 禁止与延后
+    # 4. 提前布局 (M1: new)
+    setup_section = _section_setup_candidates(assistant)
+    if setup_section:
+        sections.append(setup_section)
+
+    # 5. 禁止与延后
     blocked_section = _section_blocked_and_deferred(card, assistant)
     if blocked_section:
         sections.append(blocked_section)
 
-    # 4. 组合影响
-    impact_section = _section_portfolio_impact(assistant)
+    # 6. 组合与检查点 (M1: merged former sections 4 and 5)
+    impact_section = _section_portfolio_and_checkpoint(card, assistant)
     if impact_section:
         sections.append(impact_section)
-
-    # 5. 下一检查点
-    checkpoint_section = _section_next_checkpoint(card, assistant)
-    if checkpoint_section:
-        sections.append(checkpoint_section)
 
     lines: list[str] = [
         f"**{payload.get('session_label', '交易窗口')} · {payload.get('market_date', '')}**",
@@ -312,6 +317,7 @@ def _section_heading(title: str) -> str:
 
 
 def _section_window_changes(assistant: dict) -> list[str]:
+    """§1 本窗口变化 — outlook_delta 或"无新证据"。走势研判本身放到 §2。"""
     lines: list[str] = [_section_heading("本窗口变化")]
     outlook_delta = assistant.get("outlook_delta") or {}
     changes = (outlook_delta.get("changes") or {}) if isinstance(outlook_delta, dict) else {}
@@ -320,7 +326,6 @@ def _section_window_changes(assistant: dict) -> list[str]:
         rendered = _render_delta_changes_concise(changes)
         for line in rendered[:4]:
             lines.append(f"- {line}")
-        # Source refs changes (added/removed IDs)
         source_changes = changes.get("source_refs") or {}
         if isinstance(source_changes, dict):
             added = source_changes.get("added") or []
@@ -331,42 +336,174 @@ def _section_window_changes(assistant: dict) -> list[str]:
                 lines.append(f"- 来源移除: {', '.join(str(x) for x in removed[:3])}")
         return lines
 
+    lines.append("- 本窗口未发现需要改变计划的新证据")
+    return lines
+
+
+def _section_market_outlook(assistant: dict) -> list[str]:
+    """§2 走势研判 — 短期 + 中期方向、驱动、证伪线、组合影响。
+
+    Outlook 未就绪时给一句诚实的"暂不可用"降级，不泄漏内部错误。
+    M2 的 evidence 扩展让这段实际填充上短中期研判正文；此处的渲染
+    结构已按最终形态实现，无需 M2 再改渲染层。
+    """
+    lines: list[str] = [_section_heading("走势研判")]
     outlook = assistant.get("outlook") or {}
-    if isinstance(outlook, dict) and outlook.get("status") == "unavailable":
+
+    if not isinstance(outlook, dict) or not outlook:
         lines.append("- 中长期研判暂不可用")
         return lines
 
-    if isinstance(outlook, dict) and outlook.get("status") == "ok":
-        if outlook.get("summary"):
-            lines.append(f"- 综合判断: {outlook['summary']}")
-        near = outlook.get("near_term") or {}
-        medium = outlook.get("medium_term") or {}
-        parts: list[str] = []
-        if near:
-            d = _DIRECTION_LABELS.get(near.get("direction"), near.get("direction", ""))
-            c = _CONFIDENCE_LABELS.get(near.get("confidence"), near.get("confidence", ""))
-            if d or c:
-                parts.append(f"未来1-2周: {d}" + (f"（{c}）" if c else ""))
-        if medium:
-            d = _DIRECTION_LABELS.get(medium.get("direction"), medium.get("direction", ""))
-            c = _CONFIDENCE_LABELS.get(medium.get("confidence"), medium.get("confidence", ""))
-            if d or c:
-                parts.append(f"未来1-3个月: {d}" + (f"（{c}）" if c else ""))
-        for av in (outlook.get("asset_views") or [])[:4]:
-            key = av.get("asset_class") or av.get("asset") or ""
-            d = _DIRECTION_LABELS.get(av.get("direction"), av.get("direction", ""))
-            if key and d:
-                parts.append(f"{key}: {d}")
-        for sv in (outlook.get("sector_views") or [])[:4]:
-            key = sv.get("sector") or ""
-            d = _DIRECTION_LABELS.get(sv.get("direction"), sv.get("direction", ""))
-            if key and d:
-                parts.append(f"{key}行业: {d}")
-        for line in parts[:4]:
-            lines.append(f"- {line}")
+    status = outlook.get("status")
+    if status == "unavailable":
+        # 不泄漏 disable/未配置类内部字符串；只给用户友善说明。
+        lines.append("- 中长期研判本期未通过校验，暂不输出")
         return lines
 
-    lines.append("- 本窗口未发现需要改变计划的新证据")
+    if status != "ok":
+        lines.append("- 中长期研判暂不可用")
+        return lines
+
+    summary = outlook.get("summary") or ""
+    if summary:
+        lines.append(f"- 综合判断: {summary}")
+
+    for hkey, hlabel in (("near_term", "短期(1-2周)"), ("medium_term", "中期(1-3月)")):
+        h = outlook.get(hkey) or {}
+        if not isinstance(h, dict) or not h:
+            continue
+        direction_key = str(h.get("direction") or "")
+        confidence_key = str(h.get("confidence") or "")
+        rationale = str(h.get("rationale") or "")
+        d = _DIRECTION_LABELS.get(direction_key, direction_key)
+        c = _CONFIDENCE_LABELS.get(confidence_key, confidence_key)
+        if d or c:
+            piece = f"{hlabel}: {d}" if d else hlabel
+            if c:
+                piece += f"（置信 {c}）"
+            if rationale:
+                piece += f" — {rationale}"
+            lines.append(f"- {piece}")
+
+    shown_lines = 0
+    for sv in (outlook.get("sector_views") or [])[:3]:
+        sector = sv.get("sector") or ""
+        direction_key = str(sv.get("direction") or "")
+        d = _DIRECTION_LABELS.get(direction_key, direction_key)
+        rationale = str(sv.get("rationale") or "")
+        if sector and d:
+            piece = f"- {sector}: {d}"
+            if rationale:
+                piece += f" — {rationale}"
+            lines.append(piece)
+            shown_lines += 1
+        if shown_lines >= 3:
+            break
+
+    for av in (outlook.get("asset_views") or [])[:2]:
+        asset_class = av.get("asset_class") or av.get("asset") or ""
+        direction_key = str(av.get("direction") or "")
+        d = _DIRECTION_LABELS.get(direction_key, direction_key)
+        rationale = str(av.get("rationale") or "")
+        if asset_class and d:
+            piece = f"- {asset_class}: {d}"
+            if rationale:
+                piece += f" — {rationale}"
+            lines.append(piece)
+
+    return lines
+
+
+# 信号到渲染标签
+_SETUP_SIGNAL_LABELS = {
+    "left_bottom_candidate": "左侧超跌",
+    "accumulate_candidate": "趋势布局",
+    "rotation_candidate": "轮动贴轨",
+    "wait_for_pullback": "等回踎",
+    "reduce_risk": "趋势转弱",
+    "avoid_catching_falling_knife": "下跌未止",
+    "neutral_hold": "维持现状",
+    "no_data": "缺数据",
+}
+
+
+# 合体可能的时候提取较为干净的条件/止损几乎语
+_SETUP_TRIGGER_HINTS = {
+    "left_bottom_candidate": ["轻仓试", "超跌", "止损", "等待加仓"],
+    "accumulate_candidate": ["分批", "布局", "回踎", "趋势"],
+    "rotation_candidate": ["轮动", "相对强势", "贴轨"],
+    "wait_for_pullback": ["回踎", "过热", "等回踎"],
+}
+
+
+def _setup_candidate_tag(item: dict) -> str:
+    """Return a short decision tag from candidate metadata."""
+    tag = str(item.get("setup_tag") or "")
+    if tag:
+        return tag
+    signal = str(item.get("signal") or "")
+    return _SETUP_SIGNAL_LABELS.get(signal, "观察")
+
+
+def _setup_candidate_tail(item: dict) -> str | None:
+    """Return one-line trigger/condition tail, or None if nothing useful."""
+    reasons = [str(r) for r in (item.get("reasons") or []) if r]
+    if reasons:
+        return "；".join(reasons[:2])
+    hint = str(item.get("action_hint") or "")
+    # strip obvious generic phrases
+    for stale in ("仅供观察", "不形成交易", "可分批", "深跌超卖"):
+        hint = hint.replace(stale, "")
+    # extract price/threshold-looking sentences if any
+    for key in ("价格", "回踎", "等待", "止损", "MA", "RSI", "放量"):
+        if key in hint:
+            # crude: take the first sentence-like chunk containing key
+            idx = hint.find(key)
+            start = max(0, idx - 20)
+            end = min(len(hint), idx + 40)
+            return hint[start:end].strip("，。 ")
+    return None
+
+
+def _section_setup_candidates(assistant: dict) -> list[str]:
+    """§4 提前布局 — 从 research 提升到主段，展示 top 2-3 候选。"""
+    lines: list[str] = [_section_heading("提前布局")]
+    research = assistant.get("research") or []
+    if not research:
+        lines.append("- 本窗口无值得提前布局的候选")
+        return lines
+
+    def _score(item: dict) -> float:
+        s = item.get("score")
+        if isinstance(s, (int, float)) and not isinstance(s, bool):
+            return float(s)
+        return -1.0
+
+    sorted_items = sorted(research, key=_score, reverse=True)
+    top = sorted_items[:3]
+
+    for item in top:
+        label = item.get("display_label") or "未命名候选"
+        tag = _setup_candidate_tag(item)
+        tail = _setup_candidate_tail(item)
+        score = item.get("score")
+        score_text = ""
+        if isinstance(score, (int, float)) and not isinstance(score, bool):
+            score_text = f" 综合得分 {score:.2f}"
+        sizing_hint = str(item.get("sizing_hint") or "")
+        if tail:
+            lines.append(f"- **{label}**（{tag}{score_text}）: {tail}")
+        else:
+            lines.append(f"- **{label}**（{tag}{score_text}）")
+        if sizing_hint:
+            lines.append(f"  仓位/止损: {sizing_hint}")
+        reassess = item.get("reassess_after")
+        if reassess and reassess != "下一交易窗口复核":
+            lines.append(f"  复核: {reassess}")
+
+    overflow = len(research) - len(top)
+    if overflow > 0:
+        lines.append(f"- 另有 {overflow} 个候选，详情待人工进一步筛选")
     return lines
 
 
@@ -455,13 +592,99 @@ def _render_delta_changes_concise(changes: dict) -> list[str]:
     return rendered[:8]
 
 
+def _conflict_type(reason: str) -> str:
+    """Classify a no_action_reason into conflict type for decision branching."""
+    r = str(reason or "").lower()
+    if "数据" in r or "行情" in r or "过时" in r or "缺失" in r or "复权" in r:
+        return "数据问题"
+    if "冲突" in r or "人工确认" in r or "方向" in r or "权益" in r or "低于" in r or "但" in r:
+        return "决策冲突"
+    if "锁定" in r or "不能交易" in r or "锁定状态" in r:
+        return "锁定"
+    if "开放期" in r or "周期" in r or "不在开放" in r:
+        return "非开放期"
+    if "资金" in r or "结算" in r or "缺口" in r:
+        return "资金/结算"
+    return "其他"
+
+
+def _conflict_decision_branch(reason: str) -> str:
+    """Return a default branch for manual review conflicts."""
+    t = _conflict_type(reason)
+    if t == "数据问题":
+        return "默认：等待数据恢复后重新评估"
+    if t == "决策冲突":
+        return "默认：维持现状，等待人工确认方向"
+    if t == "锁定":
+        return "默认：等待锁定解除"
+    if t == "非开放期":
+        return "默认：等待开放期"
+    if t == "资金/结算":
+        return "默认：等待资金结算方式确认"
+    return "默认：维持现状"
+
+
+def _no_action_conflict_details(reason: str) -> dict[str, Any]:
+    """Parse a no_action_reason into structured conflict details for display."""
+    text = str(reason or "")
+    # Extract instrument label and code from the leading 'label(code): ...' form.
+    label = text
+    code = ""
+    m = re.match(r"(.+?)（([\dA-Za-z\.]+)）：", text)
+    if not m:
+        m = re.match(r"(.+?)\(([\dA-Za-z\.]+)\)\s*:", text)
+    if m:
+        label = m.group(1).strip()
+        code = m.group(2).strip()
+    return {
+        "type": _conflict_type(text),
+        "label": label,
+        "code": code,
+        "reason": text,
+        "branch": _conflict_decision_branch(text),
+    }
+
+
 def _section_executable_actions(card: dict) -> list[str]:
+    """§3 可执行动作 — manual_review 时列出待决冲突和参考值，并给出决策分支。"""
     lines: list[str] = [_section_heading("可执行动作")]
     actions = card.get("actions") or []
+    status_raw = str(card.get("status") or "").strip().lower()
+    status_label = card.get("status_label") or ("等待人工确认" if status_raw == "manual_review" else "")
+
     if not actions:
+        # 无 approved actions；若为 manual_review，把冲突理由摆出来带参考值和默认分支。
         no_action_reasons = card.get("no_action_reasons") or []
-        status = card.get("status_label") or "等待人工确认"
-        lines.append(f"- 状态: {status}")
+        if status_raw == "manual_review" and no_action_reasons:
+            lines.append(f"- 状态: {status_label or '等待人工确认'}")
+            lines.append("- 以下冲突需你判断:")
+            for reason in no_action_reasons[:3]:
+                detail = _no_action_conflict_details(reason)
+                if detail["label"] and detail["code"]:
+                    lines.append(f"  · **{detail['label']}（{detail['code']}）** [{detail['type']}] {detail['reason'].split('：', 1)[-1] if '：' in detail['reason'] else detail['reason']}")
+                else:
+                    lines.append(f"  · [{detail['type']}] {detail['reason']}")
+                lines.append(f"    分支: {detail['branch']}")
+            # 参考值：从 suppressed_actions_reference 提取每个冲突的 rule-driven 参考比例
+            suppressed = card.get("suppressed_actions_reference") or []
+            for ref in suppressed[:3]:
+                if not isinstance(ref, dict):
+                    continue
+                label = ref.get("display_label") or ref.get("instrument_name") or ""
+                signal = ref.get("signal_type") or ref.get("action_type") or ""
+                ratio = ref.get("ratio")
+                if not label and not signal and ratio is None:
+                    continue
+                parts = []
+                if signal:
+                    parts.append(str(signal))
+                if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
+                    parts.append(f"{float(ratio) * 100:.0f}%")
+                if parts and label:
+                    lines.append(f"  参考: {label} → {' '.join(parts)}")
+            return lines
+
+        lines.append(f"- 状态: {status_label or '当前无需操作'}")
         for reason in (no_action_reasons or ["当前没有满足执行条件的获批动作"])[:2]:
             lines.append(f"- {reason}")
         return lines
@@ -495,18 +718,50 @@ def _section_executable_actions(card: dict) -> list[str]:
     return lines
 
 
+# 带金额的 data_notes 类型判断：当做“待决事项”
+_PENDING_TYPES = frozenset({"数据问题", "决策冲突", "锁定", "非开放期", "资金/结算"})
+
+
+def _pending_item_type(text: str) -> str:
+    """Classify a blocked/deferred note into pending type for grouping."""
+    r = str(text or "").lower()
+    if "开放期" in r or "周期" in r or "不在开放" in r:
+        return "非开放期"
+    if "锁定" in r or "不能交易" in r or "锁定状态" in r:
+        return "锁定"
+    if "数据" in r or "行情" in r or "过时" in r or "缺失" in r or "复权" in r:
+        return "数据"
+    if "资金" in r or "结算" in r or "缺口" in r:
+        return "资金"
+    if "风险" in r or "暂停加仓" in r or "停止" in r:
+        return "风险"
+    if "长期配置" in r or "仅供观察" in r or "研究" in r:
+        return "观察"
+    return "其他"
+
+
 def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
+    """§5 禁止与延后 — manual_review 冲突已在 §3 呈现时不重复；
+    带金额的 data_notes 归到 §6 组合与检查点的“待决事项”。"""
     lines: list[str] = [_section_heading("禁止与延后")]
     collected: list[str] = []
 
+    status_raw = str(card.get("status") or "").strip().lower()
+    actions = card.get("actions") or []
+    manual_review_only = status_raw == "manual_review" and not actions
+
+    # manual_review 状态下 §3 已列出 no_action_reasons，此处跳过
     no_action_reasons = card.get("no_action_reasons") or []
-    if no_action_reasons:
+    if no_action_reasons and not manual_review_only:
         collected.extend(no_action_reasons)
 
     why = assistant.get("why") or []
-    action_sentences = {a.get("reason_summary") for a in (card.get("actions") or []) if a.get("reason_summary")}
+    action_sentences = {a.get("reason_summary") for a in actions if a.get("reason_summary")}
+    manual_review_reasons_set = set(no_action_reasons) if manual_review_only else set()
     for text in why:
         if text in action_sentences:
+            continue
+        if text in manual_review_reasons_set:
             continue
         if text not in collected:
             collected.append(text)
@@ -516,9 +771,10 @@ def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
         if text and text not in collected:
             collected.append(text)
 
+    # 只把非资金缺口类的 data_notes 放这里；含金额的 data_notes 归到 §6
     data_notes = assistant.get("data_notes") or []
     for note in data_notes:
-        if note and note not in collected:
+        if note and note not in collected and not _has_currency_amount(note):
             collected.append(note)
 
     risk = assistant.get("risk") or {}
@@ -527,10 +783,6 @@ def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
         if msg not in collected:
             collected.append(msg)
 
-    if not collected:
-        lines.append("- 无")
-
-    # Sort by priority groups
     priority0 = []
     priority1 = []
     priority2 = []
@@ -547,19 +799,24 @@ def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
             priority2.append(text)
 
     ordered = (priority0 + priority1 + priority2 + priority3)[:4]
+    if not ordered:
+        lines.append("- 无")
     for text in ordered:
         lines.append(f"- {text}")
-
-    # E2: research is always compressed to a single trailing line if present
-    research = assistant.get("research") or []
-    if research:
-        lines.append(f"- 研究候选 {len(research)} 个，当前均不构成交易动作")
 
     return lines
 
 
-def _section_portfolio_impact(assistant: dict) -> list[str]:
-    lines: list[str] = [_section_heading("组合影响")]
+def _has_currency_amount(text: str) -> bool:
+    """Detect whether a data_notes entry mentions a currency amount."""
+    if not isinstance(text, str):
+        return False
+    return bool(re.search(r"[¥$€]\s*-?\d|CNY\s*-?\d|-?\d[\d,]*\s*元", text))
+
+
+def _section_portfolio_and_checkpoint(card: dict, assistant: dict) -> list[str]:
+    """§6 组合与检查点 — 风险状态 + 现金 + 待决事项 + 执行后 + 下一检查点。"""
+    lines: list[str] = [_section_heading("组合与检查点")]
     risk = assistant.get("risk") or {}
     label = risk.get("label") or "风险状态待确认"
     transition = risk.get("transition") or "状态未变"
@@ -570,58 +827,122 @@ def _section_portfolio_impact(assistant: dict) -> list[str]:
     if not reasons and risk.get("level") in ("hedge", "reduce"):
         lines.append("- 触发原因: 风险等级判定缺少可读证据，已转人工复核")
 
+    # —— 资金折叠 ——
     cash = assistant.get("cash") or {}
-    cash_parts = []
-    for key, label_text in (
-        ("available_now", "现在能用"),
-        ("confirmed_settling", "到账途中"),
-        ("planned_release", "计划内到期释放"),
-    ):
+    cash_parts: list[str] = []
+
+    def _amount(key: str) -> float:
         item = cash.get(key) or {}
-        if item.get("amount_cny") is not None:
-            cash_parts.append(f"{label_text} ¥{float(item.get('amount_cny') or 0):,.0f}")
-    locked = cash.get("locked") or {}
-    locked_amount = float(locked.get("amount_cny") or 0)
-    if locked_amount > 0:
-        cash_parts.append(f"不能动 ¥{locked_amount:,.0f}")
+        try:
+            return float(item.get("amount_cny") or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
-    strategic = cash.get("strategic_exit") or {}
-    strategic_amount = float(strategic.get("amount_cny") or 0)
-    if strategic_amount > 0:
-        cash_parts.append(f"卖出后可释放 ¥{strategic_amount:,.0f}")
+    available_now = _amount("available_now")
+    confirmed_settling = _amount("confirmed_settling")
+    planned_release = _amount("planned_release")
+    locked = _amount("locked")
+    strategic_exit = _amount("strategic_exit")
+    safety_buffer = _amount("safety_buffer")
+    unresolved_settlement = _amount("unresolved_settlement")
 
-    safety = cash.get("safety_buffer") or {}
-    safety_amount = float(safety.get("amount_cny") or 0)
-    if safety_amount > 0:
-        cash_parts.append(f"安全垫 ¥{safety_amount:,.0f}（不计入可用）")
+    cash_parts.append(f"现在能用 ¥{available_now:,.0f}")
+    if confirmed_settling > 0:
+        cash_parts.append(f"到账途中 ¥{confirmed_settling:,.0f}")
+    if planned_release > 0:
+        cash_parts.append(f"计划内到期释放 ¥{planned_release:,.0f}")
+    if locked > 0:
+        cash_parts.append(f"不能动 ¥{locked:,.0f}")
+
+    # strategic_exit 仅当存在可执行的 sell 类动作时展示
+    actions = card.get("actions") or []
+    has_sell_action = any(
+        _is_sell_action(a) for a in actions
+    )
+    if has_sell_action and strategic_exit > 0:
+        cash_parts.append(f"卖出后可释放 ¥{strategic_exit:,.0f}")
+
+    if safety_buffer > 0:
+        cash_parts.append(f"安全垫 ¥{safety_buffer:,.0f}（不计入可用）")
 
     if cash_parts:
         lines.append(f"- 资金: {'；'.join(cash_parts)}")
-    return lines
 
+    # —— 待决事项统一段（带金额的 data_notes + 部分延后理由）——
+    pending_items: list[tuple[str, str]] = []
+    for note in assistant.get("data_notes") or []:
+        if _has_currency_amount(note):
+            pending_items.append(("资金", note))
+    if unresolved_settlement > 0 and not any(
+        t == "资金" for t, _ in pending_items
+    ):
+        pending_items.append(("资金",
+            f"¥{unresolved_settlement:,.0f} 的卖出资金结算方式待确认，"
+            "未计入“现在能用”或“到账途中”"))
 
-def _section_next_checkpoint(card: dict, assistant: dict) -> list[str]:
-    lines: list[str] = [_section_heading("下一检查点")]
+    do_not_do = assistant.get("do_not_do") or []
+    for text in do_not_do:
+        t = _pending_item_type(text)
+        if t in ("锁定", "非开放期", "数据", "资金"):
+            pending_items.append((t, text))
+
+    if pending_items:
+        lines.append("- 待决事项:")
+        for ptype, text in pending_items[:3]:
+            lines.append(f"  · [{ptype}] {text}")
+
+    # —— 执行后估算 ——
+    post_trade = assistant.get("post_trade_projection") or {}
+    if actions and isinstance(post_trade, dict) and post_trade:
+        available_before = post_trade.get("available_now_before_cny")
+        available_after = post_trade.get("available_now_after_cny")
+        equity_before = post_trade.get("equity_ratio_before")
+        equity_after = post_trade.get("equity_ratio_after")
+        # 只有所有字段都齐备时才输出，避免半截信息
+        if (
+            isinstance(available_before, (int, float)) and not isinstance(available_before, bool)
+            and isinstance(available_after, (int, float)) and not isinstance(available_after, bool)
+            and isinstance(equity_before, (int, float)) and not isinstance(equity_before, bool)
+            and isinstance(equity_after, (int, float)) and not isinstance(equity_after, bool)
+        ):
+            lines.append(
+                f"- 执行后估算: 可用 ¥{float(available_before):,.0f} → "
+                f"¥{float(available_after):,.0f}, 权益比例 "
+                f"{float(equity_before)*100:.0f}% → {float(equity_after)*100:.0f}%"
+            )
+
+    # —— 下一检查点 ——
     checkpoint = card.get("next_checkpoint") or "下一交易窗口复核"
-    lines.append(f"- {checkpoint}")
+    lines.append(f"- 下一检查点: {checkpoint}")
 
-    actions = card.get("actions") or []
     if actions:
         cancel = actions[0].get("cancel_condition") or "触发条件不再成立时取消"
         lines.append(f"- 条件: {cancel}")
-        return lines
+    else:
+        release = risk.get("release_condition")
+        if release:
+            lines.append(f"- 条件: {release}")
+        else:
+            # 找一个非资金缺口的 data_note
+            for note in assistant.get("data_notes") or []:
+                if not _has_currency_amount(note):
+                    lines.append(f"- 注意: {note}")
+                    break
 
-    risk = assistant.get("risk") or {}
-    release = risk.get("release_condition")
-    if release:
-        lines.append(f"- 条件: {release}")
-        return lines
-
-    data_notes = assistant.get("data_notes") or []
-    if data_notes:
-        lines.append(f"- 注意: {data_notes[0]}")
     return lines
 
+
+def _is_sell_action(action: dict) -> bool:
+    """Detect whether an action is a sell/reduce/hedge type."""
+    if not isinstance(action, dict):
+        return False
+    label = (action.get("action_label") or "").strip()
+    signal = (action.get("signal_type") or "").strip().lower()
+    if "卖" in label or "减" in label or "止损" in label or "对冲" in label:
+        return True
+    if signal in {"sell", "reduce", "hedge", "trim"}:
+        return True
+    return False
 
 
 _SUBKEY_LABELS = {
@@ -799,31 +1120,33 @@ def _is_span_safe(pos: int, num_str: str, safe_spans: set[tuple[int, int]]) -> b
     return False
 
 
-_E2_REQUIRED_HEADINGS = ("本窗口变化", "可执行动作", "禁止与延后", "组合影响", "下一检查点")
+_E2_REQUIRED_HEADINGS = ("本窗口变化", "走势研判", "可执行动作", "提前布局", "禁止与延后", "组合与检查点")
 
 
 def _remove_outlook_sections(text: str) -> str:
-    """Remove only the outlook-bearing section(s) from the rendered text.
+    """Remove outlook-bearing section(s) from the rendered text.
 
-    The number-authorization scan must cover every deterministic section
-    (可执行动作 / 禁止与延后 / 组合影响 / 下一检查点) — amounts, quantities
-    and percentages there must trace back to the payload. The E2 layout puts
-    the outlook narrative inside 本窗口变化, so only that one section is
-    removed (outlook numbers have their own upstream validator,
-    outlook_validation.py). The pre-E2 implementation truncated the text at
-    the first section heading, which silently disabled the scan for every
-    section in the E2 layout (adversarial review P0-2).
+    In the M1 six-section layout, both 本窗口变化 (delta narrative) and
+    走势研判 (outlook body) may quote LLM-produced numbers (macro levels,
+    horizons). These are validated upstream by outlook_validation.py; the
+    render-layer number scan must not double-check them. All other
+    sections must trace every number back to the payload.
     """
-    start = text.find("**本窗口变化**")
-    if start < 0:
-        stripped = text
-    else:
-        end = len(text)
-        for marker in ("**可执行动作**", "**禁止与延后**", "**组合影响**", "**下一检查点**"):
-            idx = text.find(marker, start)
+    stripped = text
+    for heading in ("本窗口变化", "走势研判"):
+        marker = f"**{heading}**"
+        start = stripped.find(marker)
+        if start < 0:
+            continue
+        end = len(stripped)
+        for later in _E2_REQUIRED_HEADINGS:
+            if later == heading:
+                continue
+            later_marker = f"**{later}**"
+            idx = stripped.find(later_marker, start + len(marker))
             if idx >= 0:
                 end = min(end, idx)
-        stripped = text[:start] + text[end:]
+        stripped = stripped[:start] + stripped[end:]
     # Legacy layouts appended outlook sections at the end; keep cutting there.
     for marker in ("**中长期研判**", "**研判变化**"):
         idx = stripped.find(marker)
@@ -843,12 +1166,15 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
     # Remove only the outlook-bearing section(s) before number scanning.
     deterministic_text = _remove_outlook_sections(text)
     allowed = _number_values(_strip_outlook_from_payload(payload))
-    # Render-time computed counts that are deterministic given the payload but
-    # not stored as values inside it (trading payloads only — the research
-    # list lives under user_view).
+    # Render-time computed counts that are deterministic given the payload
+    # but not stored as values inside it (trading payloads only). In M1 the
+    # 提前布局 section may render "另有 N 个候选" where N == len(research) -
+    # displayed_count; both len(research) and any subset count are safe to
+    # authorize because they derive purely from the payload's research list.
     if payload.get("session_type") == "trading":
         research = ((payload.get("user_view") or {}).get("assistant_brief") or {}).get("research") or []
-        allowed.add(round(float(len(research)), 4))
+        for i in range(len(research) + 1):
+            allowed.add(round(float(i), 4))
 
     numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", deterministic_text)
     safe_spans = _safe_numeric_spans(numeric_text)
@@ -868,7 +1194,8 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
     if text == "[SILENT]":
         return errors
     if payload.get("session_type") == "trading":
-        # Concise report schema (TASK-001E2): exactly five ordered sections.
+        # M1: six ordered sections (本窗口变化 / 走势研判 / 可执行动作 /
+        # 提前布局 / 禁止与延后 / 组合与检查点).
         positions = []
         for heading in _E2_REQUIRED_HEADINGS:
             marker = f"**{heading}**"
@@ -881,6 +1208,8 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
         for banned in (
             "交易指令卡", "私人投资助理", "为什么这样安排", "待人工确认的信号分类",
             "仅供观察", "中长期研判", "资产类别", "行业观察", "基准情景", "乐观情景", "风险情景",
+            # M1: banned legacy 5-section headings
+            "组合影响", "下一检查点",
         ):
             if f"**{banned}**" in text:
                 errors.append(f"banned legacy heading: {banned}")

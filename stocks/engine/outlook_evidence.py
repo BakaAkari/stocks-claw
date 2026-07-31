@@ -238,6 +238,22 @@ def _build_intelligence_events(
             title = str(article.get("title") or "").strip()
             url = str(article.get("url") or "").strip()
             published_at = str(article.get("published_at") or "").strip()
+            # Fallback: derive a source label from the URL's host when the
+            # upstream harvester didn't set one. Without this fallback, feeds
+            # that omit an explicit "source" field (e.g. GNews with only URL +
+            # title) produce zero evidence sources, and every downstream
+            # outlook fails validation with "narrative outlook has no
+            # source_refs" — even though real, dated, URL-backed evidence
+            # was collected.
+            if not source and url:
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(url).hostname or ""
+                    if host.startswith("www."):
+                        host = host[4:]
+                    source = host
+                except (ValueError, AttributeError):
+                    source = ""
             if not (source and title and url and published_at):
                 continue
             sources.append({

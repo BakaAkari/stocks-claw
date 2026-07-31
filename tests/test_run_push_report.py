@@ -35,8 +35,10 @@ def test_entrypoint_renders_and_persists_sanitized_payload(tmp_path):
     assert "**本窗口变化**" in r.stdout
     assert "**可执行动作**" in r.stdout
     assert "**禁止与延后**" in r.stdout
-    assert "**组合影响**" in r.stdout
-    assert "**下一检查点**" in r.stdout
+    assert "**组合与检查点**" in r.stdout
+    # M1: 下一检查点 是 §6 内嵌行，不再是独立 heading
+    assert "下一检查点:" in r.stdout
+    assert "**下一检查点**" not in r.stdout
     assert "4个减仓信号" not in r.stdout
     data = json.loads((payload / "cn_after_close.json").read_text())
     assert set(data) == {

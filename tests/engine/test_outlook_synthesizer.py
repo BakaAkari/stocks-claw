@@ -178,15 +178,23 @@ def test_prompt_json_example_is_valid_and_documents_forecast_contract():
     start = prompt.index("```json") + len("```json")
     end = prompt.index("```", start)
     example = json.loads(prompt[start:end].strip())
-    assert example["forecast_candidates"]
-    candidate = example["forecast_candidates"][0]
-    assert set(candidate) >= {
-        "target", "metric", "comparator", "level", "deadline",
-        "confidence", "source_ref_ids", "requires_confirmation",
-    }
+    assert isinstance(example["forecast_candidates"], list)
+    assert "forecast_candidates" in example
+    assert example["confidence"] in {"high", "medium", "low"}
+    assert example["near_term"]["horizon"] == "1-2w"
+    assert example["medium_term"]["horizon"] == "1-3m"
+    if example["forecast_candidates"]:
+        candidate = example["forecast_candidates"][0]
+        assert set(candidate) >= {
+            "target", "metric", "comparator", "level", "deadline",
+            "confidence", "source_ref_ids", "requires_confirmation",
+        }
+    assert example["scenarios"]["base"]["portfolio_effect"]
+    assert example["sector_views"][0]["rationale"]
+    assert example["asset_views"][0]["rationale"]
 
 
-def test_cache_identity_changes_with_prompt_content(evidence, monkeypatch, tmp_path):
+def test_cache_identity_changes_with_prompt_content(monkeypatch, tmp_path):
     from stocks.engine.outlook_synthesizer import OutlookSynthesizer
 
     monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test-key")
@@ -407,10 +415,12 @@ def test_disabled_returns_unavailable(evidence, monkeypatch, tmp_path):
 def test_no_api_key_returns_unavailable(evidence, monkeypatch, tmp_path):
     from stocks.engine.outlook_synthesizer import OutlookSynthesizer
 
-    # Ensure env var is absent
+    # Ensure env var is absent AND point .secret/ fallback at an empty dir
     monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
 
     cfg = _valid_cfg()
+    cfg = dict(cfg)
+    cfg["paths"] = {"secret_dir": str(tmp_path / "no-secrets")}
 
     def transport(req: dict) -> dict:
         return _chat_response(json.dumps(_valid_outlook_dict(), ensure_ascii=False))

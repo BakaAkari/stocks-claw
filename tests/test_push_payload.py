@@ -204,7 +204,7 @@ def test_renderer_preserves_signal_classification_and_never_invents_totals():
     # E2: conflict counts are no longer rendered as separate lines.
     assert "**可执行动作**" in text
     assert "**禁止与延后**" in text
-    assert "**组合影响**" in text
+    assert "**组合与检查点**" in text
     assert "manual_review" not in text
     assert "approved_actions" not in text
     assert "---" not in text
@@ -214,12 +214,20 @@ def test_renderer_reads_canonical_cash_keys_not_legacy_immediate_settling():
     """The cash section must render the actual available_now/confirmed_settling
     amounts; falling back to legacy immediate/settling keys (or missing keys
     entirely) would silently render the "资金待确认" placeholder instead
-    (TASK-001D correction item 1)."""
-    text = render_push_payload(build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00"))
-    assert "现在能用 ¥345,134" in text
-    assert "到账途中 ¥0" in text
-    assert "资金待确认" not in text
+    (TASK-001D correction item 1).
 
+    M1 additionally collapses zero-valued confirmed_settling from the cash line
+    so this test injects a non-zero value.
+    """
+    artifact = _artifact()
+    # Inject non-zero confirmed_settling so M1 collapse rule doesn't hide it
+    artifact["portfolio_decision"]["user_view"]["assistant_brief"]["cash"]["confirmed_settling"] = {
+        "label": "到账途中", "amount_cny": 12_345.0,
+    }
+    text = render_push_payload(build_push_payload(artifact, now="2026-07-17T15:27:00+08:00"))
+    assert "现在能用 ¥345,134" in text
+    assert "到账途中 ¥12,345" in text
+    assert "资金待确认" not in text
 
 def test_payload_validator_rejects_unknown_numbers_and_internal_tokens():
     payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
@@ -347,7 +355,7 @@ def test_cli_fail_closed_and_writes_atomic_payload(tmp_path):
     assert result.returncode == 0, result.stderr
     assert output.is_file()
     assert "**可执行动作**" in result.stdout
-    assert "**组合影响**" in result.stdout
+    assert "**组合与检查点**" in result.stdout
     bad = json.loads(artifact.read_text())
     bad["portfolio_decision"].pop("user_view")
     artifact.write_text(json.dumps(bad), encoding="utf-8")
@@ -385,21 +393,26 @@ def test_primary_no_action_always_sends_and_watch_no_action_is_silent():
 
 
 def test_payload_renderer_includes_outlook_section_and_order():
-    """E2 concise report renders window-change section first, then actions."""
+    """M1 six-section report has 走势研判 and 提前布局 as first-class sections."""
     payload = build_push_payload(_full_outlook_artifact(), now="2026-07-17T15:27:00+08:00")
     text = render_push_payload(payload)
     assert "**本窗口变化**" in text
+    assert "**走势研判**" in text
     assert "**可执行动作**" in text
+    assert "**提前布局**" in text
     assert "**禁止与延后**" in text
-    assert "**组合影响**" in text
-    assert "**下一检查点**" in text
+    assert "**组合与检查点**" in text
     # Legacy section headings removed
     assert "**中长期研判**" not in text
     assert "**资产类别**" not in text
     assert "**行业观察**" not in text
-    assert text.index("**本窗口变化**") < text.index("**可执行动作**")
-    assert text.index("**可执行动作**") < text.index("**组合影响**")
-    assert text.index("**组合影响**") < text.index("**下一检查点**")
+    assert "**组合影响**" not in text
+    assert "**下一检查点**" not in text
+    assert text.index("**本窗口变化**") < text.index("**走势研判**")
+    assert text.index("**走势研判**") < text.index("**可执行动作**")
+    assert text.index("**可执行动作**") < text.index("**提前布局**")
+    assert text.index("**提前布局**") < text.index("**禁止与延后**")
+    assert text.index("**禁止与延后**") < text.index("**组合与检查点**")
 
 
 def test_payload_renderer_watch_window_shows_only_outlook_delta():
@@ -415,12 +428,16 @@ def test_payload_renderer_watch_window_shows_only_outlook_delta():
 
 
 def test_payload_renderer_unavailable_outlook_shows_message_with_trade_card():
-    """Unavailable outlook renders inside the concise window-change section."""
+    """Unavailable outlook renders inside the 走势研判 section with a friendly downgrade."""
     payload = build_push_payload(_unavailable_outlook_artifact(), now="2026-07-17T15:27:00+08:00")
     text = render_push_payload(payload)
     assert "**可执行动作**" in text
-    assert "**本窗口变化**" in text
-    assert "中长期研判暂不可用" in text
+    assert "**走势研判**" in text
+    # Never leak internal English disabled/config messages to users
+    assert "outlook synthesizer disabled" not in text
+    assert "not configured" not in text
+    # Friendly downgrade wording
+    assert "中长期研判" in text
     assert "**中长期研判**" not in text
 
 
@@ -449,14 +466,27 @@ def test_hostile_outlook_number_is_authority_of_upstream_outlook_validator_not_p
         "generated_at": "2026-07-17T08:00:00+00:00",
         "summary": "目标99999",
         "confidence": "medium",
-        "near_term": {"horizon": "1-2w", "direction": "supportive", "confidence": "medium"},
-        "medium_term": {"horizon": "1-3m", "direction": "supportive", "confidence": "medium"},
-        "source_refs": [],
+        "near_term": {"horizon": "1-2w", "direction": "supportive", "confidence": "medium", "rationale": "test"},
+        "medium_term": {"horizon": "1-3m", "direction": "supportive", "confidence": "medium", "rationale": "test"},
+        "scenarios": {
+            "base": {"label": "基准", "drivers": [], "portfolio_effect": "无", "validation": [], "invalidation": []},
+            "bull": {"label": "乐观", "drivers": [], "portfolio_effect": "无", "validation": [], "invalidation": []},
+            "risk": {"label": "风险", "drivers": [], "portfolio_effect": "无", "validation": [], "invalidation": []},
+        },
+        "source_refs": [{"id": "src-1", "source": "Reuters", "title": "T", "url": "http://x", "published_at": "2026-07-17T00:00:00+00:00"}],
     }
     upstream_errors = validate_structured_outlook(outlook, evidence={})
     assert any(
-        "numeric claim" in e or "unauthorized number" in e for e in upstream_errors
-    ), f"expected upstream outlook validator to reject hostile number, got: {upstream_errors}"
+        "unauthorized number" in e or "numeric claim" in e or "unauthorized source" in e
+        for e in upstream_errors
+    ), f"expected upstream outlook validator to reject hostile content, got: {upstream_errors}"
+
+    from stocks.engine.outlook_validation import _check_numeric_authority
+    direct_errors: list[str] = []
+    _check_numeric_authority(outlook, evidence={}, errors=direct_errors)
+    assert any("unauthorized number" in e for e in direct_errors), (
+        f"expected direct numeric authority check to reject 99999, got: {direct_errors}"
+    )
 
     base = _full_outlook_artifact()
     base["portfolio_decision"]["user_view"]["assistant_brief"]["outlook"]["summary"] = "目标99999"
@@ -655,40 +685,40 @@ def test_validate_payload_text_allows_https_url_with_port_numbers():
 
 
 
-def test_concise_report_has_five_sections_in_order():
-    """E2: trading report has exactly the five required concise sections in order."""
+def test_concise_report_has_six_sections_in_order():
+    """M1: trading report has exactly the six required sections in order."""
     payload = build_push_payload(_full_outlook_artifact(), now="2026-07-17T15:27:00+08:00")
     text = render_push_payload(payload)
-    headings = ["本窗口变化", "可执行动作", "禁止与延后", "组合影响", "下一检查点"]
+    headings = ["本窗口变化", "走势研判", "可执行动作", "提前布局", "禁止与延后", "组合与检查点"]
     positions = [text.index(f"**{h}**") for h in headings]
     assert positions == sorted(positions)
 
 
 def test_concise_report_no_legacy_headings():
-    """E2: legacy verbose section headings are removed."""
+    """M1: legacy verbose section headings (including old 5-section E2 pair) are removed."""
     payload = build_push_payload(_full_outlook_artifact(), now="2026-07-17T15:27:00+08:00")
     text = render_push_payload(payload)
     for banned in (
         "交易指令卡", "私人投资助理", "为什么这样安排", "待人工确认的信号分类",
         "仅供观察", "中长期研判", "资产类别", "行业观察", "基准情景", "乐观情景", "风险情景",
+        "组合影响", "下一检查点",
     ):
         assert f"**{banned}**" not in text, f"banned heading {banned!r} found in text"
 
 
 def test_concise_report_size_limits():
-    """E2: rendered trading report is <= 45 non-empty lines and <= 1400 Chinese characters."""
+    """M1: rendered trading report is <= 55 non-empty lines and <= 1800 Chinese chars."""
     payload = build_push_payload(_full_outlook_artifact(), now="2026-07-17T15:27:00+08:00")
     text = render_push_payload(payload)
     non_empty = [ln for ln in text.splitlines() if ln.strip()]
-    assert len(non_empty) <= 45, f"{len(non_empty)} non-empty lines"
-    # Chinese characters only
+    assert len(non_empty) <= 55, f"{len(non_empty)} non-empty lines"
     import re
     cn_count = len(re.findall(r"[一-鿿]", text))
-    assert cn_count <= 1400, f"{cn_count} Chinese characters"
+    assert cn_count <= 1800, f"{cn_count} Chinese characters"
 
 
 def test_concise_report_action_limit_and_fields():
-    """E2: at most 3 actions; each action shows required fields."""
+    """M1: at most 3 actions; each action shows required fields; no checkpoint repeat."""
     payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
     actions = [
         _action(display_label=f"化工ETF（516020）-{i}", reason_summary=f"化工ETF（516020）-{i}：减仓 25%")
@@ -698,29 +728,30 @@ def test_concise_report_action_limit_and_fields():
     payload["user_view"]["instruction_card"]["status"] = "action_required"
     payload["user_view"]["assistant_brief"]["why"] = [a["reason_summary"] for a in actions]
     text = render_push_payload(payload)
-    # at most 3 actions
     action_bullets = [ln for ln in text.splitlines() if ln.strip().startswith("- **减仓｜")]
     assert len(action_bullets) <= 3, f"{len(action_bullets)} action bullet lines"
-    # action fields present in the first action line
     assert any("减仓｜" in ln for ln in text.splitlines())
-    # next checkpoint is not repeated inside action lines
+    # Next-checkpoint text lives only in §6 组合与检查点, never inside action lines
     checkpoint_text = "下一交易日盘前复核"
-    action_lines = text[:text.index("**下一检查点**")]
+    action_lines = text[:text.index("**组合与检查点**")]
     assert checkpoint_text not in action_lines
 
 
-def test_concise_report_research_is_one_line():
-    """E2: research candidates are compressed to a single line in the blocked section."""
+def test_concise_report_research_becomes_setup_section():
+    """M1: research candidates become their own **提前布局** section (top 2-3), not a count line."""
     payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
     payload["user_view"]["assistant_brief"]["research"] = [
-        {"display_label": "芯片ETF（159995）", "action_hint": "仅供观察"},
-        {"display_label": "医药ETF（512010）", "action_hint": "仅供观察"},
+        {"display_label": "芯片ETF（159995）", "action_hint": "深跌超卖左侧试仓", "composite_score": 0.42},
+        {"display_label": "医药ETF（512010）", "action_hint": "回踩短均线附近", "composite_score": 0.31},
     ]
     text = render_push_payload(payload)
-    blocked = text[text.index("**禁止与延后**"):text.index("**组合影响**")]
-    research_lines = [ln for ln in blocked.splitlines() if "研究候选" in ln]
-    assert len(research_lines) == 1, f"research compressed to one line, got {len(research_lines)}"
-    assert "2 个" in research_lines[0]
+    setup = text[text.index("**提前布局**"):text.index("**禁止与延后**")]
+    # Both candidates appear with their hint
+    assert "芯片ETF（159995）" in setup
+    assert "医药ETF（512010）" in setup
+    # No legacy "研究候选 N 个" count-line in the blocked section
+    blocked = text[text.index("**禁止与延后**"):text.index("**组合与检查点**")]
+    assert "研究候选" not in blocked
 
 
 # ── Adversarial review P0-2 / P0-3 regressions ─────────────────────────

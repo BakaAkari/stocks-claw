@@ -338,12 +338,19 @@ def test_unresolved_settlement_excluded_from_cash_and_surfaced_as_data_note():
         session_id="cn_pre_open", session_intent="pre_open_plan",
     )
     cash = view["assistant_brief"]["cash"]
-    # Five canonical buckets + the visible safety-buffer carve-out (P1-8).
-    # unresolved_settlement is still never a bucket.
-    assert set(cash) == {"available_now", "confirmed_settling", "planned_release", "strategic_exit", "locked", "safety_buffer"}
+    # M1: six canonical spendable/blocked buckets + safety_buffer + unresolved_settlement
+    # (unresolved_settlement is not a spendable bucket — it's a render-layer
+    # amount field so the "资金缺口" line in §6 can quote the figure).
+    assert set(cash) == {
+        "available_now", "confirmed_settling", "planned_release",
+        "strategic_exit", "locked", "safety_buffer", "unresolved_settlement",
+    }
     assert cash["available_now"]["amount_cny"] == 10_000.0
     assert cash["confirmed_settling"]["amount_cny"] == 2_000.0
-    assert "unresolved_settlement" not in str(view)
+    # unresolved_settlement is exposed as an amount field, not a spendable bucket
+    assert "unresolved_settlement" in cash
+    assert cash["unresolved_settlement"]["amount_cny"] == 7_500
+    # It still surfaces as a data_note for user attention
     notes = view["assistant_brief"]["data_notes"]
     assert any("¥7,500" in note for note in notes)
 
