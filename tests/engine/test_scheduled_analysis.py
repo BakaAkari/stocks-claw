@@ -600,7 +600,11 @@ class FakeSynthWithForecast(FakeSynth):
 
 
 def _engine_with_enough_for_outlook(tmp_path, context_payload=None):
-    """Config with cn_after_close and cn_post_open sessions."""
+    """Config with cn_after_close and cn_post_open sessions.
+
+    These tests exercise the legacy OutlookSynthesizer path, so the M2
+    advisory mainline is explicitly disabled here.
+    """
     from tests.engine.test_scheduled_analysis import FakeEngine, _context
     config = {
         "schema_version": 1,
@@ -609,6 +613,7 @@ def _engine_with_enough_for_outlook(tmp_path, context_payload=None):
         "default_duplicate_window_minutes": 90,
         "quiet_hours": {"enabled": True, "start": "00:00", "end": "07:30",
                         "timezone": "Asia/Shanghai", "allow_critical": True},
+        "llm": {"advisory_mainline": {"enabled": False}},
         "markets": {
             "cn": {
                 "enabled": True, "exchange_timezone": "Asia/Shanghai",

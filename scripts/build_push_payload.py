@@ -351,7 +351,7 @@ def _section_market_outlook(assistant: dict) -> list[str]:
     outlook = assistant.get("outlook") or {}
 
     if not isinstance(outlook, dict) or not outlook:
-        lines.append("- 中长期研判暂不可用，等待 M2 上线")
+        lines.append("- 中长期研判暂不可用（研判待复核）")
         return lines
 
     status = outlook.get("status")
@@ -363,11 +363,11 @@ def _section_market_outlook(assistant: dict) -> list[str]:
         if message:
             lines.append(f"- 中长期研判：{message}")
         else:
-            lines.append("- 中长期研判暂不可用，等待 M2 上线")
+            lines.append("- 中长期研判暂不可用（研判待复核）")
         return lines
 
     if status != "ok":
-        lines.append("- 中长期研判暂不可用，等待 M2 上线")
+        lines.append("- 中长期研判暂不可用（研判待复核）")
         return lines
 
     summary = outlook.get("summary") or ""
@@ -378,6 +378,9 @@ def _section_market_outlook(assistant: dict) -> list[str]:
         h = outlook.get(hkey) or {}
         if not isinstance(h, dict) or not h:
             continue
+        # M2 advisory outlooks carry their own horizon label (e.g. "3-7天");
+        # prefer it over the legacy default when present.
+        hlabel = str(h.get("horizon") or hlabel)
         direction_key = str(h.get("direction") or "")
         confidence_key = str(h.get("confidence") or "")
         rationale = str(h.get("rationale") or "")
@@ -390,6 +393,12 @@ def _section_market_outlook(assistant: dict) -> list[str]:
             if rationale:
                 piece += f" — {rationale}"
             lines.append(f"- {piece}")
+        validation = str(h.get("validation") or "")
+        falsification = str(h.get("falsification") or "")
+        if validation:
+            lines.append(f"  验证：{validation}")
+        if falsification:
+            lines.append(f"  证伪：{falsification}")
 
     shown_lines = 0
     for sv in (outlook.get("sector_views") or [])[:3]:

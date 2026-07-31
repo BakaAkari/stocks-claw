@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from stocks.engine.advisory_mainline import build_advisory_outlook
 from stocks.engine.economic_event_watcher import EconomicEventWatcher
 from stocks.engine.forecasts import build_forecast_candidates
 from stocks.engine.hypothesis_tracker import (
@@ -707,31 +708,60 @@ class ScheduledAnalysisRunner:
         structured_outlook_for_view: Optional[dict] = None
         outlook_delta_for_view: Optional[dict] = None
         if session_id in PRIMARY_OUTLOOK_SESSIONS:
-            try:
-                evidence = build_outlook_evidence(
-                    context_dict, run, session_id=session_id,
-                    generated_at=run["generated_at"],
-                )
-                # Write evidence meta *before* generation so it is preserved
-                # even when synthesis fails
-                run["outlook_evidence_meta"] = {
-                    "hash": evidence_hash(evidence),
-                    "confidence_cap": evidence["confidence_cap"],
-                }
-                outlook = await asyncio.to_thread(
-                    self._get_synthesizer().generate, evidence,
-                    now=run["generated_at"],
-                )
-                run["structured_outlook"] = outlook
-                run["forecast_candidates"] = build_forecast_candidates(outlook)
-                structured_outlook_for_view = outlook
-            except Exception:
-                logger.exception("Outlook synthesis failed for %s", session_id)
-                run["structured_outlook"] = sanitize_unavailable_outlook(
-                    ["Outlook synthesis failed"], generated_at=run["generated_at"],
-                )
-                run["forecast_candidates"] = []
-                structured_outlook_for_view = run["structured_outlook"]
+            mainline_enabled = bool(
+                (self.config.get("llm") or {}).get("advisory_mainline", {}).get("enabled", True)
+            )
+            if mainline_enabled:
+                # M2 advisory mainline: LLM Investment Analyst drives the
+                # structured_outlook; failures degrade to 研判待复核.
+                try:
+                    outlook = await asyncio.to_thread(
+                        build_advisory_outlook,
+                        context,
+                        session_id=session_id,
+                        market=run["market"],
+                        config=self.config,
+                        now=run["generated_at"],
+                    )
+                    run["structured_outlook"] = outlook
+                    run["forecast_candidates"] = build_forecast_candidates(outlook)
+                    if isinstance(outlook.get("advisory_receipt"), dict):
+                        run["advisory_receipt"] = outlook["advisory_receipt"]
+                    structured_outlook_for_view = outlook
+                except Exception:
+                    logger.exception("Advisory mainline failed for %s", session_id)
+                    run["structured_outlook"] = sanitize_unavailable_outlook(
+                        ["Outlook synthesis failed"], generated_at=run["generated_at"],
+                    )
+                    run["forecast_candidates"] = []
+                    structured_outlook_for_view = run["structured_outlook"]
+            else:
+                # Legacy constrained OutlookSynthesizer path (evidence + hash).
+                try:
+                    evidence = build_outlook_evidence(
+                        context_dict, run, session_id=session_id,
+                        generated_at=run["generated_at"],
+                    )
+                    # Write evidence meta *before* generation so it is preserved
+                    # even when synthesis fails
+                    run["outlook_evidence_meta"] = {
+                        "hash": evidence_hash(evidence),
+                        "confidence_cap": evidence["confidence_cap"],
+                    }
+                    outlook = await asyncio.to_thread(
+                        self._get_synthesizer().generate, evidence,
+                        now=run["generated_at"],
+                    )
+                    run["structured_outlook"] = outlook
+                    run["forecast_candidates"] = build_forecast_candidates(outlook)
+                    structured_outlook_for_view = outlook
+                except Exception:
+                    logger.exception("Outlook synthesis failed for %s", session_id)
+                    run["structured_outlook"] = sanitize_unavailable_outlook(
+                        ["Outlook synthesis failed"], generated_at=run["generated_at"],
+                    )
+                    run["forecast_candidates"] = []
+                    structured_outlook_for_view = run["structured_outlook"]
         elif session_id in OBSERVATION_OUTLOOK_SESSIONS:
             # Observation window: compute delta from latest two primary outlooks
             try:

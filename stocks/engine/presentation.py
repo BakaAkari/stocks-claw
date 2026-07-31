@@ -477,7 +477,9 @@ _OUTLOOK_ALLOWED_TOP = frozenset({
     "summary", "confidence", "near_term", "medium_term",
     "asset_views", "sector_views", "scenarios", "source_refs",
 })
-_OUTLOOK_HORIZON_ALLOWED = frozenset({"horizon", "direction", "confidence", "rationale"})
+_OUTLOOK_HORIZON_ALLOWED = frozenset({
+    "horizon", "direction", "confidence", "rationale", "validation", "falsification",
+})
 _OUTLOOK_VIEW_ALLOWED = frozenset({"asset_class", "asset", "sector", "direction", "rationale"})
 _OUTLOOK_SCENARIO_ALLOWED = frozenset({
     "label", "drivers", "portfolio_effect", "validation", "invalidation",

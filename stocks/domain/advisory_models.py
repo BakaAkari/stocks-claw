@@ -170,6 +170,23 @@ class AdvisoryForecast:
 
 
 @dataclass(frozen=True, slots=True)
+class AdvisoryOutlook:
+    """One horizon's forward-looking judgment (M2).
+
+    Direction vocabulary matches the push renderer's _DIRECTION_LABELS so
+    the projection layer can pass values through verbatim.
+    """
+
+    direction: str  # supportive | neutral | adverse | uncertain | mixed
+    confidence: ConfidenceLevel = "low"
+    rationale: str = ""
+    drivers: tuple[str, ...] = ()
+    validation: str = ""     # what evidence would confirm this judgment
+    falsification: str = ""  # what evidence would invalidate it
+    source_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class InvestmentAdvisory:
     """Structured output from the LLM investment analyst.
 
@@ -182,6 +199,8 @@ class InvestmentAdvisory:
     generated_at: str
     market_assessment: str = ""
     portfolio_assessment: str = ""
+    short_term: Optional[AdvisoryOutlook] = None   # 3-7 day judgment (M2)
+    medium_term: Optional[AdvisoryOutlook] = None  # 1-3 month judgment (M2)
     actions: tuple[AdvisoryAction, ...] = ()
     hold_decisions: tuple[AdvisoryAction, ...] = ()
     do_not_do: tuple[str, ...] = ()

@@ -14,6 +14,7 @@ from typing import Any
 from stocks.domain.advisory_models import (
     AdvisoryAction,
     AdvisoryForecast,
+    AdvisoryOutlook,
     AdvisoryScenario,
     AdvisoryValidationReceipt,
     InvestmentAdvisory,
@@ -83,6 +84,28 @@ def _validate_forecast(forecast: AdvisoryForecast, errors: list[str], warnings: 
         warnings.append(f"forecast {forecast.forecast_id}: requires_confirmation should be true")
 
 
+def _validate_outlook(
+    outlook: AdvisoryOutlook | None,
+    field: str,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    """M2: a present horizon judgment must be complete and evidence-bound."""
+    if outlook is None:
+        warnings.append(f"{field} outlook is absent")
+        return
+    if outlook.direction not in {"supportive", "neutral", "adverse", "uncertain", "mixed"}:
+        errors.append(f"{field}.direction '{outlook.direction}' is not in the allowed vocabulary")
+    if not outlook.rationale:
+        warnings.append(f"{field}.rationale is empty")
+    if not outlook.validation:
+        warnings.append(f"{field}.validation is empty")
+    if not outlook.falsification:
+        errors.append(f"{field}.falsification is required (never an unfalsifiable judgment)")
+    if not outlook.source_refs:
+        warnings.append(f"{field}.source_refs is empty")
+
+
 def validate_advisory(
     advisory: InvestmentAdvisory,
     *,
@@ -102,6 +125,11 @@ def validate_advisory(
         warnings.append("market_assessment is empty")
     if not advisory.portfolio_assessment:
         warnings.append("portfolio_assessment is empty")
+
+    _validate_outlook(advisory.short_term, "short_term", errors, warnings)
+    validated_fields.append("short_term")
+    _validate_outlook(advisory.medium_term, "medium_term", errors, warnings)
+    validated_fields.append("medium_term")
 
     for action in advisory.actions:
         _validate_action(action, errors, warnings)

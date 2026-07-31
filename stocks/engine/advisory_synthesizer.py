@@ -14,6 +14,7 @@ from typing import Any
 from stocks.domain.advisory_models import (
     AdvisoryAction,
     AdvisoryForecast,
+    AdvisoryOutlook,
     AdvisoryScenario,
     InvestmentAdvisory,
     UnifiedAnalysisSnapshot,
@@ -33,8 +34,10 @@ signals, and action signals. Produce an InvestmentAdvisory in JSON only.
 Output JSON format:
 {{
   "advisory_id": "auto-generated-by-system",
-  "market_assessment": "string",
+  "market_assessment": "string (2-3 sentences, overall market state and drivers)",
   "portfolio_assessment": "string",
+  "short_term": <outlook object for 3-7 days>,
+  "medium_term": <outlook object for 1-3 months>,
   "actions": [],
   "hold_decisions": [],
   "do_not_do": ["string"],
@@ -46,6 +49,24 @@ Output JSON format:
   "next_checkpoints": ["string"],
   "data_limitations": ["string"]
 }}
+
+Outlook object fields (short_term / medium_term):
+{{
+  "direction": "supportive|neutral|adverse|uncertain|mixed",
+  "confidence": "low|medium|high",
+  "rationale": "string (one or two sentences)",
+  "drivers": ["string"],
+  "validation": "what evidence would CONFIRM this judgment",
+  "falsification": "what evidence would INVALIDATE this judgment",
+  "source_refs": ["fact_id or source_id from the snapshot"]
+}}
+
+Rules for outlook objects:
+- Both short_term and medium_term are required when evidence allows any
+  judgment; omit one only when evidence is genuinely insufficient.
+- validation and falsification must be concrete, observable conditions,
+  not vague restatements of the direction.
+- source_refs must reference ids present in the snapshot.
 
 Action object fields:
 {{
@@ -167,6 +188,24 @@ def _parse_forecasts(items: list[dict[str, Any]]) -> tuple[AdvisoryForecast, ...
     )
 
 
+def _parse_outlook(item: Any) -> AdvisoryOutlook | None:
+    """Parse one horizon outlook object; None when absent/malformed."""
+    if not isinstance(item, dict) or not item:
+        return None
+    direction = str(item.get("direction", "")).strip()
+    if direction not in {"supportive", "neutral", "adverse", "uncertain", "mixed"}:
+        return None
+    return AdvisoryOutlook(
+        direction=direction,
+        confidence=str(item.get("confidence", "low")),
+        rationale=str(item.get("rationale", "")),
+        drivers=tuple(str(d) for d in (item.get("drivers") or []) if d),
+        validation=str(item.get("validation", "")),
+        falsification=str(item.get("falsification", "")),
+        source_refs=tuple(str(s) for s in (item.get("source_refs") or []) if s),
+    )
+
+
 def synthesize_advisory(
     snapshot: UnifiedAnalysisSnapshot,
     *,
@@ -200,6 +239,8 @@ def synthesize_advisory(
         generated_at=generated_at,
         market_assessment=str(parsed.get("market_assessment", "")),
         portfolio_assessment=str(parsed.get("portfolio_assessment", "")),
+        short_term=_parse_outlook(parsed.get("short_term")),
+        medium_term=_parse_outlook(parsed.get("medium_term")),
         actions=_parse_actions(parsed.get("actions", [])),
         hold_decisions=_parse_actions(parsed.get("hold_decisions", [])),
         do_not_do=tuple(parsed.get("do_not_do", [])),

@@ -141,6 +141,9 @@ DEFAULT_ENGINE_CONFIG = {
             "max_tokens": 8000,
             "cache_dir": ".local/outlook_cache",
         },
+        # M2: advisory mainline replaces the constrained OutlookSynthesizer
+        # as the source of structured_outlook for primary sessions.
+        "advisory_mainline": {"enabled": True},
     },
     "risk_state": {
         "critical_ttl_minutes": 360,

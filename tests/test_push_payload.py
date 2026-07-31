@@ -859,7 +859,7 @@ def test_unavailable_outlook_without_message_uses_m1_fallback():
     brief = payload["user_view"]["assistant_brief"]
     brief["outlook"] = {"status": "unavailable"}
     text = render_push_payload(payload)
-    assert "中长期研判暂不可用，等待 M2 上线" in text
+    assert "中长期研判暂不可用（研判待复核）" in text
     assert "outlook synthesizer disabled" not in text
     assert "not configured" not in text
 
@@ -868,7 +868,7 @@ def test_missing_outlook_uses_m1_fallback():
     """M1: no outlook key at all also renders the M2 pending fallback line."""
     payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
     text = render_push_payload(payload)
-    assert "中长期研判暂不可用，等待 M2 上线" in text
+    assert "中长期研判暂不可用（研判待复核）" in text
 
 
 def test_setup_section_orders_by_composite_score():
