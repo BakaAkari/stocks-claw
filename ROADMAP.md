@@ -115,6 +115,24 @@ Scope:
 Non-goals: execution capture, broker connectivity, automated position
 tracking (that remains manual per user preference).
 
+### M4 — Constraint model upgrade (candidate)
+
+Extend the constraint model beyond four-bucket min/max ratios to express
+the constraint semantics real allocation decisions depend on:
+irreversibility (sell = permanent exit, e.g. purchase-restricted funds),
+segregated pools (e.g. overseas accounts isolated by capital controls —
+no cross-pool funding, per-pool risk checks), and hard caps (breach ⇒
+mandatory reduce candidate). Motivation and evidence:
+`docs/analysis/kimi-report-constraint-comparison-2026-07-31.md`; bounded
+scope in `docs/tasks/TASK-M4-constraint-model-upgrade.md`.
+
+Status: backlog candidate. Sequencing against M2/M3 is re-evaluated when
+M1 closes; it is independent of the outlook mainline and may be pulled
+forward if constraint-driven advice errors show up in real reports.
+
+Non-goals: multi-period glide-path planning (depends on M3 feedback
+data), execution surface, auto-tuning.
+
 ## Acceptance gates (apply per milestone)
 
 1. **Engineering gate** — lint, tests, compile pass on the touched

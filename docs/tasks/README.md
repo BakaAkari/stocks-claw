@@ -32,6 +32,10 @@ covering VISION §2.3 questions 1, 2, 3, 5, 6, 7 (question 4 waits for M2).
   freshness gate.
 - **M3** — Feedback loop: user marks each recommendation accepted / partial
   / rejected / deferred, feedback flows into next Outlook run as evidence.
+- **M4** — Constraint model upgrade (candidate): irreversibility
+  (no-buyback), segregated pools, hard caps. See
+  `TASK-M4-constraint-model-upgrade.md`; sequencing re-evaluated when M1
+  closes.
 
 ## Retired
 
