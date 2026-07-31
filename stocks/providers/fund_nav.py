@@ -17,7 +17,15 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
+from stocks.engine.config_loader import provider_base_url
+
 logger = logging.getLogger(__name__)
+
+# Provider 端点：env (STOCKS_PROVIDER_FUND_NAV_BASE_URL) > engine.yaml > 代码默认。
+# 该值即完整接口路径（query 参数另拼）。
+_PROVIDER_BASE_URL = provider_base_url(
+    "fund_nav", "https://api.fund.eastmoney.com/f10/lsjz"
+)
 
 
 @dataclass
@@ -40,11 +48,10 @@ class FundNavProvider:
     结果缓存在内存中，同一次 build_context 内不重复请求。
     """
 
-    def __init__(self, min_interval: float = 2.0, *, base_url: str = ""):
+    def __init__(self, min_interval: float = 2.0):
         self._min_interval = max(0.5, min_interval)
         self._last_request_at = 0.0
         self._cache: dict[str, Optional[FundNav]] = {}
-        self._base_url = (base_url or "https://api.fund.eastmoney.com").rstrip("/")
 
     def clear_cache(self) -> None:
         self._cache.clear()
@@ -56,19 +63,16 @@ class FundNavProvider:
             time.sleep(wait)
         self._last_request_at = time.monotonic()
 
-    def _build_url(self, fund_code: str) -> str:
-        return (
-            f"{self._base_url}/f10/lsjz"
-            f"?callback=jQuery&fundCode={fund_code}&pageIndex=1&pageSize=1"
-        )
-
     def _fetch_sync(self, fund_code: str) -> Optional[FundNav]:
         """同步获取单只基金最新确认净值。"""
         if fund_code in self._cache:
             return self._cache[fund_code]
 
         self._throttle()
-        url = self._build_url(fund_code)
+        url = (
+            f"{_PROVIDER_BASE_URL}"
+            f"?callback=jQuery&fundCode={fund_code}&pageIndex=1&pageSize=1"
+        )
         req = urllib.request.Request(
             url,
             headers={

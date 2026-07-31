@@ -38,9 +38,11 @@ class RiskAssessment:
     cash_target_pct: Optional[float] = None
 
 
-# Single source of truth for risk-warning defaults: config_loader.py's
+# ---------------------------------------------------------------------------
+# Single source of truth for risk-warning thresholds: config_loader.py's
 # DEFAULT_ENGINE_CONFIG["risk_warning"].  This module must not duplicate
 # thresholds, to avoid silent inconsistency when engine.yaml is tuned.
+# ---------------------------------------------------------------------------
 _DEFAULT_RISK_CONFIG: dict = DEFAULT_ENGINE_CONFIG["risk_warning"]
 
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from stocks.domain.models import Instrument, Quote
+from stocks.engine.config_loader import provider_base_url
 from stocks.errors import (
     ProviderAuthError,
     ProviderConfigError,
@@ -23,6 +24,9 @@ from stocks.errors import (
     ProviderTimeoutError,
 )
 from stocks.providers.base import QuoteProvider
+
+# Provider 端点：env (STOCKS_PROVIDER_POLYGON_BASE_URL) > engine.yaml > 代码默认
+_PROVIDER_BASE_URL = provider_base_url("polygon", "https://api.polygon.io")
 
 ROOT = Path(__file__).resolve().parents[2]
 POLYGON_KEY_PATH = ROOT / ".secret" / "polygon-key.md"
@@ -89,7 +93,7 @@ class PolygonQuoteProvider(QuoteProvider):
         self._throttle()
         endpoint = endpoint.strip("/")
         sep = "&" if "?" in endpoint else "?"
-        url = f"https://api.polygon.io/{endpoint}{sep}apiKey={self.api_key}"
+        url = f"{_PROVIDER_BASE_URL}/{endpoint}{sep}apiKey={self.api_key}"
         req = urllib.request.Request(
             url, headers={"User-Agent": "stocks-claw/1.0"}
         )

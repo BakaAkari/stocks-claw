@@ -25,12 +25,16 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 from stocks.domain.models import Instrument
+from stocks.engine.config_loader import provider_base_url
 from stocks.engine.macro_data import FredMacroProvider
 from stocks.engine.news_sources import RSSNewsProvider
 from stocks.logging_utils import get_logger
 from stocks.providers.finnhub_quote import FinnhubQuoteProvider
 
 logger = get_logger("intelligence_harvester")
+
+# Binance 行情端点，与行情 Provider 共用同一配置源
+_BINANCE_BASE_URL = provider_base_url("binance", "https://api.binance.com/api/v3")
 
 GNEWS_KEY_PATHS = (
     Path(__file__).resolve().parents[2] / ".secret" / "gnews-key.md",
@@ -426,7 +430,7 @@ class IntelligenceHarvester:
     async def _fetch_binance_btc(self) -> Optional[dict]:
         query = urllib.parse.urlencode({"symbol": "BTCUSDT"})
         request = urllib.request.Request(
-            f"https://api.binance.com/api/v3/ticker/24hr?{query}",
+            f"{_BINANCE_BASE_URL}/ticker/24hr?{query}",
             headers={"User-Agent": "stocks-claw/1.0"},
         )
         with urllib.request.urlopen(request, timeout=15) as response:

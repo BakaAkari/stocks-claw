@@ -14,9 +14,12 @@ from email.utils import parsedate_to_datetime
 from typing import Optional
 
 from stocks.domain.models import NewsItem
+from stocks.engine.config_loader import provider_base_url
 
-# 默认 RSS 源（当配置未提供时使用；新 feed 应在 engine.yaml 中配置）
-_DEFAULT_RSS_URL = "https://www.chinanews.com.cn/rss/finance.xml"
+# 默认 RSS 源（env STOCKS_PROVIDER_RSS_NEWS_BASE_URL > engine.yaml > 代码默认）
+_DEFAULT_RSS_URL = provider_base_url(
+    "rss_news", "https://www.chinanews.com.cn/rss/finance.xml"
+)
 
 
 def _parse_rss_item(

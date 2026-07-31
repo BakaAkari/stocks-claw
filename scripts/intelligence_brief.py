@@ -233,7 +233,7 @@ def _llm_summary(brief: dict) -> str:
         print("[intelligence_brief] _llm_summary: API key not found in .env or env vars", file=_sys.stderr)
         return ""
 
-    base_url = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
+    base_url = os.environ.get("OPENAI_BASE_URL", "")
 
     parts = []
     if brief["macro"]:
@@ -302,7 +302,7 @@ def _translate_texts(texts):
     if not api_key:
         return texts
 
-    base_url = os.environ.get("OPENAI_BASE_URL", "http://100.121.167.1:8317/v1")
+    base_url = os.environ.get("OPENAI_BASE_URL", "")
     indexed = "\n".join(f"[{i}] {t}" for i, t in enumerate(texts))
 
     system = (

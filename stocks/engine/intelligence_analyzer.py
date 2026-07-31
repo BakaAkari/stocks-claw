@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from stocks.engine.config_loader import DEFAULT_ENGINE_CONFIG
 from stocks.engine.news_intelligence_store import (
     EventCluster,
     IntelligenceSignal,
@@ -26,125 +27,45 @@ from stocks.logging_utils import get_logger
 
 logger = get_logger("intelligence_analyzer")
 
-# Theme keywords grouped by macro topic.
-THEME_KEYWORDS = {
-    "geopolitics": [
-        "war",
-        "conflict",
-        "tension",
-        "sanction",
-        "iran",
-        "israel",
-        "ukraine",
-        "russia",
-        "china",
-        "taiwan",
-        "military",
-        "strike",
-        "drone",
-        "attack",
-    ],
-    "monetary_policy": [
-        "fed",
-        "federal reserve",
-        "interest rate",
-        "rate hike",
-        "rate cut",
-        "powell",
-        "fomc",
-        "central bank",
-        " ECB ",
-        "BOJ",
-        "PBOC",
-        "yield",
-    ],
-    "earnings": [
-        "earnings",
-        "revenue",
-        "profit",
-        "guidance",
-        "beat",
-        "miss",
-        "EPS",
-        "quarterly",
-        "reported",
-        "results",
-    ],
-    "technology": [
-        "AI",
-        "artificial intelligence",
-        "chip",
-        "semiconductor",
-        "nvidia",
-        "tesla",
-        "big tech",
-        "magnificent seven",
-        "tech stock",
-        "cloud",
-    ],
-    "energy": [
-        "oil",
-        "crude",
-        "energy",
-        "OPEC",
-        "gas",
-        "petroleum",
-        "renewable",
-        "solar",
-    ],
-    "macro_data": [
-        "CPI",
-        "inflation",
-        "PPI",
-        "GDP",
-        "nonfarm",
-        "unemployment",
-        "jobs report",
-        "retail sales",
-        "PMI",
-        "industrial production",
-    ],
-}
 
-MARKET_SENTIMENT_POSITIVE = [
-    "surge",
-    "rally",
-    "jump",
-    "soar",
-    "gain",
-    "rise",
-    "record high",
-    "bullish",
-    "strong",
-    "beat",
-    "raise guidance",
-    "optimistic",
-]
-MARKET_SENTIMENT_NEGATIVE = [
-    "plunge",
-    "crash",
-    "tumble",
-    "slump",
-    "drop",
-    "fall",
-    "bearish",
-    "recession",
-    "miss",
-    "cut guidance",
-    "fear",
-    "panic",
-    "sell-off",
-]
+_INTELLIGENCE_CFG = DEFAULT_ENGINE_CONFIG.get("intelligence", {})
+
+
+# Theme keywords grouped by macro topic. Defaults are copied from the legacy
+# hard-coded list; they can be overridden via DEFAULT_ENGINE_CONFIG["intelligence"].
+THEME_KEYWORDS: dict[str, list[str]] = dict(
+    _INTELLIGENCE_CFG.get("theme_keywords", {})
+    or {
+        "geopolitics": ["war", "conflict", "tension", "sanction", "iran", "israel", "ukraine", "russia", "china", "taiwan", "military", "strike", "drone", "attack"],
+        "monetary_policy": ["fed", "federal reserve", "interest rate", "rate hike", "rate cut", "powell", "fomc", "central bank", " ECB ", "BOJ", "PBOC", "yield"],
+        "earnings": ["earnings", "revenue", "profit", "guidance", "beat", "miss", "EPS", "quarterly", "reported", "results"],
+        "technology": ["AI", "artificial intelligence", "chip", "semiconductor", "nvidia", "tesla", "big tech", "magnificent seven", "tech stock", "cloud"],
+        "energy": ["oil", "crude", "energy", "OPEC", "gas", "petroleum", "renewable", "solar"],
+        "macro_data": ["CPI", "inflation", "PPI", "GDP", "nonfarm", "unemployment", "jobs report", "retail sales", "PMI", "industrial production"],
+    }
+)
+
+MARKET_SENTIMENT_POSITIVE: list[str] = list(
+    _INTELLIGENCE_CFG.get("positive_keywords", [])
+    or ["surge", "rally", "jump", "soar", "gain", "rise", "record high", "bullish", "strong", "beat", "raise guidance", "optimistic"]
+)
+MARKET_SENTIMENT_NEGATIVE: list[str] = list(
+    _INTELLIGENCE_CFG.get("negative_keywords", [])
+    or ["plunge", "crash", "tumble", "slump", "drop", "fall", "bearish", "recession", "miss", "cut guidance", "fear", "panic", "sell-off"]
+)
 
 # Map theme to typical affected markets/assets.
-THEME_MARKETS = {
-    "geopolitics": ["equity", "oil", "gold", "dxy"],
-    "monetary_policy": ["equity", "bond", "dxy", "gold"],
-    "earnings": ["equity", "tech"],
-    "technology": ["equity", "tech"],
-    "energy": ["oil", "equity", "energy"],
-    "macro_data": ["equity", "bond", "dxy", "gold"],
-}
+THEME_MARKETS: dict[str, list[str]] = dict(
+    _INTELLIGENCE_CFG.get("theme_markets", {})
+    or {
+        "geopolitics": ["equity", "oil", "gold", "dxy"],
+        "monetary_policy": ["equity", "bond", "dxy", "gold"],
+        "earnings": ["equity", "tech"],
+        "technology": ["equity", "tech"],
+        "energy": ["oil", "equity", "energy"],
+        "macro_data": ["equity", "bond", "dxy", "gold"],
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -177,23 +98,27 @@ class IntelligenceAnalyzer:
         holdings: Optional list of user holdings (instrument_key or symbol) for matching.
     """
 
-    # Known valid ticker/ETF symbols
-    _KNOWN_SYMBOLS = frozenset({
-        "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "IVV", "VWO", "EFA",
-        "GLD", "SLV", "GDX", "NEM", "XAU",
-        "USO", "XLE", "XOM", "CVX", "OIH",
-        "TLT", "IEF", "SHY", "AGG", "LQD", "HYG", "BND", "SGOV",
-        "EEM", "FXI", "KWEB", "ASHR", "MCHI",
-        "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "AVGO",
-        "AMD", "INTC", "QCOM", "MU", "ARM", "SMCI",
-        "JPM", "GS", "BAC", "WFC", "C", "MS", "BLK", "V", "MA",
-        "XLV", "XBI", "XLP", "XLY", "XLF", "XLI", "XLK", "XLU", "XLB",
-        "ITA", "NOC", "LMT", "RTX", "PPA",
-        "SOXX", "SMH", "SOXL", "SOXS",
-        "BTC", "ETH", "BTCUSDT", "ETHUSDT",
-        "VIX", "VIXY", "UVXY", "VXX", "SVXY",
-        "GC", "CL", "NG", "SI", "HG", "ZC", "ZS", "ZW",
-    })
+    # Known valid ticker/ETF symbols. Defaults are the legacy hard-coded list;
+    # they can be overridden via DEFAULT_ENGINE_CONFIG["intelligence"]["known_symbols"].
+    _KNOWN_SYMBOLS = frozenset(
+        _INTELLIGENCE_CFG.get("known_symbols", [])
+        or [
+            "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "IVV", "VWO", "EFA",
+            "GLD", "SLV", "GDX", "NEM", "XAU",
+            "USO", "XLE", "XOM", "CVX", "OIH",
+            "TLT", "IEF", "SHY", "AGG", "LQD", "HYG", "BND", "SGOV",
+            "EEM", "FXI", "KWEB", "ASHR", "MCHI",
+            "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "AVGO",
+            "AMD", "INTC", "QCOM", "MU", "ARM", "SMCI",
+            "JPM", "GS", "BAC", "WFC", "C", "MS", "BLK", "V", "MA",
+            "XLV", "XBI", "XLP", "XLY", "XLF", "XLI", "XLK", "XLU", "XLB",
+            "ITA", "NOC", "LMT", "RTX", "PPA",
+            "SOXX", "SMH", "SOXL", "SOXS",
+            "BTC", "ETH", "BTCUSDT", "ETHUSDT",
+            "VIX", "VIXY", "UVXY", "VXX", "SVXY",
+            "GC", "CL", "NG", "SI", "HG", "ZC", "ZS", "ZW",
+        ]
+    )
 
     _NOISE_WORDS = frozenset({
         "CRYPTO", "GENERAL", "STOCK", "STOCKS", "MARKET", "TRADE",
@@ -789,12 +714,12 @@ class LLMIntelligenceAnalyzer:
                 if line.startswith("OPENAI_API_KEY=") and "COMPATIBLE" not in line:
                     api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
         api_key = api_key or os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
-        # Resolve base URL (parameter > env > config fallback > empty, no hardcoded default)
+        # Resolve base URL (parameter > env > config fallback)
         base_url = (
             self._base_url_override
             or os.environ.get("OPENAI_BASE_URL")
             or os.environ.get("STOCKS_LLM__FALLBACK_BASE_URL")
-            or ""
+            or ""  # no default: fail closed when unconfigured
         )
 
         self._api_key = api_key
@@ -1025,30 +950,37 @@ class LLMIntelligenceAnalyzer:
         If the LLM didn't cover a category, add a hold signal with the
         reasoning sourced from the most relevant cluster.
         """
-        # Category → target symbol mapping
-        categories = {
-            'gold': ['us:NEM', 'a:518880', 'ccb_gold'],
-            'us_tech': ['us:NVDA', 'us:QQQ'],
-            'us_energy': ['us:XLE'],
-            'us_defense': ['us:ITA'],
-            'china_broad': ['a:510300', 'a:512890', 'a:511880', 'a:516020'],
-            'china_sci': ['a:588000', 'a:512480', 'a:561560'],
-            'qdii': ['alipay_gf_nasdaq', 'alipay_dc_nasdaq'],
-            'active': ['alipay_info'],
-            'bonds': ['us:SGOV', 'a:159110'],
-        }
+        # Category → target symbol mapping (legacy defaults; configure via
+        # DEFAULT_ENGINE_CONFIG["intelligence"]["category_to_positions"]).
+        categories: dict[str, list[str]] = dict(
+            _INTELLIGENCE_CFG.get("category_to_positions", {})
+            or {
+                'gold': ['us:NEM', 'a:518880', 'ccb_gold'],
+                'us_tech': ['us:NVDA', 'us:QQQ'],
+                'us_energy': ['us:XLE'],
+                'us_defense': ['us:ITA'],
+                'china_broad': ['a:510300', 'a:512890', 'a:511880', 'a:516020'],
+                'china_sci': ['a:588000', 'a:512480', 'a:561560'],
+                'qdii': ['alipay_gf_nasdaq', 'alipay_dc_nasdaq'],
+                'active': ['alipay_info'],
+                'bonds': ['us:SGOV', 'a:159110'],
+            }
+        )
         # Category → cluster theme mapping for rationale sourcing
-        category_theme = {
-            'gold': ['geopolitics', 'monetary_policy', 'macro_data'],
-            'us_energy': ['geopolitics', 'energy'],
-            'us_tech': ['technology', 'earnings', 'monetary_policy'],
-            'us_defense': ['geopolitics'],
-            'china_broad': ['macro_data', 'monetary_policy', 'china_policy'],
-            'china_sci': ['technology', 'china_policy'],
-            'qdii': ['technology', 'monetary_policy'],
-            'active': ['technology', 'earnings'],
-            'bonds': ['monetary_policy', 'macro_data'],
-        }
+        category_theme: dict[str, list[str]] = dict(
+            _INTELLIGENCE_CFG.get("category_to_themes", {})
+            or {
+                'gold': ['geopolitics', 'monetary_policy', 'macro_data'],
+                'us_energy': ['geopolitics', 'energy'],
+                'us_tech': ['technology', 'earnings', 'monetary_policy'],
+                'us_defense': ['geopolitics'],
+                'china_broad': ['macro_data', 'monetary_policy', 'china_policy'],
+                'china_sci': ['technology', 'china_policy'],
+                'qdii': ['technology', 'monetary_policy'],
+                'active': ['technology', 'earnings'],
+                'bonds': ['monetary_policy', 'macro_data'],
+            }
+        )
 
         # Build reverse proxy: for each signal symbol, what position symbols does it cover?: for each signal symbol, what position symbols does it cover?
         # E.g. GLD → {"NEM", "a:518880", "ccb_gold"}
@@ -1121,15 +1053,19 @@ class LLMIntelligenceAnalyzer:
             ))
         return signals
 
-    # Symbol → asset class mapping for market impact
-    _SYMBOL_TO_ASSET = {
-        "SPY": "equity", "QQQ": "equity", "NVDA": "equity", "IWM": "equity",
-        "XLE": "oil", "USO": "oil",
-        "GLD": "gold", "NEM": "gold", "IAU": "gold",
-        "TLT": "bond", "SGOV": "bond", "SHY": "bond",
-        "UUP": "dxy",
-        "KWEB": "china_assets", "FXI": "china_assets", "ASHR": "china_assets",
-    }
+    # Symbol → asset class mapping for market impact. Defaults are the legacy
+    # hard-coded list; override via DEFAULT_ENGINE_CONFIG["intelligence"]["symbol_to_asset"].
+    _SYMBOL_TO_ASSET = dict(
+        _INTELLIGENCE_CFG.get("symbol_to_asset", {})
+        or {
+            "SPY": "equity", "QQQ": "equity", "NVDA": "equity", "IWM": "equity",
+            "XLE": "oil", "USO": "oil",
+            "GLD": "gold", "NEM": "gold", "IAU": "gold",
+            "TLT": "bond", "SGOV": "bond", "SHY": "bond",
+            "UUP": "dxy",
+            "KWEB": "china_assets", "FXI": "china_assets", "ASHR": "china_assets",
+        }
+    )
 
     def _build_market_impact(
         self, llm_result: dict, clusters: list[EventCluster], macro: dict,

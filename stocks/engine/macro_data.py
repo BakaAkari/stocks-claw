@@ -94,11 +94,46 @@ def _compute_tier_as_of(field_sources: dict, fields: tuple[str, ...]) -> Optiona
     return min(dates) if dates else None
 
 
+# 官方宏观日程（仅记录官方公布的确定日期，见 stocks/config/event_calendar.json）
+_EVENT_CALENDAR_PATH = Path(__file__).resolve().parents[1] / "config" / "event_calendar.json"
+
+# FRED 拉取历史长度（天）：覆盖 13 个月以上以确保 CPI YoY 计算有足够窗口
+_FRED_LOOKBACK_DAYS = 800
+
+
+def _next_cpi_release_from_calendar() -> Optional[str]:
+    """从 event_calendar.json 读取下一次 CPI 发布日期。
+
+    官方日程是首选数据源（只收录已公布的确定日期）；返回今天及之后最近的
+    CPI 发布日，无数据时返回 None 以便调用方回退到启发式估算。
+    """
+    try:
+        payload = json.loads(_EVENT_CALENDAR_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    today = datetime.now(timezone.utc).date().isoformat()
+    candidates = []
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        if "CPI" not in str(event.get("name") or "").upper():
+            continue
+        event_date = str(event.get("date") or "")
+        if event_date and event_date >= today:
+            candidates.append(event_date)
+    return min(candidates) if candidates else None
+
+
 def _next_cpi_release_estimate() -> str:
-    """估算下一次 CPI 发布日期（每月 10-14 号）。"""
-    from datetime import datetime, timezone
+    """估算下一次 CPI 发布日期。
+
+    优先从 event_calendar.json 读取官方公布的日期；没有官方数据时回退到
+    启发式估算（CPI 通常在每月 10-14 日发布前月数据，默认取 12 号）。
+    """
+    configured = _next_cpi_release_from_calendar()
+    if configured:
+        return configured
     now = datetime.now(timezone.utc)
-    # CPI 通常在每月 10-14 日发布前月数据
     # 当前月 >= 15 号 → 下月 12 号发布；否则本月 12 号可能尚未发布
     year, month = now.year, now.month
     if now.day >= 15:
@@ -270,7 +305,7 @@ class FredMacroProvider:
     def _fetch_many_sync(
         self, series_ids: list[str]
     ) -> dict[str, list[tuple[str, float]]]:
-        start = (datetime.now(timezone.utc).date() - timedelta(days=800)).isoformat()
+        start = (datetime.now(timezone.utc).date() - timedelta(days=_FRED_LOOKBACK_DAYS)).isoformat()
         query = urllib.parse.urlencode({"id": ",".join(series_ids), "cosd": start})
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?{query}"
         raw = self._fetch_url_with_fallback(url)

@@ -132,7 +132,8 @@ def _valid_cfg(cache_dir: str = "/tmp/stocks_test_outlook_cache") -> dict:
                 "model": "deepseek-v4-pro",
                 "api_key_env": "OPENAI_COMPATIBLE_API_KEY",
                 "base_url_env": "OPENAI_COMPATIBLE_BASE_URL",
-                "fallback_base_url": "http://100.121.167.1:8317/v1",
+                # 留空=未配置；测试注入 transport，base_url 不影响行为
+                "fallback_base_url": "",
                 "timeout_seconds": 120,
                 "temperature": 0.2,
                 "max_tokens": 3000,

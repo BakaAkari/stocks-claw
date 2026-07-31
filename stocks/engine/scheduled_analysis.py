@@ -65,82 +65,84 @@ _ACCOUNT_ID_TO_INSTITUTION = {
 }
 
 
-def _institution_type_for_account_id(account_id: str, account_institution_type: str = "") -> str:
-    """Infer institution_type from account metadata; fall back to known IDs only."""
-    if account_institution_type:
-        return account_institution_type
+def _institution_type_for_account_id(account_id: str) -> str:
+    """Infer institution_type from account_id when not present in position metadata."""
     return _ACCOUNT_ID_TO_INSTITUTION.get(account_id, "")
 
 # ── Phase 2: 可执行性辅助函数 ──
-# Operation-channel hints are user-facing text.  They should live in
-# engine.yaml under presentation.operation_channels, but the code fallback below
-# keeps the module self-contained for development.  `_PLATFORM_DISPLAY` is
-# similarly a default map that should be overridden from profile/account data.
-_OPERATION_CHANNEL = {
-    ("fund_platform", "alipay"): "打开支付宝 → 理财 → 按名称/代码搜索",
-    ("bank", "ccb"): "打开建行 APP → 理财/基金 → 查看开放期",
-    ("insurance", "boc_life"): "联系香港中银人寿顾问或登录中银人寿 APP",
-    ("brokerage", "a_stock"): "通过东方财富/华泰等证券软件",
-    ("brokerage", "ibkr"): "登录 Interactive Brokers (IBKR) 账户",
-}
 
-
-# Account metadata can override the default display names.
 _PLATFORM_DISPLAY = {
     "brokerage": "证券账户",
-    "fund_platform": "场外基金平台",
+    "fund_platform": "支付宝",
     "bank": "银行理财",
     "insurance": "保险账户",
 }
 
+_OPERATION_CHANNEL = {
+    ("fund_platform", "alipay"): "打开支付宝 → 理财 → 按名称/代码搜索",
+    ("bank", "ccb"): "打开建行 APP → 理财/基金 → 查看开放期",
+    ("insurance", "boc_life"): "联系香港中银人寿顾问或登录中银人寿 APP",
+    ("brokerage", "a_stock"): "通过东方财富/华泰等中信建投交易软件",
+    ("brokerage", "ibkr"): "登录 Interactive Brokers (IBKR) 账户",
+}
 
-def _platform_display(institution_type: str, account_id: str, display_name: str = "") -> str:
-    """Return a human-readable platform name based on account/profile data."""
-    if display_name:
-        return display_name
+
+def _platform_display(institution_type: str, account_id: str) -> str:
+    """Return a human-readable platform name based on institution type and account id."""
     if institution_type == "brokerage":
         if account_id == "ibkr":
             return "IBKR"
         if account_id == "a_stock":
             return "A股证券账户"
-        return _PLATFORM_DISPLAY.get(institution_type, "证券账户")
-    return _PLATFORM_DISPLAY.get(institution_type, "待确认平台")
+        return "证券账户"
+    if institution_type == "fund_platform":
+        return "支付宝"
+    if institution_type == "bank":
+        return "建行 APP"
+    if institution_type == "insurance":
+        return "中银人寿"
+    return "待确认平台"
 
 
 def _settlement_timing_for_institution(institution_type: str, routing: str) -> str:
     """Card-level settlement fallback aligned with engine.yaml execution_rules.
 
-    The canonical settlement is determined by resolve_execution(); this helper
-    is only for pre-canonical display metadata. It now fails closed to an
-    empty string for unknown institution types so that new platforms cannot be
-    silently mis-timed.
+    Adversarial review P1-5: this function used to be a second, contradictory
+    settlement authority (fund_platform -> "T+1" while the config resolves
+    T+2; unknown institutions defaulted to a dangerous "T+1"). It now emits
+    only the canonical token vocabulary used by execution_rules and fails
+    closed to "" for anything it cannot map. Approved actions always get
+    their settlement from resolve_execution(); this fallback is card
+    metadata only.
     """
     if routing in ("info_only", "skip"):
         return ""
+    if institution_type == "brokerage":
+        return "T+1"
+    if institution_type == "fund_platform":
+        return "T+2"
+    if institution_type == "bank":
+        return "periodic_open"
+    if institution_type == "insurance":
+        return "locked"
     return ""
 
 
-def _operation_channel(institution_type: str, account_id: str, routing: str, operation_notes: str = "") -> str:
-    """Return concrete operation-channel hint for the platform.
-
-    Prefer account-level notes when present, then the institution/account map,
-    then generic instructions. This avoids hard-coding new platforms.
-    """
+def _operation_channel(institution_type: str, account_id: str, routing: str) -> str:
+    """Return concrete operation-channel hint for the platform."""
     if routing in ("info_only", "skip"):
         if institution_type == "insurance":
             return _OPERATION_CHANNEL.get(("insurance", "boc_life"), "联系对应机构顾问")
         return "当前不形成交易动作，继续持有"
-    if operation_notes:
-        return operation_notes
     channel = _OPERATION_CHANNEL.get((institution_type, account_id))
     if channel:
         return channel
     if institution_type == "brokerage":
         return "登录证券账户执行"
     if institution_type == "fund_platform":
-        return "登录对应基金平台搜索产品名称/代码"
+        return "打开支付宝 → 理财 → 按名称/代码搜索"
     if institution_type == "bank":
-        return "打开银行 APP → 理财/基金"
+        return "打开建行 APP → 理财/基金"
     return "在对应平台执行"
 
 
@@ -162,12 +164,14 @@ class ScheduledSession:
     primary_market: str
     run_every_minutes: Optional[int] = None
     delta_silent_when_unchanged: bool = False
-    # Presentation / decision-policy metadata; defaults keep the module
-    # self-contained while allowing per-session configuration.
+    # ── 会话级展示/行为覆盖（来自 scheduled_sessions.json 的 session 配置）──
+    # headline/focus/can_recommend_new/can_review_closed 缺省时回退到
+    # _headline()/_session_intent_props() 的内置默认表；ignore_weekend=True
+    # 表示该会话在周末也照常运行（仅假期跳过）。
     headline: Optional[str] = None
-    focus: str = "cross_market"
-    can_recommend_new: bool = True
-    can_review_closed: bool = False
+    focus: Optional[str] = None
+    can_recommend_new: Optional[bool] = None
+    can_review_closed: Optional[bool] = None
     ignore_weekend: bool = False
 
     @property
@@ -303,10 +307,11 @@ class MarketSessionCalendar:
                         delta_silent_when_unchanged=bool(
                             item.get("delta_silent_when_unchanged", False)
                         ),
-                        headline=str(item.get("headline")) if item.get("headline") else None,
-                        focus=str(item.get("focus") or "cross_market"),
-                        can_recommend_new=bool(item.get("can_recommend_new", True)),
-                        can_review_closed=bool(item.get("can_review_closed", False)),
+                        # 会话级覆盖字段：从 session 配置原样透传，缺省回退到默认表
+                        headline=item.get("headline"),
+                        focus=item.get("focus"),
+                        can_recommend_new=item.get("can_recommend_new"),
+                        can_review_closed=item.get("can_review_closed"),
                         ignore_weekend=bool(item.get("ignore_weekend", False)),
                     )
                 )
@@ -314,9 +319,8 @@ class MarketSessionCalendar:
 
     @staticmethod
     def _is_market_date(session: ScheduledSession, market_date: date) -> bool:
-        # Per-session config: some sessions (e.g. global intelligence patrol,
-        # crypto) should run on weekends; most exchange sessions should not.
-        if not getattr(session, "ignore_weekend", False) and market_date.weekday() >= 5:
+        # ignore_weekend=True 的会话（如全球情报巡逻）周末照常运行，仅跳过假期
+        if not session.ignore_weekend and market_date.weekday() >= 5:
             return False
         return market_date.isoformat() not in session.holidays
 
@@ -328,6 +332,8 @@ class RunArtifactStore:
         "window_delta", "portfolio_decision", "risk_state",
         "data_boundaries", "research_candidates",
     })
+    # 可信交易产物必须使用的 agent_task.task_version（与 build_agent_task 对齐）
+    _TRUSTED_CONTRACT_TASK_VERSION = 5
 
     def __init__(self, artifact_dir: str | Path):
         self.artifact_dir = Path(artifact_dir)
@@ -354,7 +360,7 @@ class RunArtifactStore:
             return
         task_version = (run.get("agent_task") or {}).get("task_version")
         missing = self._TRUSTED_FIELDS - set(run)
-        if task_version != 5 or missing:
+        if task_version != self._TRUSTED_CONTRACT_TASK_VERSION or missing:
             raise ValueError(
                 "trading artifacts must use trusted v5 contract; "
                 f"task_version={task_version}, missing={sorted(missing)}"
@@ -925,7 +931,7 @@ class ScheduledAnalysisRunner:
             timeout=llm_cfg.get("analysis_timeout", 60),
             temperature=llm_cfg.get("analysis_temperature", 0.1),
             env_file_path=paths_cfg.get("secret_env_file"),
-            base_url=llm_cfg.get("fallback_base_url") or os.environ.get("STOCKS_LLM__FALLBACK_BASE_URL"),
+            base_url=llm_cfg.get("fallback_base_url"),
         )
         analysis_result = analyzer.analyze(recent_snapshots)
         store.save_clusters(analysis_result.clusters, formed_at=now)
@@ -1018,17 +1024,9 @@ def _build_rotation_leaders(rotation: dict, max_items: int = 8) -> list[dict]:
     return result
 
 
-def _filter_action_signals_by_market(
-    action_signals: dict,
-    primary_market: str,
-    market_prefix_map: dict[str, str] | None = None,
-) -> dict:
-    """过滤 action_signals.items，只保留与 session 市场相关的标的。
-
-    The prefix map is configurable so new markets do not require code changes.
-    """
-    prefixes = market_prefix_map or {"cn": "a:", "us": "us:", "crypto": "crypto:"}
-    market_prefix = prefixes.get(primary_market, "")
+def _filter_action_signals_by_market(action_signals: dict, primary_market: str) -> dict:
+    """过滤 action_signals.items，只保留与 session 市场相关的标的。"""
+    market_prefix = {"cn": "a:", "us": "us:", "crypto": "crypto:"}.get(primary_market, "")
     if not market_prefix:
         return action_signals  # 无法判断，保留全部
     items = action_signals.get("items") or []
@@ -2454,10 +2452,7 @@ def _build_action_cards(
                 routing = "full"
 
         account_id = (item.get("account") or {}).get("account_id", "") or item.get("account_id", "")
-        account_institution_type = (item.get("account") or {}).get("institution_type", "")
-        account_display_name = (item.get("account") or {}).get("display_name", "")
-        account_notes = (item.get("account") or {}).get("notes", "")
-        institution_type = account_institution_type or _institution_type_for_account_id(account_id, account_institution_type=account_institution_type)
+        institution_type = (item.get("account") or {}).get("institution_type", "") or _institution_type_for_account_id(account_id)
         cards.append({
             "position_id": decision.position_id,
             "display_name": item.get("display_name", ""),
@@ -2467,7 +2462,7 @@ def _build_action_cards(
             "account_type": account_type,
             "account_id": account_id,
             "institution_type": institution_type,
-            "platform_display": _platform_display(institution_type, account_id, display_name=account_display_name),
+            "platform_display": _platform_display(institution_type, account_id),
             "signal": decision.signal,
             "action": decision.action,
             "ratio": decision.ratio,
@@ -2489,7 +2484,7 @@ def _build_action_cards(
             "evidence_status": getattr(decision, 'evidence_status', 'ok'),
             # ── Phase 2: 结算和平台信息 ──
             "settlement_timing": getattr(decision, 'settlement_timing', '') or _settlement_timing_for_institution(institution_type, routing),
-            "operation_channel": _operation_channel(institution_type, account_id, routing, operation_notes=account_notes),
+            "operation_channel": _operation_channel(institution_type, account_id, routing),
         })
 
     return cards
@@ -3024,26 +3019,7 @@ def _portfolio_scope(context: dict, primary_market: str) -> dict:
     }
 
 
-def _headline(session: ScheduledSession | str) -> str:
-    """Return a human-readable headline for a session.
-
-    Prefer configured headline from scheduled_sessions.json, then fall back to
-    the legacy hard-coded map for backward compatibility.
-    """
-    if isinstance(session, ScheduledSession):
-        if session.headline:
-            return session.headline
-        session_id = session.id
-    else:
-        session_id = session
-    return _LEGACY_HEADLINES.get(session_id, f"{session_id}: scheduled analysis")
-
-
-# 将与 session 相关的市场焦点和属性抽象为单独体
-# NOTE: retained only for backward compatibility; new sessions should define
-# these fields directly in scheduled_sessions.json so behaviour changes without
-# a code deploy.
-_LEGACY_HEADLINES = {
+_DEFAULT_HEADLINES = {
     "cn_pre_open": "A 股盘前:重点检查隔夜影响、持仓触发器和当天计划",
     "cn_open_watch": "A 股开盘观察:只处理跳空、破位和过热风险",
     "cn_pre_close": "A 股收盘前:优先回答已有持仓是否需要条件式处理",
@@ -3056,6 +3032,27 @@ _LEGACY_HEADLINES = {
     "cn_morning_close": "A 股午前:检查上午走势和午后应对计划",
     "cn_afternoon_open": "A 股午后开盘:检查午间变化和下午方向",
 }
+
+
+def _headline(session: ScheduledSession | str) -> str:
+    """会话摘要标题。
+
+    优先使用 session 配置中的 headline 覆盖字段；未配置时回退到内置默认表，
+    最后兜底为 ``{session_id}: scheduled analysis``。接受 ScheduledSession
+    或纯 session_id 字符串（向后兼容）。
+    """
+    if isinstance(session, str):
+        session_id = session
+        configured = None
+    else:
+        session_id = session.id
+        configured = session.headline
+    if configured:
+        return configured
+    return _DEFAULT_HEADLINES.get(session_id, f"{session_id}: scheduled analysis")
+
+
+# 将与 session 相关的市场焦点和属性抽象为单独体
 _SESSION_INTENT_PROPERTIES = {
     "cn_pre_open": {
         "focus": "a+中国/香港市场",
@@ -3129,19 +3126,30 @@ def _market_state_summary(market_state: dict) -> dict:
 
 
 def _session_intent_props(session: ScheduledSession | str) -> dict:
-    """Return decision-policy properties for a session.
+    """会话意图属性（focus / can_recommend_new / can_review_closed）。
 
-    Prefer values from scheduled_sessions.json, then fall back to the legacy
-    hard-coded map so existing sessions keep working.
+    以内置默认表为基底，再用 session 配置中的 focus/can_recommend_new/
+    can_review_closed 覆盖字段逐项覆写（未配置的字段保持默认值）。
+    接受 ScheduledSession 或纯 session_id 字符串（向后兼容）。
     """
-    if isinstance(session, ScheduledSession):
-        return {
-            "focus": session.focus,
-            "can_recommend_new": session.can_recommend_new,
-            "can_review_closed": session.can_review_closed,
-        }
-    session_id = session
-    return _SESSION_INTENT_PROPERTIES.get(
-        session_id,
-        {"focus": "cross_market", "can_recommend_new": True, "can_review_closed": False},
+    if isinstance(session, str):
+        session_id = session
+        focus = can_recommend_new = can_review_closed = None
+    else:
+        session_id = session.id
+        focus = session.focus
+        can_recommend_new = session.can_recommend_new
+        can_review_closed = session.can_review_closed
+    props = dict(
+        _SESSION_INTENT_PROPERTIES.get(
+            session_id,
+            {"focus": "cross_market", "can_recommend_new": True, "can_review_closed": False},
+        )
     )
+    if focus is not None:
+        props["focus"] = focus
+    if can_recommend_new is not None:
+        props["can_recommend_new"] = bool(can_recommend_new)
+    if can_review_closed is not None:
+        props["can_review_closed"] = bool(can_review_closed)
+    return props

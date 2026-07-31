@@ -25,9 +25,13 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from stocks.domain.models import Instrument
+from stocks.engine.config_loader import provider_base_url
 from stocks.engine.history_cache import HistoryCache
 from stocks.logging_utils import get_logger
 from stocks.providers.tencent_a import tencent_market_prefix
+
+# Binance 历史 K 线端点，与行情 Provider 共用同一配置源
+_BINANCE_BASE_URL = provider_base_url("binance", "https://api.binance.com/api/v3")
 
 logger = get_logger("history_provider")
 
@@ -397,7 +401,7 @@ class BinanceKLineProvider:
             # 多取一根并剔除尚未收盘的当日 K，避免未来 closeTime 污染指标。
             "limit": min(max(1, lookback_days + 1), 1000),
         })
-        url = f"https://api.binance.com/api/v3/klines?{query}"
+        url = f"{_BINANCE_BASE_URL}/klines?{query}"
 
         def _request():
             req = urllib.request.Request(url, headers=self._HEADERS)

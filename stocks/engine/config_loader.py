@@ -26,16 +26,17 @@ DEFAULT_ENGINE_CONFIG = {
         "secret_env_file": None,  # 自定义 .env 文件路径（用于 LLM API key 加载）
     },
     "providers": {
-        "tencent_a": {"enabled": True, "url_template": "https://qt.gtimg.cn/q={symbols}"},
-        "eastmoney_a": {"enabled": True, "url_template": "https://push2.eastmoney.com/api/qt/ulist.np/get"},
-        "eastmoney_fund": {"enabled": True, "url_template": "https://api.fund.eastmoney.com/f10/lsjz"},
-        "finnhub": {"enabled": True, "url_template": "https://finnhub.io/api/v1/{endpoint}"},
-        "binance": {"enabled": True, "url_template": "https://api.binance.com/api/v3/{endpoint}"},
-        "rss_news": {"enabled": True, "url_template": "https://www.chinanews.com.cn/rss/finance.xml"},
-        "sec_filings": {"enabled": True, "submissions_url": "https://data.sec.gov/submissions/CIK{cik}.json", "archive_url": "https://www.sec.gov/Archives/edgar/data/{cik_path}/"},
-        "cninfo": {"enabled": True, "query_url": "https://www.cninfo.com.cn/new/hisAnnouncement/query", "file_url": "https://static.cninfo.com.cn/{adjunct_url}", "referer": "https://www.cninfo.com.cn/"},
-        "exchange_rate": {"enabled": True, "url_template": "https://api.exchangerate-api.com/v4/latest/USD"},
-        "polygon": {"enabled": True, "url_template": "https://api.polygon.io/{endpoint}"},
+        # base_url: 各 Provider 的默认端点，可在 engine.yaml 或环境变量
+        # STOCKS_PROVIDER_<NAME>_BASE_URL 覆盖（见 provider_base_url()）。
+        "tencent_a": {"enabled": True, "base_url": "https://qt.gtimg.cn"},
+        "eastmoney_a": {"enabled": True, "base_url": "https://push2.eastmoney.com"},
+        "finnhub": {"enabled": True, "base_url": "https://finnhub.io/api/v1"},
+        "binance": {"enabled": True, "base_url": "https://api.binance.com/api/v3"},
+        "polygon": {"enabled": True, "base_url": "https://api.polygon.io"},
+        # fund_nav 端点即完整接口路径（query 参数另拼）
+        "fund_nav": {"enabled": True, "base_url": "https://api.fund.eastmoney.com/f10/lsjz"},
+        # rss_news 的 base_url 即默认 feed URL
+        "rss_news": {"enabled": True, "base_url": "https://www.chinanews.com.cn/rss/finance.xml"},
         "fallback": {
             "a": ["eastmoney_a", "tencent_a"],
             "us": [],
@@ -64,18 +65,77 @@ DEFAULT_ENGINE_CONFIG = {
         "cninfo": {"enabled": True},
     },
     "news": {"watchlist_templates_enabled": True},
+    # 新闻→市场事件提取器的关键词/情绪词典（market_events.py 的唯一数据源）。
+    # 调词即调行为：在此处增删关键词，无需改动引擎代码。
+    "market_events": {
+        "event_keywords": {
+            "monetary_policy": [
+                "美联储", "fed", "fomc", "降息", "加息", "利率", "缩表", "扩表", "央行",
+                "逆回购", "流动性", "准备金率", "mlf", "lpr",
+            ],
+            "macro_policy": [
+                "政策", "财政", "发改委", "国务院", "刺激", "补贴", "消费券", "地产政策",
+                "监管", "证监会", "税收", "关税",
+            ],
+            "earnings": [
+                "财报", "业绩", "利润", "营收", "eps", "guidance", "预告", "亏损", "盈利",
+            ],
+            "geopolitical": [
+                "地缘", "战争", "制裁", "出口管制", "禁令", "关税", "贸易战", "中东", "台海",
+            ],
+            "industry_theme": [
+                "ai", "人工智能", "芯片", "半导体", "算力", "新能源", "军工", "机器人", "医药",
+                "银行", "券商", "保险", "消费电子", "云计算", "数据中心",
+            ],
+            "market_movement": [
+                "大涨", "大跌", "反弹", "跳水", "收涨", "收跌", "创新高", "新低", "暴跌", "暴涨",
+                "纳指", "标普", "道指", "沪指", "创业板", "科创板",
+            ],
+        },
+        "theme_keywords": {
+            "AI": ["ai", "人工智能", "大模型", "算力", "gpu", "英伟达", "nvidia"],
+            "半导体": ["芯片", "半导体", "晶圆", "光刻", "存储", "英伟达", "nvidia", "高通", "qcom"],
+            "军工": ["军工", "国防", "航天", "导弹", "无人机"],
+            "金融": ["银行", "券商", "保险", "金融", "平安银行", "利差"],
+            "新能源": ["新能源", "光伏", "锂电", "储能", "电动车", "tesla", "特斯拉"],
+            "医药": ["医药", "创新药", "医疗", "药品", "fda"],
+            "消费": ["消费", "零售", "白酒", "旅游", "餐饮"],
+            "地产": ["地产", "房地产", "房贷", "按揭", "销售面积"],
+            "汇率": ["人民币", "汇率", "美元指数", "dxy", "usdcny"],
+            "利率": ["利率", "美债", "收益率", "降息", "加息", "流动性"],
+        },
+        "positive_keywords": [
+            "利好", "上调", "超预期", "增长", "创新高", "批准", "放宽", "降息", "刺激", "回购",
+            "beat", "surge", "record high", "approval",
+        ],
+        "negative_keywords": [
+            "利空", "下调", "不及预期", "下滑", "亏损", "制裁", "禁令", "暴跌", "加息", "收紧",
+            "miss", "plunge", "ban", "sanction",
+        ],
+        "immediate_keywords": ["突发", "刚刚", "盘前", "盘中", "after-hours", "pre-market", "紧急"],
+        "high_urgency_keywords": ["大涨", "大跌", "暴涨", "暴跌", "制裁", "禁令", "降息", "加息", "财报"],
+        "market_keywords": {
+            "a": ["a股", "沪指", "深成指", "创业板", "科创板", "北向", "人民币", "央行", "证监会"],
+            "us": [
+                "美股", "纳指", "标普", "道指", "美联储", "美元", "美债", "sec", "nasdaq", "s&p",
+                "dow", "nvidia", "microsoft", "apple", "qcom", "qualcomm",
+            ],
+            "hk": ["港股", "恒生", "恒指", "h股"],
+            "global": ["全球", "原油", "黄金", "地缘", "战争", "关税", "美元指数"],
+        },
+    },
     "llm": {
         "analysis_enabled": False,
         "analysis_model": "kimi-k2.6",
         "api_key_env": "OPENAI_API_KEY",
         "base_url_env": "OPENAI_BASE_URL",
-        "fallback_base_url": "",
+        "fallback_base_url": "",  # 留空=未配置；必须经 base_url_env / .secret 提供，禁止默认内网地址
         "outlook": {
             "enabled": True,
             "model": "deepseek-v4-pro",
             "api_key_env": "OPENAI_COMPATIBLE_API_KEY",
             "base_url_env": "OPENAI_COMPATIBLE_BASE_URL",
-            "fallback_base_url": "",
+            "fallback_base_url": "",  # 留空=未配置；必须经 base_url_env / .secret 提供，禁止默认内网地址
             "timeout_seconds": 120,
             "temperature": 0.2,
             "max_tokens": 8000,
@@ -119,7 +179,7 @@ DEFAULT_ENGINE_CONFIG = {
     "quant_action": {
         "stop_loss_pct": -12.0,
         "mid_stop_pct": -10.0,
-        "mid_stop_ratio": 0.5,
+        "mid_stop_ratio": 0.3,
         "warning_loss_pct": -8.0,
         "take_profit_levels": [[10.0, 0.25], [20.0, 0.25], [30.0, 0.50]],
         "profit_pullback_pct": -2.0,
@@ -154,6 +214,134 @@ DEFAULT_ENGINE_CONFIG = {
             "price_pos": 0.20,
             "volume": 0.10,
         },
+        # Intelligence signal symbol → position proxy mapping. Used by quant_action
+        # and intelligence_analyzer to associate external signals (e.g. QQQ, GLD)
+        # with the user's actual positions. Add/modify mappings here without code changes.
+        "intel_signal_proxy": {
+            "USO": "XLE",
+            "GLD": "NEM",
+            "NEM": "NEM",
+            "GOLD": "NEM",
+            "QQQ": "alipay_gf_nasdaq",
+            "SPY": "SPY",
+            "ITA": "ITA",
+            "NVDA": "NVDA",
+            "XLE": "XLE",
+            "KWEB": "alipay_info",
+            "FXI": "a_510300",
+            "ASHR": "a_510300",
+            "GDX": "NEM",
+            "SLV": "NEM",
+            "GC=F": "ccb_gold",
+            "XAU": "ccb_gold",
+            "GC": "ccb_gold",
+            "518880": "518880",
+            "TLT": "SGOV",
+            "SHY": "SGOV",
+            "SGOV": "SGOV",
+            "IWM": "a_512890",
+            "BTCUSDT": "alipay_info",
+        },
+        # Event theme → exposure bucket tags mapping. Used by finalize_decision to map
+        # macro events to portfolio exposure buckets.
+        "theme_to_exposure": {
+            "geopolitics": ["energy", "defense", "gold", "oil_gas", "aerospace", "mining"],
+            "energy": ["energy", "oil_gas"],
+            "technology": ["tech", "semiconductor", "ai", "star_board", "nasdaq100"],
+            "earnings": ["tech", "ai", "semiconductor", "nasdaq100"],
+            "monetary_policy": ["gold", "fixed_income", "us_rates", "cash_like", "money_market", "bank_wmp", "credit_plus"],
+            "crypto": ["crypto"],
+            "healthcare": ["healthcare", "bio"],
+            "financials": ["financials"],
+            "china_policy": ["a_share", "broad_index", "blue_chip", "dividend_low_vol", "high_dividend", "active_equity", "star_board", "utilities", "power"],
+            "general": [],
+        },
+        # Exposure bucket tag → constraint category mapping. Kept here as a single
+        # source of truth for exposure aggregation.
+        "tag_to_bucket": {
+            "gold": "黄金", "mining": "黄金",
+            "a_share": "权益", "us_equity": "权益", "tech": "权益",
+            "nasdaq100": "权益", "qdii": "权益", "semiconductor": "权益",
+            "star_board": "权益", "blue_chip": "权益", "dividend_low_vol": "权益",
+            "high_dividend": "权益", "active_equity": "权益",
+            "energy": "权益", "oil_gas": "权益", "defense": "权益",
+            "aerospace": "权益", "ai": "权益",
+            "fixed_income": "固收", "credit_plus": "固收", "us_rates": "固收",
+            "bank_wmp": "固收", "short_treasury": "固收",
+            "cash_like": "现金", "money_market": "现金",
+        },
+    },
+    "intelligence": {
+        # Theme → market/asset mapping for the keyword-rules analyzer.
+        "theme_markets": {
+            "geopolitics": ["equity", "oil", "gold", "dxy"],
+            "monetary_policy": ["equity", "bond", "dxy", "gold"],
+            "earnings": ["equity", "tech"],
+            "technology": ["equity", "tech"],
+            "energy": ["oil", "equity", "energy"],
+            "macro_data": ["equity", "bond", "dxy", "gold"],
+        },
+        # Theme → exposure bucket tags for category padding in LLM analyzer.
+        "category_to_positions": {
+            "gold": ["us:NEM", "a:518880", "ccb_gold"],
+            "us_tech": ["us:NVDA", "us:QQQ"],
+            "us_energy": ["us:XLE"],
+            "us_defense": ["us:ITA"],
+            "china_broad": ["a:510300", "a:512890", "a:511880", "a:516020"],
+            "china_sci": ["a:588000", "a:512480", "a:561560"],
+            "qdii": ["alipay_gf_nasdaq", "alipay_dc_nasdaq"],
+            "active": ["alipay_info"],
+            "bonds": ["us:SGOV", "a:159110"],
+        },
+        "category_to_themes": {
+            "gold": ["geopolitics", "monetary_policy", "macro_data"],
+            "us_energy": ["geopolitics", "energy"],
+            "us_tech": ["technology", "earnings", "monetary_policy"],
+            "us_defense": ["geopolitics"],
+            "china_broad": ["macro_data", "monetary_policy", "china_policy"],
+            "china_sci": ["technology", "china_policy"],
+            "qdii": ["technology", "monetary_policy"],
+            "active": ["technology", "earnings"],
+            "bonds": ["monetary_policy", "macro_data"],
+        },
+        # Symbol → asset class mapping for market impact scoring.
+        "symbol_to_asset": {
+            "SPY": "equity", "QQQ": "equity", "NVDA": "equity", "IWM": "equity",
+            "XLE": "oil", "USO": "oil",
+            "GLD": "gold", "NEM": "gold", "IAU": "gold",
+            "TLT": "bond", "SGOV": "bond", "SHY": "bond",
+            "UUP": "dxy",
+            "KWEB": "china_assets", "FXI": "china_assets", "ASHR": "china_assets",
+        },
+        # Known valid ticker/ETF symbols accepted by the keyword-rules analyzer.
+        "known_symbols": [
+            "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "IVV", "VWO", "EFA",
+            "GLD", "SLV", "GDX", "NEM", "XAU",
+            "USO", "XLE", "XOM", "CVX", "OIH",
+            "TLT", "IEF", "SHY", "AGG", "LQD", "HYG", "BND", "SGOV",
+            "EEM", "FXI", "KWEB", "ASHR", "MCHI",
+            "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "AVGO",
+            "AMD", "INTC", "QCOM", "MU", "ARM", "SMCI",
+            "JPM", "GS", "BAC", "WFC", "C", "MS", "BLK", "V", "MA",
+            "XLV", "XBI", "XLP", "XLY", "XLF", "XLI", "XLK", "XLU", "XLB",
+            "ITA", "NOC", "LMT", "RTX", "PPA",
+            "SOXX", "SMH", "SOXL", "SOXS",
+            "BTC", "ETH", "BTCUSDT", "ETHUSDT",
+            "VIX", "VIXY", "UVXY", "VXX", "SVXY",
+            "GC", "CL", "NG", "SI", "HG", "ZC", "ZS", "ZW",
+        ],
+        # Theme keywords for the keyword-rules analyzer (English, lower-case matching).
+        "theme_keywords": {
+            "geopolitics": ["war", "conflict", "tension", "sanction", "iran", "israel", "ukraine", "russia", "china", "taiwan", "military", "strike", "drone", "attack"],
+            "monetary_policy": ["fed", "federal reserve", "interest rate", "rate hike", "rate cut", "powell", "fomc", "central bank", " ECB ", "BOJ", "PBOC", "yield"],
+            "earnings": ["earnings", "revenue", "profit", "guidance", "beat", "miss", "EPS", "quarterly", "reported", "results"],
+            "technology": ["AI", "artificial intelligence", "chip", "semiconductor", "nvidia", "tesla", "big tech", "magnificent seven", "tech stock", "cloud"],
+            "energy": ["oil", "crude", "energy", "OPEC", "gas", "petroleum", "renewable", "solar"],
+            "macro_data": ["CPI", "inflation", "PPI", "GDP", "nonfarm", "unemployment", "jobs report", "retail sales", "PMI", "industrial production"],
+        },
+        # Sentiment keywords for the keyword-rules analyzer.
+        "positive_keywords": ["surge", "rally", "jump", "soar", "gain", "rise", "record high", "bullish", "strong", "beat", "raise guidance", "optimistic"],
+        "negative_keywords": ["plunge", "crash", "tumble", "slump", "drop", "fall", "bearish", "recession", "miss", "cut guidance", "fear", "panic", "sell-off"],
     },
     "logging": {
         "level": "INFO",
@@ -247,6 +435,29 @@ def _set_nested(d: dict, path: list[str], value: Any) -> None:
     for key in path[:-1]:
         d = d.setdefault(key, {})
     d[path[-1]] = value
+
+
+def provider_base_url(provider_name: str, default: str) -> str:
+    """解析 Provider 端点：环境变量 > 引擎配置 > 代码默认值。
+
+    Args:
+        provider_name: Provider 名（如 "tencent_a"），对应
+            DEFAULT_ENGINE_CONFIG["providers"][name]["base_url"]。
+        default: 代码内兜底 URL（当前实现的历史值）。
+
+    环境变量格式：``STOCKS_PROVIDER_<NAME>_BASE_URL``（如
+    ``STOCKS_PROVIDER_TENCENT_A_BASE_URL``）。返回结果去掉尾部 ``/``。
+    """
+    env_key = f"STOCKS_PROVIDER_{provider_name.upper()}_BASE_URL"
+    env_value = os.environ.get(env_key, "").strip()
+    if env_value:
+        return env_value.rstrip("/")
+    configured = (
+        DEFAULT_ENGINE_CONFIG.get("providers", {})
+        .get(provider_name, {})
+        .get("base_url")
+    )
+    return str(configured or default).rstrip("/")
 
 
 def _parse_env_value(value: str) -> Any:

@@ -8,91 +8,39 @@ from datetime import datetime, timezone
 from stocks.domain.models import FinancialAsset, Instrument, MarketEvent, NewsItem
 from stocks.engine.config_loader import DEFAULT_ENGINE_CONFIG
 
-# Keyword dictionaries are loaded from DEFAULT_ENGINE_CONFIG so new themes/markets
-# can be added via engine.yaml without code changes. The module-level defaults
-# remain as a fallback when the config is not loaded.
-_CFG_KEYWORDS = DEFAULT_ENGINE_CONFIG.get("market_event_keywords", {})
+# ---------------------------------------------------------------------------
+# 关键词/情绪词典的唯一数据源：config_loader.DEFAULT_ENGINE_CONFIG["market_events"]。
+# 引擎代码不再内嵌词典；调词（增删关键词、调整情绪词）只改配置，不动代码。
+# 下列模块级名字保留为视图别名，供本模块方法与既有引用使用。
+# ---------------------------------------------------------------------------
+_MARKET_EVENTS_CONFIG: dict = DEFAULT_ENGINE_CONFIG.get("market_events", {})
 
-_EVENT_KEYWORDS = _CFG_KEYWORDS.get(
-    "events",
-    {
-        "monetary_policy": [
-            "美联储", "fed", "fomc", "降息", "加息", "利率", "缩表", "扩表", "央行", "逆回购",
-            "流动性", "准备金率", "mlf", "lpr",
-        ],
-        "macro_policy": [
-            "政策", "财政", "发改委", "国务院", "刺激", "补贴", "消费券", "地产政策",
-            "监管", "证监会", "税收", "关税",
-        ],
-        "earnings": [
-            "财报", "业绩", "利润", "营收", "eps", "guidance", "预告", "亏损", "盈利",
-        ],
-        "geopolitical": [
-            "地缘", "战争", "制裁", "出口管制", "禁令", "关税", "贸易战", "中东", "台海",
-        ],
-        "industry_theme": [
-            "ai", "人工智能", "芯片", "半导体", "算力", "新能源", "军工", "机器人", "医药",
-            "银行", "券商", "保险", "消费电子", "云计算", "数据中心",
-        ],
-        "market_movement": [
-            "大涨", "大跌", "反弹", "跳水", "收涨", "收跌", "创新高", "新低", "暴跌", "暴涨",
-            "纳指", "标普", "道指", "沪指", "创业板", "科创板",
-        ],
-    },
-)
+_EVENT_KEYWORDS: dict = _MARKET_EVENTS_CONFIG.get("event_keywords", {})
+_THEME_KEYWORDS: dict = _MARKET_EVENTS_CONFIG.get("theme_keywords", {})
+_POSITIVE_KEYWORDS: list = _MARKET_EVENTS_CONFIG.get("positive_keywords", [])
+_NEGATIVE_KEYWORDS: list = _MARKET_EVENTS_CONFIG.get("negative_keywords", [])
+_IMMEDIATE_KEYWORDS: list = _MARKET_EVENTS_CONFIG.get("immediate_keywords", [])
+_HIGH_URGENCY_KEYWORDS: list = _MARKET_EVENTS_CONFIG.get("high_urgency_keywords", [])
+_MARKET_KEYWORDS: dict = _MARKET_EVENTS_CONFIG.get("market_keywords", {})
 
-_THEME_KEYWORDS = _CFG_KEYWORDS.get(
-    "themes",
-    {
-        "AI": ["ai", "人工智能", "大模型", "算力", "gpu", "英伟达", "nvidia"],
-        "半导体": ["芯片", "半导体", "晶圆", "光刻", "存储", "英伟达", "nvidia", "高通", "qcom"],
-        "军工": ["军工", "国防", "航天", "导弹", "无人机"],
-        "金融": ["银行", "券商", "保险", "金融", "平安银行", "利差"],
-        "新能源": ["新能源", "光伏", "锂电", "储能", "电动车", "tesla", "特斯拉"],
-        "医药": ["医药", "创新药", "医疗", "药品", "fda"],
-        "消费": ["消费", "零售", "白酒", "旅游", "餐饮"],
-        "地产": ["地产", "房地产", "房贷", "按揭", "销售面积"],
-        "汇率": ["人民币", "汇率", "美元指数", "dxy", "usdcny"],
-        "利率": ["利率", "美债", "收益率", "降息", "加息", "流动性"],
-    },
-)
+# ── 提取器规则常量（规则版本 rules_v1 的组成部分）──
 
-_POSITIVE_KEYWORDS = _CFG_KEYWORDS.get(
-    "positive",
-    [
-        "利好", "上调", "超预期", "增长", "创新高", "批准", "放宽", "降息", "刺激", "回购",
-        "beat", "surge", "record high", "approval",
-    ],
-)
+# 新闻年龄 ≤ 2 小时视为高紧急度
+_URGENCY_AGE_HIGH_SECONDS = 2 * 60 * 60
 
-_NEGATIVE_KEYWORDS = _CFG_KEYWORDS.get(
-    "negative",
-    [
-        "利空", "下调", "不及预期", "下滑", "亏损", "制裁", "禁令", "暴跌", "加息", "收紧",
-        "miss", "plunge", "ban", "sanction",
-    ],
-)
+# 无任何市场关键词命中时，命中以下线索才归为 global（与 market_keywords["global"]
+# 口径一致；保留为独立常量以免误触发"关税/地缘"等泛化词）
+_GLOBAL_MARKET_FALLBACK_HINTS = ("全球", "美元", "原油", "黄金")
 
-_IMMEDIATE_KEYWORDS = _CFG_KEYWORDS.get(
-    "immediate", ["突发", "刚刚", "盘前", "盘中", "after-hours", "pre-market", "紧急"]
-)
-_HIGH_URGENCY_KEYWORDS = _CFG_KEYWORDS.get(
-    "high_urgency",
-    ["大涨", "大跌", "暴涨", "暴跌", "制裁", "禁令", "降息", "加息", "财报"],
-)
-
-_MARKET_KEYWORDS = _CFG_KEYWORDS.get(
-    "markets",
-    {
-        "a": ["a股", "沪指", "深成指", "创业板", "科创板", "北向", "人民币", "央行", "证监会"],
-        "us": [
-            "美股", "纳指", "标普", "道指", "美联储", "美元", "美债", "sec", "nasdaq", "s&p",
-            "dow", "nvidia", "microsoft", "apple", "qcom", "qualcomm",
-        ],
-        "hk": ["港股", "恒生", "恒指", "h股"],
-        "global": ["全球", "原油", "黄金", "地缘", "战争", "关税", "美元指数"],
-    },
-)
+# 置信度评分权重：调参前需重新评估输出分布，避免与规则版本解耦
+_CONFIDENCE_BASE_SCORE = 0.35
+_CONFIDENCE_EVENT_HIT_WEIGHT = 0.10
+_CONFIDENCE_THEME_WEIGHT = 0.06
+_CONFIDENCE_SYMBOL_BONUS = 0.12
+_CONFIDENCE_HOLDING_BONUS = 0.12
+_CONFIDENCE_SCOPE_HOLDING_BONUS = 0.12
+_CONFIDENCE_MAX_HITS_CAP = 3
+_CONFIDENCE_MAX_SCORE = 0.95
 
 
 class MarketEventExtractor:
@@ -227,7 +175,9 @@ class MarketEventExtractor:
                 markets.add(inst.market)
         if item.scope == "holding" and item.raw_metadata.get("market"):
             markets.add(str(item.raw_metadata["market"]))
-        if not markets and any(keyword in text for keyword in ("全球", "美元", "原油", "黄金")):
+        if not markets and any(
+            keyword in text for keyword in _GLOBAL_MARKET_FALLBACK_HINTS
+        ):
             markets.add("global")
         return sorted(markets)
 
@@ -270,7 +220,7 @@ class MarketEventExtractor:
             return "high"
 
         age_seconds = self._age_seconds(item.published_at, generated_at)
-        if age_seconds is not None and age_seconds <= 2 * 60 * 60:
+        if age_seconds is not None and age_seconds <= _URGENCY_AGE_HIGH_SECONDS:
             return "high"
         return "medium"
 
@@ -292,16 +242,16 @@ class MarketEventExtractor:
         matched_holdings: list[str],
         item: NewsItem,
     ) -> float:
-        score = 0.35
-        score += min(event_hits, 3) * 0.1
-        score += min(len(themes), 3) * 0.06
+        score = _CONFIDENCE_BASE_SCORE
+        score += min(event_hits, _CONFIDENCE_MAX_HITS_CAP) * _CONFIDENCE_EVENT_HIT_WEIGHT
+        score += min(len(themes), _CONFIDENCE_MAX_HITS_CAP) * _CONFIDENCE_THEME_WEIGHT
         if affected_symbols:
-            score += 0.12
+            score += _CONFIDENCE_SYMBOL_BONUS
         if matched_holdings:
-            score += 0.12
+            score += _CONFIDENCE_HOLDING_BONUS
         if item.scope == "holding":
-            score += 0.12
-        return round(min(score, 0.95), 2)
+            score += _CONFIDENCE_SCOPE_HOLDING_BONUS
+        return round(min(score, _CONFIDENCE_MAX_SCORE), 2)
 
     def _rationale(
         self,

@@ -18,7 +18,7 @@ from stocks.engine.config_loader import DEFAULT_ENGINE_CONFIG
 logger = logging.getLogger(__name__)
 _LEVEL_ORDER = {"normal": 0, "watch": 1, "reduce": 2, "hedge": 3}
 # Single source of truth for risk-state lifecycle defaults: config_loader.py's
-# DEFAULT_ENGINE_CONFIG["risk_state"].  This keeps confirmation counts and TTL
+# DEFAULT_ENGINE_CONFIG["risk_state"].  Confirmation counts and TTL stay
 # aligned with the rest of the engine configuration.
 _DEFAULT_CONFIG: dict = DEFAULT_ENGINE_CONFIG["risk_state"]
 
@@ -54,14 +54,12 @@ class RiskState:
 
     @property
     def cash_target_pct(self) -> Optional[float]:
-        return None
+        """Cash target for the current risk level, driven by engine config.
 
-    def cash_target_pct_for(self, config: Optional[dict] = None) -> Optional[float]:
-        """Return the cash target for the current level, driven by config.
-
-        Keeps the single source of truth in engine.yaml's risk_warning section.
+        Values come from DEFAULT_ENGINE_CONFIG["risk_warning"] (cash_target_hedge
+        / cash_target_reduce) so the target cannot drift from engine.yaml.
         """
-        cfg = DEFAULT_ENGINE_CONFIG["risk_warning"] if config is None else config
+        cfg = DEFAULT_ENGINE_CONFIG["risk_warning"]
         if self.level == "hedge":
             return cfg.get("cash_target_hedge")
         if self.level == "reduce":
@@ -75,7 +73,7 @@ class RiskState:
             if value is not None:
                 result[key] = value.isoformat()
         result["suspend_accumulation"] = self.suspend_accumulation
-        result["cash_target_pct"] = self.cash_target_pct_for()
+        result["cash_target_pct"] = self.cash_target_pct
         return result
 
 

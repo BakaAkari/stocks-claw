@@ -31,16 +31,25 @@ from stocks.engine.valuation_freshness import freshness_is_estimate
 logger = logging.getLogger(__name__)
 
 # Product types that are NOT immediately accessible cash — derived from the
-# single source of truth in domain.models.  New product types only need to be
-# added there; if they are cash-like they go in _IMMEDIATE_CASH_PRODUCT_TYPES.
+# single source of truth in domain.models: anything not declared cash-like is
+# treated as non-immediate (fail-safe for new product types).
 _NON_IMMEDIATE_PRODUCT_TYPES = frozenset(_PRODUCT_TYPES - _IMMEDIATE_CASH_PRODUCT_TYPES)
 
 # Liquidity tiers that represent immediately accessible cash
 _IMMEDIATE_LIQUIDITY_TIERS = frozenset({"cash", "t0"})
 
-# Locked / non-tradable liquidity tiers — derived from the canonical list so
-# that a new tier cannot silently become executable by omission.
-_LOCKED_LIQUIDITY_TIERS = frozenset({t for t in _LIQUIDITY_TIERS if t not in _IMMEDIATE_LIQUIDITY_TIERS and t != "unknown"})
+# Tiers on a known settlement clock (T+1 / T+2) — not locked, not spendable now
+_SETTLING_LIQUIDITY_TIERS = frozenset({"t1", "t2_plus"})
+
+# Locked / non-tradable liquidity tiers — derived from the canonical tier list
+# so a new tier can never silently become executable by omission.  "Locked"
+# means: not immediately spendable AND not on a known settlement clock.
+_LOCKED_LIQUIDITY_TIERS = frozenset(
+    t for t in _LIQUIDITY_TIERS
+    if t not in _IMMEDIATE_LIQUIDITY_TIERS
+    and t not in _SETTLING_LIQUIDITY_TIERS
+    and t != "unknown"
+)
 
 # Default rule version for stable decision_id
 _DEFAULT_RULE_VERSION = "decision-trust-t1-v1"
@@ -51,8 +60,9 @@ _REDUCE_SIGNALS = frozenset({"reduce", "stop_loss", "take_profit"})
 # Signals that are add/increase directions
 _ADD_SIGNALS = frozenset({"add"})
 
-# Minimum CNY amount for an add action to be executable. Loaded from engine
-# config so portfolio constraint changes do not require a code deploy.
+# Minimum CNY amount for an add action to be executable.  Kept as a named
+# constant so the threshold is tunable in one place (see _MIN_ADD_AMOUNT_CNY
+# usage in build_capital_allocation_with_suppression).
 _MIN_ADD_AMOUNT_CNY = 800.0
 
 # settlement_rule tokens safe to surface verbatim as human-facing settlement_timing;

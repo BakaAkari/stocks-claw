@@ -344,7 +344,8 @@ _COST_BASIS_METHODS = {"average"}
 
 # Single source of truth for cash-like product types.  Anything in
 # _PRODUCT_TYPES that is NOT in this set is considered non-immediate cash by
-# the adjudicator.  New cash-like instruments are declared here once.
+# the portfolio adjudicator.  New cash-like instruments are declared here once;
+# the adjudicator derives its non-immediate set as the difference.
 _IMMEDIATE_CASH_PRODUCT_TYPES = {
     "cash",
     "cash_equivalent",

@@ -14,7 +14,6 @@
     "cn": {
       "enabled": true,
       "exchange_timezone": "Asia/Shanghai",
-      "headline_template": "A 股 scheduled analysis",
       "holidays": [
         "2026-01-01",
         "2026-02-16",
@@ -41,11 +40,7 @@
           "time": "09:55",
           "intent": "post_open_decision",
           "push": "digest",
-          "primary_market": "cn",
-          "headline": "A 股开盘后:确认上午方向与持仓触发器",
-          "focus": "a+中国/香港市场",
-          "can_recommend_new": true,
-          "can_review_closed": false
+          "primary_market": "cn"
         },
         {
           "id": "cn_after_close",
@@ -63,7 +58,6 @@
     "us": {
       "enabled": true,
       "exchange_timezone": "America/New_York",
-      "headline_template": "美股 scheduled analysis",
       "holidays": [
         "2026-01-01",
         "2026-01-19",
@@ -82,11 +76,7 @@
           "time": "09:55",
           "intent": "post_open_decision",
           "push": "digest",
-          "primary_market": "us",
-          "headline": "美股开盘后:聚焦 IBKR 持仓、事件和早盘波动",
-          "focus": "us+欧美市场",
-          "can_recommend_new": true,
-          "can_review_closed": false
+          "primary_market": "us"
         },
         {
           "id": "us_after_close",
@@ -114,11 +104,9 @@
           "primary_market": "global",
           "run_every_minutes": 60,
           "enabled": true,
-          "headline": "每日全球情报",
-          "focus": "cross_market",
-          "can_recommend_new": false,
-          "can_review_closed": false,
-          "ignore_weekend": true
+          "ignore_weekend": true,
+          "headline": "全球情报巡逻:跨市场事件与隔夜风险",
+          "focus": "global"
         }
       ]
     }

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from stocks.domain.models import Instrument, Quote
+from stocks.engine.config_loader import provider_base_url
 from stocks.errors import (
     ProviderDataError,
     ProviderNetworkError,
@@ -20,13 +21,12 @@ from stocks.errors import (
 )
 from stocks.providers.base import QuoteProvider
 
+# Provider 端点：env (STOCKS_PROVIDER_BINANCE_BASE_URL) > engine.yaml > 代码默认
+_PROVIDER_BASE_URL = provider_base_url("binance", "https://api.binance.com/api/v3")
+
 
 class BinanceQuoteProvider(QuoteProvider):
     """免 key 的 Binance 24 小时 ticker，作为 crypto 实时备用源。"""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._base_url = (kwargs.get("base_url") or "https://api.binance.com").rstrip("/")
 
     @property
     def name(self) -> str:
@@ -43,7 +43,7 @@ class BinanceQuoteProvider(QuoteProvider):
     def _fetch_sync(self, symbol: str) -> dict:
         query = urllib.parse.urlencode({"symbol": symbol})
         request = urllib.request.Request(
-            f"{self._base_url}/api/v3/ticker/24hr?{query}",
+            f"{_PROVIDER_BASE_URL}/ticker/24hr?{query}",
             headers={"User-Agent": "stocks-claw/1.0"},
         )
         try:

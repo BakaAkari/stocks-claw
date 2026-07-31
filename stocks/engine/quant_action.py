@@ -15,80 +15,86 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 
+from stocks.engine.config_loader import DEFAULT_ENGINE_CONFIG
 from stocks.engine.data_quality_gate import compute_action_eligible
 from stocks.engine.exchange_rate import get_usd_cny_rate
 from stocks.engine.factor_rules import adjudicate, collect_votes
 
+
+def _quant_config_value(config: Optional[dict], key: str, default: Any) -> Any:
+    """Read a value from the provided quant_action config, falling back to DEFAULT_ENGINE_CONFIG."""
+    if config is not None and key in config:
+        return config[key]
+    return DEFAULT_ENGINE_CONFIG.get("quant_action", {}).get(key, default)
+
+
 # ── 事件主题 → 持仓暴露标签 ──
-THEME_TO_EXPOSURE: dict[str, list[str]] = {
-    "geopolitics": ["energy", "defense", "gold", "oil_gas", "aerospace", "mining"],
-    "energy": ["energy", "oil_gas"],
-    "technology": ["tech", "semiconductor", "ai", "star_board", "nasdaq100"],
-    "earnings": ["tech", "ai", "semiconductor", "nasdaq100"],
-    "monetary_policy": ["gold", "fixed_income", "us_rates", "cash_like",
-                         "money_market", "bank_wmp", "credit_plus"],
-    "crypto": ["crypto"],
-    "healthcare": ["healthcare", "bio"],
-    "financials": ["financials"],
-    "china_policy": ["a_share", "broad_index", "blue_chip", "dividend_low_vol",
-                     "high_dividend", "active_equity", "star_board", "utilities", "power"],
-    "general": [],
-}
+THEME_TO_EXPOSURE: dict[str, list[str]] = dict(
+    _quant_config_value(None, "theme_to_exposure", {})
+    or {
+        "geopolitics": ["energy", "defense", "gold", "oil_gas", "aerospace", "mining"],
+        "energy": ["energy", "oil_gas"],
+        "technology": ["tech", "semiconductor", "ai", "star_board", "nasdaq100"],
+        "earnings": ["tech", "ai", "semiconductor", "nasdaq100"],
+        "monetary_policy": ["gold", "fixed_income", "us_rates", "cash_like", "money_market", "bank_wmp", "credit_plus"],
+        "crypto": ["crypto"],
+        "healthcare": ["healthcare", "bio"],
+        "financials": ["financials"],
+        "china_policy": ["a_share", "broad_index", "blue_chip", "dividend_low_vol", "high_dividend", "active_equity", "star_board", "utilities", "power"],
+        "general": [],
+    }
+)
 
 # ── 情报信号 symbol → 持仓关联 ──
-_INTEL_SIGNAL_PROXY: dict[str, str] = {
-    # Macro → user positions
-    "USO": "XLE",           # oil fund → US energy ETF
-    "GLD": "NEM",            # gold ETF → gold miners ETF (and gold positions)
-    "NEM": "NEM",            # gold miners → direct
-    # Equity indices
-    # Gold → multiple gold-related positions
-    "GOLD": "NEM",
-    # Equity
-    "QQQ": "alipay_gf_nasdaq",  # NASDAQ ETF → Alipay NASDAQ fund
-    "SPY": "SPY",           # S&P 500
-    "ITA": "ITA",           # defense ETF
-    "NVDA": "NVDA",         # NVIDIA stock
-    "XLE": "XLE",           # energy ETF
-    # China market
-    "KWEB": "alipay_info",  # China internet → active info fund
-    "FXI": "a_510300",     # China large cap → 沪深300
-    "ASHR": "a_510300",    # China A-shares → 沪深300
-    # Gold/precious metals
-    "GDX": "NEM",          # gold miners ETF → NEM
-    "SLV": "NEM",          # silver → gold miners proxy
-    "GC=F": "ccb_gold",    # gold futures → 建行黄金
-    "XAU": "ccb_gold",     # gold spot → 建行黄金
-    "GC": "ccb_gold",      # gold futures → 建行黄金
-    # China gold
-    "518880": "518880",    # 黄金ETF
-    # Fixed income
-    "TLT": "SGOV",         # long treasury → short treasury
-    "SHY": "SGOV",         # short treasury → short treasury
-    "SGOV": "SGOV",        # short treasury ETF
-    # Broad market
-    "IWM": "a_512890",     # Russell 2000 → 中证500
-    # Bitcoin
-    "BTCUSDT": "alipay_info",  # Bitcoin → active fund (tech-heavy)
-}
+_INTEL_SIGNAL_PROXY: dict[str, str] = dict(
+    _quant_config_value(None, "intel_signal_proxy", {})
+    or {
+        "USO": "XLE",
+        "GLD": "NEM",
+        "NEM": "NEM",
+        "GOLD": "NEM",
+        "QQQ": "alipay_gf_nasdaq",
+        "SPY": "SPY",
+        "ITA": "ITA",
+        "NVDA": "NVDA",
+        "XLE": "XLE",
+        "KWEB": "alipay_info",
+        "FXI": "a_510300",
+        "ASHR": "a_510300",
+        "GDX": "NEM",
+        "SLV": "NEM",
+        "GC=F": "ccb_gold",
+        "XAU": "ccb_gold",
+        "GC": "ccb_gold",
+        "518880": "518880",
+        "TLT": "SGOV",
+        "SHY": "SGOV",
+        "SGOV": "SGOV",
+        "IWM": "a_512890",
+        "BTCUSDT": "alipay_info",
+    }
+)
 
 # ── 曝光标签 → 约束大类 ──
-_TAG_TO_BUCKET: dict[str, str] = {
-    "gold": "黄金", "mining": "黄金",
-    "a_share": "权益", "us_equity": "权益", "tech": "权益",
-    "nasdaq100": "权益", "qdii": "权益", "semiconductor": "权益",
-    "star_board": "权益", "blue_chip": "权益", "dividend_low_vol": "权益",
-    "high_dividend": "权益", "active_equity": "权益",
-    "energy": "权益", "oil_gas": "权益", "defense": "权益",
-    "aerospace": "权益", "ai": "权益",
-    "fixed_income": "固收", "credit_plus": "固收", "us_rates": "固收",
-    "bank_wmp": "固收", "short_treasury": "固收",
-    "cash_like": "现金", "money_market": "现金",
-}
+_TAG_TO_BUCKET: dict[str, str] = dict(
+    _quant_config_value(None, "tag_to_bucket", {})
+    or {
+        "gold": "黄金", "mining": "黄金",
+        "a_share": "权益", "us_equity": "权益", "tech": "权益",
+        "nasdaq100": "权益", "qdii": "权益", "semiconductor": "权益",
+        "star_board": "权益", "blue_chip": "权益", "dividend_low_vol": "权益",
+        "high_dividend": "权益", "active_equity": "权益",
+        "energy": "权益", "oil_gas": "权益", "defense": "权益",
+        "aerospace": "权益", "ai": "权益",
+        "fixed_income": "固收", "credit_plus": "固收", "us_rates": "固收",
+        "bank_wmp": "固收", "short_treasury": "固收",
+        "cash_like": "现金", "money_market": "现金",
+    }
+)
 
 # ── 产品类型路由规则 ──
 _PRODUCT_TYPE_RULES: dict[str, dict] = {

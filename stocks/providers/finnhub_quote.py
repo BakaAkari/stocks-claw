@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from stocks.domain.models import Instrument, Quote
+from stocks.engine.config_loader import provider_base_url
 from stocks.errors import (
     ProviderAuthError,
     ProviderConfigError,
@@ -23,6 +24,9 @@ from stocks.errors import (
     ProviderTimeoutError,
 )
 from stocks.providers.base import QuoteProvider
+
+# Provider 端点：env (STOCKS_PROVIDER_FINNHUB_BASE_URL) > engine.yaml > 代码默认
+_PROVIDER_BASE_URL = provider_base_url("finnhub", "https://finnhub.io/api/v1")
 
 ROOT = Path(__file__).resolve().parents[2]
 FINNHUB_KEY_PATH = ROOT / ".secret" / "finnhub-key.md"
@@ -54,7 +58,6 @@ class FinnhubQuoteProvider(QuoteProvider):
         self,
         api_key: Optional[str] = None,
         *,
-        base_url: Optional[str] = None,
         min_request_interval: float = 1.05,
     ):
         if api_key:
@@ -69,7 +72,6 @@ class FinnhubQuoteProvider(QuoteProvider):
                 self.api_key = ALT_KEY_PATH.read_text(encoding="utf-8").strip()
             else:
                 self.api_key = ""
-        self._base_url = (base_url or "https://finnhub.io/api/v1").rstrip("/")
         self._min_request_interval = max(0.0, min_request_interval)
         self._rate_lock = threading.Lock()
         self._last_request_at = 0.0
@@ -108,7 +110,7 @@ class FinnhubQuoteProvider(QuoteProvider):
         self._throttle()
         encoded = urllib.parse.urlencode({**params, "token": self.api_key})
         endpoint = endpoint.strip("/")
-        url = f"{self._base_url}/{endpoint}?{encoded}"
+        url = f"{_PROVIDER_BASE_URL}/{endpoint}?{encoded}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
