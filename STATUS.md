@@ -8,25 +8,32 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-07-31 (third update) — M1 report structure upgrade
-> landed at `382207b`; backlog re-evaluated, M2 is next.
-> Earlier same-day updates: de-hardcode verification (`03ee449`); direction
-> reset (`docs/analysis/adversarial-review-2026-07-31.md`,
+> Last updated: 2026-07-31 (fourth update) — M2 outlook mainline landed at
+> `7c35c7f`; VISION §2.3 score 5/1/1 → 7/0/0 (pipeline); M3 is next.
+> Earlier same-day updates: M1 (`382207b`), de-hardcode verification
+> (`03ee449`), direction reset (`docs/analysis/adversarial-review-2026-07-31.md`,
 > `docs/analysis/direction-2026-07-31.md`).
 
-## Baseline (as of 2026-07-31, third verification)
+## Baseline (as of 2026-07-31, fourth verification)
 
-- HEAD (code baseline, verified): `382207b` — "feat(M1): close six-section
-  report gaps against TASK-M1 spec"
-- Doc-only commits on top of the previous verified baseline: `742b2d8`,
-  `a116340`.
+- HEAD (code baseline, verified): `7c35c7f` — "feat(M2): wire advisory
+  mainline into production push outlook"
 - Branch: `master` == `origin/master`
 - Working tree: **clean** (verified this session — `git status --short --branch`)
-- Full pytest: **1272 passed, 7 skipped, 0 failed** (verified on `382207b`)
+- Full pytest: **1287 passed, 7 skipped, 0 failed** (verified on `7c35c7f`;
+  1285 unit + 2 integration)
 - ruff: **clean**; compileall: **clean**; git diff --check: **clean**
-- Smoke (M1 acceptance): regenerated `cn_after_close` 2026-07-30 report —
-  six sections in order, 40 non-empty lines (gate ≤55), 697 Chinese chars
-  (gate ≤1800), `validate_payload_text` clean. Sample:
+- Smoke (M2 acceptance, no-LLM-endpoint case): forced `cn_after_close`
+  2026-07-30 run → `structured_outlook.status == "unavailable"` with
+  message `研判待复核：目标市场行情数据过旧或缺失` (freshness gate fired
+  on stale forced-date quotes — gate works as designed); push report
+  renders `走势研判 - 中长期研判：研判待复核：…` and completes through
+  the push validators. The configured-endpoint case (real short/medium
+  judgments) is covered by fake-client unit/integration tests; a live-LLM
+  run has **not** been performed (no endpoint configured locally).
+- Smoke (M1 acceptance, earlier): regenerated `cn_after_close` 2026-07-30
+  report — six sections in order, 40 non-empty lines (gate ≤55), 697
+  Chinese chars (gate ≤1800), `validate_payload_text` clean. Sample:
   `.local/m1-sample-cn_after_close-20260730.md`.
 - Tag: `v2.8-e1e2-complete` remains at `cc1eaa0` (not an ancestor of HEAD;
   left untouched — re-tagging is the user's call).
@@ -65,7 +72,9 @@ StocksEngine.build_context
   → AnalysisContext v12
   → Technical / Rotation / QuantAction / Factor Rules
   → Portfolio Adjudicator → user_view (instruction_card + assistant_brief)
-  → Deterministic Renderer (5-section concise report)
+  → Advisory Mainline (primary sessions): snapshot → LLM analyst →
+    validation receipt → structured_outlook (研判待复核 on any failure)
+  → Deterministic Renderer (6-section concise report)
   → validate_push_truth + validate_payload_text
   → Feishu delivery
 ```
@@ -74,41 +83,51 @@ E1 truth gate and E2 concise renderer are landed and verified. Details on
 what each covers are in the archived task files under
 `docs/archive/tasks-completed-2026-07/` for the record.
 
-## Known gaps against `stocks/VISION.md` §2.3 (re-scored after M1, real cn_after_close run 2026-07-30)
+## Known gaps against `stocks/VISION.md` §2.3 (re-scored after M2, 2026-07-31)
 
-M1 landed at `382207b` and was verified against a regenerated real report
-(sample: `.local/m1-sample-cn_after_close-20260730.md`). Earlier per-field
-breakdown archived in `docs/analysis/adversarial-review-2026-07-31.md`.
+M2 landed at `7c35c7f`: the advisory mainline now produces the 走势研判
+content from the LLM Investment Analyst (short-term 3-7天 / medium-term
+1-3个月 judgments with 验证/证伪 lines, scenarios, source_refs), gated by
+quote freshness, snapshot age, client configuration, and the validation
+receipt. Verified with fake-client tests and the no-endpoint smoke; a
+live-LLM run is still pending (no endpoint configured locally).
 
 Coverage of VISION §2.3's seven required questions:
 
 | # | VISION requirement | Current coverage |
 |---|---|---|
-| 1 | Market state, drivers, conflicts | 🟡 structure landed (本窗口变化 + 走势研判 section); content waits M2 (outlook unavailable → sanitized fallback line) |
+| 1 | Market state, drivers, conflicts | ✅ pipeline landed (advisory outlook summary + drivers; honest 研判待复核 fallback when gated) |
 | 2 | Position actions, magnitude, condition, reason | ✅ covered (manual-review conflicts now carry 参考: ratio / 参考数量 / 参考金额 audit lines) |
 | 3 | Post-trade portfolio/cash/risk delta | ✅ covered (post_trade_projection renders as 执行后估算 line when executable actions exist) |
-| 4 | Short/medium-term scenarios with validation/falsification | ❌ missing (waits M2 outlook mainline) |
+| 4 | Short/medium-term scenarios with validation/falsification | ✅ pipeline landed (near/medium-term + 验证/证伪 lines + base/bull/risk scenarios; falsification is a hard validation error) |
 | 5 | Watch / setup candidates | ✅ covered (提前布局 first-class section, top 2-3 by score + overflow tail) |
 | 6 | Data unreliability & suspend condition | ✅ covered (capital-gap data_notes reach push as 待决事项 lines) |
 | 7 | Next check condition | ✅ covered |
 
-**Score after M1: 5 full / 1 partial / 1 missing** (was 2 / 2 / 3). The
-remaining gap is question 4 — the M2 outlook mainline.
+**Score after M2: 7 full / 0 partial / 0 missing** (was 5 / 1 / 1) — at
+pipeline level. Content-level verification (live LLM judgments in real
+reports) remains gated on an ad-hoc endpoint and the shadow/user-value
+gates below.
 
 ## Report mode
 
-Production push runs the **legacy path only**: rule-driven actions +
-constrained `structured_outlook`. Advisory shadow (`advisory_synthesizer.py`,
-`unified_snapshot.py`, `advisory_shadow_store.py`, `run_shadow_advisory.py`,
-`compare_advisory_paths.py`) exists and produces artifacts under
-`.local/advisory_shadow/`, but is not wired into the push path. See
-`docs/contracts/README.md` for per-contract PRODUCTION/SHADOW/PLANNED
-labels.
+Production push runs the **M2 advisory mainline by default** for primary
+sessions: `build_unified_snapshot` → `synthesize_advisory` (LLM Investment
+Analyst) → `validate_advisory` → projection into `structured_outlook`,
+orchestrated by `stocks/engine/advisory_mainline.py`. Every failure path
+(stale/missing quotes, snapshot older than 90 minutes, unconfigured LLM
+endpoint, `hold_default` fallback, receipt errors) degrades to an honest
+`研判待复核` unavailable outlook — never a fabricated judgment.
 
-No `report_mode` config toggle exists yet. When M2 lands, a toggle will
-appear here and in `docs/contracts/README.md`.
+Toggle: `llm.advisory_mainline.enabled` (default `true` in
+`DEFAULT_ENGINE_CONFIG`). Setting it `false` restores the legacy
+constrained `OutlookSynthesizer` path (evidence + hash metadata included).
+Advisory contracts (`UnifiedAnalysisSnapshot`, `InvestmentAdvisory`,
+`AdvisoryValidationReceipt`) are PRODUCTION as of M2; `AdvisoryShadowRun`
+stays SHADOW. Rule engine adjudicator and instruction_card actions are
+untouched: advisory informs judgment only, never action selection.
 
-## Roadmap now: M1 ✅ → M2 → M3 (+ M4 candidate)
+## Roadmap now: M1 ✅ → M2 ✅ → M3 (+ M4 candidate)
 
 Full description in `ROADMAP.md`. Rationale in
 `docs/analysis/direction-2026-07-31.md`.
@@ -118,14 +137,19 @@ Full description in `ROADMAP.md`. Rationale in
   提前布局 first-class, manual-review choice space with 参考: audit lines,
   cash-bucket collapse, data-notes capital gaps, post-trade projection
   line. VISION §2.3 score moved 2/2/3 → 5/1/1.
-- **M2 — Outlook mainline.** Wire `advisory_synthesizer` into the push
-  path. Short-term (3–7 day) + medium-term (1–3 month) judgments backed by
-  news/industry/sentiment/macro/technical evidence, with `source_refs` and
-  freshness gate. Fallback to "研判待复核" on failure — never fabricate.
-  **This is the next task.**
+- **M2 — Outlook mainline. ✅ landed 2026-07-31 (`7c35c7f`).**
+  `advisory_mainline.py` wires the LLM Investment Analyst into primary
+  sessions behind `llm.advisory_mainline.enabled` (default true): freshness
+  gate → snapshot → synthesis → receipt validation → projection into the
+  whitelisted `structured_outlook` shape (delta/forecast pipelines
+  unchanged). Short-term (3–7 day) + medium-term (1–3 month) judgments
+  carry direction/confidence/rationale/validation/falsification and typed
+  source_refs; falsification absence is a hard validation error. All
+  failure paths render 研判待复核 — never fabricate. VISION §2.3 score
+  moved 5/1/1 → 7/0/0 (pipeline level).
 - **M3 — Feedback loop.** User marks each recommendation (accepted /
   partial / rejected / deferred). Feedback becomes evidence for future
-  outlook runs, not an auto-tuner.
+  outlook runs, not an auto-tuner. **This is the next task.**
 - **M4 — Constraint model upgrade (backlog candidate, added 2026-07-31).**
   Irreversibility (no-buyback), segregated pools, hard caps. Motivation:
   `docs/analysis/kimi-report-constraint-comparison-2026-07-31.md`; scope:
@@ -149,31 +173,34 @@ Full description in `ROADMAP.md`. Rationale in
 
 ## Live/user-value gates (retained from previous ROADMAP)
 
-Both retained as verification concepts for M2:
+Both retained as verification concepts for M2; **status after M2 landing:**
 
-- **Shadow gate** — new and old outputs comparable and replayable, at
-  least 5 consecutive trading days of main-window shadow runs before
-  cutover.
-- **User-value gate** — user confirms the new capability reduces decision
-  cost before M2 fully replaces the current outlook.
+- **Shadow gate — PENDING.** The 5-consecutive-trading-day replay of live
+  main-window runs cannot be satisfied by a local one-off run; it requires
+  real trading days with a configured LLM endpoint. Recorded as pending,
+  not waived.
+- **User-value gate — PENDING.** User confirms the new capability reduces
+  decision cost before M2 fully replaces the legacy outlook (the legacy
+  path remains available via `llm.advisory_mainline.enabled: false`).
 
-Neither is satisfiable by a local run; they attach to M2, not to a fixed
-task file.
+## Advisory pipeline — status after M2
 
-## Advisory shadow pipeline — status
-
-Confirmed in this session:
-- `stocks/domain/advisory_models.py`, `stocks/engine/unified_snapshot.py`,
-  `stocks/engine/advisory_contract.py`, `stocks/engine/advisory_synthesizer.py`,
-  `stocks/engine/advisory_shadow_store.py`, `stocks/engine/asset_intake_parser.py`,
-  `stocks/engine/llm_asset_intake.py`, `stocks/engine/asset_intake_writer.py`,
-  `scripts/run_shadow_advisory.py`, `scripts/compare_advisory_paths.py` all
-  exist, are committed, and produce artifacts under `.local/advisory_shadow/`.
-- None is wired into any production adapter or the push path.
-- See `docs/contracts/README.md` for per-contract labels.
+- `advisory_mainline.py` (new, M2) orchestrates the production advisory
+  path for primary sessions; `UnifiedAnalysisSnapshot` /
+  `InvestmentAdvisory` / `AdvisoryValidationReceipt` are PRODUCTION
+  contracts (see `docs/contracts/README.md`).
+- Shadow tooling (`advisory_shadow_store.py`, `run_shadow_advisory.py`,
+  `compare_advisory_paths.py`, artifacts under `.local/advisory_shadow/`)
+  remains available for the shadow-gate replay; `AdvisoryShadowRun` stays
+  SHADOW.
+- Asset-intake (`asset_intake_parser.py`, `llm_asset_intake.py`,
+  `asset_intake_writer.py`) remains library-only (SHADOW), unchanged by M2.
 
 ## Next concrete task
 
-M1 is done. Next is **M2 — Outlook mainline** (task file to be written
-before starting; scope lives in `ROADMAP.md` §M2).
-`TASK-M4-constraint-model-upgrade.md` stays backlog behind M2/M3.
+M2 is done. Next is **M3 — Feedback loop** (task file to be written before
+starting; direction: CLI feedback channel `--advice-feedback <id>
+<accepted|partial|rejected|deferred>` + AdviceRecord ledger + weekly rollup
+flowing back into `recent_advice` in `AnalysisContext`; scope lives in
+`ROADMAP.md` §M3). `TASK-M4-constraint-model-upgrade.md` stays backlog
+behind M3.
