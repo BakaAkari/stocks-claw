@@ -398,9 +398,14 @@ def build_capital_allocation_with_suppression(
     constraints: Optional[dict] = None,
     rotation_ranks: Optional[dict[str, int]] = None,
     rotation_leaders: Optional[list[dict]] = None,
+    context_config: Optional[dict] = None,
 ) -> dict:
     """Non-mutating capital allocation with suppression records."""
     from stocks.engine.scheduled_analysis import _build_capital_allocation
+
+    min_add = float(
+        (context_config or {}).get("min_add_amount_cny", _MIN_ADD_AMOUNT_CNY)
+    )
 
     suppressed = []
     for card in action_cards:
@@ -412,11 +417,11 @@ def build_capital_allocation_with_suppression(
                 mv = pv.get("market_value_cny") or 0.0
                 break
         alloc_amount = mv * abs(card.get("ratio", 0))
-        if alloc_amount < _MIN_ADD_AMOUNT_CNY:
+        if alloc_amount < min_add:
             suppressed.append({
                 "position_id": card["position_id"],
                 "reason": "below_minimum_amount",
-                "message": f"\u5206\u914d\u91d1\u989d \uffe5{alloc_amount:.0f} \u4f4e\u4e8e \uffe5{_MIN_ADD_AMOUNT_CNY:.0f} \u6709\u6548\u4e0b\u9650\uff0c\u4ec5\u4f5c\u89c2\u5bdf\u4e0d\u6267\u884c",
+                "message": f"\u5206\u914d\u91d1\u989d \uffe5{alloc_amount:.0f} \u4f4e\u4e8e \uffe5{min_add:.0f} \u6709\u6548\u4e0b\u9650\uff0c\u4ec5\u4f5c\u89c2\u5bdf\u4e0d\u6267\u884c",
                 "original_signal": card["signal"],
                 "original_ratio": card["ratio"],
                 "alloc_amount_cny": round(alloc_amount, 2),
@@ -430,6 +435,7 @@ def build_capital_allocation_with_suppression(
         constraints=constraints,
         rotation_ranks=rotation_ranks,
         rotation_leaders=rotation_leaders,
+        context_config=context_config,
     )
     result["suppressed_adds"] = suppressed
     return result

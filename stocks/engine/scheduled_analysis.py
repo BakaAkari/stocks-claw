@@ -1231,6 +1231,7 @@ def build_scheduled_run(
         constraints=context.get("portfolio_constraints"),
         rotation_ranks=rotation_ranks if rotation_ranks else None,
         rotation_leaders=rotation_leaders_data,
+        context_config=context.get("engine_config", {}).get("portfolio_layering"),
     )
     total_value = sum(
         item.get("market_value_cny") or 0.0
@@ -2499,6 +2500,7 @@ def _build_capital_allocation(
     constraints: Optional[dict] = None,
     rotation_ranks: Optional[dict[str, int]] = None,
     rotation_leaders: Optional[list[dict]] = None,
+    context_config: Optional[dict] = None,
 ) -> dict:
     """组合级资金分配提示 — 交易分析师视角。
 
@@ -2617,6 +2619,12 @@ def _build_capital_allocation(
 
     # ── 4. 可动用资金 ──
     liq_buckets = liquidity_summary.get("buckets", {})
+    # 最小加仓金额阈值（CNY），从 engine.yaml portfolio_layering.min_add_amount_cny 读取。
+    min_add_amount_cny = float(
+        (context_config or {}).get("min_add_amount_cny", 800.0)
+    )
+
+    # 可用资金池
     available_cash = liq_buckets.get("cash_or_t0", {}).get("value_cny", 0)
     strategic_exit_value = liq_buckets.get("t1_t2", {}).get("value_cny", 0)
     safety_buffer = total_value * 0.05
@@ -2636,14 +2644,14 @@ def _build_capital_allocation(
     for card in action_cards:
         if card["signal"] != "add":
             continue
-        # Skip trivial allocations below ¥800 threshold (do NOT mutate card)
+        # Skip trivial allocations below configured threshold (do NOT mutate card)
         mv = 0.0
         for pv in position_valuations:
             if pv.get("position_id") == card["position_id"]:
                 mv = pv.get("market_value_cny") or 0.0
                 break
         alloc_amount = mv * abs(card.get("ratio", 0))
-        if alloc_amount < 800:
+        if alloc_amount < min_add_amount_cny:
             # Suppression only — original card kept intact.
             # Suppression record is produced by build_capital_allocation_with_suppression.
             continue

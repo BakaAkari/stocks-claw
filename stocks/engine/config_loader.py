@@ -347,6 +347,11 @@ DEFAULT_ENGINE_CONFIG = {
         "level": "INFO",
         "desensitize": True,  # 脱敏日志中的金额和 API Key
     },
+    "portfolio_layering": {
+        # Minimum CNY amount for an add action to be considered executable.
+        # Values smaller than this are suppressed to "observe only".
+        "min_add_amount_cny": 800.0,
+    },
 }
 
 
