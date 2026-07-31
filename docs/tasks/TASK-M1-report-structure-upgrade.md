@@ -220,3 +220,17 @@ section shape and the acceptance criteria above. Save a copy of the
 rendered output alongside the STATUS.md update.
 
 Do not commit until the user reviews the sample output.
+
+## Outcome (2026-07-31)
+
+Landed at `382207b`. The six-section renderer skeleton already existed
+(landed with `503bad2`); this task closed the remaining spec gaps: 3-line
+delta cap, sanitized unavailable-outlook fallback, per-conflict 参考:
+audit lines (with presentation now emitting `suppressed_actions_reference`
+— previously a write-never field), composite_score ordering, checkpoint-
+aware 复核 lines, pending-sell strategic_exit visibility, and a
+presentation-side score rounding fix for the number gate. Verified on a
+regenerated real `cn_after_close` 2026-07-30 report: six sections in
+order, 40 non-empty lines (≤55), 697 Chinese chars (≤1800),
+`validate_payload_text` clean. Sample: `.local/m1-sample-cn_after_close-20260730.md`.
+Full suite 1272 passed / 7 skipped; ruff / compileall / diff-check clean.

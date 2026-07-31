@@ -21,21 +21,20 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-`TASK-M1-report-structure-upgrade.md` — the report structure upgrade
-covering VISION §2.3 questions 1, 2, 3, 5, 6, 7 (question 4 waits for M2).
+None open. M1 closed 2026-07-31 (outcome in `STATUS.md`); **M2 — Outlook
+mainline** is next (task file to be written before starting).
 
 ## Backlog (do not start before the current task closes)
 
-- **M1** — Report structure upgrade *(current)*.
+- **M1** — Report structure upgrade *(done 2026-07-31, `382207b`)*.
 - **M2** — Outlook mainline: `advisory_synthesizer` into production push,
   short-term (3-7d) + medium-term (1-3m) judgment with source_refs and
-  freshness gate.
+  freshness gate. *(next)*
 - **M3** — Feedback loop: user marks each recommendation accepted / partial
   / rejected / deferred, feedback flows into next Outlook run as evidence.
 - **M4** — Constraint model upgrade (candidate): irreversibility
   (no-buyback), segregated pools, hard caps. See
-  `TASK-M4-constraint-model-upgrade.md`; sequencing re-evaluated when M1
-  closes.
+  `TASK-M4-constraint-model-upgrade.md`; kept behind M2/M3.
 
 ## Retired
 

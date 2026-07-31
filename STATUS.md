@@ -8,24 +8,26 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-07-31 (second update) — de-hardcode landing verified
-> at `03ee449`; M4 constraint-model candidate added to backlog (`742b2d8`).
-> Earlier same-day update: direction reset following the adversarial review
-> (`docs/analysis/adversarial-review-2026-07-31.md`,
+> Last updated: 2026-07-31 (third update) — M1 report structure upgrade
+> landed at `382207b`; backlog re-evaluated, M2 is next.
+> Earlier same-day updates: de-hardcode verification (`03ee449`); direction
+> reset (`docs/analysis/adversarial-review-2026-07-31.md`,
 > `docs/analysis/direction-2026-07-31.md`).
 
-## Baseline (as of 2026-07-31, second verification)
+## Baseline (as of 2026-07-31, third verification)
 
-- HEAD (code baseline, verified): `03ee449` — "fix: wire
-  portfolio_layering.min_add_amount_cny through config"
-- Doc-only commits on top of the verified baseline: `742b2d8` (M4
-  candidate task + comparison analysis + roadmap/tasks backlog).
+- HEAD (code baseline, verified): `382207b` — "feat(M1): close six-section
+  report gaps against TASK-M1 spec"
+- Doc-only commits on top of the previous verified baseline: `742b2d8`,
+  `a116340`.
 - Branch: `master` == `origin/master`
 - Working tree: **clean** (verified this session — `git status --short --branch`)
-- Full pytest: **1262 passed, 7 skipped, 0 failed** (verified on `03ee449`)
+- Full pytest: **1272 passed, 7 skipped, 0 failed** (verified on `382207b`)
 - ruff: **clean**; compileall: **clean**; git diff --check: **clean**
-- Smoke: `.venv/bin/python -m stocks.adapters.cli --output json
-  --no-news --no-quotes` → exit 0 (verified on `03ee449`)
+- Smoke (M1 acceptance): regenerated `cn_after_close` 2026-07-30 report —
+  six sections in order, 40 non-empty lines (gate ≤55), 697 Chinese chars
+  (gate ≤1800), `validate_payload_text` clean. Sample:
+  `.local/m1-sample-cn_after_close-20260730.md`.
 - Tag: `v2.8-e1e2-complete` remains at `cc1eaa0` (not an ancestor of HEAD;
   left untouched — re-tagging is the user's call).
 
@@ -72,26 +74,26 @@ E1 truth gate and E2 concise renderer are landed and verified. Details on
 what each covers are in the archived task files under
 `docs/archive/tasks-completed-2026-07/` for the record.
 
-## Known gaps against `stocks/VISION.md` §2.3 (verified by real cn_after_close run 2026-07-30)
+## Known gaps against `stocks/VISION.md` §2.3 (re-scored after M1, real cn_after_close run 2026-07-30)
 
-Ran a real report (`--session cn_after_close --now 2026-07-30T15:00:00+08:00`)
-this session. Report text and per-field breakdown archived in
-`docs/analysis/adversarial-review-2026-07-31.md`.
+M1 landed at `382207b` and was verified against a regenerated real report
+(sample: `.local/m1-sample-cn_after_close-20260730.md`). Earlier per-field
+breakdown archived in `docs/analysis/adversarial-review-2026-07-31.md`.
 
 Coverage of VISION §2.3's seven required questions:
 
 | # | VISION requirement | Current coverage |
 |---|---|---|
-| 1 | Market state, drivers, conflicts | ❌ missing (outlook unavailable) |
-| 2 | Position actions, magnitude, condition, reason | 🟡 partial (no reference ratio when manual review) |
-| 3 | Post-trade portfolio/cash/risk delta | 🟡 partial (post_trade_projection exists but not rendered) |
-| 4 | Short/medium-term scenarios with validation/falsification | ❌ missing (outlook synthesizer disabled) |
-| 5 | Watch / setup candidates | ❌ hidden (8 candidates collapsed to a `count` line) |
-| 6 | Data unreliability & suspend condition | ✅ covered (but data_notes items don't reach push) |
+| 1 | Market state, drivers, conflicts | 🟡 structure landed (本窗口变化 + 走势研判 section); content waits M2 (outlook unavailable → sanitized fallback line) |
+| 2 | Position actions, magnitude, condition, reason | ✅ covered (manual-review conflicts now carry 参考: ratio / 参考数量 / 参考金额 audit lines) |
+| 3 | Post-trade portfolio/cash/risk delta | ✅ covered (post_trade_projection renders as 执行后估算 line when executable actions exist) |
+| 4 | Short/medium-term scenarios with validation/falsification | ❌ missing (waits M2 outlook mainline) |
+| 5 | Watch / setup candidates | ✅ covered (提前布局 first-class section, top 2-3 by score + overflow tail) |
+| 6 | Data unreliability & suspend condition | ✅ covered (capital-gap data_notes reach push as 待决事项 lines) |
 | 7 | Next check condition | ✅ covered |
 
-**Score: 2 full / 2 partial / 3 missing.** This is the concrete gap the new
-roadmap targets.
+**Score after M1: 5 full / 1 partial / 1 missing** (was 2 / 2 / 3). The
+remaining gap is question 4 — the M2 outlook mainline.
 
 ## Report mode
 
@@ -106,28 +108,31 @@ labels.
 No `report_mode` config toggle exists yet. When M2 lands, a toggle will
 appear here and in `docs/contracts/README.md`.
 
-## Roadmap now: M1 → M2 → M3 (+ M4 candidate)
+## Roadmap now: M1 ✅ → M2 → M3 (+ M4 candidate)
 
 Full description in `ROADMAP.md`. Rationale in
 `docs/analysis/direction-2026-07-31.md`.
 
-- **M1 — Report structure upgrade.** 5 sections → 6 sections. Add "走势研判"
-  and "提前布局" as first-class sections. Fix manual-review duplication,
-  cash-bucket noise, data-notes leakage. `outlook synthesizer disabled`
-  message must no longer be a permanent report state — it becomes a real
-  fallback string only when M2's outlook actually fails.
+- **M1 — Report structure upgrade. ✅ landed 2026-07-31 (`382207b`).**
+  Six-section report is live: 走势研判 (sanitized fallback until M2),
+  提前布局 first-class, manual-review choice space with 参考: audit lines,
+  cash-bucket collapse, data-notes capital gaps, post-trade projection
+  line. VISION §2.3 score moved 2/2/3 → 5/1/1.
 - **M2 — Outlook mainline.** Wire `advisory_synthesizer` into the push
   path. Short-term (3–7 day) + medium-term (1–3 month) judgments backed by
   news/industry/sentiment/macro/technical evidence, with `source_refs` and
   freshness gate. Fallback to "研判待复核" on failure — never fabricate.
+  **This is the next task.**
 - **M3 — Feedback loop.** User marks each recommendation (accepted /
   partial / rejected / deferred). Feedback becomes evidence for future
   outlook runs, not an auto-tuner.
 - **M4 — Constraint model upgrade (backlog candidate, added 2026-07-31).**
   Irreversibility (no-buyback), segregated pools, hard caps. Motivation:
   `docs/analysis/kimi-report-constraint-comparison-2026-07-31.md`; scope:
-  `docs/tasks/TASK-M4-constraint-model-upgrade.md`. Sequencing vs M2/M3 is
-  re-evaluated when M1 closes.
+  `docs/tasks/TASK-M4-constraint-model-upgrade.md`. Sequencing was
+  re-evaluated when M1 closed: kept as backlog behind M2/M3 — the
+  constraint semantics matter most once M2's richer advice is live, and no
+  constraint-driven advice error has been observed in real reports yet.
 
 ## Deprecated / removed
 
@@ -169,6 +174,6 @@ Confirmed in this session:
 
 ## Next concrete task
 
-`docs/tasks/TASK-M1-report-structure-upgrade.md`. That is the only current
-task. `TASK-M4-constraint-model-upgrade.md` is backlog — do not start
-before M1 closes.
+M1 is done. Next is **M2 — Outlook mainline** (task file to be written
+before starting; scope lives in `ROADMAP.md` §M2).
+`TASK-M4-constraint-model-upgrade.md` stays backlog behind M2/M3.
