@@ -21,6 +21,7 @@ from stocks.engine.outlook_validation import (
     sanitize_unavailable_outlook,
     validate_structured_outlook,
 )
+from stocks.errors import ConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +164,7 @@ class OutlookSynthesizer:
         self.api_key_env: str = outlook_cfg.get("api_key_env", "OPENAI_COMPATIBLE_API_KEY")
         self.base_url_env: str = outlook_cfg.get("base_url_env", "OPENAI_COMPATIBLE_BASE_URL")
         self.fallback_base_url: str = outlook_cfg.get(
-            "fallback_base_url", "http://100.121.167.1:8317/v1"
+            "fallback_base_url", ""
         )
         self.timeout: int = outlook_cfg.get("timeout_seconds", 120)
         self.temperature: float = outlook_cfg.get("temperature", 0.2)
@@ -337,8 +338,14 @@ class OutlookSynthesizer:
                     url = url_file.read_text("utf-8").strip()
 
         self._api_key = key or None
-        base = (url or self.fallback_base_url).rstrip("/")
-        self._base_url = f"{base}/chat/completions"
+        base = url or self.fallback_base_url
+        if not base:
+            raise ConfigError(
+                "outlook_synthesizer: 缺少 LLM base_url。"
+                "请配置环境变量 OPENAI_COMPATIBLE_BASE_URL / OPENAI_BASE_URL，"
+                "或 engine.yaml llm.outlook.fallback_base_url。"
+            )
+        self._base_url = f"{base.rstrip('/')}/chat/completions"
 
     def _build_request(self, evidence: dict) -> dict:
         """Build the OpenAI-compatible request dict."""

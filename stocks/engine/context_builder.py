@@ -182,12 +182,15 @@ class ContextBuilder:
         )
 
         # 8. 引擎动作信号（方向性候选动作，2026-07-02 用户裁决启用）
+        quant_cfg = self._config.get("quant_action", {}) if self._config else {}
         action_signals = compute_action_signals(
             rotation_frames,
             rotation_universe,
             rotation,
             upcoming_events=upcoming_events,
             scan_keys=scan_keys,
+            thresholds=quant_cfg.get("thresholds"),
+            rank_weights=quant_cfg.get("rank_weights"),
         )
         rule_scorecard = self._build_rule_scorecard(
             rotation_frames, action_signals

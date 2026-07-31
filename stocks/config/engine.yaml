@@ -94,7 +94,7 @@ llm:
     model: gpt-5.5
     api_key_env: OPENAI_COMPATIBLE_API_KEY
     base_url_env: OPENAI_COMPATIBLE_BASE_URL
-    fallback_base_url: http://100.121.167.1:8317/v1
+    fallback_base_url: ""
     timeout_seconds: 180
     temperature: 0.2
     max_tokens: 5000

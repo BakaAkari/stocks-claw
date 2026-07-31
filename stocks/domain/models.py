@@ -342,6 +342,15 @@ _VALUATION_METHODS = {
 _LIQUIDITY_TIERS = {"cash", "t0", "t1", "t2_plus", "periodic_open", "locked", "unknown"}
 _COST_BASIS_METHODS = {"average"}
 
+# Single source of truth for cash-like product types.  Anything in
+# _PRODUCT_TYPES that is NOT in this set is considered non-immediate cash by
+# the adjudicator.  New cash-like instruments are declared here once.
+_IMMEDIATE_CASH_PRODUCT_TYPES = {
+    "cash",
+    "cash_equivalent",
+    "money_market_fund",
+}
+
 
 def _require_string(value, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():

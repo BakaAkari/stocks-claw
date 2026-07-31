@@ -162,18 +162,18 @@ class StocksEngine:
         self.registry = ProviderRegistry()
         prov_cfg = self._config["providers"]
         if prov_cfg.get("tencent_a", {}).get("enabled", True):
-            self.registry.register(TencentAQuoteProvider())
+            self.registry.register(TencentAQuoteProvider(**prov_cfg.get("tencent_a", {})))
         if prov_cfg.get("eastmoney_a", {}).get("enabled", True):
-            self.registry.register(EastmoneyAQuoteProvider())
+            self.registry.register(EastmoneyAQuoteProvider(**prov_cfg.get("eastmoney_a", {})))
         if prov_cfg.get("finnhub", {}).get("enabled", True):
-            self.registry.register(FinnhubQuoteProvider())
+            self.registry.register(FinnhubQuoteProvider(**prov_cfg.get("finnhub", {})))
         if prov_cfg.get("polygon", {}).get("enabled", True):
-            self.registry.register(PolygonQuoteProvider())
+            self.registry.register(PolygonQuoteProvider(**prov_cfg.get("polygon", {})))
 
         # 基金净值 Provider（非行情注册表，独立管理）
-        self.fund_nav_provider = FundNavProvider()
+        self.fund_nav_provider = FundNavProvider(**prov_cfg.get("eastmoney_fund", {}))
         if prov_cfg.get("binance", {}).get("enabled", False):
-            self.registry.register(BinanceQuoteProvider())
+            self.registry.register(BinanceQuoteProvider(**prov_cfg.get("binance", {})))
 
         # 2. 初始化 Engine 组件（使用配置参数）
         fetcher_cfg = self._config["fetcher"]

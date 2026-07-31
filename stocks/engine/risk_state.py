@@ -13,14 +13,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from stocks.engine.config_loader import DEFAULT_ENGINE_CONFIG
+
 logger = logging.getLogger(__name__)
 _LEVEL_ORDER = {"normal": 0, "watch": 1, "reduce": 2, "hedge": 3}
-_DEFAULT_CONFIG = {
-    "critical_ttl_minutes": 360,
-    "hedge_independent_evidence": 2,
-    "hedge_confirmations": 2,
-    "deescalation_confirmations": 2,
-}
+# Single source of truth for risk-state lifecycle defaults: config_loader.py's
+# DEFAULT_ENGINE_CONFIG["risk_state"].  This keeps confirmation counts and TTL
+# aligned with the rest of the engine configuration.
+_DEFAULT_CONFIG: dict = DEFAULT_ENGINE_CONFIG["risk_state"]
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,19 @@ class RiskState:
 
     @property
     def cash_target_pct(self) -> Optional[float]:
-        return 0.15 if self.level == "hedge" else 0.10 if self.level == "reduce" else None
+        return None
+
+    def cash_target_pct_for(self, config: Optional[dict] = None) -> Optional[float]:
+        """Return the cash target for the current level, driven by config.
+
+        Keeps the single source of truth in engine.yaml's risk_warning section.
+        """
+        cfg = DEFAULT_ENGINE_CONFIG["risk_warning"] if config is None else config
+        if self.level == "hedge":
+            return cfg.get("cash_target_hedge")
+        if self.level == "reduce":
+            return cfg.get("cash_target_reduce")
+        return None
 
     def to_dict(self) -> dict:
         result = asdict(self)
@@ -63,7 +75,7 @@ class RiskState:
             if value is not None:
                 result[key] = value.isoformat()
         result["suspend_accumulation"] = self.suspend_accumulation
-        result["cash_target_pct"] = self.cash_target_pct
+        result["cash_target_pct"] = self.cash_target_pct_for()
         return result
 
 

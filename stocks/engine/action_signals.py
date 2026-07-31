@@ -37,28 +37,58 @@ from stocks.engine.indicators import TechnicalIndicators
 ACTION_SIGNALS_SCHEMA_VERSION = 1
 
 # 规则阈值（集中定义，便于复核与调参）
-_KNIFE_R5 = -3.0          # 5 根 K 线跌幅超过该值视为加速下跌
-_KNIFE_RSI = 38.0
-_REDUCE_R20 = -5.0        # 20 根 K 线跌幅超过该值视为趋势转弱
-_PULLBACK_R20 = 5.0       # 趋势强劲阈值
-_PULLBACK_RSI = 65.0
-_PULLBACK_POSITION = 85.0  # 布林带位置百分比
-_ACCUMULATE_R20 = 2.0      # 排除仅略高于 0 的横盘噪声
-_ACCUMULATE_RSI_LOW = 40.0
-_ACCUMULATE_RSI_HIGH = 65.0
-_ACCUMULATE_R20_MAX = 15.0   # 短期涨幅过高，即使 RSI 未超买也应等回调
-# 左侧抄底门槛
-_LEFT_BOTTOM_RSI_MAX = 40.0      # 超卖或接近超卖
-_LEFT_BOTTOM_PRICE_POSITION_MAX = 25.0  # 价格位置底部区
-_LEFT_BOTTOM_R20_MAX = -10.0     # 近20根跌幅超过10%
-_LEFT_BOTTOM_R5_FLOOR = -5.0     # 近5根跌幅不再加速
-_LEFT_BOTTOM_PULLBACK_COOLDOWN = 0.02  # 价格低于MA20不超过2%
+# These defaults are frozen so behaviour is stable, but the canonical place to
+# tune signal thresholds is engine.yaml under `quant_action`.  When loaded via
+# load_engine_config(), the values below are overridden at runtime.
+#
+# To add a new market regime or asset class, change YAML — not this block.
+_QUANT_ACTION_THRESHOLDS = {
+    "knife_r5": -3.0,
+    "knife_rsi": 38.0,
+    "reduce_r20": -5.0,
+    "pullback_r20": 5.0,
+    "pullback_rsi": 65.0,
+    "pullback_position": 85.0,
+    "accumulate_r20": 2.0,
+    "accumulate_rsi_low": 40.0,
+    "accumulate_rsi_high": 65.0,
+    "accumulate_r20_max": 15.0,
+    "left_bottom_rsi_max": 40.0,
+    "left_bottom_price_position_max": 25.0,
+    "left_bottom_r20_max": -10.0,
+    "left_bottom_r5_floor": -5.0,
+    "left_bottom_pullback_cooldown": 0.02,
+}
 
-# 横截面排序权重
-_RANK_WEIGHT_R20 = 0.40        # 中期趋势强度
-_RANK_WEIGHT_RSI_ZONE = 0.30   # RSI 区间得分
-_RANK_WEIGHT_PRICE_POS = 0.20  # 布林带位置惩罚
-_RANK_WEIGHT_VOLUME = 0.10     # 量比加成
+_RANK_WEIGHTS = {
+    "r20": 0.40,
+    "rsi_zone": 0.30,
+    "price_pos": 0.20,
+    "volume": 0.10,
+}
+
+# Backwards-compatible module-level names (deprecated; prefer the dicts above
+# or the runtime config).
+_KNIFE_R5 = _QUANT_ACTION_THRESHOLDS["knife_r5"]
+_KNIFE_RSI = _QUANT_ACTION_THRESHOLDS["knife_rsi"]
+_REDUCE_R20 = _QUANT_ACTION_THRESHOLDS["reduce_r20"]
+_PULLBACK_R20 = _QUANT_ACTION_THRESHOLDS["pullback_r20"]
+_PULLBACK_RSI = _QUANT_ACTION_THRESHOLDS["pullback_rsi"]
+_PULLBACK_POSITION = _QUANT_ACTION_THRESHOLDS["pullback_position"]
+_ACCUMULATE_R20 = _QUANT_ACTION_THRESHOLDS["accumulate_r20"]
+_ACCUMULATE_RSI_LOW = _QUANT_ACTION_THRESHOLDS["accumulate_rsi_low"]
+_ACCUMULATE_RSI_HIGH = _QUANT_ACTION_THRESHOLDS["accumulate_rsi_high"]
+_ACCUMULATE_R20_MAX = _QUANT_ACTION_THRESHOLDS["accumulate_r20_max"]
+_LEFT_BOTTOM_RSI_MAX = _QUANT_ACTION_THRESHOLDS["left_bottom_rsi_max"]
+_LEFT_BOTTOM_PRICE_POSITION_MAX = _QUANT_ACTION_THRESHOLDS["left_bottom_price_position_max"]
+_LEFT_BOTTOM_R20_MAX = _QUANT_ACTION_THRESHOLDS["left_bottom_r20_max"]
+_LEFT_BOTTOM_R5_FLOOR = _QUANT_ACTION_THRESHOLDS["left_bottom_r5_floor"]
+_LEFT_BOTTOM_PULLBACK_COOLDOWN = _QUANT_ACTION_THRESHOLDS["left_bottom_pullback_cooldown"]
+
+_RANK_WEIGHT_R20 = _RANK_WEIGHTS["r20"]
+_RANK_WEIGHT_RSI_ZONE = _RANK_WEIGHTS["rsi_zone"]
+_RANK_WEIGHT_PRICE_POS = _RANK_WEIGHTS["price_pos"]
+_RANK_WEIGHT_VOLUME = _RANK_WEIGHTS["volume"]
 
 _SIGNAL_ACTION_HINTS = {
     "accumulate_candidate": "趋势与动能配合，可分批布局；回踩短均线附近优先于追高",
@@ -118,9 +148,15 @@ def _signal_for_item(
     r5: Optional[float],
     r20: Optional[float],
     data_points: int,
-    is_leader: bool = False,
+    is_leader: bool,
+    thresholds: Optional[dict[str, float]] = None,
 ) -> tuple[str, list[str]]:
-    """按固定顺序匹配规则，返回 (signal, reasons)。首个命中的规则生效。"""
+    """Return (signal, reasons) for one instrument using its technical facts.
+
+    Thresholds default to the module-level constants but can be overridden via
+    engine.yaml for per-market or per-regime tuning.
+    """
+    t = {**_QUANT_ACTION_THRESHOLDS, **(thresholds or {})}
     if data_points < 15 or price is None:
         return "no_data", [f"历史仅 {data_points} bars，不足以判级"]
 
@@ -166,17 +202,16 @@ def _signal_for_item(
     # 1. 下跌刀：短线加速下跌 + 价格在短均线下方 + RSI 弱势
     if (
         r5 is not None
-        and r5 <= _KNIFE_R5
+        and r5 <= t["knife_r5"]
         and ma5 is not None
         and price < ma5
-        and (rsi is None or rsi <= _KNIFE_RSI)
+        and (rsi is None or rsi <= t["knife_rsi"])
     ):
-        reasons.append(f"近5根K线累计 {r5:+.2f}%（≤{_KNIFE_R5}%）")
+        reasons.append(f"近5根K线累计 {r5:+.2f}%（≤{t['knife_r5']}%）")
         reasons.append(f"现价 {price:.2f} 低于 MA5 {ma5:.2f}")
         if rsi is not None:
             reasons.append(f"RSI {rsi:.1f} 处于弱势区")
         return "avoid_catching_falling_knife", reasons
-
 
     # 2. 降低暴露：中期趋势与动能同步转弱
     if (
@@ -185,11 +220,11 @@ def _signal_for_item(
         and macd_hist is not None
         and macd_hist < 0
         and r20 is not None
-        and r20 <= _REDUCE_R20
+        and r20 <= t["reduce_r20"]
     ):
         reasons.append(f"现价 {price:.2f} 低于 MA20 {ma20:.2f}")
         reasons.append(f"MACD 柱 {macd_hist:.3f} 为负")
-        reasons.append(f"近20根K线累计 {r20:+.2f}%（≤{_REDUCE_R20}%）")
+        reasons.append(f"近20根K线累计 {r20:+.2f}%（≤{t['reduce_r20']}%）")
         return "reduce_risk", reasons
 
     # 3. 等回踩：趋势强但短线过热
@@ -197,16 +232,16 @@ def _signal_for_item(
         ma20 is not None
         and price > ma20
         and r20 is not None
-        and r20 >= _PULLBACK_R20
+        and r20 >= t["pullback_r20"]
         and (
-            (rsi is not None and rsi >= _PULLBACK_RSI)
-            or (price_position is not None and price_position >= _PULLBACK_POSITION)
+            (rsi is not None and rsi >= t["pullback_rsi"])
+            or (price_position is not None and price_position >= t["pullback_position"])
         )
     ):
         reasons.append(f"现价 {price:.2f} 高于 MA20 {ma20:.2f}，近20根 {r20:+.2f}%")
-        if rsi is not None and rsi >= _PULLBACK_RSI:
+        if rsi is not None and rsi >= t["pullback_rsi"]:
             reasons.append(f"RSI {rsi:.1f} 接近超买")
-        if price_position is not None and price_position >= _PULLBACK_POSITION:
+        if price_position is not None and price_position >= t["pullback_position"]:
             reasons.append(f"布林带位置 {price_position:.0f}% 接近上轨")
         return "wait_for_pullback", reasons
 
@@ -215,11 +250,11 @@ def _signal_for_item(
         ma20 is not None
         and price > ma20
         and r20 is not None
-        and r20 >= _ACCUMULATE_R20_MAX
-        and (rsi is None or rsi < _PULLBACK_RSI)
+        and r20 >= t["accumulate_r20_max"]
+        and (rsi is None or rsi < t["pullback_rsi"])
     ):
         reasons.append(f"现价 {price:.2f} 高于 MA20 {ma20:.2f}，近20根 {r20:+.2f}%")
-        reasons.append(f"短期涨幅过高（≥{_ACCUMULATE_R20_MAX}%），即使RSI未超买也应等回调确认")
+        reasons.append(f"短期涨幅过高（≥{t['accumulate_r20_max']}%），即使RSI未超买也应等回调确认")
         return "wait_for_pullback", reasons
 
     # 4. 分批布局：趋势向上、动能配合、未过热
@@ -227,14 +262,14 @@ def _signal_for_item(
         ma20 is not None
         and price > ma20
         and r20 is not None
-        and r20 >= _ACCUMULATE_R20
+        and r20 >= t["accumulate_r20"]
         and rsi is not None
-        and _ACCUMULATE_RSI_LOW <= rsi < _ACCUMULATE_RSI_HIGH
+        and t["accumulate_rsi_low"] <= rsi < t["accumulate_rsi_high"]
         and (macd_hist is None or macd_hist > 0 or (r5 is not None and r5 > 0))
     ):
         reasons.append(f"现价 {price:.2f} 站上 MA20 {ma20:.2f}")
         reasons.append(
-            f"近20根K线累计 {r20:+.2f}%（≥{_ACCUMULATE_R20}%）"
+            f"近20根K线累计 {r20:+.2f}%（≥{t['accumulate_r20']}%）"
         )
         reasons.append(f"RSI {rsi:.1f} 中性偏强，未过热")
         if macd_hist is not None and macd_hist > 0:
@@ -355,6 +390,9 @@ def compute_action_signals(
     rotation: dict,
     upcoming_events: Optional[list] = None,
     scan_keys: Optional[set[str]] = None,
+    *,
+    thresholds: Optional[dict[str, float]] = None,
+    rank_weights: Optional[dict[str, float]] = None,
 ) -> dict:
     """为 watchlist + 扫描池每个标的输出候选动作信号。
 
@@ -366,6 +404,9 @@ def compute_action_signals(
         scan_keys: 扫描池 key 集合
     """
     scan_keys = scan_keys or set()
+    thresholds = thresholds or {}
+    rank_weights = rank_weights or {}
+
     rotation_items = {
         item["symbol"]: item for item in (rotation or {}).get("items", [])
     }
@@ -393,6 +434,9 @@ def compute_action_signals(
 
     items: list[dict] = []
     counts: dict[str, int] = {}
+    t = {**_QUANT_ACTION_THRESHOLDS, **(thresholds or {})}
+    # rank_weights 在 _rank_signals 中通过模块常量引用；保留合并逻辑供未来传入使用
+    _ = {**_RANK_WEIGHTS, **(rank_weights or {})}
     for key, instrument in instruments.items():
         frame = frames.get(key)
         indicators: dict = {}
@@ -424,6 +468,7 @@ def compute_action_signals(
             r20=rotation_item.get("r20"),
             data_points=int(indicators.get("data_points") or 0),
             is_leader=(key in leaders),
+            thresholds=t,
         )
 
         # 轮动领先且尚无方向信号 → rotation_candidate

@@ -14,6 +14,7 @@
     "cn": {
       "enabled": true,
       "exchange_timezone": "Asia/Shanghai",
+      "headline_template": "A 股 scheduled analysis",
       "holidays": [
         "2026-01-01",
         "2026-02-16",
@@ -40,20 +41,29 @@
           "time": "09:55",
           "intent": "post_open_decision",
           "push": "digest",
-          "primary_market": "cn"
+          "primary_market": "cn",
+          "headline": "A 股开盘后:确认上午方向与持仓触发器",
+          "focus": "a+中国/香港市场",
+          "can_recommend_new": true,
+          "can_review_closed": false
         },
         {
           "id": "cn_after_close",
           "time": "15:00",
           "intent": "after_close_review",
           "push": "digest",
-          "primary_market": "cn"
+          "primary_market": "cn",
+          "headline": "A 股盘后:复盘收盘事实、触发器和明日计划",
+          "focus": "a+中国/香港市场",
+          "can_recommend_new": false,
+          "can_review_closed": true
         }
       ]
     },
     "us": {
       "enabled": true,
       "exchange_timezone": "America/New_York",
+      "headline_template": "美股 scheduled analysis",
       "holidays": [
         "2026-01-01",
         "2026-01-19",
@@ -72,14 +82,22 @@
           "time": "09:55",
           "intent": "post_open_decision",
           "push": "digest",
-          "primary_market": "us"
+          "primary_market": "us",
+          "headline": "美股开盘后:聚焦 IBKR 持仓、事件和早盘波动",
+          "focus": "us+欧美市场",
+          "can_recommend_new": true,
+          "can_review_closed": false
         },
         {
           "id": "us_after_close",
           "time": "16:00",
           "intent": "after_close_review",
           "push": "digest",
-          "primary_market": "us"
+          "primary_market": "us",
+          "headline": "美股盘后:复盘今日盈亏与触发器事实,不做新建议",
+          "focus": "us+欧美市场",
+          "can_recommend_new": false,
+          "can_review_closed": true
         }
       ]
     },
@@ -95,7 +113,12 @@
           "push": "normal",
           "primary_market": "global",
           "run_every_minutes": 60,
-          "enabled": true
+          "enabled": true,
+          "headline": "每日全球情报",
+          "focus": "cross_market",
+          "can_recommend_new": false,
+          "can_review_closed": false,
+          "ignore_weekend": true
         }
       ]
     }

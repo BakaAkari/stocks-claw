@@ -9,13 +9,26 @@ from stocks.domain.models import Instrument, Quote
 from stocks.providers.base import QuoteProvider
 
 
-def tencent_market_prefix(instrument: Instrument) -> str:
-    """返回腾讯接口使用的 sh/sz 前缀，供实时与历史 Provider 共用。"""
+def tencent_market_prefix(instrument: Instrument, fallback_prefixes: dict[str, str] | None = None) -> str:
+    """返回腾讯接口使用的 sh/sz 前缀，供实时与历史 Provider 共用。
+
+    Prefers explicit exchange metadata, then optional configured fallback rules.
+    """
     exchange = (instrument.exchange or "").lower()
     if exchange in ("sh", "sh_stock", "sh_a", "sh_index"):
         return "sh"
     if exchange in ("sz", "sz_stock", "sz_a", "sz_index"):
         return "sz"
+    # Configurable code-prefix → prefix mapping, so new board segments can be
+    # added without changing code.
+    rules = fallback_prefixes or {
+        "sh": ("5", "6", "9"),
+        "sz": ("0", "1", "2", "3"),
+    }
+    for prefix, digits in rules.items():
+        if instrument.code.startswith(tuple(digits)):
+            return prefix
+    # Conservative default: legacy behavior
     if instrument.code.startswith(("5", "6", "9")):
         return "sh"
     return "sz"
@@ -44,9 +57,13 @@ class TencentAQuoteProvider(QuoteProvider):
     def _build_symbol(self, instrument: Instrument) -> str:
         return f"{self._prefix(instrument)}{instrument.code}"
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._url_template = kwargs.get("url_template") or "https://qt.gtimg.cn/q={symbols}"
+
     def _fetch_raw_sync(self, symbols: list[str]) -> Optional[str]:
         """同步请求腾讯接口，返回原始文本。"""
-        url = "https://qt.gtimg.cn/q=" + ",".join(symbols)
+        url = self._url_template.format(symbols=",".join(symbols))
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=20) as resp:

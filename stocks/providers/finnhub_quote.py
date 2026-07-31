@@ -54,6 +54,7 @@ class FinnhubQuoteProvider(QuoteProvider):
         self,
         api_key: Optional[str] = None,
         *,
+        base_url: Optional[str] = None,
         min_request_interval: float = 1.05,
     ):
         if api_key:
@@ -68,6 +69,7 @@ class FinnhubQuoteProvider(QuoteProvider):
                 self.api_key = ALT_KEY_PATH.read_text(encoding="utf-8").strip()
             else:
                 self.api_key = ""
+        self._base_url = (base_url or "https://finnhub.io/api/v1").rstrip("/")
         self._min_request_interval = max(0.0, min_request_interval)
         self._rate_lock = threading.Lock()
         self._last_request_at = 0.0
@@ -106,7 +108,7 @@ class FinnhubQuoteProvider(QuoteProvider):
         self._throttle()
         encoded = urllib.parse.urlencode({**params, "token": self.api_key})
         endpoint = endpoint.strip("/")
-        url = f"https://finnhub.io/api/v1/{endpoint}?{encoded}"
+        url = f"{self._base_url}/{endpoint}?{encoded}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:

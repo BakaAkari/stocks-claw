@@ -789,12 +789,12 @@ class LLMIntelligenceAnalyzer:
                 if line.startswith("OPENAI_API_KEY=") and "COMPATIBLE" not in line:
                     api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
         api_key = api_key or os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
-        # Resolve base URL (parameter > env > config fallback)
+        # Resolve base URL (parameter > env > config fallback > empty, no hardcoded default)
         base_url = (
             self._base_url_override
             or os.environ.get("OPENAI_BASE_URL")
             or os.environ.get("STOCKS_LLM__FALLBACK_BASE_URL")
-            or "http://100.121.167.1:8317/v1"
+            or ""
         )
 
         self._api_key = api_key

@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from stocks.engine.config_loader import DEFAULT_ENGINE_CONFIG
+
 
 class RiskLevel:
     WATCH = "watch"
@@ -36,25 +38,10 @@ class RiskAssessment:
     cash_target_pct: Optional[float] = None
 
 
-# ---------------------------------------------------------------------------
-# Hard-coded defaults — keep in sync with DEFAULT_ENGINE_CONFIG["risk_warning"]
-# in config_loader.py so that behaviour is identical when no config is passed.
-# ---------------------------------------------------------------------------
-_DEFAULT_RISK_CONFIG: dict = {
-    "vix_hedge": 35,
-    "vix_reduce": 25,
-    "vix_watch": 20,
-    "critical_cluster_trigger": 1,
-    "negative_cluster_trigger": 3,
-    "geopolitical_action": "hedge",
-    "drawdown_hedge_pct": 12,
-    "drawdown_reduce_pct": 8,
-    "cash_target_hedge": 0.15,
-    "cash_target_reduce": 0.10,
-    "hedge_actions": ["暂停全部加仓", "评估对冲工具", "检查止损线"],
-    "reduce_actions": ["暂停权益加仓", "关注防御板块", "检查高beta暴露"],
-    "watch_actions": ["关注风险指标", "不新增高beta仓位"],
-}
+# Single source of truth for risk-warning defaults: config_loader.py's
+# DEFAULT_ENGINE_CONFIG["risk_warning"].  This module must not duplicate
+# thresholds, to avoid silent inconsistency when engine.yaml is tuned.
+_DEFAULT_RISK_CONFIG: dict = DEFAULT_ENGINE_CONFIG["risk_warning"]
 
 
 def assess_risk(

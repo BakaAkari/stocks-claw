@@ -19,25 +19,28 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
+from stocks.domain.models import (
+    _IMMEDIATE_CASH_PRODUCT_TYPES,
+    _LIQUIDITY_TIERS,
+    _PRODUCT_TYPES,
+)
 from stocks.engine.execution_rules import resolve_execution
 from stocks.engine.quant_action import _TAG_TO_BUCKET
 from stocks.engine.valuation_freshness import freshness_is_estimate
 
 logger = logging.getLogger(__name__)
 
-# Product types that are NOT immediately accessible cash
-_NON_IMMEDIATE_PRODUCT_TYPES = frozenset({
-    "stock", "etf", "exchange_traded_fund", "short_treasury_etf",
-    "qdii_fund", "feeder_fund", "mixed_fund", "fixed_income_plus_fund",
-    "precious_metal_account", "precious_metal", "bank_wealth_management",
-    "insurance_policy",
-})
+# Product types that are NOT immediately accessible cash — derived from the
+# single source of truth in domain.models.  New product types only need to be
+# added there; if they are cash-like they go in _IMMEDIATE_CASH_PRODUCT_TYPES.
+_NON_IMMEDIATE_PRODUCT_TYPES = frozenset(_PRODUCT_TYPES - _IMMEDIATE_CASH_PRODUCT_TYPES)
 
 # Liquidity tiers that represent immediately accessible cash
 _IMMEDIATE_LIQUIDITY_TIERS = frozenset({"cash", "t0"})
 
-# Locked / non-tradable liquidity tiers
-_LOCKED_LIQUIDITY_TIERS = frozenset({"locked", "periodic_open"})
+# Locked / non-tradable liquidity tiers — derived from the canonical list so
+# that a new tier cannot silently become executable by omission.
+_LOCKED_LIQUIDITY_TIERS = frozenset({t for t in _LIQUIDITY_TIERS if t not in _IMMEDIATE_LIQUIDITY_TIERS and t != "unknown"})
 
 # Default rule version for stable decision_id
 _DEFAULT_RULE_VERSION = "decision-trust-t1-v1"
@@ -47,6 +50,10 @@ _REDUCE_SIGNALS = frozenset({"reduce", "stop_loss", "take_profit"})
 
 # Signals that are add/increase directions
 _ADD_SIGNALS = frozenset({"add"})
+
+# Minimum CNY amount for an add action to be executable. Loaded from engine
+# config so portfolio constraint changes do not require a code deploy.
+_MIN_ADD_AMOUNT_CNY = 800.0
 
 # settlement_rule tokens safe to surface verbatim as human-facing settlement_timing;
 # non-executable tokens (periodic_open, locked, review_required) fall back to the
@@ -395,11 +402,11 @@ def build_capital_allocation_with_suppression(
                 mv = pv.get("market_value_cny") or 0.0
                 break
         alloc_amount = mv * abs(card.get("ratio", 0))
-        if alloc_amount < 800:
+        if alloc_amount < _MIN_ADD_AMOUNT_CNY:
             suppressed.append({
                 "position_id": card["position_id"],
                 "reason": "below_minimum_amount",
-                "message": f"\u5206\u914d\u91d1\u989d \uffe5{alloc_amount:.0f} \u4f4e\u4e8e \uffe5800 \u6709\u6548\u4e0b\u9650\uff0c\u4ec5\u4f5c\u89c2\u5bdf\u4e0d\u6267\u884c",
+                "message": f"\u5206\u914d\u91d1\u989d \uffe5{alloc_amount:.0f} \u4f4e\u4e8e \uffe5{_MIN_ADD_AMOUNT_CNY:.0f} \u6709\u6548\u4e0b\u9650\uff0c\u4ec5\u4f5c\u89c2\u5bdf\u4e0d\u6267\u884c",
                 "original_signal": card["signal"],
                 "original_ratio": card["ratio"],
                 "alloc_amount_cny": round(alloc_amount, 2),

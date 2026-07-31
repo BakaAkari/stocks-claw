@@ -40,10 +40,11 @@ class FundNavProvider:
     结果缓存在内存中，同一次 build_context 内不重复请求。
     """
 
-    def __init__(self, min_interval: float = 2.0):
+    def __init__(self, min_interval: float = 2.0, *, base_url: str = ""):
         self._min_interval = max(0.5, min_interval)
         self._last_request_at = 0.0
         self._cache: dict[str, Optional[FundNav]] = {}
+        self._base_url = (base_url or "https://api.fund.eastmoney.com").rstrip("/")
 
     def clear_cache(self) -> None:
         self._cache.clear()
@@ -55,16 +56,19 @@ class FundNavProvider:
             time.sleep(wait)
         self._last_request_at = time.monotonic()
 
+    def _build_url(self, fund_code: str) -> str:
+        return (
+            f"{self._base_url}/f10/lsjz"
+            f"?callback=jQuery&fundCode={fund_code}&pageIndex=1&pageSize=1"
+        )
+
     def _fetch_sync(self, fund_code: str) -> Optional[FundNav]:
         """同步获取单只基金最新确认净值。"""
         if fund_code in self._cache:
             return self._cache[fund_code]
 
         self._throttle()
-        url = (
-            f"https://api.fund.eastmoney.com/f10/lsjz"
-            f"?callback=jQuery&fundCode={fund_code}&pageIndex=1&pageSize=1"
-        )
+        url = self._build_url(fund_code)
         req = urllib.request.Request(
             url,
             headers={

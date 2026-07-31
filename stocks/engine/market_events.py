@@ -6,67 +6,93 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from stocks.domain.models import FinancialAsset, Instrument, MarketEvent, NewsItem
+from stocks.engine.config_loader import DEFAULT_ENGINE_CONFIG
 
-_EVENT_KEYWORDS = {
-    "monetary_policy": [
-        "美联储", "fed", "fomc", "降息", "加息", "利率", "缩表", "扩表", "央行", "逆回购",
-        "流动性", "准备金率", "mlf", "lpr",
-    ],
-    "macro_policy": [
-        "政策", "财政", "发改委", "国务院", "刺激", "补贴", "消费券", "地产政策",
-        "监管", "证监会", "税收", "关税",
-    ],
-    "earnings": [
-        "财报", "业绩", "利润", "营收", "eps", "guidance", "预告", "亏损", "盈利",
-    ],
-    "geopolitical": [
-        "地缘", "战争", "制裁", "出口管制", "禁令", "关税", "贸易战", "中东", "台海",
-    ],
-    "industry_theme": [
-        "ai", "人工智能", "芯片", "半导体", "算力", "新能源", "军工", "机器人", "医药",
-        "银行", "券商", "保险", "消费电子", "云计算", "数据中心",
-    ],
-    "market_movement": [
-        "大涨", "大跌", "反弹", "跳水", "收涨", "收跌", "创新高", "新低", "暴跌", "暴涨",
-        "纳指", "标普", "道指", "沪指", "创业板", "科创板",
-    ],
-}
+# Keyword dictionaries are loaded from DEFAULT_ENGINE_CONFIG so new themes/markets
+# can be added via engine.yaml without code changes. The module-level defaults
+# remain as a fallback when the config is not loaded.
+_CFG_KEYWORDS = DEFAULT_ENGINE_CONFIG.get("market_event_keywords", {})
 
-_THEME_KEYWORDS = {
-    "AI": ["ai", "人工智能", "大模型", "算力", "gpu", "英伟达", "nvidia"],
-    "半导体": ["芯片", "半导体", "晶圆", "光刻", "存储", "英伟达", "nvidia", "高通", "qcom"],
-    "军工": ["军工", "国防", "航天", "导弹", "无人机"],
-    "金融": ["银行", "券商", "保险", "金融", "平安银行", "利差"],
-    "新能源": ["新能源", "光伏", "锂电", "储能", "电动车", "tesla", "特斯拉"],
-    "医药": ["医药", "创新药", "医疗", "药品", "fda"],
-    "消费": ["消费", "零售", "白酒", "旅游", "餐饮"],
-    "地产": ["地产", "房地产", "房贷", "按揭", "销售面积"],
-    "汇率": ["人民币", "汇率", "美元指数", "dxy", "usdcny"],
-    "利率": ["利率", "美债", "收益率", "降息", "加息", "流动性"],
-}
+_EVENT_KEYWORDS = _CFG_KEYWORDS.get(
+    "events",
+    {
+        "monetary_policy": [
+            "美联储", "fed", "fomc", "降息", "加息", "利率", "缩表", "扩表", "央行", "逆回购",
+            "流动性", "准备金率", "mlf", "lpr",
+        ],
+        "macro_policy": [
+            "政策", "财政", "发改委", "国务院", "刺激", "补贴", "消费券", "地产政策",
+            "监管", "证监会", "税收", "关税",
+        ],
+        "earnings": [
+            "财报", "业绩", "利润", "营收", "eps", "guidance", "预告", "亏损", "盈利",
+        ],
+        "geopolitical": [
+            "地缘", "战争", "制裁", "出口管制", "禁令", "关税", "贸易战", "中东", "台海",
+        ],
+        "industry_theme": [
+            "ai", "人工智能", "芯片", "半导体", "算力", "新能源", "军工", "机器人", "医药",
+            "银行", "券商", "保险", "消费电子", "云计算", "数据中心",
+        ],
+        "market_movement": [
+            "大涨", "大跌", "反弹", "跳水", "收涨", "收跌", "创新高", "新低", "暴跌", "暴涨",
+            "纳指", "标普", "道指", "沪指", "创业板", "科创板",
+        ],
+    },
+)
 
-_POSITIVE_KEYWORDS = [
-    "利好", "上调", "超预期", "增长", "创新高", "批准", "放宽", "降息", "刺激", "回购",
-    "beat", "surge", "record high", "approval",
-]
+_THEME_KEYWORDS = _CFG_KEYWORDS.get(
+    "themes",
+    {
+        "AI": ["ai", "人工智能", "大模型", "算力", "gpu", "英伟达", "nvidia"],
+        "半导体": ["芯片", "半导体", "晶圆", "光刻", "存储", "英伟达", "nvidia", "高通", "qcom"],
+        "军工": ["军工", "国防", "航天", "导弹", "无人机"],
+        "金融": ["银行", "券商", "保险", "金融", "平安银行", "利差"],
+        "新能源": ["新能源", "光伏", "锂电", "储能", "电动车", "tesla", "特斯拉"],
+        "医药": ["医药", "创新药", "医疗", "药品", "fda"],
+        "消费": ["消费", "零售", "白酒", "旅游", "餐饮"],
+        "地产": ["地产", "房地产", "房贷", "按揭", "销售面积"],
+        "汇率": ["人民币", "汇率", "美元指数", "dxy", "usdcny"],
+        "利率": ["利率", "美债", "收益率", "降息", "加息", "流动性"],
+    },
+)
 
-_NEGATIVE_KEYWORDS = [
-    "利空", "下调", "不及预期", "下滑", "亏损", "制裁", "禁令", "暴跌", "加息", "收紧",
-    "miss", "plunge", "ban", "sanction",
-]
-
-_IMMEDIATE_KEYWORDS = ["突发", "刚刚", "盘前", "盘中", "after-hours", "pre-market", "紧急"]
-_HIGH_URGENCY_KEYWORDS = ["大涨", "大跌", "暴涨", "暴跌", "制裁", "禁令", "降息", "加息", "财报"]
-
-_MARKET_KEYWORDS = {
-    "a": ["a股", "沪指", "深成指", "创业板", "科创板", "北向", "人民币", "央行", "证监会"],
-    "us": [
-        "美股", "纳指", "标普", "道指", "美联储", "美元", "美债", "sec", "nasdaq", "s&p",
-        "dow", "nvidia", "microsoft", "apple", "qcom", "qualcomm",
+_POSITIVE_KEYWORDS = _CFG_KEYWORDS.get(
+    "positive",
+    [
+        "利好", "上调", "超预期", "增长", "创新高", "批准", "放宽", "降息", "刺激", "回购",
+        "beat", "surge", "record high", "approval",
     ],
-    "hk": ["港股", "恒生", "恒指", "h股"],
-    "global": ["全球", "原油", "黄金", "地缘", "战争", "关税", "美元指数"],
-}
+)
+
+_NEGATIVE_KEYWORDS = _CFG_KEYWORDS.get(
+    "negative",
+    [
+        "利空", "下调", "不及预期", "下滑", "亏损", "制裁", "禁令", "暴跌", "加息", "收紧",
+        "miss", "plunge", "ban", "sanction",
+    ],
+)
+
+_IMMEDIATE_KEYWORDS = _CFG_KEYWORDS.get(
+    "immediate", ["突发", "刚刚", "盘前", "盘中", "after-hours", "pre-market", "紧急"]
+)
+_HIGH_URGENCY_KEYWORDS = _CFG_KEYWORDS.get(
+    "high_urgency",
+    ["大涨", "大跌", "暴涨", "暴跌", "制裁", "禁令", "降息", "加息", "财报"],
+)
+
+_MARKET_KEYWORDS = _CFG_KEYWORDS.get(
+    "markets",
+    {
+        "a": ["a股", "沪指", "深成指", "创业板", "科创板", "北向", "人民币", "央行", "证监会"],
+        "us": [
+            "美股", "纳指", "标普", "道指", "美联储", "美元", "美债", "sec", "nasdaq", "s&p",
+            "dow", "nvidia", "microsoft", "apple", "qcom", "qualcomm",
+        ],
+        "hk": ["港股", "恒生", "恒指", "h股"],
+        "global": ["全球", "原油", "黄金", "地缘", "战争", "关税", "美元指数"],
+    },
+)
 
 
 class MarketEventExtractor:

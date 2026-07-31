@@ -15,7 +15,7 @@ from typing import Optional
 
 from stocks.domain.models import NewsItem
 
-# 默认 RSS 源
+# 默认 RSS 源（当配置未提供时使用；新 feed 应在 engine.yaml 中配置）
 _DEFAULT_RSS_URL = "https://www.chinanews.com.cn/rss/finance.xml"
 
 

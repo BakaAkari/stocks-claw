@@ -39,6 +39,10 @@ class EastmoneyAQuoteProvider(QuoteProvider):
             return f"1.{code}"
         return f"0.{code}"
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._base_url = kwargs.get("base_url") or "https://push2.eastmoney.com/api/qt/ulist.np/get"
+
     def _fetch_sync(self, secids: list[str]) -> Optional[dict]:
         """同步请求东方财富接口，返回 JSON 字典。"""
         params = {
@@ -47,7 +51,7 @@ class EastmoneyAQuoteProvider(QuoteProvider):
             "fields": "f12,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18,f124",
             "secids": ",".join(secids),
         }
-        url = "https://push2.eastmoney.com/api/qt/ulist.np/get?" + urllib.parse.urlencode(params)
+        url = f"{self._base_url}?" + urllib.parse.urlencode(params)
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=20) as resp:

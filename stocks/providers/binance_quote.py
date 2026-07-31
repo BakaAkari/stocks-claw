@@ -24,6 +24,10 @@ from stocks.providers.base import QuoteProvider
 class BinanceQuoteProvider(QuoteProvider):
     """免 key 的 Binance 24 小时 ticker，作为 crypto 实时备用源。"""
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._base_url = (kwargs.get("base_url") or "https://api.binance.com").rstrip("/")
+
     @property
     def name(self) -> str:
         return "binance"
@@ -39,7 +43,7 @@ class BinanceQuoteProvider(QuoteProvider):
     def _fetch_sync(self, symbol: str) -> dict:
         query = urllib.parse.urlencode({"symbol": symbol})
         request = urllib.request.Request(
-            f"https://api.binance.com/api/v3/ticker/24hr?{query}",
+            f"{self._base_url}/api/v3/ticker/24hr?{query}",
             headers={"User-Agent": "stocks-claw/1.0"},
         )
         try:
