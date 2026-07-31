@@ -829,3 +829,112 @@ def test_replacement_buy_leg_deferred_text_is_chain_aware():
     assert card["no_action_reasons"] == [
         "纳指ETF（QQQ）：换仓买入腿——等待卖出资金到账后执行，维持权益敞口"
     ]
+
+
+# ── M1 gap-closure regressions (2026-07-31) ─────────────────────────────
+
+
+def test_build_user_view_emits_reference_for_gate_rejected_action():
+    """M1 truth-gate audit trail: an adjudicator-approved action that fails
+    the executable gate keeps its rule-driven proposal (ratio / quantity /
+    amount) as structured reference data on the instruction card."""
+    decision = {
+        "status": "review_required",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "reduce", "ratio": 0.25,
+            "reason": "趋势走弱",
+            "final_ratio": 0.21, "execution_status": "review_required",
+            "decision_reason": "权益低配与技术信号方向冲突",
+            "executable_quantity": 2100.0,
+            "estimated_amount_cny": 4_200.0,
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [],
+        "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020", 20_000)],
+        [], [], {"level": "normal", "transition": "stable"},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+        session_id="cn_after_close", session_intent="after_close_review",
+    )
+    card = view["instruction_card"]
+    assert card["status"] == "manual_review"
+    assert card["actions"] == []
+    refs = card["suppressed_actions_reference"]
+    assert len(refs) == 1
+    ref = refs[0]
+    assert ref["display_label"] == "化工ETF（516020）"
+    assert ref["signal_type"] == "减仓"
+    assert ref["ratio"] == 0.21
+    assert ref["executable_quantity"] == 2100.0
+    assert ref["estimated_amount_cny"] == 4_200.0
+
+
+def test_build_user_view_no_reference_without_positive_ratio():
+    """A gate-rejected action without a real proposal ratio emits no
+    reference entry (nothing useful for the user to decide against)."""
+    decision = {
+        "status": "review_required",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "reduce",
+            "reason": "趋势走弱", "execution_status": "review_required",
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [],
+        "cash_schedule": {},
+    }
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020", 20_000)],
+        [], [], {"level": "normal", "transition": "stable"},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+        session_id="cn_after_close", session_intent="after_close_review",
+    )
+    assert "suppressed_actions_reference" not in view["instruction_card"]
+
+
+def test_build_user_view_pending_sell_flag_only_for_sell_signals():
+    """M1: cash.pending_sell is set iff suppressed_actions contains an
+    approved-but-review-pending sell (stop_loss / take_profit / reduce)."""
+    base = {
+        "status": "review_required",
+        "approved_actions": [],
+        "unresolved_conflicts": [],
+        "cash_schedule": {"strategic_exit": 60_000},
+    }
+    sell = dict(base, suppressed_actions=[
+        {"position_id": "a_516020", "signal": "stop_loss", "reason": "硬止损"},
+    ])
+    view = build_user_view(
+        sell, [_position("a_516020", "化工ETF", "a:516020")], [], [],
+        {"level": "normal", "transition": "stable"},
+        session_id="cn_after_close", session_intent="after_close_review",
+    )
+    assert view["assistant_brief"]["cash"].get("pending_sell") is True
+
+    # A gate-rejected approved sell also marks pending_sell.
+    gate_rejected = {
+        "status": "review_required",
+        "approved_actions": [{
+            "position_id": "a_516020", "signal": "stop_loss", "ratio": 1.0,
+            "reason": "硬止损", "final_ratio": 1.0,
+            "execution_status": "review_required",
+        }],
+        "suppressed_actions": [], "unresolved_conflicts": [],
+        "cash_schedule": {"strategic_exit": 60_000},
+    }
+    view = build_user_view(
+        gate_rejected, [_position("a_516020", "化工ETF", "a:516020")], [], [],
+        {"level": "normal", "transition": "stable"},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+        session_id="cn_after_close", session_intent="after_close_review",
+    )
+    assert view["assistant_brief"]["cash"].get("pending_sell") is True
+
+    buy = dict(base, suppressed_actions=[
+        {"position_id": "a_516020", "signal": "add", "reason": "低于最小加仓金额"},
+    ])
+    view = build_user_view(
+        buy, [_position("a_516020", "化工ETF", "a:516020")], [], [],
+        {"level": "normal", "transition": "stable"},
+        session_id="cn_after_close", session_intent="after_close_review",
+    )
+    assert "pending_sell" not in view["assistant_brief"]["cash"]

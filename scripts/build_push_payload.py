@@ -283,7 +283,7 @@ def _render_trading_payload(payload: dict) -> str:
         sections.append(action_section)
 
     # 4. 提前布局 (M1: new)
-    setup_section = _section_setup_candidates(assistant)
+    setup_section = _section_setup_candidates(assistant, card.get("next_checkpoint") or "")
     if setup_section:
         sections.append(setup_section)
 
@@ -324,7 +324,7 @@ def _section_window_changes(assistant: dict) -> list[str]:
 
     if changes:
         rendered = _render_delta_changes_concise(changes)
-        for line in rendered[:4]:
+        for line in rendered[:3]:
             lines.append(f"- {line}")
         source_changes = changes.get("source_refs") or {}
         if isinstance(source_changes, dict):
@@ -351,17 +351,23 @@ def _section_market_outlook(assistant: dict) -> list[str]:
     outlook = assistant.get("outlook") or {}
 
     if not isinstance(outlook, dict) or not outlook:
-        lines.append("- 中长期研判暂不可用")
+        lines.append("- 中长期研判暂不可用，等待 M2 上线")
         return lines
 
     status = outlook.get("status")
     if status == "unavailable":
-        # 不泄漏 disable/未配置类内部字符串；只给用户友善说明。
-        lines.append("- 中长期研判本期未通过校验，暂不输出")
+        # 不泄漏 disable/未配置类内部字符串。outlook.message 是上游 sanitize
+        # 过的中文降级文案（如"本期研判未通过数据完整性校验，暂不输出"），
+        # 可直接转述；缺 message 时退回 M1 的占位降级。
+        message = str(outlook.get("message") or "").strip()
+        if message:
+            lines.append(f"- 中长期研判：{message}")
+        else:
+            lines.append("- 中长期研判暂不可用，等待 M2 上线")
         return lines
 
     if status != "ok":
-        lines.append("- 中长期研判暂不可用")
+        lines.append("- 中长期研判暂不可用，等待 M2 上线")
         return lines
 
     summary = outlook.get("summary") or ""
@@ -446,10 +452,10 @@ def _setup_candidate_tag(item: dict) -> str:
 
 
 def _setup_candidate_tail(item: dict) -> str | None:
-    """Return one-line trigger/condition tail, or None if nothing useful."""
+    """Return one-line trigger/condition tail (≤60 chars), or None."""
     reasons = [str(r) for r in (item.get("reasons") or []) if r]
     if reasons:
-        return "；".join(reasons[:2])
+        return "；".join(reasons[:2])[:60]
     hint = str(item.get("action_hint") or "")
     # strip obvious generic phrases
     for stale in ("仅供观察", "不形成交易", "可分批", "深跌超卖"):
@@ -461,11 +467,12 @@ def _setup_candidate_tail(item: dict) -> str | None:
             idx = hint.find(key)
             start = max(0, idx - 20)
             end = min(len(hint), idx + 40)
-            return hint[start:end].strip("，。 ")
-    return None
+            return hint[start:end].strip("，。 ")[:60]
+    cleaned = hint.strip("，。 ")
+    return cleaned[:60] if cleaned else None
 
 
-def _section_setup_candidates(assistant: dict) -> list[str]:
+def _section_setup_candidates(assistant: dict, next_checkpoint: str = "") -> list[str]:
     """§4 提前布局 — 从 research 提升到主段，展示 top 2-3 候选。"""
     lines: list[str] = [_section_heading("提前布局")]
     research = assistant.get("research") or []
@@ -474,13 +481,15 @@ def _section_setup_candidates(assistant: dict) -> list[str]:
         return lines
 
     def _score(item: dict) -> float:
-        s = item.get("score")
-        if isinstance(s, (int, float)) and not isinstance(s, bool):
-            return float(s)
+        for key in ("score", "composite_score"):
+            s = item.get(key)
+            if isinstance(s, (int, float)) and not isinstance(s, bool):
+                return float(s)
         return -1.0
 
     sorted_items = sorted(research, key=_score, reverse=True)
     top = sorted_items[:3]
+    checkpoint_ref = str(next_checkpoint or "") or "下一交易窗口复核"
 
     for item in top:
         label = item.get("display_label") or "未命名候选"
@@ -498,7 +507,7 @@ def _section_setup_candidates(assistant: dict) -> list[str]:
         if sizing_hint:
             lines.append(f"  仓位/止损: {sizing_hint}")
         reassess = item.get("reassess_after")
-        if reassess and reassess != "下一交易窗口复核":
+        if reassess and reassess != checkpoint_ref:
             lines.append(f"  复核: {reassess}")
 
     overflow = len(research) - len(top)
@@ -645,6 +654,55 @@ def _no_action_conflict_details(reason: str) -> dict[str, Any]:
     }
 
 
+def _find_reference_for_conflict(detail: dict, references: list[dict]) -> dict | None:
+    """Match a parsed manual-review conflict to its rule-driven reference entry.
+
+    The conflict reason text starts with ``{display_label}：…``; the parser
+    splits label/code apart, so we re-match by containment against the
+    reference's full display_label.
+    """
+    label = str(detail.get("label") or "")
+    code = str(detail.get("code") or "")
+    for ref in references:
+        ref_label = str(ref.get("display_label") or "")
+        if not ref_label:
+            continue
+        if code and code in ref_label:
+            return ref
+        if label and label in ref_label:
+            return ref
+    return None
+
+
+def _format_reference_line(ref: dict, *, with_label: bool = False) -> str:
+    """Render one truth-gate audit-trail line:
+    ``参考: <signal_type> <ratio>%<, 参考数量 Q><, 参考金额 ¥A>``.
+    """
+    head: list[str] = []
+    label = str(ref.get("display_label") or "")
+    signal = str(ref.get("signal_type") or ref.get("action_type") or "")
+    ratio = ref.get("ratio")
+    if with_label and label:
+        head.append(label)
+    if signal:
+        head.append(signal)
+    if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and ratio > 0:
+        head.append(f"{float(ratio) * 100:.0f}%")
+    if not head:
+        return ""
+    tail: list[str] = []
+    qty = ref.get("executable_quantity")
+    if isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0:
+        tail.append(f"参考数量 {int(qty)}")
+    amount = ref.get("estimated_amount_cny")
+    if isinstance(amount, (int, float)) and not isinstance(amount, bool) and amount > 0:
+        tail.append(f"参考金额 ¥{float(amount):,.0f}")
+    line = f"参考: {' '.join(head)}"
+    if tail:
+        line += f"，{'，'.join(tail)}"
+    return line
+
+
 def _section_executable_actions(card: dict) -> list[str]:
     """§3 可执行动作 — manual_review 时列出待决冲突和参考值，并给出决策分支。"""
     lines: list[str] = [_section_heading("可执行动作")]
@@ -658,6 +716,11 @@ def _section_executable_actions(card: dict) -> list[str]:
         if status_raw == "manual_review" and no_action_reasons:
             lines.append(f"- 状态: {status_label or '等待人工确认'}")
             lines.append("- 以下冲突需你判断:")
+            suppressed = [
+                ref for ref in (card.get("suppressed_actions_reference") or [])
+                if isinstance(ref, dict)
+            ]
+            matched: set[int] = set()
             for reason in no_action_reasons[:3]:
                 detail = _no_action_conflict_details(reason)
                 if detail["label"] and detail["code"]:
@@ -665,23 +728,19 @@ def _section_executable_actions(card: dict) -> list[str]:
                 else:
                     lines.append(f"  · [{detail['type']}] {detail['reason']}")
                 lines.append(f"    分支: {detail['branch']}")
-            # 参考值：从 suppressed_actions_reference 提取每个冲突的 rule-driven 参考比例
-            suppressed = card.get("suppressed_actions_reference") or []
+                # M1 truth-gate 审计线：该冲突对应的 rule-driven 参考值随冲突展示
+                ref = _find_reference_for_conflict(detail, suppressed)
+                if ref is not None:
+                    matched.add(id(ref))
+                    ref_line = _format_reference_line(ref)
+                    if ref_line:
+                        lines.append(f"    {ref_line}")
             for ref in suppressed[:3]:
-                if not isinstance(ref, dict):
+                if id(ref) in matched:
                     continue
-                label = ref.get("display_label") or ref.get("instrument_name") or ""
-                signal = ref.get("signal_type") or ref.get("action_type") or ""
-                ratio = ref.get("ratio")
-                if not label and not signal and ratio is None:
-                    continue
-                parts = []
-                if signal:
-                    parts.append(str(signal))
-                if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
-                    parts.append(f"{float(ratio) * 100:.0f}%")
-                if parts and label:
-                    lines.append(f"  参考: {label} → {' '.join(parts)}")
+                ref_line = _format_reference_line(ref, with_label=True)
+                if ref_line:
+                    lines.append(f"  {ref_line}")
             return lines
 
         lines.append(f"- 状态: {status_label or '当前无需操作'}")
@@ -854,11 +913,12 @@ def _section_portfolio_and_checkpoint(card: dict, assistant: dict) -> list[str]:
     if locked > 0:
         cash_parts.append(f"不能动 ¥{locked:,.0f}")
 
-    # strategic_exit 仅当存在可执行的 sell 类动作时展示
+    # strategic_exit 仅当存在可执行的 sell 类动作，或存在"已获批但等待人工
+    # 复核"的卖出（presentation 在 cash.pending_sell 置位）时展示
     actions = card.get("actions") or []
     has_sell_action = any(
         _is_sell_action(a) for a in actions
-    )
+    ) or bool(cash.get("pending_sell"))
     if has_sell_action and strategic_exit > 0:
         cash_parts.append(f"卖出后可释放 ¥{strategic_exit:,.0f}")
 

@@ -774,6 +774,8 @@ def build_user_view(
 
     actions = []
     deferred_reasons = []
+    suppressed_reference: list[dict] = []
+    gate_rejected_sell = False
     for raw in approved_cards:
         item = by_id.get(str(raw.get("position_id") or ""), {})
         # TASK-001E1 defect 2/3: only executable actions (execution_status
@@ -785,6 +787,23 @@ def build_user_view(
             text = _deferred_action_text(raw, item, by_market)
             if text not in deferred_reasons:
                 deferred_reasons.append(text)
+            # M1: an approved sell stopped at the gate is still a pending
+            # sell — its proceeds belong in 卖出后可释放 (strategic_exit).
+            if str(raw.get("signal") or "") in {"stop_loss", "take_profit", "reduce"}:
+                gate_rejected_sell = True
+            # M1 truth-gate audit trail: keep the rule-driven pre-gate
+            # proposal (ratio / quantity / amount) as structured reference
+            # data so the report can show it next to the manual-review
+            # conflict the user has to resolve.
+            ratio = raw.get("final_ratio")
+            if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and ratio > 0:
+                suppressed_reference.append({
+                    "display_label": _display_for_position(item),
+                    "signal_type": signal_label(raw.get("signal", "")),
+                    "ratio": raw.get("final_ratio"),
+                    "executable_quantity": raw.get("executable_quantity"),
+                    "estimated_amount_cny": raw.get("estimated_amount_cny"),
+                })
             continue
         label = _display_for_position(item)
         ratio = float(raw.get("final_ratio") or 0.0)
@@ -877,6 +896,18 @@ def build_user_view(
         reassess_after = str(candidate.get("reassess_after") or "下一交易窗口复核")
         if "当前状态:" in reassess_after:
             reassess_after = "风险解除后再评估"
+        # Round the score once, here, to the exact precision the report
+        # renders (2 decimals). The push number gate authorizes only values
+        # present in the payload — rendering a 4-decimal raw score as 0.39
+        # would trip the gate with an unauthorized rounded value.
+        raw_score = candidate.get("score")
+        if not isinstance(raw_score, (int, float)) or isinstance(raw_score, bool):
+            raw_score = candidate.get("composite_score")
+        score = (
+            round(float(raw_score), 2)
+            if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool)
+            else None
+        )
         research.append({
             "display_label": display_label(name, symbol),
             "action_hint": str(candidate.get("action_hint") or "仅供观察，不形成交易动作"),
@@ -885,7 +916,7 @@ def build_user_view(
             "pool": str(candidate.get("pool") or ""),
             "setup_tag": _research_signal_label(str(candidate.get("signal") or "")),
             "reasons": [str(r) for r in (candidate.get("reasons") or []) if r][:2],
-            "score": candidate.get("score") or candidate.get("composite_score") or None,
+            "score": score,
             "sizing_hint": str(candidate.get("sizing_hint") or ""),
         })
         if len(research) >= 8:
@@ -904,6 +935,17 @@ def build_user_view(
         "unchanged": "状态未变", "candidate": "候选状态待确认",
     }.get(transition, "状态待确认")
     cash_schedule = decision.get("cash_schedule") or {}
+    cash_view = _cash_view(cash_schedule)
+    # M1: an approved-but-review-pending sell keeps strategic_exit visible in
+    # the report (labeled 卖出后可释放) even when no executable sell exists.
+    # Pending sells come from two places: suppressed_actions, and approved
+    # actions that were stopped at the executable gate (gate_rejected_sell).
+    if gate_rejected_sell or any(
+        str(x.get("signal") or "") in {"stop_loss", "take_profit", "reduce"}
+        for x in (decision.get("suppressed_actions") or [])
+        if isinstance(x, dict)
+    ):
+        cash_view["pending_sell"] = True
     data_notes = _data_notes(data_boundaries or {})
     unresolved_note = _unresolved_settlement_note(cash_schedule)
     if unresolved_note:
@@ -920,7 +962,7 @@ def build_user_view(
             _suppressed_user_text(x, by_id, reviews_by_id)
             for x in (decision.get("suppressed_actions") or [])[:5]
         ],
-        "cash": _cash_view(cash_schedule),
+        "cash": cash_view,
         "risk": {
             "label": risk_label(level),
             "transition": transition_text,
@@ -935,15 +977,18 @@ def build_user_view(
     }
     # Strip sentinel keys that were never set
     assistant = {k: v for k, v in assistant.items() if v is not _no_value}
+    card = {
+        "status": card_status,
+        "status_label": card_label,
+        "actions": actions,
+        "actions_overflow": actions_overflow,
+        "no_action_reasons": no_action_reasons[:2] if not actions else [],
+        "next_checkpoint": actions[0]["next_checkpoint"] if actions else _session_checkpoint(session_id, session_intent),
+    }
+    if suppressed_reference:
+        card["suppressed_actions_reference"] = suppressed_reference[:3]
     return {
-        "instruction_card": {
-            "status": card_status,
-            "status_label": card_label,
-            "actions": actions,
-            "actions_overflow": actions_overflow,
-            "no_action_reasons": no_action_reasons[:2] if not actions else [],
-            "next_checkpoint": actions[0]["next_checkpoint"] if actions else _session_checkpoint(session_id, session_intent),
-        },
+        "instruction_card": card,
         "assistant_brief": assistant,
     }
 

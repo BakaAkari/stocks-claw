@@ -557,18 +557,37 @@ def _delta_with_scenarios_and_sources():
 
 
 def test_delta_renderer_shows_scenarios_with_chinese_labels():
-    """_render_delta_changes_concise renders scenario changes with Chinese labels."""
+    """Scenario changes render with Chinese labels when inside §1's 3-line cap.
+
+    M1 caps 本窗口变化 at 3 concise delta lines; scenario entries sort last
+    in the delta renderer, so this test keeps only scenario changes to prove
+    the label rendering itself.
+    """
+    artifact = _delta_with_scenarios_and_sources()
+    brief = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+    changes = brief["outlook_delta"]["changes"]
+    brief["outlook_delta"]["changes"] = {"scenarios": changes["scenarios"]}
+    payload = build_push_payload(artifact, now="2026-07-17T10:05:00+08:00")
+    text = render_push_payload(payload)
+    assert "**本窗口变化**" in text
+    assert "基准情景" in text
+    assert "温和复苏情景" in text
+    # Scenario validation/invalidation labels visible
+    assert any(k in text for k in ("验证条件", "GDP超预期", "否定条件", "就业恶化"))
+
+
+def test_delta_renderer_caps_window_changes_at_three_lines():
+    """M1: 本窗口变化 renders at most 3 concise delta lines (plus source lines)."""
     payload = build_push_payload(
         _delta_with_scenarios_and_sources(), now="2026-07-17T10:05:00+08:00"
     )
     text = render_push_payload(payload)
-    assert "**本窗口变化**" in text
-    # Scenario labels (bounded by E2 concise window section, only top 6 delta lines)
-    assert "基准情景" in text
-    assert "温和复苏情景" in text
-    # Scenario validation/invalidation (E2 window-changes section is bounded;
-    # at least one of validation/invalidation must be visible)
-    assert any(k in text for k in ("验证条件", "GDP超预期", "否定条件", "就业恶化"))
+    section = text[text.index("**本窗口变化**"):text.index("**走势研判**")]
+    delta_bullets = [
+        ln for ln in section.splitlines()
+        if ln.strip().startswith("- ") and not ln.startswith("- 来源")
+    ]
+    assert len(delta_bullets) <= 3, f"{len(delta_bullets)} delta lines"
 
 
 def test_delta_renderer_shows_source_refs_with_added_removed():
@@ -807,3 +826,90 @@ def test_overflow_actions_line_renders_and_passes_number_gate():
     text = render_push_payload(payload)
     assert "另有 2 个获批动作超出展示上限" in text
     assert validate_payload_text(payload, text) == []
+
+
+# ── M1 gap-closure regressions (2026-07-31) ─────────────────────────────
+
+
+def test_manual_review_reference_line_with_quantity_and_amount():
+    """M1 truth-gate audit trail: each manual-review conflict carries the
+    rule-driven reference values (signal, ratio, quantity, amount) as a
+    参考: sub-line, and every number in it is payload-authorized."""
+    payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
+    card = payload["user_view"]["instruction_card"]
+    card["suppressed_actions_reference"] = [{
+        "display_label": "沪深300ETF（510300）",
+        "signal_type": "减仓",
+        "ratio": 0.2,
+        "executable_quantity": 300,
+        "estimated_amount_cny": 12000.0,
+    }]
+    text = render_push_payload(payload)
+    section = text[text.index("**可执行动作**"):text.index("**提前布局**")]
+    conflict_pos = section.index("沪深300ETF（510300）")
+    ref_pos = section.index("参考: 减仓 20%，参考数量 300，参考金额 ¥12,000")
+    assert ref_pos > conflict_pos, "参考 line must follow its conflict"
+    assert validate_payload_text(payload, text) == []
+
+
+def test_unavailable_outlook_without_message_uses_m1_fallback():
+    """M1: unavailable outlook without a sanitized message renders the M2
+    pending fallback line, never internal English."""
+    payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
+    brief = payload["user_view"]["assistant_brief"]
+    brief["outlook"] = {"status": "unavailable"}
+    text = render_push_payload(payload)
+    assert "中长期研判暂不可用，等待 M2 上线" in text
+    assert "outlook synthesizer disabled" not in text
+    assert "not configured" not in text
+
+
+def test_missing_outlook_uses_m1_fallback():
+    """M1: no outlook key at all also renders the M2 pending fallback line."""
+    payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
+    text = render_push_payload(payload)
+    assert "中长期研判暂不可用，等待 M2 上线" in text
+
+
+def test_setup_section_orders_by_composite_score():
+    """M1: 提前布局 sorts candidates by composite_score (score alias) desc."""
+    payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
+    brief = payload["user_view"]["assistant_brief"]
+    brief["research"] = [
+        {"display_label": "医药ETF（512010）", "action_hint": "回踩短均线附近", "composite_score": 0.31},
+        {"display_label": "芯片ETF（159995）", "action_hint": "深跌超卖左侧试仓", "composite_score": 0.42},
+    ]
+    text = render_push_payload(payload)
+    setup = text[text.index("**提前布局**"):text.index("**禁止与延后**")]
+    assert setup.index("芯片ETF") < setup.index("医药ETF")
+
+
+def test_setup_section_skips_reassess_when_same_as_report_checkpoint():
+    """M1: reassess_after equal to the report's own next checkpoint is not
+    repeated as a 复核 line; a different one is shown."""
+    payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
+    brief = payload["user_view"]["assistant_brief"]
+    # card next_checkpoint in the fixture is 下一交易日盘前复核
+    brief["research"] = [
+        {"display_label": "芯片ETF（159995）", "action_hint": "左侧试仓", "score": 0.5,
+         "reassess_after": "下一交易日盘前复核"},
+        {"display_label": "医药ETF（512010）", "action_hint": "回踩布局", "score": 0.4,
+         "reassess_after": "风险解除后再评估"},
+    ]
+    text = render_push_payload(payload)
+    setup = text[text.index("**提前布局**"):text.index("**禁止与延后**")]
+    assert "复核: 下一交易日盘前复核" not in setup
+    assert "复核: 风险解除后再评估" in setup
+
+
+def test_strategic_exit_shown_with_pending_review_sell():
+    """M1: 卖出后可释放 renders when an approved-but-review-pending sell
+    exists (cash.pending_sell), even without an executable sell action."""
+    payload = build_push_payload(_artifact(), now="2026-07-17T15:27:00+08:00")
+    brief = payload["user_view"]["assistant_brief"]
+    text_without = render_push_payload(payload)
+    assert "卖出后可释放" not in text_without
+    brief["cash"]["pending_sell"] = True
+    text_with = render_push_payload(payload)
+    assert "卖出后可释放 ¥613,470" in text_with
+    assert validate_payload_text(payload, text_with) == []
