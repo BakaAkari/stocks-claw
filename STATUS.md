@@ -8,21 +8,51 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-07-31 for the direction reset following the adversarial
-> review (`docs/analysis/adversarial-review-2026-07-31.md`,
+> Last updated: 2026-07-31 (second update) — de-hardcode landing verified
+> at `03ee449`; M4 constraint-model candidate added to backlog (`742b2d8`).
+> Earlier same-day update: direction reset following the adversarial review
+> (`docs/analysis/adversarial-review-2026-07-31.md`,
 > `docs/analysis/direction-2026-07-31.md`).
 
-## Baseline (as of 2026-07-31)
+## Baseline (as of 2026-07-31, second verification)
 
-- HEAD: `5026076` — "fix(push): remove legacy per-session cron wrappers;
-  land E1/E2 follow-up cleanups"
-- Branch: `master` == `origin/master` at `5026076`
+- HEAD (code baseline, verified): `03ee449` — "fix: wire
+  portfolio_layering.min_add_amount_cny through config"
+- Doc-only commits on top of the verified baseline: `742b2d8` (M4
+  candidate task + comparison analysis + roadmap/tasks backlog).
+- Branch: `master` == `origin/master`
 - Working tree: **clean** (verified this session — `git status --short --branch`)
-- Full pytest: **1262 passed, 7 skipped, 0 failed** (verified this session)
-- ruff: **clean** (verified this session)
-- git diff --check: **clean**
+- Full pytest: **1262 passed, 7 skipped, 0 failed** (verified on `03ee449`)
+- ruff: **clean**; compileall: **clean**; git diff --check: **clean**
+- Smoke: `.venv/bin/python -m stocks.adapters.cli --output json
+  --no-news --no-quotes` → exit 0 (verified on `03ee449`)
 - Tag: `v2.8-e1e2-complete` remains at `cc1eaa0` (not an ancestor of HEAD;
   left untouched — re-tagging is the user's call).
+
+## De-hardcode landing (verified 2026-07-31)
+
+Three commits landed and were verified this session:
+
+- `1ab7dec` — M1-M5+M10: config-driven data sources, market prefixes,
+  sessions, FX, signal thresholds (21 files).
+- `7a60aac` — S1-S4/M1-M12/L1-L5: config-driven providers, sessions, FX,
+  risk, quant thresholds, intelligence mappings (27 files).
+- `03ee449` — follow-up fix wiring `portfolio_layering.min_add_amount_cny`.
+
+Behavior preservation was verified by direct old-vs-new value comparison
+(not just by tests): all `market_events` keyword/sentiment tables,
+`quant_action` mapping tables (signal proxy / theme→exposure / tag→bucket),
+`intelligence_analyzer` tables (theme markets / category maps / symbol
+tables), all 15 signal thresholds and rank weights, and the USD/CNY 7.2
+fallback are **identical** to the previous hardcoded values. Hardcoded
+internal LLM fallback URLs were removed from shipped config; the outlook
+path fails closed (unavailable) when no endpoint is configured.
+
+Note: the S/M/L finding IDs in the commit messages are not traceable to
+any repo document (`docs/analysis/system-consistency-review-2026-07-30.md`
+uses P0/P1/P2 numbering) — treat the commit messages as the only coverage
+claim. Defaults now live in two places (`DEFAULT_ENGINE_CONFIG` and
+module-level fallback constants); keep them in sync when tuning.
 
 ## What's actually running in production
 
@@ -76,7 +106,7 @@ labels.
 No `report_mode` config toggle exists yet. When M2 lands, a toggle will
 appear here and in `docs/contracts/README.md`.
 
-## Roadmap now: M1 → M2 → M3
+## Roadmap now: M1 → M2 → M3 (+ M4 candidate)
 
 Full description in `ROADMAP.md`. Rationale in
 `docs/analysis/direction-2026-07-31.md`.
@@ -93,6 +123,11 @@ Full description in `ROADMAP.md`. Rationale in
 - **M3 — Feedback loop.** User marks each recommendation (accepted /
   partial / rejected / deferred). Feedback becomes evidence for future
   outlook runs, not an auto-tuner.
+- **M4 — Constraint model upgrade (backlog candidate, added 2026-07-31).**
+  Irreversibility (no-buyback), segregated pools, hard caps. Motivation:
+  `docs/analysis/kimi-report-constraint-comparison-2026-07-31.md`; scope:
+  `docs/tasks/TASK-M4-constraint-model-upgrade.md`. Sequencing vs M2/M3 is
+  re-evaluated when M1 closes.
 
 ## Deprecated / removed
 
@@ -135,4 +170,5 @@ Confirmed in this session:
 ## Next concrete task
 
 `docs/tasks/TASK-M1-report-structure-upgrade.md`. That is the only current
-task.
+task. `TASK-M4-constraint-model-upgrade.md` is backlog — do not start
+before M1 closes.
