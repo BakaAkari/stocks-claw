@@ -21,9 +21,9 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-None open. M2 closed 2026-07-31 (`7c35c7f`); A1 closed 2026-08-01
-(`c313d22`). **M3 — Feedback loop** is next (task file to be written
-before starting).
+None open. M3 closed 2026-08-01 (`83e94ec`). **W1 — Watchlist
+productization** is next (M5; task file to be written before starting,
+with D1 US-quotes verification folded in).
 
 ## Backlog (do not start before the current task closes)
 
@@ -32,16 +32,14 @@ before starting).
   verified same day)*.
 - **A1** — Asset intake entry *(done 2026-08-01, `c313d22`)*:
   `TASK-A1-asset-intake-entry.md`.
-- **M3** — Feedback loop: user marks each recommendation accepted / partial
-  / rejected / deferred, feedback flows into next Outlook run as evidence.
-  *(next)*
+- **M3** — Feedback loop *(done 2026-08-01, `83e94ec`)*:
+  `TASK-M3-feedback-loop.md`.
 - **W1** — Watchlist productization (M5): user-designated instruments
-  persisted, scanned daily, surfaced in push.
-- **D1** — US quotes freshness verification (M5): fold into the next task
-  touching the US quote path.
+  persisted, scanned daily, surfaced in push. *(next; folds in D1 US
+  quotes freshness verification)*
 - **M4** — Constraint model upgrade (candidate): irreversibility
   (no-buyback), segregated pools, hard caps. See
-  `TASK-M4-constraint-model-upgrade.md`; kept behind M3/W1.
+  `TASK-M4-constraint-model-upgrade.md`; kept behind W1.
 
 ## Retired
 
