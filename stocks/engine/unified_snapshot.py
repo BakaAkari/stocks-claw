@@ -17,6 +17,10 @@ from stocks.domain.advisory_models import (
     UnifiedAnalysisSnapshot,
 )
 from stocks.domain.models import AnalysisContext, Quote, UpcomingEvent
+from stocks.engine.advice_feedback import (
+    compute_feedback_rollup,
+    summarize_record_for_snapshot,
+)
 from stocks.logging_utils import get_logger
 
 logger = get_logger("unified_snapshot")
@@ -357,6 +361,47 @@ def _build_profile_facts(context: AnalysisContext) -> list[FactRef]:
     return facts
 
 
+def _build_recent_advice_facts(context: AnalysisContext) -> list[FactRef]:
+    """M3: recent advice outcomes (incl. user feedback) as analyst evidence.
+
+    Unmarked records surface with status ``unmarked`` so the analyst sees
+    the coverage gap; a rollup fact is added when any mark exists in the
+    trailing 7-day window.
+    """
+    records = context.recent_advice or []
+    if not isinstance(records, list) or not records:
+        return []
+    as_of = str(context.generated_at or "")
+    facts: list[FactRef] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        created = str(record.get("created_at") or f"idx{index}")
+        fact = _fact(
+            f"advice:{created}",
+            "advice_outcome",
+            summarize_record_for_snapshot(record),
+            "record",
+            as_of,
+            "system:advice_ledger",
+        )
+        if fact is not None:
+            facts.append(fact)
+    rollup = compute_feedback_rollup(records, window_days=7)
+    if rollup["marked_total"]:
+        fact = _fact(
+            "advice:feedback_rollup_7d",
+            "advice_feedback_rollup_7d",
+            rollup,
+            "rollup",
+            as_of,
+            "system:advice_ledger",
+        )
+        if fact is not None:
+            facts.append(fact)
+    return facts
+
+
 def build_unified_snapshot(
     context: AnalysisContext,
     *,
@@ -387,7 +432,7 @@ clearly
         session=session,
         market_scope=market_scope,  # type: ignore[arg-type]
         portfolio=tuple(_build_portfolio_facts(context, source_registry)),
-        profile=tuple(_build_profile_facts(context)),
+        profile=tuple(_build_profile_facts(context) + _build_recent_advice_facts(context)),
         quotes=tuple(_build_quote_facts(context, source_registry)),
         history_features=(),
         technical_evidence=tuple(_build_technical_facts(context)),

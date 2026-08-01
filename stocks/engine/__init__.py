@@ -40,6 +40,7 @@ from stocks.domain.models import (
     financial_asset_to_position_v2,
     position_v2_to_financial_asset,
 )
+from stocks.engine.advice_feedback import compute_feedback_rollup, make_feedback
 from stocks.engine.asset_intake_service import apply_intake_draft, build_intake_draft
 from stocks.engine.config_loader import load_engine_config
 from stocks.engine.context_builder import ContextBuilder
@@ -755,6 +756,17 @@ class StocksEngine:
     def list_advice(self) -> list[dict]:
         """列出已确认保存的建议摘要。"""
         return self.persistence.list_advice()
+
+    def mark_advice_feedback(self, advice_ref: str, status: str, note: str = "") -> dict:
+        """M3：给一条建议记录打上用户结果标记（accepted/partial/rejected/deferred）。"""
+        feedback = make_feedback(status, note)
+        return self.persistence.update_advice_feedback(advice_ref, feedback)
+
+    def advice_feedback_rollup(self, window_days: int = 7) -> dict:
+        """M3：最近 window_days 天的反馈周度汇总（只读）。"""
+        return compute_feedback_rollup(
+            self.persistence.list_advice(), window_days=window_days,
+        )
 
     def save_execution(self, payload: dict) -> dict:
         """保存用户确认过的执行记录。"""

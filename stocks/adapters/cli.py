@@ -122,6 +122,27 @@ class CLIAdapter:
             help="列出已确认保存的建议摘要",
         )
         asset_actions.add_argument(
+            "--advice-feedback",
+            nargs=2,
+            metavar=("REF", "STATUS"),
+            help="给建议打结果标记；REF 为 latest 或 created_at 前缀，"
+                 "STATUS ∈ accepted|partial|rejected|deferred（需 --confirmed）",
+        )
+        asset_actions.add_argument(
+            "--advice-rollup",
+            nargs="?",
+            const=7,
+            default=None,
+            type=int,
+            metavar="DAYS",
+            help="查看最近 DAYS 天（默认 7）的建议反馈汇总（只读）",
+        )
+        parser.add_argument(
+            "--note",
+            default="",
+            help="反馈备注（配合 --advice-feedback 使用）",
+        )
+        asset_actions.add_argument(
             "--advice-save",
             metavar="JSON",
             help="保存一条建议摘要；值为 AdviceRecord 字段的 JSON 对象",
@@ -305,6 +326,8 @@ class CLIAdapter:
             return {"success": True, "data": self.engine.get_profile()}
         if args.advice_list:
             return {"success": True, "data": self.engine.list_advice()}
+        if args.advice_rollup is not None:
+            return {"success": True, "data": self.engine.advice_feedback_rollup(args.advice_rollup)}
         if args.execution_list:
             return {"success": True, "data": self.engine.list_executions()}
         if args.execution_pending:
@@ -373,6 +396,7 @@ class CLIAdapter:
                 args.asset_remove,
                 args.profile_update,
                 args.advice_save,
+                args.advice_feedback,
                 args.execution_save,
                 args.execution_pending,
                 args.forecast_save,
@@ -392,6 +416,10 @@ class CLIAdapter:
             }
 
         try:
+            if args.advice_feedback:
+                ref, status = args.advice_feedback
+                record = self.engine.mark_advice_feedback(ref, status, note=args.note or "")
+                return {"success": True, "data": record, "action": "advice_feedback_marked"}
             if args.advice_save:
                 advice = self.engine.save_advice(
                     self._parse_json_object(args.advice_save)

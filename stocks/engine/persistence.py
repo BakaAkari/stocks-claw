@@ -119,6 +119,51 @@ class DataPersistence:
         """读取最近 N 条确认建议摘要。"""
         return [record.to_dict() for record in self._load_advice_records()[:count]]
 
+    def update_advice_feedback(self, advice_ref: str, feedback: dict) -> dict:
+        """把用户反馈标记写回指定建议记录（M3）。
+
+        advice_ref: ``"latest"`` 取最新一条；否则按 created_at / 文件名
+        安全时间戳前缀匹配。匹配不到或匹配多条都报错，绝不猜测。
+        """
+        if not isinstance(feedback, dict) or not feedback.get("status"):
+            raise ValueError("feedback must be an object with a status")
+        files = self._list_advice_files()
+        if not files:
+            raise ValueError("advice ledger is empty")
+
+        if advice_ref == "latest":
+            target = files[0]
+        else:
+            ref = str(advice_ref).strip()
+            safe_ref = self._safe_timestamp(ref)
+            matches = [path for path in files if path.stem.startswith(safe_ref)]
+            if not matches:
+                # 退化到 created_at 前缀匹配（读取文件内容）
+                for path in files:
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            created = str(json.load(f).get("created_at", ""))
+                    except Exception:
+                        continue
+                    if created.startswith(ref):
+                        matches.append(path)
+            if not matches:
+                raise ValueError(f"no advice record matches ref '{advice_ref}'")
+            if len(matches) > 1:
+                raise ValueError(
+                    f"advice ref '{advice_ref}' is ambiguous ({len(matches)} matches)"
+                )
+            target = matches[0]
+
+        with open(target, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["feedback"] = dict(feedback)
+        # 经过模型校验后再落盘，保证台账里永远是合法记录
+        record = AdviceRecord.from_dict(data)
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump(record.to_dict(), f, ensure_ascii=False, indent=2)
+        return record.to_dict()
+
     def list_advice(self) -> list[dict]:
         """列出所有确认建议摘要（按 created_at 倒序）。"""
         return [record.to_dict() for record in self._load_advice_records()]

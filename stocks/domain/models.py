@@ -981,6 +981,7 @@ class DriftCheck:
 
 
 _ADVICE_DIRECTIONS = {"buy", "sell", "watch", "hold"}
+_ADVICE_FEEDBACK_STATUSES = {"accepted", "partial", "rejected", "deferred"}
 _ADVICE_BASED_ON = {"quotes", "news", "indicators", "macro", "portfolio", "profile"}
 _ADVICE_BOUNDARY_TYPES = {"fact", "inference"}
 _ADVICE_TRIGGER_TYPES = {
@@ -1032,7 +1033,11 @@ def _normalize_date_string(value, field_name: str) -> str:
 
 @dataclass(frozen=True)
 class AdviceRecord:
-    """用户确认保存的建议摘要，不保存 LLM 长文。"""
+    """用户确认保存的建议摘要，不保存 LLM 长文。
+
+    M3: `feedback` 是用户对该建议的结果标记（accepted / partial /
+    rejected / deferred + note + marked_at），缺省表示未标记。
+    """
 
     created_at: str
     instruments: list[dict]
@@ -1042,6 +1047,7 @@ class AdviceRecord:
     boundary: list[dict]
     triggers: list[dict] = field(default_factory=list)
     actions: list[dict] = field(default_factory=list)
+    feedback: Optional[dict] = None
 
     @classmethod
     def create(
@@ -1077,11 +1083,23 @@ class AdviceRecord:
             boundary=list(data.get("boundary", [])),
             triggers=list(data.get("triggers", [])),
             actions=list(data.get("actions", [])),
+            feedback=data.get("feedback"),
         )
 
     def __post_init__(self) -> None:
         if not self.created_at:
             raise ValueError("created_at is required")
+        if self.feedback is not None:
+            if not isinstance(self.feedback, dict):
+                raise ValueError("feedback must be an object")
+            if self.feedback.get("status") not in _ADVICE_FEEDBACK_STATUSES:
+                raise ValueError(
+                    f"feedback.status must be one of {sorted(_ADVICE_FEEDBACK_STATUSES)}"
+                )
+            if not isinstance(self.feedback.get("note", ""), str):
+                raise ValueError("feedback.note must be a string")
+            if not isinstance(self.feedback.get("marked_at", ""), str):
+                raise ValueError("feedback.marked_at must be a string")
         if len(self.rationale_summary) > 500:
             raise ValueError("rationale_summary must be 500 characters or fewer")
         if not isinstance(self.instruments, list) or not all(
@@ -1174,6 +1192,7 @@ class AdviceRecord:
             "boundary": self.boundary,
             "triggers": self.triggers,
             "actions": self.actions,
+            "feedback": self.feedback,
         }
 
 
