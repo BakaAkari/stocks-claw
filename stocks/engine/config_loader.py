@@ -133,6 +133,8 @@ DEFAULT_ENGINE_CONFIG = {
         "outlook": {
             "enabled": True,
             "model": "deepseek-v4-pro",
+            "fallback_models": [],  # 主模型失败时按顺序尝试的备用模型（共用端点/密钥）
+            "retry_attempts": 0,    # 每个模型的额外重试次数
             "api_key_env": "OPENAI_COMPATIBLE_API_KEY",
             "base_url_env": "OPENAI_COMPATIBLE_BASE_URL",
             "fallback_base_url": "",  # 留空=未配置；必须经 base_url_env / .secret 提供，禁止默认内网地址

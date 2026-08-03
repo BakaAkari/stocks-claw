@@ -97,6 +97,11 @@ llm:
   outlook:
     enabled: true
     model: gpt-5.5
+    # 主模型失败（超时/传输/解析错误）时按顺序尝试的备用模型，
+    # 与主模型共用同一端点和密钥
+    fallback_models: ["deepseek-v4-pro", "deepseek-v4-flash"]
+    # 每个模型的额外重试次数（0=不重复，1=失败后重试一次）
+    retry_attempts: 1
     api_key_env: OPENAI_COMPATIBLE_API_KEY
     base_url_env: OPENAI_COMPATIBLE_BASE_URL
     # 留空=未配置；必须通过 OPENAI_COMPATIBLE_BASE_URL 或 .secret/openai-base-url.md 提供

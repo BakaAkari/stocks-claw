@@ -464,3 +464,117 @@ class TestScheduledAnalysisWiring:
         assert fake.calls == 1
         assert artifact["structured_outlook"]["status"] == "ok"
         assert "outlook_evidence_meta" in artifact
+
+
+class _FlakyClient:
+    """Fails the first ``failures`` calls (timeout), then returns payload."""
+
+    def __init__(self, failures: int, payload: dict | None = None):
+        self.failures = failures
+        self.payload = payload if payload is not None else _valid_advisory_payload()
+        self.calls = 0
+        self.model = "flaky-model"
+
+    def complete(self, prompt: str):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise TimeoutError("request timed out")
+        return json.dumps(self.payload, ensure_ascii=False)
+
+
+class _AlwaysFailingClient:
+    def __init__(self, model: str = "bad-model"):
+        self.calls = 0
+        self.model = model
+
+    def complete(self, prompt: str):
+        self.calls += 1
+        raise TimeoutError("request timed out")
+
+
+class TestRetryAndFallbackChain:
+    """P0: LLM 超时重试 + 备用模型链（2026-08-03 盘后运行 LLM 超时后新增）。"""
+
+    def test_retry_attempts_recovers_after_timeout(self) -> None:
+        client = _FlakyClient(failures=1)
+        outlook = build_advisory_outlook(
+            _context(), session_id="cn_after_close", market="cn",
+            config={"llm": {"outlook": {"retry_attempts": 1}}},
+            llm_client=client, now=NOW,
+        )
+        assert outlook["status"] == "ok"
+        assert client.calls == 2
+
+    def test_no_retry_when_attempts_zero(self) -> None:
+        client = _AlwaysFailingClient()
+        outlook = build_advisory_outlook(
+            _context(), session_id="cn_after_close", market="cn",
+            config={"llm": {"outlook": {"retry_attempts": 0}}},
+            llm_client=client, now=NOW,
+        )
+        assert outlook["status"] == "unavailable"
+        assert client.calls == 1
+
+    def test_fallback_model_chain_used_after_primary_fails(self, monkeypatch) -> None:
+        import stocks.engine.advisory_mainline as mainline
+
+        primary = _AlwaysFailingClient(model="gpt-5.5")
+        fallback = _FakeClient()
+        fallback.model = "deepseek-v4-pro"
+        monkeypatch.setattr(
+            mainline, "resolve_mainline_llm_clients",
+            lambda config: [primary, fallback],
+        )
+        outlook = build_advisory_outlook(
+            _context(), session_id="cn_after_close", market="cn",
+            config={"llm": {"outlook": {"retry_attempts": 1}}},
+            llm_client="auto", now=NOW,
+        )
+        assert outlook["status"] == "ok"
+        assert primary.calls == 2   # 1 + retry_attempts
+        assert fallback.calls == 1  # 备用模型一次成功
+
+    def test_all_models_fail_returns_honest_unavailable(self, monkeypatch) -> None:
+        import stocks.engine.advisory_mainline as mainline
+
+        clients = [_AlwaysFailingClient(model="m1"), _AlwaysFailingClient(model="m2")]
+        monkeypatch.setattr(
+            mainline, "resolve_mainline_llm_clients", lambda config: clients,
+        )
+        outlook = build_advisory_outlook(
+            _context(), session_id="cn_after_close", market="cn",
+            config={"llm": {"outlook": {"retry_attempts": 1}}},
+            llm_client="auto", now=NOW,
+        )
+        assert outlook["status"] == "unavailable"
+        assert outlook["message"] == "研判待复核：LLM 分析暂不可用，下期重试"
+        assert all(c.calls == 2 for c in clients)
+        assert any("synthesis error" in lim for lim in outlook["data_limitations"])
+
+
+class TestResolveMainlineLLMClients:
+    def test_chain_includes_fallback_models(self, monkeypatch, tmp_path) -> None:
+        from stocks.engine.advisory_mainline import resolve_mainline_llm_clients
+
+        monkeypatch.setenv("TEST_CHAIN_KEY", "sk-x")
+        monkeypatch.setenv("TEST_CHAIN_URL", "https://llm.example/v1")
+        monkeypatch.chdir(tmp_path)  # 隔离 repo .secret/
+        config = {"llm": {"outlook": {
+            "model": "gpt-5.5",
+            "fallback_models": ["deepseek-v4-pro", "deepseek-v4-flash", "gpt-5.5"],
+            "api_key_env": "TEST_CHAIN_KEY",
+            "base_url_env": "TEST_CHAIN_URL",
+            "timeout_seconds": 180,
+        }}}
+        clients = resolve_mainline_llm_clients(config)
+        assert [c.model for c in clients] == ["gpt-5.5", "deepseek-v4-pro", "deepseek-v4-flash"]
+        assert all(c.api_key == "sk-x" and c.base_url == "https://llm.example/v1" for c in clients)
+        assert all(c.timeout == 180 for c in clients)
+
+    def test_unconfigured_returns_empty_list(self, monkeypatch, tmp_path) -> None:
+        from stocks.engine.advisory_mainline import resolve_mainline_llm_clients
+
+        monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_COMPATIBLE_BASE_URL", raising=False)
+        monkeypatch.chdir(tmp_path)
+        assert resolve_mainline_llm_clients({"llm": {"outlook": {}}}) == []

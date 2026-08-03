@@ -85,6 +85,26 @@ def _load_secret_value(name: str, *, want_url: bool) -> Optional[str]:
     return lines[0] if len(lines) == 1 else None
 
 
+def _resolve_outlook_credentials(config: dict) -> tuple[str, str, int, str, list[str]]:
+    """Read ``config["llm"]["outlook"]`` credentials and model chain settings.
+
+    Returns ``(api_key, base_url, timeout, primary_model, fallback_models)``;
+    ``api_key``/``base_url`` are empty strings when unconfigured.
+    """
+    outlook_cfg = (config.get("llm") or {}).get("outlook") or {}
+    model = str(outlook_cfg.get("model") or "deepseek-v4-pro")
+    api_key_env = str(outlook_cfg.get("api_key_env") or "OPENAI_COMPATIBLE_API_KEY")
+    base_url_env = str(outlook_cfg.get("base_url_env") or "OPENAI_COMPATIBLE_BASE_URL")
+    timeout = int(outlook_cfg.get("timeout_seconds") or 120)
+    fallback_models = [
+        str(m) for m in (outlook_cfg.get("fallback_models") or []) if str(m).strip()
+    ]
+
+    api_key = os.environ.get(api_key_env, "").strip() or _load_secret_value("openai-key.md", want_url=False)
+    base_url = os.environ.get(base_url_env, "").strip() or _load_secret_value("openai-base-url.md", want_url=True)
+    return api_key, base_url, timeout, model, fallback_models
+
+
 def resolve_mainline_llm_client(config: dict) -> Optional[LLMClient]:
     """Resolve an LLMClient from ``config["llm"]["outlook"]``.
 
@@ -93,17 +113,29 @@ def resolve_mainline_llm_client(config: dict) -> Optional[LLMClient]:
     ``openai-base-url.md``).  Returns ``None`` when either the key or the
     endpoint URL is missing — the caller must degrade, never fabricate.
     """
-    outlook_cfg = (config.get("llm") or {}).get("outlook") or {}
-    model = str(outlook_cfg.get("model") or "deepseek-v4-pro")
-    api_key_env = str(outlook_cfg.get("api_key_env") or "OPENAI_COMPATIBLE_API_KEY")
-    base_url_env = str(outlook_cfg.get("base_url_env") or "OPENAI_COMPATIBLE_BASE_URL")
-    timeout = int(outlook_cfg.get("timeout_seconds") or 120)
-
-    api_key = os.environ.get(api_key_env, "").strip() or _load_secret_value("openai-key.md", want_url=False)
-    base_url = os.environ.get(base_url_env, "").strip() or _load_secret_value("openai-base-url.md", want_url=True)
+    api_key, base_url, timeout, model, _ = _resolve_outlook_credentials(config)
     if not api_key or not base_url:
         return None
     return LLMClient(model=model, api_key=api_key, base_url=base_url, timeout=timeout)
+
+
+def resolve_mainline_llm_clients(config: dict) -> list[LLMClient]:
+    """Resolve the primary client plus fallback-model chain.
+
+    Fallback models share the primary endpoint/credentials and are tried
+    in order when the primary model fails (timeout, transport or parse
+    error).  Returns an empty list when unconfigured — the caller must
+    degrade, never fabricate.
+    """
+    api_key, base_url, timeout, model, fallback_models = _resolve_outlook_credentials(config)
+    if not api_key or not base_url:
+        return []
+    clients = [LLMClient(model=model, api_key=api_key, base_url=base_url, timeout=timeout)]
+    for fallback in fallback_models:
+        if fallback == model:
+            continue
+        clients.append(LLMClient(model=fallback, api_key=api_key, base_url=base_url, timeout=timeout))
+    return clients
 
 
 def _quotes_freshness_blocked(context: AnalysisContext, market: str) -> bool:
@@ -251,26 +283,50 @@ def build_advisory_outlook(
         logger.info("advisory mainline: context snapshot older than 90 minutes")
         return _unavailable("研判待复核：数据快照过旧", generated_at=generated_at)
 
-    # 2. LLM client resolution.  "auto" resolves from config; an explicit
-    #    client (tests, ad-hoc runs) is used as-is; None disables the path.
-    client = llm_client
+    # 2. LLM client resolution.  "auto" resolves the primary client plus the
+    #    configured fallback-model chain from config; an explicit client
+    #    (tests, ad-hoc runs) is used as-is; None disables the path.
     if llm_client == "auto":
-        client = resolve_mainline_llm_client(config or {})
-    if client is None:
+        clients = resolve_mainline_llm_clients(config or {})
+    elif llm_client is None:
+        clients = []
+    else:
+        clients = [llm_client]
+    if not clients:
         logger.info("advisory mainline: no LLM client configured")
         return _unavailable("研判待复核：LLM 分析端未配置", generated_at=generated_at)
 
-    # 3. Snapshot → synthesis → fallback detection.
+    # 3. Snapshot → synthesis with per-client retries, then next model in
+    #    the chain.  Only transport/parse failures (deterministic fallback
+    #    advisory) trigger another attempt; a validated advisory is final.
+    outlook_cfg = (config or {}).get("llm", {}).get("outlook", {}) if isinstance(config, dict) else {}
+    retry_attempts = max(0, int(outlook_cfg.get("retry_attempts") or 0))
     snapshot: UnifiedAnalysisSnapshot = build_unified_snapshot(
         context, trigger="scheduled", session=session_id, market_scope=market,
     )
-    advisory = synthesize_advisory(snapshot, llm_client=client)
-    if _is_fallback_advisory(advisory):
+    advisory = None
+    last_limitations: list[str] = []
+    for index, client in enumerate(clients):
+        model_label = getattr(client, "model", f"client#{index}")
+        for attempt in range(1 + retry_attempts):
+            advisory = synthesize_advisory(snapshot, llm_client=client)
+            if not _is_fallback_advisory(advisory):
+                break
+            last_limitations = list(advisory.data_limitations)
+            logger.info(
+                "advisory mainline: synthesis fallback (model=%s attempt=%d/%d)",
+                model_label, attempt + 1, 1 + retry_attempts,
+            )
+        if advisory is not None and not _is_fallback_advisory(advisory):
+            if index > 0:
+                logger.info("advisory mainline: succeeded with fallback model %s", model_label)
+            break
+    if advisory is None or _is_fallback_advisory(advisory):
         logger.info("advisory mainline: LLM synthesis fell back to hold_default")
         return _unavailable(
             "研判待复核：LLM 分析暂不可用，下期重试",
             generated_at=generated_at,
-            data_limitations=list(advisory.data_limitations),
+            data_limitations=last_limitations,
         )
 
     # 4. Contract validation: receipt errors mean the judgment is unusable.
