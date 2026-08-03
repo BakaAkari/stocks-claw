@@ -83,6 +83,15 @@ E1 truth gate and E2 concise renderer are landed and verified. Details on
 what each covers are in the archived task files under
 `docs/archive/tasks-completed-2026-07/` for the record.
 
+**Daily scheduling is live (2026-08-03):** three Kimi Work 定时任务
+(cron, `Asia/Shanghai`) drive the production sessions — A股
+`7 10,15 * * *`（cn_post_open + cn_after_close）、美股盘前
+`47 21 * * *`（us_post_open）、美股盘后 `47 5 * * *`（us_after_close）。
+Each run executes `--scheduled-run-due`（周末/休市自动跳过）并为新 run
+渲染推送 payload 到 `.local/push_payloads/<date>/`。执行路径已验证
+（手动触发 run `run_89cf79ea` succeeded，workspace 绑定正确）。在此之前
+没有任何系统级调度器（crontab / LaunchAgents 均无），分析只会手动触发。
+
 ## Known gaps against `stocks/VISION.md` §2.3 (re-scored after M2, 2026-07-31)
 
 M2 landed at `7c35c7f`: the advisory mainline now produces the 走势研判
@@ -212,9 +221,13 @@ stays backlog.
 
 Known pending items (recorded honestly, not waived):
 - **Shadow gate** (M2): 5 consecutive trading days of live main-window
-  advisory runs — first live run done 2026-07-31, 4+ remain.
+  advisory runs — live runs: 2026-07-31 us_post_open、2026-08-03
+  cn_post_open（中文研判，receipt ok）。每日定时任务已于 2026-08-03
+  上线，后续天数自动积累。
 - **User-value gate** (M2/M3): user confirms reduced decision cost.
 - **MCP wiring for A1 intake + M3 feedback** (CLI landed first; MCP is
   the agent's primary surface — natural follow-up, no task file yet).
 - **Feishu inline feedback buttons** (M3 non-goal; delivery-layer
   follow-up).
+- **Feishu push delivery automation**: 推送 payload 已由定时任务每日
+  生成；发送到飞书的自动化接线尚未做（此前为手动）。
