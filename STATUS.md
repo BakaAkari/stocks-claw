@@ -8,10 +8,70 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-01 (sixth update) — M3 feedback loop landed at
-> `83e94ec`; W1 watchlist is next under M5.
-> Earlier updates: A1 (`c313d22`), M2 (`7c35c7f`, live-LLM verified),
-> M1 (`382207b`).
+> Last updated: 2026-08-03 (seventh update) — institution_type 链路修复 +
+> 报告可用性评审 + P0 修复（LLM 重试/备用模型链、风险状态路径锚定）。
+> W1 watchlist is next under M5.
+> Earlier updates: M3 (`83e94ec`), A1 (`c313d22`), M2 (`7c35c7f`, live-LLM
+> verified), M1 (`382207b`).
+
+## 2026-08-03 三连修复（评审驱动）
+
+**Committed this session（见 git log）；full pytest 1327 passed, 7 skipped,
+0 failed；ruff/compileall/diff-check clean。**
+
+### Fix 1 — institution_type 链路（`no settlement rule matched` 根因）
+
+Real 2026-08-03 reports showed every A股 (cn_broker) action stuck at
+manual_review with `no settlement rule matched` and `待确认平台`. Root
+cause chain: `ContextBuilder._value_position` never put account metadata
+on `position_valuations` items, so all downstream consumers
+(`_build_action_cards`, `finalize_decision`) fell back to
+`_ACCOUNT_ID_TO_INSTITUTION` in `scheduled_analysis.py` — a hardcoded map
+still holding pre-2026-07-06 account IDs (`a_stock`/`boc_life`), while the
+live assets file uses `cn_broker`/`bochk_life`. With `institution_type=""`
+no rule in `engine.yaml execution_rules.settlement_rules` can match
+(fail-closed by design).
+
+Fix: `context_builder.py` threads `asset_accounts_v2` (authoritative
+accounts section) into `_build_position_valuations`/`_value_position` —
+each item now carries `account: {account_id, display_name,
+institution_type, type}` (`{}` when unmatched). `scheduled_analysis.py`
+map updated as backstop (`cn_broker`/`bochk_life` added; legacy IDs kept);
+`_platform_display` maps `cn_broker` → `A股证券账户`. Smoke: real
+cn_after_close re-run — 23/23 positions carry institution_type, 512480
+stop_loss resolves `executable_quantity 5000` / `¥4,605`;
+`no settlement rule matched` gone from user_view.
+
+### Fix 2 — LLM 超时重试 + 备用模型链（P0，评审 P0-1）
+
+2026-08-03 cn_after_close 真实运行 `synthesis error: timed out` →
+走势研判缺席。原配置单次调用、180s 超时、无重试、无备用模型。
+`advisory_mainline.build_advisory_outlook` 现支持：
+`llm.outlook.retry_attempts`（engine.yaml=1，默认 0）每模型重试 +
+`llm.outlook.fallback_models`（engine.yaml=[deepseek-v4-pro,
+deepseek-v4-flash]）共用端点/密钥按序降级。仅传输/解析失败（确定性
+hold_default fallback）触发下一尝试；校验通过的研判不再重试；
+全部失败仍诚实降级"研判待复核"。`resolve_mainline_llm_client`
+保留（asset_intake_service 使用），新增 `resolve_mainline_llm_clients`。
+
+### Fix 3 — 风险状态路径锚定（P0，评审 P0-2 修正版）
+
+评审原结论"风险状态滞留 19 天"经深夜复核**不成立**：运行产物链证明
+TTL 自动解除机制工作正常（7-31 hedge → 8-03 06:08 过期重置 normal →
+15:12 新 critical 簇重新 escalate → 21:47 再次过期降级）。盘后
+"地缘政治 crisis"来自当天新鲜情报簇。真实缺陷：
+`_persist_risk_state` 用进程 CWD 解析相对 `state_path`/`artifact_dir`，
+与 `resolve_artifact_dir`（锚定 repo_root）不一致——cron/agent 不同
+工作目录启动会把风险状态静默分裂成多份。新增
+`_resolve_risk_state_path` 锚定仓库根目录；`load()`/`_update_locked()`
+的 expires_at 逻辑未动。
+
+### 评审文档
+
+`docs/analysis/report-usability-review-2026-08-03.md`：报告可用性与
+LLM 能力发挥度全面评审（含 P0-2 修正记录）。结论：管线能力已建成，
+LLM 成功时报告可用可参考；剩余 P1（情报层 0 方向信号、资产/宏观数据
+陈旧）与 P2（M4 约束模型重估、推送自动化、反馈闭环启用）未动。
 
 ## Baseline (as of 2026-08-01, sixth verification)
 
