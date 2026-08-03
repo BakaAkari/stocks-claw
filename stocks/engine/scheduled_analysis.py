@@ -1116,6 +1116,28 @@ def _risk_evidence_keys(*, vix, clusters: list[dict]) -> list[str]:
     return sorted(set(keys))
 
 
+def _resolve_risk_state_path(config: dict, *, repo_root: Optional[Path] = None) -> Path:
+    """Resolve the persistent risk-state path, anchored to the repo root.
+
+    Relative ``risk_state.state_path`` / ``artifact_dir`` values must NOT be
+    resolved against the process CWD: scheduled runs can be launched by
+    agents or cron jobs whose CWD differs from the repo, which would
+    silently split the risk state into multiple divergent files.
+    """
+    root = repo_root or Path(__file__).resolve().parents[2]
+    risk_cfg = (config or {}).get("risk_state") or {}
+    raw = risk_cfg.get("state_path")
+    if not raw:
+        artifact_dir = Path(str((config or {}).get("artifact_dir") or ".local/scheduled_runs"))
+        if not artifact_dir.is_absolute():
+            artifact_dir = root / artifact_dir
+        return artifact_dir.parent / "risk_state.json"
+    path = Path(str(raw))
+    if not path.is_absolute():
+        path = root / path
+    return path
+
+
 def _persist_risk_state(assessment: dict, *, generated_at: datetime, config: dict) -> dict:
     from stocks.engine.risk_state import RiskObservation, RiskStateStore
 
@@ -1128,10 +1150,7 @@ def _persist_risk_state(assessment: dict, *, generated_at: datetime, config: dic
             minutes=int(risk_cfg.get("critical_ttl_minutes", 360))
         ),
     )
-    state_path = risk_cfg.get("state_path")
-    if not state_path:
-        artifact_dir = Path((config or {}).get("artifact_dir") or ".local/scheduled_runs")
-        state_path = artifact_dir.parent / "risk_state.json"
+    state_path = _resolve_risk_state_path(config)
     state = RiskStateStore(path=state_path, config=risk_cfg).update(observation)
     result = state.to_dict()
     result["recommended_actions"] = assessment.get("recommended_actions", [])

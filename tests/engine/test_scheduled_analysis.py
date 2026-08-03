@@ -1192,3 +1192,50 @@ def test_task001c_evidence_bridge_never_fabricates_unit_for_flat_quantity():
         "liquidity": {"tier": "t1"}, "evidence": {},
     }])["ccb_gold"]
     assert bridged["holding"] == {"quantity": 139.2733, "unit": ""}
+
+
+def test_resolve_risk_state_path_anchors_relative_paths_to_repo_root(tmp_path):
+    """P0: 风险状态路径必须锚定仓库根目录，不得随进程 CWD 漂移——
+    否则 cron/agent 以不同 CWD 启动会把状态静默分裂成多份。"""
+    from stocks.engine.scheduled_analysis import _resolve_risk_state_path
+
+    root = tmp_path / "repo"
+    # 默认（无配置）：<root>/.local/risk_state.json
+    assert _resolve_risk_state_path({}, repo_root=root) == root / ".local" / "risk_state.json"
+    # 相对 state_path 锚定 root
+    assert _resolve_risk_state_path(
+        {"risk_state": {"state_path": ".local/risk_state.json"}}, repo_root=root,
+    ) == root / ".local" / "risk_state.json"
+    # 相对 artifact_dir 回退也锚定 root
+    assert _resolve_risk_state_path(
+        {"artifact_dir": ".local/scheduled_runs"}, repo_root=root,
+    ) == root / ".local" / "risk_state.json"
+    # 绝对路径原样保留
+    absolute = tmp_path / "elsewhere" / "risk_state.json"
+    assert _resolve_risk_state_path(
+        {"risk_state": {"state_path": str(absolute)}}, repo_root=root,
+    ) == absolute
+
+
+def test_persist_risk_state_writes_anchored_file_regardless_of_cwd(tmp_path, monkeypatch):
+    """从不同 CWD 调用 _persist_risk_state，状态仍写入同一个锚定文件。"""
+    from datetime import timezone as _tz
+
+    from stocks.engine.scheduled_analysis import _persist_risk_state
+
+    state_dir = tmp_path / "state"
+    config = {"risk_state": {"state_path": str(state_dir / "risk_state.json")}}
+    monkeypatch.chdir(tmp_path)  # 模拟非仓库 CWD
+    first = _persist_risk_state(
+        {"level": "watch", "evidence_keys": ["cluster:x"]},
+        generated_at=datetime(2026, 8, 3, 7, 0, tzinfo=_tz.utc),
+        config=config,
+    )
+    assert first["level"] == "watch"
+    assert (state_dir / "risk_state.json").exists()
+    second = _persist_risk_state(
+        {"level": "normal", "evidence_keys": []},
+        generated_at=datetime(2026, 8, 3, 8, 0, tzinfo=_tz.utc),
+        config=config,
+    )
+    assert second["deescalation_count"] == 1  # 读到了同一文件中的 watch 状态
