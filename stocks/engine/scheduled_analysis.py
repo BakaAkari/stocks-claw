@@ -58,10 +58,15 @@ logger = get_logger("scheduled_analysis")
 # ── Phase 2: 可执行性辅助函数 ──
 
 _ACCOUNT_ID_TO_INSTITUTION = {
-    "a_stock": "brokerage",
+    # 当前资产文件账户 ID（权威来源是 assets 文件 accounts 段，
+    # 经 context_builder 透传；此表仅为缺失元数据时的兜底）。
+    "cn_broker": "brokerage",
     "ibkr": "brokerage",
     "alipay": "fund_platform",
     "ccb": "bank",
+    "bochk_life": "insurance",
+    # 历史 ID（2026-07-06 资产文件改版前），保留兼容旧快照。
+    "a_stock": "brokerage",
     "boc_life": "insurance",
 }
 
@@ -93,7 +98,7 @@ def _platform_display(institution_type: str, account_id: str) -> str:
     if institution_type == "brokerage":
         if account_id == "ibkr":
             return "IBKR"
-        if account_id == "a_stock":
+        if account_id in ("a_stock", "cn_broker"):
             return "A股证券账户"
         return "证券账户"
     if institution_type == "fund_platform":

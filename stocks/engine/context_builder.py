@@ -206,6 +206,7 @@ class ContextBuilder:
             exposure_proxy=exposure_proxy or {},
             action_signals=action_signals,
             technical_indicators=technical_indicators,
+            accounts=list(asset_accounts_v2 or []),
         )
         valuation_assets = self._assets_from_position_valuations(
             positions,
@@ -452,6 +453,7 @@ class ContextBuilder:
         exposure_proxy: dict,
         action_signals: Optional[dict],
         technical_indicators: Optional[dict[str, dict]] = None,
+        accounts: Optional[list[Account]] = None,
     ) -> list[dict]:
         """按 v2 position 生成运行时估值快照；只进入上下文，不持久化。"""
         if not positions:
@@ -466,6 +468,9 @@ class ContextBuilder:
             for item in (action_signals or {}).get("items", [])
             if item.get("symbol")
         }
+        accounts_by_id = {
+            account.account_id: account for account in (accounts or [])
+        }
         items: list[dict] = []
         for position in positions:
             indicators = (technical_indicators or {}).get(position.instrument_key or "", {})
@@ -476,6 +481,7 @@ class ContextBuilder:
                 exposure_proxy=exposure_proxy,
                 signal_by_symbol=signal_by_symbol,
                 indicators=indicators,
+                account=accounts_by_id.get(position.account_id),
             )
             items.append(item)
 
@@ -498,6 +504,7 @@ class ContextBuilder:
         exposure_proxy: dict,
         signal_by_symbol: dict[str, dict],
         indicators: Optional[dict] = None,
+        account: Optional[Account] = None,
     ) -> dict:
         flags: list[str] = []
         method = position.valuation_input.method
@@ -638,6 +645,19 @@ class ContextBuilder:
         return {
             "position_id": position.position_id,
             "account_id": position.account_id,
+            # 账户元数据（来自资产文件 accounts 段，权威来源）：供下游
+            # 行动卡解析 institution_type / platform_display，避免回退到
+            # 账户 ID 硬编码映射表。
+            "account": (
+                {
+                    "account_id": account.account_id,
+                    "display_name": account.display_name,
+                    "institution_type": account.institution_type,
+                    "type": account.institution_type,
+                }
+                if account is not None
+                else {}
+            ),
             "display_name": position.display_name,
             "instrument_key": position.instrument_key,
             "public_code": (position.instrument or {}).get("fund_code") or "",

@@ -913,6 +913,13 @@ class TestRawPromptStructure:
         assert context.schema_version == 12
         assert context.data_quality["schema_version"] == 10
         assert context.data_quality["asset_format"]["schema_version"] == 2
+        # 账户元数据透传：institution_type 的权威来源是资产文件 accounts 段，
+        # 下游行动卡/结算规则依赖该字段（回归：cn_broker 曾回退到过期的
+        # 账户 ID 硬编码映射表，导致 no settlement rule matched）。
+        assert by_id["broker_000001"]["account"]["institution_type"] == "brokerage"
+        assert by_id["broker_000001"]["account"]["account_id"] == "broker"
+        assert by_id["fund_nasdaq"]["account"]["institution_type"] == "fund_platform"
+        assert by_id["bank_cash"]["account"] == {}  # 无匹配账户时为空
         assert by_id["broker_000001"]["market_value_cny"] == 1050.0
         assert by_id["broker_000001"]["pnl_pct"] == 31.25
         assert by_id["fund_nasdaq"]["advice_granularity"] == "sector"

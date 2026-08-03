@@ -336,6 +336,39 @@ def test_action_cards_apply_freshness_per_position_in_mixed_market_portfolio():
     assert by_id["us_previous_close"]["ratio"] == 0.15
 
 
+def test_action_card_uses_account_metadata_institution_type_when_present():
+    """账户元数据（资产文件 accounts 段透传）是 institution_type 的权威来源。"""
+    position = _tradable_position("cn_broker_etf", "a:510300", freshness="current")
+    position.update({
+        "account_id": "cn_broker",
+        "account": {"account_id": "cn_broker", "institution_type": "brokerage"},
+        "liquidity": {"rebalance_eligible": True, "tradable": True, "tier": "t1"},
+    })
+
+    card = _build_action_cards([position])[0]
+
+    assert card["institution_type"] == "brokerage"
+    assert card["platform_display"] == "A股证券账户"
+    assert card["settlement_timing"] == "T+1"
+    assert card["operation_channel"] != "在对应平台执行"
+
+
+def test_action_card_falls_back_to_account_id_map_for_current_account_ids():
+    """回归：cn_broker / bochk_life 曾不在账户 ID 映射表中，导致
+    institution_type 为空 → no settlement rule matched。"""
+    position = _tradable_position("cn_broker_300etf", "a:510300", freshness="current")
+    position.update({
+        "account_id": "cn_broker",
+        "liquidity": {"rebalance_eligible": True, "tradable": True, "tier": "t1"},
+    })
+
+    card = _build_action_cards([position])[0]
+
+    assert card["institution_type"] == "brokerage"
+    assert card["platform_display"] == "A股证券账户"
+    assert card["settlement_timing"] == "T+1"
+
+
 def test_action_card_blocks_anomalous_technical_action_but_keeps_raw_result():
     position = _tradable_position(
         "a_512480",
