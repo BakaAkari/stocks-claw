@@ -8,13 +8,66 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-03 (seventh update) — institution_type 链路修复 +
-> 报告可用性评审 + P0 修复（LLM 重试/备用模型链、风险状态路径锚定）。
-> W1 watchlist is next under M5.
-> Earlier updates: M3 (`83e94ec`), A1 (`c313d22`), M2 (`7c35c7f`, live-LLM
-> verified), M1 (`382207b`).
+> Last updated: 2026-08-04 (eighth update) — **M4 约束模型升级 landed**
+> （不可逆/分池/硬上限 + 约束即金融记忆 + 用户中立化加载路径）。
+> 此前：2026-08-03 三连修复（institution_type 链路、LLM 重试/备用模型链、
+> 风险状态路径锚定，`v2.9-p0-fixes`）。
+> Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
 
-## 2026-08-03 三连修复（评审驱动）
+## M4 — Constraint model upgrade (landed 2026-08-04)
+
+**Full pytest 1351 passed, 7 skipped, 0 failed；ruff/compileall/diff-check
+clean。** Requirements rationale:
+`docs/analysis/user-requirements-analysis-2026-08-04.md`（§8 校验发现：
+限购/封闭池/换汇三大硬约束此前只存在于系统外的一份 Markdown 报告，
+系统金融记忆零表达）。
+
+What landed:
+
+- **`stocks/engine/constraint_model.py`（新）**：M4 schema + fail-closed
+  校验（未知键/错误类型/引用未定义池 → `ConstraintConfigError`）+
+  `ConstraintModel` 运行时视图 + `iter_bucket_rules`（legacy 桶规则
+  唯一迭代入口）。Schema：`pools`（含 `isolated`）/
+  `position_pool`/`account_pool`/`bucket_limits`（分池比例）/
+  `hard_caps`（`on_breach: must_reduce`）/`position_restrictions`
+  （`no_buyback` + `restriction_note`）。`_` 前缀键为文档键。
+- **约束即金融记忆**：`StocksEngine._load_constraints` 改为
+  `.local/portfolio_constraints.json` 优先，repo
+  `stocks/config/portfolio_constraints.json` 降级为中性 schema example
+  （分发不携带任何用户约束值）。用户的真实约束（QDII 限购不可逆 +
+  12% 硬上限、IBKR 海外封闭池、分池比例）已按用户声明写入 `.local/`。
+- **裁决器**（`portfolio_adjudicator`）：止盈作用于 no_buyback 持仓
+  → 抑制并注明不可逆；任何卖出作用于 no_buyback 持仓 →
+  `decision_reason` 附加 `⚠️ 不可逆` 警告原文；硬上限超限 → 无技术
+  信号也产出指明上限的强制减仓候选（按超出额计算比例）；定义
+  `bucket_limits` 时启用分池比例检查（legacy 全局检查自动关闭，永不
+  双重执行），冲突携带 `pool`/`pool_label`；`PortfolioAction.pool`
+  新字段；`cash_schedule.pools` 分池现金计划（隔离池独立安全垫）。
+- **分池资金**（`_build_capital_allocation`）：加仓候选携带
+  `pool`/`pool_label`/`funding_deployable_cny`（仅本池可动用），输出
+  `pools` 分池资金段；隔离池现金与回款不跨池出资。
+- **既有消费者防护**：`scaffolds` 偏离检查与 `context_builder` 的
+  【约束配置】prompt 段改经 `iter_bucket_rules`，M4 扩展键不再被
+  误读为幻影桶（修复 `list object has no attribute get`）。
+- **验证**：13 个新测试（schema 校验 10 + 模型 7 + 裁决器硬上限/
+  不可逆/分池 5 + 跨池出资围栏 1，含任务文件全部验收标准）；真实
+  `cn_after_close` 烟雾（2026-08-04）：报告首次给出三个带数量/金额的
+  可执行动作（512480 止损 5000 股、510300 减仓 525 股、588000 减仓
+  450 股），冲突带"国内池："前缀，NVDA 减仓不再被国内池权益低配
+  阻塞（分池语义生效）；备用模型链在真实运行中触发（gpt-5.5 失败后
+  尝试 deepseek-v4-pro）。
+
+Known limitations (recorded honestly):
+
+- 分池比例检查不含 replacement-chain 自动换仓（该机制仍是 legacy
+  全局路径）；分池模式下低配+减仓走人工确认冲突。
+- `cn_equity`/`csi300` 等标签未映射到桶（`_TAG_TO_BUCKET` 数据缺口，
+  M4 前已存在）：510300/588000 不参与权益桶比例，桶覆盖率是既有
+  数据质量问题，未在本任务扩大。
+- 硬上限当前 nasdaq100 占比 ~9% < 12%，未触发强制减仓；已用测试
+  覆盖触发路径。
+
+## 2026-08-03 三连修复（评审驱动，`v2.9-p0-fixes`）
 
 **Committed this session（见 git log）；full pytest 1327 passed, 7 skipped,
 0 failed；ruff/compileall/diff-check clean。**

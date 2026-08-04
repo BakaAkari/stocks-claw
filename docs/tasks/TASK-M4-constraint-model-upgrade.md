@@ -162,3 +162,16 @@ isolated pool with excess cash. Manually verify the rendered report
 shows: the irreversibility warning, the must-reduce candidate naming the
 cap, and no cross-pool funding language. Save a copy of the rendered
 output alongside the STATUS.md update.
+
+## Outcome (2026-08-04)
+
+**Landed.** All six acceptance criteria verified by tests (13 new tests
+across `test_constraint_model.py`, `test_portfolio_adjudicator.py`,
+`test_scheduled_analysis.py`); full suite 1351 passed. Real smoke
+(2026-08-04 cn_after_close) shows per-pool conflicts, pool-labelled
+actions, fenced cash, and the first executable action set on the real
+portfolio. Deviations from the original sketch: `account_pool` added as a
+mapping fallback; constraints load `.local/` first (constraints-as-
+financial-memory, distribution-neutral); per-pool mode replaces (not
+augments) legacy global checks; replacement chains remain legacy-global
+only. Details in STATUS.md (eighth update).

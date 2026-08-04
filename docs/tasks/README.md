@@ -21,9 +21,9 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-None open. M3 closed 2026-08-01 (`83e94ec`). **W1 — Watchlist
-productization** is next (M5; task file to be written before starting,
-with D1 US-quotes verification folded in).
+None open. **M4 约束模型升级 landed 2026-08-04**（见 STATUS.md 第八次
+更新）。下一步按 `docs/analysis/user-requirements-analysis-2026-08-04.md`
+§7 排序：双引擎信息面专项 / 用户中立化清理 / W1。
 
 ## Backlog (do not start before the current task closes)
 
