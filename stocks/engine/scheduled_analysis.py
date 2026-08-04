@@ -1192,6 +1192,7 @@ def _build_adjudicator_evidences(pv_list: list[dict]) -> dict[str, dict]:
         evidences[pid] = {
             "position_id": pid,
             "instrument_key": pv.get("instrument_key", ""),
+            "account_id": pv.get("account_id", ""),
             "holding": _evidence_holding(pv),
             "valuation_method": pv.get("valuation_method", ""),
             "classification": pv.get("classification", {}),
@@ -2684,6 +2685,46 @@ def _build_capital_allocation(
     safety_buffer = total_value * 0.05
     net_deployable = max(0, available_cash + reduce_proceeds - safety_buffer)
 
+    # ── M4: 分池可动用资金。隔离池的现金与减仓回款只计入本池，
+    # 任何加仓建议的出资计算不得跨池。
+    from stocks.engine.constraint_model import ConstraintModel as _CM
+
+    constraint_model = _CM.from_config(constraints or {})
+    pool_of_pid: dict[str, str] = {}
+    pool_totals: dict[str, float] = {}
+    pool_cash: dict[str, float] = {}
+    for pv in position_valuations:
+        pid = pv.get("position_id", "")
+        pool = constraint_model.pool_of(pid, str(pv.get("account_id") or ""))
+        pool_of_pid[pid] = pool
+        mv = pv.get("market_value_cny") or 0.0
+        pool_totals[pool] = pool_totals.get(pool, 0.0) + mv
+        tier = ((pv.get("liquidity") or {}).get("tier") or "")
+        tradable = (pv.get("liquidity") or {}).get("tradable")
+        if tier in ("cash", "t0") and tradable is not False:
+            pool_cash[pool] = pool_cash.get(pool, 0.0) + mv
+    pool_proceeds: dict[str, float] = {}
+    for item in reduce_items:
+        pool = pool_of_pid.get(item["position_id"], "domestic")
+        pool_proceeds[pool] = pool_proceeds.get(pool, 0.0) + item["proceeds_cny"]
+    pools_funding: dict[str, dict] = {}
+    if constraint_model.has_pools:
+        for pool in sorted(pool_totals):
+            pool_safety = pool_totals[pool] * 0.05
+            deployable = max(
+                0.0,
+                pool_cash.get(pool, 0.0) + pool_proceeds.get(pool, 0.0) - pool_safety,
+            )
+            pools_funding[pool] = {
+                "label": constraint_model.pool_label(pool),
+                "isolated": constraint_model.is_isolated(pool),
+                "total_value_cny": round(pool_totals[pool], 2),
+                "available_cash_cny": round(pool_cash.get(pool, 0.0), 2),
+                "reduce_proceeds_cny": round(pool_proceeds.get(pool, 0.0), 2),
+                "safety_buffer_cny": round(pool_safety, 2),
+                "net_deployable_cny": round(deployable, 2),
+            }
+
     # ── 5. 加仓候选：约束感知排序 ──
     pid_to_inst = {}
     pid_to_tags = {}
@@ -2735,6 +2776,7 @@ def _build_capital_allocation(
             elif rank <= 5:
                 rotation_bonus = 1.5
         score = strength * constraint_penalty * rotation_bonus
+        cand_pool = pool_of_pid.get(card["position_id"], "domestic")
         add_candidates.append({
             "position_id": card["position_id"],
             "action": card["action"],
@@ -2744,6 +2786,13 @@ def _build_capital_allocation(
             "priority_score": round(score, 4),
             "constraint_note": "；".join(penalty_reasons) if penalty_reasons else "无约束冲突",
             "facts": card.get("facts", [])[:2],
+            # M4: 加仓的出资来源仅限本池可动用资金（隔离池不跨池）
+            "pool": cand_pool,
+            "pool_label": constraint_model.pool_label(cand_pool),
+            "funding_deployable_cny": (
+                pools_funding.get(cand_pool, {}).get("net_deployable_cny")
+                if pools_funding else round(net_deployable, 2)
+            ),
         })
 
     add_candidates.sort(key=lambda x: x["priority_score"], reverse=True)
@@ -2806,6 +2855,8 @@ def _build_capital_allocation(
         "add_candidates": add_candidates[:5],
         "idle_cash_suggestions": idle_cash_suggestions[:3],
         "priority_summary": "；".join(priority_summary) if priority_summary else "无优先动作",
+        # M4: 分池资金（定义了 pools 时存在；隔离池资金不跨池出资）
+        "pools": pools_funding,
     }
 
 

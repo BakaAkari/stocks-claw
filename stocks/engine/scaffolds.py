@@ -141,7 +141,10 @@ class PortfolioScaffold:
         drift_checks: list[DriftCheck] = []
 
         # 约束声明是检查基准：组合里缺失的 bucket 也必须按 0% 检查最小值。
-        for bucket, bucket_constraints in constraints.items():
+        # M4：只迭代 legacy 桶规则，跳过 pools/hard_caps 等扩展键。
+        from stocks.engine.constraint_model import iter_bucket_rules
+
+        for bucket, bucket_constraints in iter_bucket_rules(constraints):
             ratio = mapping.ratios.get(bucket, 0.0)
             target_min = bucket_constraints.get("min")
             target_max = bucket_constraints.get("max")

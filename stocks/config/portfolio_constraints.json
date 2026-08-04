@@ -1,6 +1,17 @@
 {
+  "_comment": "SCHEMA EXAMPLE — 分发用中性示例。真实约束值属于用户金融记忆，应放在 .local/portfolio_constraints.json（优先加载），不要在本文件写入个人约束。本文件同时定义合法 schema：顶层大类 min/max 为软约束；pools/position_pool/account_pool/bucket_limits/hard_caps/position_restrictions 为 M4 扩展（全部可选）。",
+
   "权益": {"min": 0.25, "max": 0.65},
-  "固收": {"min": 0.15, "max": 0.50},
-  "现金": {"min": 0.05, "max": 0.30},
-  "黄金": {"min": 0.00, "max": 0.15}
+  "固收": {"min": 0.15, "max": 0.5},
+  "现金": {"min": 0.05, "max": 0.3},
+  "黄金": {"min": 0.0, "max": 0.15},
+
+  "pools": {
+    "domestic": {"label": "默认池", "currency": "CNY"}
+  },
+  "position_pool": {},
+  "account_pool": {},
+  "bucket_limits": {},
+  "hard_caps": [],
+  "position_restrictions": {}
 }

@@ -366,11 +366,38 @@ class StocksEngine:
     def _load_configs(self) -> None:
         """加载所有配置文件。"""
         self._assets = self._load_assets_from_file()
-        self._constraints = self._load_json("portfolio_constraints.json") or {}
+        self._constraints = self._load_constraints()
         self._profile = self._load_profile()
         self._watchlist = self._load_watchlist()
         self._sector_scan = self._load_sector_scan()
         self._exposure_proxy = self._load_exposure_proxy()
+
+    def _load_constraints(self) -> dict:
+        """加载组合约束（M4：约束即用户金融记忆）。
+
+        优先级：``.local/portfolio_constraints.json``（用户确认值，实例
+        数据，永不入分发包）> ``config_dir/portfolio_constraints.json``
+        （schema example / 兜底默认值）。加载后即按 M4 schema 校验——
+        未知键、错误类型、引用未定义池一律 fail closed 抛
+        ConstraintConfigError，绝不静默忽略。
+        """
+        from stocks.engine.constraint_model import (
+            ConstraintConfigError,
+            validate_constraints,
+        )
+
+        local_path = self._local_data_dir / "portfolio_constraints.json"
+        data = None
+        if local_path.exists():
+            try:
+                data = json.loads(local_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                raise ConstraintConfigError(
+                    f"portfolio_constraints: .local 文件不是合法 JSON: {exc}"
+                ) from exc
+        if data is None:
+            data = self._load_json("portfolio_constraints.json")
+        return validate_constraints(data or {})
 
     def _load_openai_config(
         self,

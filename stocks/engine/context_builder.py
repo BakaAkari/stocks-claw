@@ -1987,9 +1987,11 @@ class ContextBuilder:
             lines.append(" 无约束配置或全部在范围内")
         lines.append("")
 
-        # 约束配置
+        # 约束配置（M4：只渲染 legacy 桶规则，扩展键不进 prompt）
+        from stocks.engine.constraint_model import iter_bucket_rules
+
         lines.append("【约束配置】")
-        for bucket, cfg in constraints.items():
+        for bucket, cfg in iter_bucket_rules(constraints):
             min_v = cfg.get("min")
             max_v = cfg.get("max")
             min_str = f"{min_v * 100:.1f}%" if min_v is not None else "-"

@@ -24,6 +24,7 @@ from stocks.domain.models import (
     _LIQUIDITY_TIERS,
     _PRODUCT_TYPES,
 )
+from stocks.engine.constraint_model import ConstraintModel
 from stocks.engine.execution_rules import resolve_execution
 from stocks.engine.quant_action import _TAG_TO_BUCKET
 from stocks.engine.valuation_freshness import freshness_is_estimate
@@ -165,6 +166,8 @@ class PortfolioAction:
     # TASK-001 item 8: amount derivation moved out of presentation.py.
     estimated_amount_cny: Optional[float] = None
     amount_is_estimate: bool = True
+    # M4: segregated pool this action belongs to ("" when pools undefined).
+    pool: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -182,6 +185,7 @@ class PortfolioAction:
             "platform_display": self.platform_display,
             "institution_type": self.institution_type,
             "account_id": self.account_id,
+            "pool": self.pool,
             "final_ratio": self.final_ratio if self.final_ratio is not None else self.ratio,
             "original_ratio": self.original_ratio if self.original_ratio is not None else self.ratio,
             "decision_reason": self.decision_reason or self.reason,
@@ -488,6 +492,32 @@ def _build_bucket_ratios_from_evidences(evidences: dict[str, dict]) -> dict[str,
     return {b: v / total for b, v in bucket_values.items()}
 
 
+def _build_bucket_ratios_by_pool(
+    evidences: dict[str, dict], model: ConstraintModel
+) -> dict[str, dict[str, float]]:
+    """M4: bucket ratios computed independently per segregated pool."""
+    by_pool: dict[str, dict[str, dict]] = {}
+    for pid, ev in evidences.items():
+        pool = model.pool_of(pid, str(ev.get("account_id") or ""))
+        by_pool.setdefault(pool, {})[pid] = ev
+    return {
+        pool: _build_bucket_ratios_from_evidences(pool_evs)
+        for pool, pool_evs in by_pool.items()
+    }
+
+
+def _append_irreversibility_warning(action: PortfolioAction, note: str) -> None:
+    """M4: sell actions on no_buyback positions carry a verbatim warning."""
+    text = note.strip() or "该持仓卖出后无法买回"
+    warning = f"⚠️ 不可逆：{text}"
+    if warning not in action.decision_reason:
+        action.decision_reason = (
+            f"{action.decision_reason}；{warning}"
+            if action.decision_reason
+            else warning
+        )
+
+
 def _finalize_approved_action(
     *,
     position_id: str,
@@ -610,7 +640,25 @@ def adjudicate_portfolio(
     risk_level = risk_state.get("level", "normal")
 
     merged = _build_evidence_from_cards(raw_cards, evidences)
+    # M4: build the constraint model and annotate each card with its
+    # segregated pool (position > account > default pool).
+    model = ConstraintModel.from_config(constraints or {})
+    for item in merged:
+        ev = item["evidence"]
+        item["pool"] = model.pool_of(
+            item["position_id"], str(ev.get("account_id") or "")
+        )
     bucket_ratios = _build_bucket_ratios_from_evidences(evidences)
+    ratios_by_pool = (
+        _build_bucket_ratios_by_pool(evidences, model) if model.bucket_limits else {}
+    )
+    # M4: when per-pool bucket_limits are defined, the legacy GLOBAL
+    # min/max checks below are disabled (set to None) and replaced by the
+    # per-pool pass at "Priority 4b" — a ratio must never be enforced by
+    # two scopes at once.
+    if model.bucket_limits:
+        gold_max = None
+        equity_min = None
 
     gold_pct = bucket_ratios.get("\u9ec4\u91d1", 0.0)
     equity_pct = bucket_ratios.get("\u6743\u76ca", 0.0)
@@ -697,6 +745,34 @@ def adjudicate_portfolio(
                 reason=f"\u98ce\u9669\u72b6\u6001 {risk_level}\uff1a\u6682\u505c\u52a0\u4ed3",
             ))
             suppressed_pids.add(pid)
+
+    # Priority 3b (M4): no_buyback positions — soft take-profit is
+    # suppressed outright (re-entry is not available); stop_loss/reduce
+    # still proceed but carry an irreversibility warning at approve time.
+    for item in merged:
+        pid = item["position_id"]
+        if pid in suppressed_pids:
+            continue
+        card = item["card"]
+        if card.get("signal") != "take_profit":
+            continue
+        ev = item["evidence"]
+        restr = model.restriction_for(pid, str(ev.get("instrument_key") or ""))
+        if not restr.get("no_buyback"):
+            continue
+        note = str(restr.get("restriction_note") or "").strip() or "该持仓卖出后无法买回"
+        did = make_decision_id(
+            run_id, pid, card.get("raw_signal", ""),
+            card.get("raw_ratio", 0.0), rule_version,
+        )
+        suppressed.append(PortfolioAction(
+            position_id=pid, signal=card.get("signal", "take_profit"),
+            action_description=card.get("action", ""),
+            ratio=card.get("ratio", 0.0), decision_id=did,
+            reason=f"不可逆约束：{note}，止盈卖出建议已抑制；如确需永久退出请人工确认",
+            pool=item["pool"],
+        ))
+        suppressed_pids.add(pid)
 
     # Priority 4: Constraint conflicts
     equity_alternatives: list[str] = []
@@ -865,6 +941,155 @@ def adjudicate_portfolio(
                     # produced; the conflict above is the only output.
                     suppressed_pids.add(reduce_pid)
 
+    # Priority 4b (M4): per-pool bucket-limit checks. Active only when
+    # bucket_limits are defined (the legacy global pass is disabled above).
+    # Mirrors Priority 4/5 semantics per pool: max breach suppresses adds,
+    # min breach + reduce signal goes to the user as a pool-labelled
+    # conflict; hard stop_loss still proceeds with a warning.
+    if model.bucket_limits:
+        for pool in sorted({item["pool"] for item in merged}):
+            pool_rules = model.bucket_rules_for(pool)
+            pool_ratios = ratios_by_pool.get(pool, {})
+            pool_label = model.pool_label(pool)
+            pool_items = [i for i in merged if i["pool"] == pool]
+            pool_total = sum(
+                (i["evidence"].get("market_value_cny") or 0.0) for i in pool_items
+            )
+            for bucket_name, rule in pool_rules.items():
+                max_v = rule.get("max")
+                min_v = rule.get("min")
+                ratio = pool_ratios.get(bucket_name)
+                if ratio is None:
+                    continue
+                if max_v is not None and ratio > max_v:
+                    for item in pool_items:
+                        pid = item["position_id"]
+                        if pid in suppressed_pids:
+                            continue
+                        card = item["card"]
+                        if card.get("signal") not in _ADD_SIGNALS:
+                            continue
+                        if bucket_name not in item["buckets"]:
+                            continue
+                        did = make_decision_id(
+                            run_id, pid, card.get("raw_signal", ""),
+                            card.get("raw_ratio", 0.0), rule_version,
+                        )
+                        suppressed.append(PortfolioAction(
+                            position_id=pid, signal=card["signal"],
+                            action_description=card.get("action", ""),
+                            ratio=card.get("ratio", 0.0), decision_id=did,
+                            reason=f"{pool_label}：{bucket_name}占比 {ratio*100:.1f}% 超上限 {max_v*100:.0f}%，不批准加仓",
+                            pool=pool,
+                        ))
+                        suppressed_pids.add(pid)
+                if min_v is not None and ratio < min_v:
+                    for item in pool_items:
+                        pid = item["position_id"]
+                        if pid in suppressed_pids:
+                            continue
+                        card = item["card"]
+                        sig = card.get("signal", "hold")
+                        if sig not in _REDUCE_SIGNALS:
+                            continue
+                        if bucket_name not in item["buckets"]:
+                            continue
+                        did = make_decision_id(
+                            run_id, pid, card.get("raw_signal", ""),
+                            card.get("raw_ratio", 0.0), rule_version,
+                        )
+                        conflicts.append({
+                            "position_id": pid,
+                            "signal": sig,
+                            "bucket": bucket_name,
+                            "pool": pool,
+                            "pool_label": pool_label,
+                            "bucket_ratio": round(ratio, 6),
+                            "bucket_min": round(float(min_v), 6),
+                            "bucket_value_cny": round(ratio * pool_total, 2),
+                            "portfolio_value_cny": round(pool_total, 2),
+                            "calculation": "per-pool position-deduplicated exposure_tags -> bucket",
+                            "message": (
+                                f"{pool_label}：{bucket_name}占比 {ratio*100:.1f}% 低于下限 {min_v*100:.0f}%，"
+                                f"但 {pid} 触发 {sig}。需人工审核。"
+                            ),
+                            "decision_id": did,
+                        })
+                        if sig == "stop_loss":
+                            action = _finalize_approved_action(
+                                position_id=pid, signal=sig,
+                                action_description=card.get("action", ""),
+                                ratio=card.get("ratio", 0.0), decision_id=did,
+                                reason=f"{pool_label}：硬止损不受约束限制，但{bucket_name}低配需复核",
+                                ev=item["evidence"], card=card,
+                                execution_rules=execution_rules,
+                            )
+                            action.pool = pool
+                            approved.append(action)
+                        suppressed_pids.add(pid)
+
+    # Priority 5b (M4): hard caps — breach produces a mandatory reduce
+    # candidate naming the cap, even when no technical signal fires.
+    for cap in model.hard_caps:
+        cap_pool = cap.get("pool")
+        scope_items = [i for i in merged if cap_pool is None or i["pool"] == cap_pool]
+        scope_total = sum(
+            (i["evidence"].get("market_value_cny") or 0.0) for i in scope_items
+        )
+        if scope_total <= 0:
+            continue
+        matching = []
+        for i in scope_items:
+            tags = ((i["evidence"].get("classification") or {}).get("exposure_tags") or [])
+            if model.category_matches(cap["category"], tags, i["buckets"]):
+                matching.append(i)
+        cat_value = sum(
+            (i["evidence"].get("market_value_cny") or 0.0) for i in matching
+        )
+        cat_ratio = cat_value / scope_total
+        if cat_ratio <= cap["max"]:
+            continue
+        matching.sort(
+            key=lambda i: i["evidence"].get("market_value_cny") or 0.0,
+            reverse=True,
+        )
+        excess = cat_value - cap["max"] * scope_total
+        pool_label = model.pool_label(cap_pool) if cap_pool else ""
+        prefix = f"{pool_label}：" if pool_label else ""
+        for item in matching:
+            if excess <= 0:
+                break
+            pid = item["position_id"]
+            if pid in suppressed_pids:
+                continue
+            ev = item["evidence"]
+            mv = ev.get("market_value_cny") or 0.0
+            if mv <= 0:
+                continue
+            ratio = min(1.0, excess / mv)
+            did = make_decision_id(
+                run_id, pid, f"hard_cap_reduce:{cap['category']}",
+                round(ratio, 6), rule_version,
+            )
+            action = _finalize_approved_action(
+                position_id=pid, signal="reduce",
+                action_description=f"硬上限减仓：{cap['category']}",
+                ratio=ratio, decision_id=did,
+                reason=(
+                    f"{prefix}硬上限：{cap['reason']}"
+                    f"（{cap['category']} 占比 {cat_ratio*100:.1f}% > 上限 {cap['max']*100:.0f}%）"
+                ),
+                ev=ev, card=item["card"],
+                execution_rules=execution_rules,
+            )
+            action.pool = item["pool"]
+            restr = model.restriction_for(pid, str(ev.get("instrument_key") or ""))
+            if restr.get("no_buyback"):
+                _append_irreversibility_warning(action, restr.get("restriction_note", ""))
+            approved.append(action)
+            suppressed_pids.add(pid)
+            excess -= mv * ratio
+
     # Remaining non-suppressed cards -> approve
     for item in merged:
         pid = item["position_id"]
@@ -878,14 +1103,21 @@ def adjudicate_portfolio(
                                card.get("raw_ratio", 0.0), rule_version)
         # reason text carries no raw pre-adjudication ratio: execution_rules
         # may still revise card["ratio"] down to final_ratio (TASK-001E1 defect 1).
-        approved.append(_finalize_approved_action(
+        action = _finalize_approved_action(
             position_id=pid, signal=sig,
             action_description=card.get("action", ""),
             ratio=card.get("ratio", 0.0), decision_id=did,
             reason=f"\u901a\u8fc7\u88c1\u51b3\uff1a{sig}",
             ev=item["evidence"], card=card,
             execution_rules=execution_rules,
-        ))
+        )
+        action.pool = item["pool"]
+        # M4: sell on a no_buyback position carries a verbatim warning.
+        if sig in _REDUCE_SIGNALS:
+            restr = model.restriction_for(pid, str(item["evidence"].get("instrument_key") or ""))
+            if restr.get("no_buyback"):
+                _append_irreversibility_warning(action, restr.get("restriction_note", ""))
+        approved.append(action)
 
     # Determine overall status
     if conflicts or any(a.execution_status == "review_required" for a in approved):
@@ -961,6 +1193,32 @@ def adjudicate_portfolio(
     decision_cash_schedule = build_cash_schedule(
         valuations, approved_sales, total_value
     )
+    # M4: per-pool cash schedules — an isolated pool's cash and proceeds
+    # are fenced: they appear only in their own pool's schedule, never as
+    # funding for another pool's actions.
+    if model.has_pools:
+        pools_schedule: dict[str, dict] = {}
+        pools_present = sorted(
+            {model.pool_of(pid, str(ev.get("account_id") or "")) for pid, ev in evidences.items()}
+        )
+        for pool in pools_present:
+            pool_valuations = [
+                v for v in valuations
+                if model.pool_of(v["position_id"], str(v.get("account_id") or "")) == pool
+            ]
+            pool_sales = [
+                s for s in approved_sales
+                if model.pool_of(
+                    s["position_id"],
+                    str((evidences.get(s["position_id"]) or {}).get("account_id") or ""),
+                ) == pool
+            ]
+            pool_total = sum(v.get("market_value_cny") or 0.0 for v in pool_valuations)
+            schedule = build_cash_schedule(pool_valuations, pool_sales, pool_total)
+            schedule["label"] = model.pool_label(pool)
+            schedule["isolated"] = model.is_isolated(pool)
+            pools_schedule[pool] = schedule
+        decision_cash_schedule["pools"] = pools_schedule
     post_trade_projection["cash_schedule_after"] = copy.deepcopy(
         decision_cash_schedule
     )

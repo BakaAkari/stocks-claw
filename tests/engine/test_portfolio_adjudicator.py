@@ -1794,3 +1794,226 @@ class TestMultiTagBucketSplit:
         )
         suppressed_ids = {a.position_id for a in decision.suppressed_actions}
         assert "mixed" not in suppressed_ids
+
+
+# ── M4: 约束模型升级（不可逆/分池/硬上限）─────────────────────────────
+
+
+def _m4_evidence(
+    position_id: str,
+    *,
+    account_id: str = "",
+    exposure_tags: list[str] | None = None,
+    product_type: str = "stock",
+    liquidity_tier: str = "t1",
+    market_value_cny: float = 10_000.0,
+    tradable: bool = True,
+) -> dict:
+    return {
+        "instrument_key": f"a:{position_id}",
+        "account_id": account_id,
+        "holding": {"quantity": 100, "unit": "share"},
+        "classification": {
+            "product_type": product_type,
+            "exposure_tags": exposure_tags or [product_type],
+        },
+        "liquidity": {"tier": liquidity_tier, "tradable": tradable,
+                      "rebalance_eligible": True},
+        "market_value_cny": market_value_cny,
+        "evidence": {"price_freshness": "current", "data_anomalies": [],
+                     "action_eligible": True},
+        "product_type": product_type,
+    }
+
+
+def _m4_constraints(**overrides) -> dict:
+    config = {
+        "pools": {
+            "domestic": {"label": "国内池", "currency": "CNY"},
+            "overseas": {"label": "海外封闭池", "currency": "USD", "isolated": True},
+        },
+        "account_pool": {"ibkr": "overseas"},
+        "bucket_limits": {
+            "domestic": {"权益": {"min": 0.25, "max": 0.65}},
+            "overseas": {"权益": {"min": 0.0, "max": 1.0}},
+        },
+    }
+    config.update(overrides)
+    return config
+
+
+class TestM4HardCaps:
+    def test_breach_without_technical_signal_yields_reduce_naming_cap(self):
+        """硬上限超限且无技术信号 → 仍产出指明上限的强制减仓候选。"""
+        cards = [
+            _make_card("qdii_gf", signal="hold"),
+            _make_card("cn_510300", signal="hold"),
+        ]
+        evidences = {
+            "qdii_gf": _m4_evidence(
+                "qdii_gf", exposure_tags=["nasdaq100", "us_equity"],
+                product_type="qdii_fund", liquidity_tier="t2_plus",
+                market_value_cny=20_000.0,
+            ),
+            "cn_510300": _m4_evidence(
+                "cn_510300", exposure_tags=["cn_equity", "csi300"],
+                market_value_cny=10_000.0,
+            ),
+        }
+        constraints = {
+            "hard_caps": [{
+                "category": "nasdaq100", "max": 0.12,
+                "on_breach": "must_reduce",
+                "reason": "限购无法买回，超上限必须减",
+            }],
+        }
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, _risk_state(), _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        actions = [a for a in decision.approved_actions if a.position_id == "qdii_gf"]
+        assert len(actions) == 1
+        action = actions[0]
+        assert action.signal == "reduce"
+        assert "硬上限" in action.reason
+        assert "限购无法买回" in action.reason
+        # 超限部分 20000-30000*0.12=16400，占持仓比例 0.82
+        assert action.ratio == pytest.approx(0.82, abs=1e-6)
+
+    def test_below_cap_yields_no_action(self):
+        cards = [_make_card("qdii_gf", signal="hold"),
+                 _make_card("cn_510300", signal="hold")]
+        evidences = {
+            "qdii_gf": _m4_evidence("qdii_gf", exposure_tags=["nasdaq100"],
+                                    product_type="qdii_fund",
+                                    market_value_cny=20_000.0),
+            "cn_510300": _m4_evidence("cn_510300", market_value_cny=10_000.0),
+        }
+        constraints = {"hard_caps": [{"category": "nasdaq100", "max": 0.9}]}
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, _risk_state(), _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+        assert decision.approved_actions == []
+
+
+class TestM4Irreversibility:
+    def test_sell_on_no_buyback_carries_verbatim_warning(self):
+        cards = [_make_card("qdii_gf", signal="reduce", ratio=0.5,
+                            raw_signal="reduce", raw_ratio=0.5)]
+        evidences = {"qdii_gf": _m4_evidence(
+            "qdii_gf", exposure_tags=["nasdaq100"], product_type="qdii_fund",
+            liquidity_tier="t2_plus", market_value_cny=20_000.0,
+        )}
+        constraints = {
+            "position_restrictions": {
+                "qdii_gf": {"no_buyback": True,
+                            "restriction_note": "平台每日限购5元，卖出后事实不可买回"},
+            },
+        }
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, _risk_state(), _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        action = decision.approved_actions[0]
+        assert "⚠️ 不可逆" in action.decision_reason
+        assert "平台每日限购5元，卖出后事实不可买回" in action.decision_reason
+
+    def test_take_profit_on_no_buyback_is_suppressed(self):
+        cards = [_make_card("qdii_gf", signal="take_profit", ratio=0.3,
+                            raw_signal="take_profit", raw_ratio=0.3)]
+        evidences = {"qdii_gf": _m4_evidence(
+            "qdii_gf", exposure_tags=["nasdaq100"], product_type="qdii_fund",
+            liquidity_tier="t2_plus", market_value_cny=20_000.0,
+        )}
+        constraints = {
+            "position_restrictions": {
+                "qdii_gf": {"no_buyback": True, "restriction_note": "每日限购5元"},
+            },
+        }
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, _risk_state(), _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert decision.approved_actions == []
+        assert len(decision.suppressed_actions) == 1
+        assert "不可逆约束" in decision.suppressed_actions[0].reason
+        assert "每日限购5元" in decision.suppressed_actions[0].reason
+
+
+class TestM4Pools:
+    def test_per_pool_ratio_breach_reported_with_pool_label(self):
+        """国内池权益低配 + 减仓信号 → 冲突携带池标签；海外池不受影响。"""
+        cards = [
+            _make_card("cn_510300", signal="reduce", ratio=0.3,
+                       raw_signal="reduce", raw_ratio=0.3),
+            _make_card("cn_cash", signal="hold"),
+            _make_card("ibkr_nvda", signal="hold"),
+        ]
+        evidences = {
+            "cn_510300": _m4_evidence(
+                "cn_510300", exposure_tags=["nasdaq100"],  # maps to 权益 bucket
+                market_value_cny=10_000.0,
+            ),
+            # 国内池现金 50k：国内池权益占比 10/60=16.7% < 25% 下限
+            "cn_cash": _m4_evidence(
+                "cn_cash", product_type="cash", liquidity_tier="cash",
+                exposure_tags=["cash_like"], market_value_cny=50_000.0,
+            ),
+            "ibkr_nvda": _m4_evidence(
+                "ibkr_nvda", account_id="ibkr",
+                exposure_tags=["nasdaq100"], market_value_cny=90_000.0,
+            ),
+        }
+        constraints = _m4_constraints()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, _risk_state(), _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        assert len(decision.unresolved_conflicts) == 1
+        conflict = decision.unresolved_conflicts[0]
+        assert conflict["pool"] == "domestic"
+        assert conflict["pool_label"] == "国内池"
+        assert "国内池" in conflict["message"]
+
+    def test_cash_schedule_has_per_pool_sections_when_pools_defined(self):
+        cards = [
+            _make_card("cn_cash", signal="hold"),
+            _make_card("ibkr_cash", signal="hold"),
+        ]
+        evidences = {
+            "cn_cash": _m4_evidence(
+                "cn_cash", product_type="cash", liquidity_tier="cash",
+                exposure_tags=["cash_like"], market_value_cny=10_000.0,
+            ),
+            "ibkr_cash": _m4_evidence(
+                "ibkr_cash", account_id="ibkr", product_type="cash",
+                liquidity_tier="cash", exposure_tags=["cash_like"],
+                market_value_cny=70_000.0,
+            ),
+        }
+        constraints = _m4_constraints()
+
+        decision = adjudicate_portfolio(
+            cards, evidences, constraints, _risk_state(), _liquidity(),
+            run_id=_run_id(), rule_version=RULE_VERSION,
+        )
+
+        pools = decision.cash_schedule.get("pools")
+        assert pools is not None
+        assert pools["overseas"]["isolated"] is True
+        assert pools["overseas"]["available_now"] == pytest.approx(
+            70_000.0 - pools["overseas"]["safety_buffer_cny"]
+        )
+        assert pools["domestic"]["available_now"] == pytest.approx(
+            10_000.0 - pools["domestic"]["safety_buffer_cny"]
+        )

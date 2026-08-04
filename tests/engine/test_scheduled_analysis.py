@@ -1239,3 +1239,47 @@ def test_persist_risk_state_writes_anchored_file_regardless_of_cwd(tmp_path, mon
         config=config,
     )
     assert second["deescalation_count"] == 1  # 读到了同一文件中的 watch 状态
+
+
+def test_capital_allocation_never_funds_adds_across_isolated_pools():
+    """M4: 隔离海外池的现金不得计入国内池加仓的出资计算。"""
+    from stocks.engine.scheduled_analysis import _build_capital_allocation
+
+    cards = [{
+        "position_id": "cn_etf", "signal": "add", "action": "回踩加仓",
+        "ratio": 0.2, "position_limit_pct": 5.0, "current_weight_pct": 1.0,
+        "facts": [],
+    }]
+    pvs = [
+        {"position_id": "cn_etf", "account_id": "cn_broker",
+         "instrument_key": "a:510300",
+         "classification": {"product_type": "stock", "exposure_tags": ["nasdaq100"]},
+         "liquidity": {"tier": "t1", "tradable": True},
+         "market_value_cny": 10_000.0},
+        {"position_id": "cn_cash", "account_id": "cn_broker",
+         "classification": {"product_type": "cash", "exposure_tags": ["cash_like"]},
+         "liquidity": {"tier": "cash", "tradable": True},
+         "market_value_cny": 5_000.0},
+        {"position_id": "ibkr_cash", "account_id": "ibkr",
+         "classification": {"product_type": "cash", "exposure_tags": ["cash_like"]},
+         "liquidity": {"tier": "cash", "tradable": True},
+         "market_value_cny": 200_000.0},
+    ]
+    constraints = {
+        "pools": {
+            "domestic": {"label": "国内池"},
+            "overseas": {"label": "海外封闭池", "isolated": True},
+        },
+        "account_pool": {"ibkr": "overseas"},
+    }
+
+    result = _build_capital_allocation(cards, pvs, {}, {}, constraints=constraints)
+
+    pools = result["pools"]
+    assert pools["overseas"]["isolated"] is True
+    assert pools["overseas"]["net_deployable_cny"] == pytest.approx(190_000.0)
+    # 国内池可动用 = 5000 - 15000*5% = 4250；海外池 20 万不计入
+    cand = result["add_candidates"][0]
+    assert cand["pool"] == "domestic"
+    assert cand["pool_label"] == "国内池"
+    assert cand["funding_deployable_cny"] == pytest.approx(4_250.0)
