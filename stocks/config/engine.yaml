@@ -91,22 +91,28 @@ llm:
   analysis_enabled: false
   analysis_model: kimi-k2.6
   # API Key 从环境变量读取，也可通过 .secret/openai-key.md
-  api_key_env: OPENAI_API_KEY
-  base_url_env: OPENAI_BASE_URL
+  # 注意: 容器运行环境注入的 OPENAI_API_KEY 是旧端点凭据，不可用；
+  # 强制走 .secret 文件(openai-key.md / openai-base-url.md)避免 env 覆盖。
+  api_key_env: STOCKS_LLM_UNUSED_API_KEY
+  base_url_env: STOCKS_LLM_UNUSED_BASE_URL
   # 中长期研判综合器
   outlook:
     enabled: true
-    model: gpt-5.5
+    model: deepseek-v4-flash
     # 主模型失败（超时/传输/解析错误）时按顺序尝试的备用模型，
     # 与主模型共用同一端点和密钥
-    fallback_models: ["deepseek-v4-pro", "deepseek-v4-flash"]
+    fallback_models: ["deepseek-v4-pro"]
     # 每个模型的额外重试次数（0=不重复，1=失败后重试一次）
     retry_attempts: 1
-    api_key_env: OPENAI_COMPATIBLE_API_KEY
-    base_url_env: OPENAI_COMPATIBLE_BASE_URL
+    # 凭据改走 .secret/openai-key.md 与 openai-base-url.md(容器 env 不注入,
+    # 避免运行时容器 env 中的旧端点/旧 key 覆盖)
+    api_key_env: STOCKS_OUTLOOK_UNUSED_API_KEY
+    base_url_env: STOCKS_OUTLOOK_UNUSED_BASE_URL
     # 留空=未配置；必须通过 OPENAI_COMPATIBLE_BASE_URL 或 .secret/openai-base-url.md 提供
     fallback_base_url: ""
-    timeout_seconds: 180
+    # 单次 LLM 研判调用上限。DeepSeek 官方 API 对超长 snapshot(>100KB)
+    # 响应约 160s,需留足余量,否则稳定触发 urllib timeout。
+    timeout_seconds: 300
     temperature: 0.2
     max_tokens: 5000
     cache_dir: .local/outlook_cache

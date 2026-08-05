@@ -8,7 +8,11 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-04 (eighth update) — **M4 约束模型升级 landed**
+> Last updated: 2026-08-05 (ninth update) — **发版流程基础设施落地**
+> （RELEASE.md + scripts/release_check.py，版本号统一为 2.10.1）。
+> 此前：2026-08-04 M4 约束模型升级（不可逆/分池/硬上限 + 约束即金融记忆）。
+> Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
+> Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
 > （不可逆/分池/硬上限 + 约束即金融记忆 + 用户中立化加载路径）。
 > 此前：2026-08-03 三连修复（institution_type 链路、LLM 重试/备用模型链、
 > 风险状态路径锚定，`v2.9-p0-fixes`）。

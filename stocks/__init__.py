@@ -12,4 +12,4 @@
 from stocks.engine import StocksEngine
 
 __all__ = ["StocksEngine"]
-__version__ = "2.0.0"
+__version__ = "2.10.1"

@@ -75,6 +75,41 @@ class TestAdvisorySynthesizer:
         assert action.size_type == "ratio"
         assert action.evidence_refs
 
+    def test_llm_hold_decisions_missing_action_defaults_to_hold(self) -> None:
+        """Regression: LLM omits `action` in hold_decisions → must default to hold,
+        not fail validation with `unknown action ''`."""
+        class FakeClient:
+            def complete(self, prompt: str) -> dict:
+                return {
+                    "market_assessment": "mixed",
+                    "hold_decisions": [
+                        {
+                            "action_id": "hold_01",
+                            "target": "a:518880",
+                            "reasoning": "gold watch, wait for data recovery",
+                            "size": "defer",
+                            "size_type": "defer",
+                        },
+                        {
+                            "action_id": "hold_02",
+                            "target": "NVDA",
+                            "reasoning": "direction conflict, needs human confirmation",
+                            "size": "defer",
+                            "size_type": "defer",
+                        },
+                    ],
+                    "data_limitations": ["gold position data as of Jul 31"],
+                }
+
+        snapshot = _snapshot()
+        advisory = synthesize_advisory(snapshot, llm_client=FakeClient())
+        assert len(advisory.hold_decisions) == 2
+        for decision in advisory.hold_decisions:
+            assert decision.action == "hold", decision.action_id
+        _, receipt = synthesize_and_validate(snapshot, llm_client=FakeClient())
+        assert receipt["status"] in {"ok", "warnings"}
+        assert not any("unknown action" in e for e in receipt.get("errors", []))
+
     def test_llm_string_response_parsed(self) -> None:
         class FakeClient:
             def complete(self, prompt: str) -> str:

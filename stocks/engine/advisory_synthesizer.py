@@ -112,6 +112,7 @@ Forecast object fields:
 
 Rules:
 - Every action must include at least one `evidence_refs` from the snapshot.
+- Every action object must include a valid `action` field (buy|sell|reduce|add|hold|watch|defer); never omit it, even in `hold_decisions` — each hold decision must carry "action": "hold".
 - Do NOT output absolute CNY amounts. Use ratios, share counts, or "defer".
 - Include "do_not_do" items where the evidence is too weak or the risk is high.
 - In "data_limitations", list missing or stale data that would change your view.
@@ -126,7 +127,7 @@ def _iso_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _parse_actions(items: list[Any]) -> tuple[AdvisoryAction, ...]:
+def _parse_actions(items: list[Any], *, default_action: str = "") -> tuple[AdvisoryAction, ...]:
     actions = []
     for item in items:
         if isinstance(item, str):
@@ -143,11 +144,12 @@ def _parse_actions(items: list[Any]) -> tuple[AdvisoryAction, ...]:
             continue
         if not isinstance(item, dict):
             continue
+        action_value = str(item.get("action", "")).strip() or default_action
         actions.append(
             AdvisoryAction(
                 action_id=str(item.get("action_id", "")),
                 target=str(item.get("target", item.get("name", ""))),
-                action=str(item.get("action", "")),
+                action=action_value,
                 size=str(item.get("size", "")),
                 size_type=str(item.get("size_type", "defer")),
                 reasoning=str(item.get("reasoning", "")),
@@ -247,11 +249,11 @@ def synthesize_advisory(
         short_term=_parse_outlook(parsed.get("short_term")),
         medium_term=_parse_outlook(parsed.get("medium_term")),
         actions=_parse_actions(parsed.get("actions", [])),
-        hold_decisions=_parse_actions(parsed.get("hold_decisions", [])),
+        hold_decisions=_parse_actions(parsed.get("hold_decisions", []), default_action="hold"),
         do_not_do=tuple(parsed.get("do_not_do", [])),
-        sector_opportunities=_parse_actions(parsed.get("sector_opportunities", [])),
-        asset_class_opportunities=_parse_actions(parsed.get("asset_class_opportunities", [])),
-        watchlist_candidates=_parse_actions(parsed.get("watchlist_candidates", [])),
+        sector_opportunities=_parse_actions(parsed.get("sector_opportunities", []), default_action="watch"),
+        asset_class_opportunities=_parse_actions(parsed.get("asset_class_opportunities", []), default_action="watch"),
+        watchlist_candidates=_parse_actions(parsed.get("watchlist_candidates", []), default_action="watch"),
         scenarios=_parse_scenarios(parsed.get("scenarios", [])),
         forecast_candidates=_parse_forecasts(parsed.get("forecast_candidates", [])),
         next_checkpoints=tuple(parsed.get("next_checkpoints", [])),

@@ -1282,6 +1282,14 @@ class StocksEngine:
     def _get_scheduled_runner(self) -> ScheduledAnalysisRunner:
         if self._scheduled_runner is None:
             config = load_scheduled_config(self.config_dir)
+            # Merge the LLM section from engine.yaml into the scheduled config.
+            # scheduled_sessions.json only defines session/market schedules; the
+            # advisory mainline resolves outlook credentials (api_key_env /
+            # base_url_env / model) from config["llm"]["outlook"]. Without this
+            # merge it falls back to defaults, picking up whatever OPENAI_*
+            # vars exist in the process env — wrong endpoint/key → 401.
+            engine_llm = (self._config or {}).get("llm") or {}
+            config.setdefault("llm", {}).update(engine_llm)
             repo_root = Path(__file__).resolve().parents[2]
             self._scheduled_runner = ScheduledAnalysisRunner(
                 self,
