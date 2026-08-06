@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -35,6 +36,15 @@ from stocks.engine.news_intelligence_store import IntelligenceSignal, NewsIntell
 from stocks.engine.rotation import compute_rotation
 from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 from stocks.logging_utils import get_logger
+
+# R5-2: 各市场交易所时区,用于 freshness 的交易日历日判定。
+# a/cn=A股(上海)、us=美股(纽约)、crypto=加密(无休市,按 UTC 即可)。
+_MARKET_TZ = {
+    "a": "Asia/Shanghai",
+    "cn": "Asia/Shanghai",
+    "us": "America/New_York",
+    "crypto": "UTC",
+}
 
 
 def _optional_float(value) -> Optional[float]:
@@ -893,14 +903,24 @@ class ContextBuilder:
             if "stale_manual_mid" in flags:
                 # P3-4: 估值 7-30 天的手工资产与当日行情混入同一资金数字,
                 # 交易员无法区分时效。作为 degraded 提示呈现,不阻断。
+                # R5-8: message 用与写入一致的 key(valuation_age_days/as_of),
+                # 此前读 _valuation_age_days/valuation_as_of 恒为 None,
+                # 产生"估值为 None 天前(截止 )"垃圾文本。
+                age_days = item.get("valuation_age_days")
+                val_as_of = str(item.get("as_of") or "")[:10]
+                age_text = (
+                    f"{item['display_name']} 估值为 {age_days} 天前"
+                    if isinstance(age_days, (int, float)) and not isinstance(age_days, bool)
+                    else f"{item['display_name']} 估值时效待确认"
+                )
                 issues.append({
                     "position_id": item["position_id"],
                     "severity": "degraded",
                     "capability": "valuation_age",
                     "message": (
-                        f"{item['display_name']} 估值为 {item.get('_valuation_age_days')} 天前"
-                        "（截止 " + str(item.get("valuation_as_of") or "")[:10] + "），"
-                        "与当日行情混算，金额为近似值"
+                        age_text
+                        + (f"（截止 {val_as_of}）" if val_as_of else "")
+                        + "，与当日行情混算，金额为近似值"
                     ),
                 })
             if "missing_quote" in flags:
@@ -1315,8 +1335,10 @@ class ContextBuilder:
             status = "missing"
             freshness = "missing"
         else:
+            # R5-2: 全局 freshness 是跨市场聚合,用 UTC 判定最保守
+            # (不绑定单一市场时区;旧语义"最老数据拖慢全局"保留)。
             freshness = (
-                self._freshness_from_datetime(oldest_as_of, generated_at)["freshness"]
+                self._freshness_from_datetime(oldest_as_of, generated_at, tz_name="UTC")["freshness"]
                 if oldest_as_of
                 else "unknown"
             )
@@ -1356,7 +1378,11 @@ class ContextBuilder:
             else:
                 market_status = "ok"
             market_freshness_info = (
-                self._freshness_from_datetime(market_oldest_as_of, generated_at)
+                self._freshness_from_datetime(
+                    market_oldest_as_of,
+                    generated_at,
+                    tz_name=_MARKET_TZ.get(market, "Asia/Shanghai"),
+                )
                 if market_oldest_as_of
                 else {"freshness": "unknown", "age_seconds": None}
             )
@@ -1687,7 +1713,25 @@ class ContextBuilder:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
-    def _freshness_from_datetime(self, value: Optional[datetime], generated_at: str) -> dict:
+    def _freshness_from_datetime(
+        self,
+        value: Optional[datetime],
+        generated_at: str,
+        tz_name: str = "Asia/Shanghai",
+    ) -> dict:
+        """Freshness by trading-calendar-day semantics (R5-2).
+
+        Old logic was a pure age window (≤2h fresh / ≤24h stale / else old),
+        which breaks after-hours reports: an A-share close quote at 08:14 is
+        4+ hours old at the 19:00 report and gets labelled stale, even though
+        it IS the day's closing price (no new quote exists after 15:00 close).
+
+        Trading-day semantics: the quote's as_of date vs the generation date,
+        both in the quote's own exchange time zone. Same trading day = fresh
+        (today's close IS current); previous day = stale; older = old.
+        Callers pass the market's exchange time zone (tz_name) so a US close
+        quote is judged in America/New_York, not UTC/Shanghai.
+        """
         if value is None:
             return {"freshness": "unknown", "age_seconds": None}
         if value.tzinfo is None:
@@ -1699,9 +1743,15 @@ class ContextBuilder:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         age_seconds = max(0, int((now - value).total_seconds()))
-        if age_seconds <= 2 * 60 * 60:
+        # R5-2: 交易日历日语义 —— 市场本地日同日 fresh / 昨日 stale / 更早 old。
+        try:
+            value_local = value.astimezone(ZoneInfo(tz_name))
+            now_local = now.astimezone(ZoneInfo(tz_name))
+        except Exception:
+            value_local, now_local = value, now
+        if value_local.date() == now_local.date():
             freshness = "fresh"
-        elif age_seconds <= 24 * 60 * 60:
+        elif (now_local.date() - value_local.date()).days == 1:
             freshness = "stale"
         else:
             freshness = "old"

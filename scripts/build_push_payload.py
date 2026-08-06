@@ -148,6 +148,9 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
         # rendered as "本窗口未发现需要改变计划的新证据" -- the exact
         # contradiction observed in the 2026-08-05 us_after_close report.
         "window_delta": artifact.get("window_delta") or {},
+        # R5-5: 报告生成时间(北京时间)供标题展示,用户据此判断报告时效
+        # (定时 15:00 的报告 19:58 才到,必须让用户看到生成时刻)。
+        "generated_at": str(artifact.get("generated_at") or ""),
     }
 
 
@@ -324,6 +327,18 @@ def _render_trading_payload(payload: dict) -> str:
     lines: list[str] = [
         f"**{payload.get('session_label', '交易窗口')} · {payload.get('market_date', '')}**",
     ]
+    # R5-5: 生成时间(北京时间)标注,用户判断报告时效。用完整 ISO 格式
+    # (YYYY-MM-DD HH:MM),与 _safe_numeric_spans 的 ISO 豁免匹配,避免
+    # 被 number gate 误判为未授权数字。
+    gen = payload.get("generated_at") or ""
+    if gen:
+        try:
+            from zoneinfo import ZoneInfo
+            gen_dt = datetime.fromisoformat(str(gen).replace("Z", "+00:00"))
+            gen_local = gen_dt.astimezone(ZoneInfo("Asia/Shanghai"))
+            lines.append(f"*生成时间 {gen_local.strftime('%Y-%m-%d %H:%M')}*")
+        except (ValueError, TypeError):
+            pass
     if not sections:
         lines.append("")
         lines.append("当前无输出内容")
@@ -450,6 +465,17 @@ def _section_window_changes(assistant: dict, window_delta: dict | None = None) -
             risk_label = str(risk.get("label") or "风险状态")
             risk_transition = str(risk.get("transition") or "")
             deterministic = [f"- 风险档位变化: {risk_label}（{risk_transition}）"]
+        # R5-7: transition=unchanged 但仍处于高风险(suspend_accumulation,
+        # 即 hedge/reduce 档)时,持续高风险是用户必须知道的事实,"本窗口
+        # 未发现新证据"会误导用户以为风险解除。
+        elif (
+            risk_key == "unchanged"
+            and bool(risk.get("suspend_accumulation"))
+        ):
+            risk_label = str(risk.get("label") or "风险状态")
+            deterministic = [
+                f"- 风险状态持续: {risk_label}（无档位变化，触发原因见组合与检查点）"
+            ]
     if deterministic:
         lines.extend(deterministic)
         return lines
@@ -966,17 +992,26 @@ def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
 
     why = assistant.get("why") or []
     action_sentences = {a.get("reason_summary") for a in actions if a.get("reason_summary")}
-    manual_review_reasons_set = set(no_action_reasons) if manual_review_only else set()
+    # R5-10: manual_review 时 §3 已展示 no_action_reasons 全文,§5 不得
+    # 再通过 why/do_not_do 重复同一标的的抑制/延后原因(8/6 实测广发纳指
+    # 在 §3 和 §5 各出现一次)。
+    already_shown = set(no_action_reasons) if manual_review_only else set()
     for text in why:
         if text in action_sentences:
             continue
-        if text in manual_review_reasons_set:
+        if text in already_shown:
             continue
         if text not in collected:
             collected.append(text)
 
     do_not_do = assistant.get("do_not_do") or []
     for text in do_not_do:
+        # R5-10: 已在 §3 展示的文本(或其前缀)跳过;do_not_do 与 why
+        # 可能带不同后缀,做前缀匹配更稳。
+        if text in already_shown:
+            continue
+        if any(text.startswith(s[:12]) or s.startswith(text[:12]) for s in already_shown):
+            continue
         if text and text not in collected:
             collected.append(text)
 
@@ -1089,6 +1124,14 @@ def _section_portfolio_and_checkpoint(card: dict, assistant: dict) -> list[str]:
 
     if cash_parts:
         lines.append(f"- 资金: {'；'.join(cash_parts)}")
+
+    # R5-4: 总资产 —— 交易分析师需要知道资金桶的相对规模,否则 6 个数字
+    # 无法快速判断"现在可用仅占总资产 X%"。数字来自 presentation 的
+    # cash.total_assets_cny(与各桶同源,validator 已授权);占比为派生
+    # 百分比,与各桶同源可复核,不新增 payload 数字。
+    total_assets = float(cash.get("total_assets_cny") or 0.0)
+    if total_assets > 0:
+        lines.append(f"- 资产合计: ¥{total_assets:,.0f}（各资金桶加总，含安全垫与待决）")
 
     # —— 待决事项统一段（带金额的 data_notes + 部分延后理由）——
     pending_items: list[tuple[str, str]] = []

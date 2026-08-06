@@ -718,9 +718,9 @@ class TestMacroData:
         assert quality["freshness"] == "old"
         assert quality["filled_fields"] == 9
         assert quality["missing_as_of"] == 0
-        # New: tiered freshness
+        # New: tiered freshness (R5-2: 日历日语义,7/2 vs 7/3 差 1 天 → stale)
         assert quality["market"]["as_of"] == "2026-07-02T00:00:00+00:00"
-        assert quality["market"]["freshness"] == "old"
+        assert quality["market"]["freshness"] == "stale"
         assert quality["official"]["as_of"] == "2026-05-01T00:00:00+00:00"
         assert quality["official"]["next_release"] == "2026-07-12"
 
@@ -1164,7 +1164,9 @@ class TestDataQuality:
             "message": "network failed",
         }])
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
-        historical_at = datetime.now(timezone.utc) - timedelta(hours=6)
+        # R5-2: 历史回退数据需跨交易日才判 stale(旧语义 now-6h 同日会被
+        # 日历日规则判 fresh,无法验证"陈旧历史"场景)。
+        historical_at = datetime.now(timezone.utc) - timedelta(days=2)
         await cache.warm(
             instrument,
             pd.DataFrame([{
@@ -1203,7 +1205,8 @@ class TestDataQuality:
         assert quote.source == "history_cache"
         quality = context.data_quality["quotes"]
         assert quality["status"] == "degraded"
-        assert quality["freshness"] == "stale"
+        # R5-2: 两天前的历史回退数据 → old(日历日语义,2 天差)
+        assert quality["freshness"] == "old"
         assert quality["us_quotes"] == "single_source_failed"
         assert quality["by_market"]["us"]["status"] == "stale_fallback"
         assert "[stale历史收盘]" in context.raw_prompt_input
@@ -1271,7 +1274,7 @@ class TestDataQuality:
         assert quality["by_market"]["a"]["as_of"] == "2026-07-01T07:00:00+00:00"
         assert quality["by_market"]["us"]["as_of"] == "2026-07-02T20:00:00+00:00"
 
-    def test_quote_quality_after_close_is_not_fresh(
+    def test_quote_quality_after_close_same_day_is_fresh(
         self,
         mock_fetcher,
         mock_scaffolds,
@@ -1284,13 +1287,17 @@ class TestDataQuality:
         }
 
         quality = builder._quote_quality(
-            "2026-07-02T23:00:00+00:00",
+            "2026-07-02T13:00:00+00:00",
             [instrument],
             quotes,
             [],
         )
 
-        assert quality["freshness"] == "stale"
+        # R5-2: 日历日语义。A股 7/2 收盘(沪 7/2 15:00)与生成(沪 7/2 21:00)
+        # 同日 → fresh。旧语义按 6h 时间差判 stale,导致盘后报告把当日
+        # 收盘价误判为过时——这正是 R5-2 修复的目标场景。
+        assert quality["freshness"] == "fresh"
+        assert quality["by_market"]["a"]["freshness"] == "fresh"
 
     def test_quote_quality_all_missing_as_of_is_unknown(
         self,
@@ -1365,12 +1372,15 @@ class TestDataQuality:
             quotes,
             [],
         )
-        # 全局 freshness 被最老的 US 拖慢
-        assert quality["freshness"] in ("stale", "old")
+        # R5-2: 交易日历日语义。A 股 7/15 盘中报价(沪 7/15 06:30 → 与生成
+        # 沪 7/15 14:45 同日)→ fresh;US 7/14 收盘(美东 7/14 16:00)vs
+        # 生成(美东 7/15 02:45)→ 跨日 stale(美股当日尚未开盘,7/14
+        # 收盘即"昨日")。
+        assert quality["freshness"] == "stale"
         # A 股市场独立 freshness 应为 fresh
         assert quality["by_market"]["a"]["freshness"] == "fresh"
-        # US 市场独立 freshness 应为 stale 或 old
-        assert quality["by_market"]["us"]["freshness"] in ("stale", "old")
+        # US 市场独立 freshness:昨日收盘 → stale
+        assert quality["by_market"]["us"]["freshness"] == "stale"
 
 
 class TestAnalysisContextSerialization:

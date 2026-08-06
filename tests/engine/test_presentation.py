@@ -344,6 +344,8 @@ def test_unresolved_settlement_excluded_from_cash_and_surfaced_as_data_note():
     assert set(cash) == {
         "available_now", "confirmed_settling", "planned_release",
         "strategic_exit", "locked", "safety_buffer", "unresolved_settlement",
+        # R5-4: 资产合计(各桶加总,渲染层展示"资产合计 ¥N")
+        "total_assets_cny",
     }
     assert cash["available_now"]["amount_cny"] == 10_000.0
     assert cash["confirmed_settling"]["amount_cny"] == 2_000.0

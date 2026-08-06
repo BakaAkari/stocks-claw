@@ -269,6 +269,19 @@ def _cash_view(schedule: dict) -> dict:
         # Not spendable — surfaced only so the render layer can report the
         # awaiting-clearing-rule gap (M1: 资金缺口 line in §6).
         "unresolved_settlement": {"label": "结算方式待确认", "amount_cny": round(values.get("unresolved_settlement", 0.0) or 0.0, 2)},
+        # R5-4: 资产合计(各桶加总)。渲染层用它在资金行后展示"资产合计
+        # ¥N + 占比",交易分析师可一眼判断现在可用/锁定/卖出可释放的比例。
+        # 与各桶同源(均来自 schedule),保证加总可审计。
+        "total_assets_cny": round(
+            float(values.get("available_now", 0.0) or 0.0)
+            + float(values.get("confirmed_settling", 0.0) or 0.0)
+            + float(values.get("planned_release", 0.0) or 0.0)
+            + float(values.get("strategic_exit", 0.0) or 0.0)
+            + float(values.get("locked", 0.0) or 0.0)
+            + float(values.get("safety_buffer_cny", 0.0) or 0.0)
+            + float(values.get("unresolved_settlement", 0.0) or 0.0),
+            2,
+        ),
     }
 
 

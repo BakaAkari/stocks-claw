@@ -47,6 +47,8 @@ def test_entrypoint_renders_and_persists_sanitized_payload(tmp_path):
         # "本窗口变化" section can surface risk/action/conflict changes even
         # when the LLM outlook_delta is empty.
         "window_delta",
+        # R5-5: 报告生成时间(渲染标题标注,用户判断报告时效)。
+        "generated_at",
     }
 
 
