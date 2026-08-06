@@ -1123,6 +1123,18 @@ def _section_portfolio_and_checkpoint(card: dict, assistant: dict) -> list[str]:
                     lines.append(f"- 注意: {note}")
                     break
 
+    # —— 明日计划 (C1-WP3: 确定性清单,非 LLM 创作) ——
+    plan = assistant.get("tomorrow_plan") or []
+    if plan:
+        lines.append(_section_heading("明日计划"))
+        for item in plan[:6]:
+            action_text = str(item.get("action") or "").strip()
+            if not action_text:
+                continue
+            prio = str(item.get("priority") or "low")
+            marker = {"high": "①", "medium": "②", "low": "③"}.get(prio, "·")
+            lines.append(f"- {marker} {action_text}")
+
     return lines
 
 

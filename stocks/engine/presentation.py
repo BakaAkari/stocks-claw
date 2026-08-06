@@ -295,6 +295,148 @@ def _conflict_reason(conflict: dict, by_id: dict[str, dict]) -> str:
     )
 
 
+def _conflict_tilt(conflict: dict, item: dict) -> tuple[str, str]:
+    """C1-WP1: 确定性冲突倾向(不依赖 LLM)。
+
+    规则(与裁决器语义对齐,硬止损在裁决器已批准,冲突仅为复核提示):
+    - stop_loss            → action:  硬止损不受约束限制,倾向执行
+    - reduce/take_profit 且 bucket 低于下限 → constraint: 低配区再降加深偏离
+    - 加仓类且 bucket 高于上限 → constraint: 高配区不宜再加
+    - 其余                 → manual:  需人工裁定
+    """
+    signal = str(conflict.get("signal") or "")
+    bucket_ratio = conflict.get("bucket_ratio")
+    bucket_min = conflict.get("bucket_min")
+    bucket_max = conflict.get("bucket_max")
+    ratio = float(bucket_ratio) if isinstance(bucket_ratio, (int, float)) else None
+    min_ = float(bucket_min) if isinstance(bucket_min, (int, float)) else None
+    max_ = float(bucket_max) if isinstance(bucket_max, (int, float)) else None
+
+    if signal == "stop_loss":
+        return "action", "硬止损不受组合约束限制，倾向按止损执行（冲突仅为复核提示）"
+
+    if signal in {"reduce", "take_profit"} and ratio is not None and min_ is not None:
+        if ratio < min_:
+            return (
+                "constraint",
+                f"权益（或该大类）当前占比 {ratio*100:.1f}% 已低于下限 {min_*100:.0f}%，"
+                "再减仓会加深低配偏离，倾向维持现状、等回补后再说",
+            )
+
+    if signal in {"buy", "accumulate", "add"} and ratio is not None and max_ is not None:
+        if ratio > max_:
+            return (
+                "constraint",
+                f"该大类当前占比 {ratio*100:.1f}% 已高于上限 {max_*100:.0f}%，"
+                "不宜再加仓，倾向维持现状",
+            )
+
+    return "manual", "方向性冲突，需人工根据最新资金与行情裁定"
+
+
+def _tomorrow_plan(
+    decision: dict,
+    conflict_details: list[dict],
+    by_id: dict[str, dict],
+    *,
+    data_notes: list[str],
+    risk_state: dict,
+    structured_outlook: dict | None,
+) -> list[dict]:
+    """C1-WP3: 确定性明日计划(非 LLM 创作)。
+
+    输入全部来自已确认的决策结构,每一条可追溯到来源:
+    - approved_actions      → 已获批动作,优先级高
+    - conflict_details tilt → constraint(维持)与 manual(需裁定)
+    - data_notes            → 待决资金等提示项
+    - risk_state            → 风险档位(升/降级提示)
+    - structured_outlook    → 研判(降级则标注低可信)
+
+    不承诺收益、不下单,只给人工确认清单。无操作时输出观察项。
+    """
+    plan: list[dict] = []
+
+    # 1. 已获批动作(可执行/待复核)
+    for action in (decision.get("approved_actions") or [])[:4]:
+        if not isinstance(action, dict):
+            continue
+        pid = str(action.get("position_id") or "")
+        item = by_id.get(pid, {})
+        label = _display_for_position(item) or pid
+        desc = str(action.get("action_description") or "")[:80]
+        ratio = action.get("final_ratio") if action.get("final_ratio") is not None else action.get("ratio")
+        amount_hint = ""
+        if isinstance(ratio, (int, float)) and ratio > 0:
+            amount_hint = f"（按 {ratio*100:.0f}% 比例）"
+        plan.append({
+            "action": f"{label}：{desc}{amount_hint}",
+            # 用户面不暴露内部 position_id,用公开 code/名称
+            "position": public_instrument_code(item.get("instrument_key", ""), "") or label,
+            "priority": "high",
+            "source": "approved_action",
+        })
+
+    # 2. 冲突倾向(constraint → 维持观察;manual → 人工裁定)
+    for detail in (conflict_details or [])[:3]:
+        tilt = str(detail.get("tilt") or "manual")
+        label = str(detail.get("label") or detail.get("code") or "")
+        reason = str(detail.get("tilt_reason") or "")[:80]
+        if tilt == "constraint":
+            plan.append({
+                "action": f"{label}：维持现状（{reason}）",
+                "position": str(detail.get("code") or ""),
+                "priority": "medium",
+                "source": "conflict_tilt",
+            })
+        elif tilt == "manual":
+            plan.append({
+                "action": f"{label}：冲突需人工裁定（{reason}）",
+                "position": str(detail.get("code") or ""),
+                "priority": "medium",
+                "source": "conflict_tilt",
+            })
+
+    # 3. 数据/资金提示(待决资金、行情过时)
+    for note in (data_notes or [])[:2]:
+        plan.append({
+            "action": f"核对：{note}",
+            "position": "",
+            "priority": "low",
+            "source": "data_note",
+        })
+
+    # 4. 风险状态变化提示
+    level = str((risk_state or {}).get("level") or "normal")
+    transition = str((risk_state or {}).get("transition") or "stable")
+    if level != "normal" or transition in {"escalated", "deescalated"}:
+        plan.append({
+            "action": f"风险档位 {level}（{transition}），按当前档位纪律执行，不临时加仓/加杠杆",
+            "position": "",
+            "priority": "medium",
+            "source": "risk_state",
+        })
+
+    # 5. 研判低可信提示(结构化 outlook 降级后)
+    if structured_outlook:
+        nt = (structured_outlook.get("near_term") or {})
+        if str(nt.get("confidence") or "") == "low":
+            plan.append({
+                "action": "研判基于滞后数据(置信度已降级)，明日以人工盯盘与数据恢复后的复核为准",
+                "position": "",
+                "priority": "medium",
+                "source": "outlook_confidence",
+            })
+
+    if not plan:
+        plan.append({
+            "action": "观察：明日无新增动作，维持当前仓位",
+            "position": "",
+            "priority": "low",
+            "source": "no_action",
+        })
+    return plan
+
+
 def _conflict_detail(conflict: dict, by_id: dict[str, dict]) -> dict[str, Any]:
     """Structured conflict for render layers and future programmatic handling."""
     item = by_id.get(str(conflict.get("position_id") or ""), {})
@@ -304,6 +446,7 @@ def _conflict_detail(conflict: dict, by_id: dict[str, dict]) -> dict[str, Any]:
     ratio = conflict.get("bucket_ratio")
     bucket_min = conflict.get("bucket_min")
     action = signal_label(conflict.get("signal", ""))
+    tilt, tilt_reason = _conflict_tilt(conflict, item)
     return {
         "label": label,
         "code": code,
@@ -314,6 +457,9 @@ def _conflict_detail(conflict: dict, by_id: dict[str, dict]) -> dict[str, Any]:
         "action": action,
         "reason": _conflict_reason(conflict, by_id),
         "branch": "默认：维持现状，等待人工确认方向",
+        # C1-WP1: 确定性倾向(非 LLM)——供交易员/下游直接消费
+        "tilt": tilt,
+        "tilt_reason": tilt_reason,
     }
 
 
@@ -1067,14 +1213,23 @@ def build_user_view(
             # P2-4: 风险状态表述基准消歧。risk_state.transition 是观察级
             # (相对上次观察),window_delta 是本窗口 session 级对比。当本
             # 窗口确实发生了 level 迁移(window_delta 有 risk_state.level
-            # 变化)而 transition_key=unchanged 时,文案\"与上次持平\"与
-            # 窗口变化卡\"降风险→对冲/高风险\"并排会让用户误读——这里
+            # 变化)而 transition_key=unchanged 时,文案"与上次持平"与
+            # 窗口变化卡"降风险→对冲/高风险"并排会让用户误读——这里
             # 显式补一个窗口基准注记,渲染层据其消歧。
             "window_level_change": _window_level_change_text(window_delta),
             "suspend_accumulation": bool((risk_state or {}).get("suspend_accumulation")),
             "reasons": _risk_reasons(risk_state or {}),
             "release_condition": str((risk_state or {}).get("release_condition") or "等待风险状态满足解除条件"),
         },
+        # C1-WP3: 确定性明日计划(非 LLM 创作,输入可追溯)
+        "tomorrow_plan": _tomorrow_plan(
+            decision,
+            conflict_details,
+            by_id,
+            data_notes=data_notes,
+            risk_state=risk_state,
+            structured_outlook=structured_outlook,
+        ),
         "data_notes": data_notes,
         "research": research,
         "outlook": _project_outlook(structured_outlook) if structured_outlook is not None else _no_value,

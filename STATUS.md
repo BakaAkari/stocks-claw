@@ -8,11 +8,63 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-06 (eleventh update) — **第四轮对抗性校验全量修复
-> （P2-2/P2-3/P2-4/P2-5/P3-1/P3-3/P3-4/P4-1/P4-1b，第三轮 P2-1 已随
-> 5e977bd 交付）**。此前：2026-08-06（tenth）六类根因缺陷修复 + 标签映射
-> 收敛（`d34a8b0` / `a8dd57d`）；2026-08-05 发版流程基础设施落地。
+> Last updated: 2026-08-06 (twelfth update) — **C1 报告决策支持层补全
+> （冲突解读 / 研判边界降级 / 明日计划）**。此前：2026-08-06（eleventh）
+> 第四轮对抗性校验全量修复（P2-2/P2-3/P2-4/P2-5/P3-1/P3-3/P3-4/P4-1/
+> P4-1b）；2026-08-06（tenth）六类根因缺陷修复 + 标签映射收敛。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
+
+## 2026-08-06 C1 报告决策支持层补全
+
+**Full pytest 1380 passed, 7 skipped, 1 deselected（仅排除既有基线失败
+`test_advice_feedback::TestLedgerWrite::test_engine_rollup_reads_ledger`）；
+ruff/compileall clean；新增 12 个回归测试（test_report_defects_p234.py
+现共 19 个）。**
+
+### C1-WP1 — 冲突确定性解读
+
+`presentation.py` 新增 `_conflict_tilt`(不依赖 LLM 的确定性规则):
+- stop_loss → `action`(硬止损不受约束限制,冲突仅为复核提示)
+- reduce/take_profit 且 bucket 低于下限 → `constraint`(低配区再降加深偏离)
+- 加仓类且 bucket 高于上限 → `constraint`(高配区不宜再加)
+- 其余 → `manual`(需人工裁定)
+
+`_conflict_detail` 增加 `tilt` + `tilt_reason` 字段,交易员可直接消费
+"倾向维持/倾向执行/需人工"结论。8/6 实测场景(科创50 减仓 vs 权益低配
+12.7%<25%)正确输出 constraint + "低于下限" 理由。
+
+### C1-WP2 — 研判边界自动降级
+
+`advisory_mainline.py` 新增 `_apply_freshness_downgrade`,在
+`build_advisory_outlook` 定稿前确定性降级:
+- macro 官方统计或任一主市场行情 freshness=old/stale → 置信度降一级
+  (high→medium→low,low 不再降)
+- `data_limitations` 追加"研判基于 N 天前宏观数据,可信度已自动降级"
+- **不改 rationale/validation 文本**——诚实保留 LLM 原话,只调可信度
+
+8/6 实测:宏观 6/1 数据 + 研判 medium 置信 → 自动降为 low。
+
+### C1-WP3 — 确定性明日计划
+
+`presentation.py` 新增 `_tomorrow_plan`(非 LLM 创作,输入可追溯):
+- approved_actions → 高优先级执行项(带比例提示)
+- conflict tilt → 维持/需裁定项
+- data_notes → 资金/数据核对项
+- risk_state → 风险档位纪律提示
+- outlook 低可信 → "明日以人工盯盘为准"
+- 无操作 → 输出观察项
+
+`build_push_payload.py` §6 后渲染"明日计划"节(①/②/③ 优先级标记)。
+用户面不暴露内部 position_id(公开 code/名称)。
+
+### 验证
+
+- 全量 1380 passed / 7 skipped / 1 deselected;新增 12 个回归测试
+  (冲突 tilt 4 + 降级 4 + 明日计划 4);
+- ruff/compileall clean;
+- 已 commit + push + NAS 同步(见 git log C1 相关 commit)。
+
+
 
 ## 2026-08-06 第四轮对抗性校验全量修复（`5e977bd` + 本批未提交）
 

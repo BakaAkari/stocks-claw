@@ -257,6 +257,75 @@ def _project_outlook(advisory: InvestmentAdvisory, receipt: Any, *, generated_at
     }
 
 
+# C1-WP2: 置信度降级顺序 high→medium→low;low 不再降。
+_CONFIDENCE_ORDER = {"high": 3, "medium": 2, "low": 1, "unknown": 0}
+
+
+def _downgrade_confidence(confidence: str) -> str:
+    cur = _CONFIDENCE_ORDER.get(str(confidence or "").lower(), 0)
+    if cur >= 2:
+        return "medium" if cur == 3 else "low"
+    return str(confidence or "unknown").lower()
+
+
+def _apply_freshness_downgrade(
+    outlook: dict,
+    context: AnalysisContext,
+) -> dict:
+    """C1-WP2: 关键数据过旧时确定性降级研判置信度(不依赖 LLM)。
+
+    输入 context.data_quality:
+    - macro.official.freshness in {old, stale} → 官方统计滞后(8/6 实测 6/1)
+    - quotes 任一主市场 freshness in {old, stale} → 行情滞后
+    规则:任一触发且该 horizon confidence 为 medium/high → 降一级;
+    data_limitations 追加"研判基于 N 天前宏观数据,可信度已降级"。
+
+    不改 rationale/validation 文本 —— 诚实保留 LLM 原话,只调可信度。
+    """
+    dq = (context.data_quality or {}) if isinstance(context.data_quality, dict) else {}
+    macro = dq.get("macro") or {}
+    official = macro.get("official") or {}
+    official_fresh = str(official.get("freshness") or "")
+    official_as_of = str(official.get("as_of") or "")[:10]
+    quotes = dq.get("quotes") or {}
+    markets = (quotes.get("by_market") or {}) if isinstance(quotes, dict) else {}
+    market_fresh = [
+        str((m or {}).get("freshness") or "")
+        for m in markets.values()
+        if isinstance(m, dict)
+    ]
+    stale_official = official_fresh in {"old", "stale"}
+    stale_quotes = any(f in {"old", "stale"} for f in market_fresh)
+    if not (stale_official or stale_quotes):
+        return outlook
+
+    reasons: list[str] = []
+    if stale_official:
+        reasons.append(f"宏观官方统计滞后(截止 {official_as_of or '未知'})")
+    if stale_quotes:
+        reasons.append("行情数据滞后")
+
+    out = dict(outlook)
+    downgraded = False
+    for key in ("near_term", "medium_term"):
+        horizon = dict(out.get(key) or {})
+        if not horizon:
+            continue
+        new_conf = _downgrade_confidence(str(horizon.get("confidence") or ""))
+        if new_conf != str(horizon.get("confidence") or ""):
+            downgraded = True
+        horizon["confidence"] = new_conf
+        out[key] = horizon
+
+    if downgraded:
+        limits = list(out.get("data_limitations") or [])
+        note = "研判基于" + "、".join(reasons) + "的数据，可信度已自动降级"
+        if note not in limits:
+            limits = limits[:2] + [note]
+        out["data_limitations"] = limits
+    return out
+
+
 def build_advisory_outlook(
     context: AnalysisContext,
     *,
@@ -340,4 +409,6 @@ def build_advisory_outlook(
         )
 
     # 5. Project into the display-shaped outlook dict.
-    return _project_outlook(advisory, receipt, generated_at=generated_at)
+    projected = _project_outlook(advisory, receipt, generated_at=generated_at)
+    # C1-WP2: 关键数据过旧时确定性降级置信度(不改 rationale 文本)。
+    return _apply_freshness_downgrade(projected, context)

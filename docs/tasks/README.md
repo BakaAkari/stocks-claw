@@ -21,9 +21,11 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-None open. **M4 约束模型升级 landed 2026-08-04**（见 STATUS.md 第八次
-更新）。下一步按 `docs/analysis/user-requirements-analysis-2026-08-04.md`
-§7 排序：双引擎信息面专项 / 用户中立化清理 / W1。
+**C1 报告决策支持层补全 done 2026-08-06**（`docs/tasks/TASK-C1-report-decision-support.md`）：
+冲突解读（`_conflict_tilt` tilt/tilt_reason）、研判边界降级（
+`_apply_freshness_downgrade`）、确定性明日计划（`_tomorrow_plan` +
+push "明日计划"节）。全量 1380 passed / 7 skipped / 1 deselected；
+ruff clean。下一步按需求分析 §7：双引擎信息面专项 / 用户中立化清理 / W1。
 
 ## Backlog (do not start before the current task closes)
 
