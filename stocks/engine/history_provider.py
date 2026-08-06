@@ -575,14 +575,30 @@ async def warm_history_cache(
     provider: CompositeKLineProvider,
     instruments: list[Instrument],
     lookback_days: int = 60,
+    stale_days: int = 4,
 ) -> list[dict]:
     """为给定标的列表 warm HistoryCache,返回结构化回填报告(D0-3)。
+
+    Args:
+        cache: HistoryCache
+        provider: CompositeKLineProvider
+        instruments: 目标标的
+        lookback_days: 需要的历史条数（日频场景下即天数）
+        stale_days: 缓存新鲜度容忍窗口（日历日）。缓存最后一根 K 线
+            早于 ``今天 - stale_days`` 视为过时,即使数据量已足也强制
+            重拉。默认 4 天：覆盖周末 + 常见节假日,同时让 7/23→8/6
+            这种两周断档无法再以 skipped_cached 蒙混过关（对抗性校验
+            P2-1：候选价格曾停留在两周前的 K 线,quotes 层却显示
+            fresh,门控只看 quotes 层放行）。
 
     Returns:
         list[dict]: 每标的一项 {symbol, market, source, rows, status, error},
         status ∈ {"ok","skipped_cached","failed"}。上层据此可拼装 data_quality.history_backfill。
     """
     report: list[dict] = []
+
+    today = datetime.now(timezone.utc).date()
+    stale_cutoff = today - timedelta(days=max(1, int(stale_days)))
 
     for inst in instruments:
         key = f"{inst.market}:{inst.code}"
@@ -592,19 +608,36 @@ async def warm_history_cache(
         degradation_result = "not_requested"
         provider_errors: dict[str, str] = {}
 
-        # 检查当前缓存数据量;≥80% 视为已足
+        # 检查当前缓存数据量;≥80% 视为已足。同时校验新鲜度：即使量足,
+        # 若最后一根 K 线早于 stale_cutoff 也强制重拉,避免停更缓存
+        # 被当作当日数据继续输出精确价格/指标。
         try:
             df = await cache.get_history(inst, lookback_bars=lookback_days, include_disk=True)
         except Exception:
             df = pd.DataFrame()
         if len(df) >= lookback_days * 0.8:
-            report.append({
-                "symbol": key, "market": inst.market, "source": source,
-                "primary_source": primary_source, "fallback_source": fallback_source,
-                "degradation_result": "skipped_cached", "errors": provider_errors,
-                "rows": len(df), "status": "skipped_cached", "error": None,
-            })
-            continue
+            cache_stale = True
+            try:
+                if not df.empty and "timestamp" in df.columns:
+                    last_ts = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").dropna()
+                    if not last_ts.empty:
+                        cache_stale = last_ts.iloc[-1].date() < stale_cutoff
+            except Exception:
+                cache_stale = True
+            if not cache_stale:
+                report.append({
+                    "symbol": key, "market": inst.market, "source": source,
+                    "primary_source": primary_source, "fallback_source": fallback_source,
+                    "degradation_result": "skipped_cached", "errors": provider_errors,
+                    "rows": len(df), "status": "skipped_cached", "error": None,
+                })
+                continue
+            # 数据量足但新鲜度不足 → 落到下方重拉,并标注原因
+            degradation_result = "stale_cache"
+            provider_errors["cache"] = (
+                f"cache last bar {df['timestamp'].iloc[-1] if not df.empty else '?'} "
+                f"older than cutoff {stale_cutoff}"
+            )
 
         # 拉取历史数据(带一次退避重试)
         hist_df = pd.DataFrame(columns=_HISTORY_COLUMNS)

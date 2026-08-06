@@ -138,3 +138,67 @@ def test_research_candidate_fresh_market_keeps_guidance_when_not_suspended():
     assert len(cands) == 1
     assert cands[0].get("quote_stale") is None
     assert "分批布局" in cands[0]["sizing_hint"] or "回踩" in cands[0]["sizing_hint"]
+
+
+# ── P2-1: technical-indicator as_of gate ────────────────────────────
+
+
+def test_research_candidate_indicator_as_of_stale_downgraded():
+    """quotes 层 fresh 但技术指标 as_of 停在两周前 → 仍降级观察,
+    不得展示两周前的精确价格（2026-08-06 对抗性校验实测场景）。"""
+    from datetime import datetime, timedelta, timezone
+
+    stale_date = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    signals = {"items": [
+        {"symbol": "a:513770", "name": "港股互联网ETF", "signal": "accumulate_candidate",
+         "action_hint": "趋势与动能配合", "reasons": ["轮动排名前段：现价 0.36 > MA20 0.35"],
+         "_score": 0.49, "as_of": stale_date},
+    ]}
+    risk = {"level": "normal", "suspend_accumulation": False}
+    # quotes 层显示 A 股 fresh —— 门控必须仍识别技术指标层过时
+    dq = {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}
+    cands = _build_research_candidates(signals, risk, None, data_quality=dq)
+    assert len(cands) == 1
+    cand = cands[0]
+    assert cand["quote_stale"] is True
+    assert cand["setup_tag"] == "观察"
+    assert cand["as_of"] == stale_date
+    # 原始精确价格 reason 必须被替换
+    assert "现价 0.36" not in " ".join(cand["reasons"])
+    assert "技术指标数据停留较早" in cand["reasons"][0]
+
+
+def test_research_candidate_fresh_indicator_as_of_kept():
+    """技术指标 as_of 新鲜且 quotes fresh → 正常展示。"""
+    from datetime import datetime, timedelta, timezone
+
+    fresh_date = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    signals = {"items": [
+        {"symbol": "a:513770", "name": "港股互联网ETF", "signal": "accumulate_candidate",
+         "action_hint": "趋势与动能配合", "reasons": ["轮动排名前段：现价 0.36 > MA20 0.35"],
+         "_score": 0.49, "as_of": fresh_date},
+    ]}
+    risk = {"level": "normal", "suspend_accumulation": False}
+    dq = {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}
+    cands = _build_research_candidates(signals, risk, None, data_quality=dq)
+    assert len(cands) == 1
+    # setup_tag 由渲染层(presentation)设置;此处数据层只保证不降级
+    assert cands[0].get("quote_stale") is None
+    assert cands[0].get("setup_tag") is None
+
+
+def test_research_candidate_missing_as_of_unknown_not_downgraded():
+    """as_of 缺失(未知年龄)且 quotes fresh → 不降级,保留既有行为;
+    市场级过时仍由 quotes 门控兜底(见 stale_market 测试)。"""
+    signals = {"items": [
+        {"symbol": "a:513770", "name": "港股互联网ETF", "signal": "accumulate_candidate",
+         "action_hint": "趋势与动能配合", "reasons": ["轮动排名前段：现价 0.36 > MA20 0.35"],
+         "_score": 0.49},  # 无 as_of
+    ]}
+    risk = {"level": "normal", "suspend_accumulation": False}
+    dq = {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}
+    cands = _build_research_candidates(signals, risk, None, data_quality=dq)
+    assert len(cands) == 1
+    # setup_tag 由渲染层(presentation)设置;此处数据层只保证不降级
+    assert cands[0].get("quote_stale") is None
+    assert cands[0].get("setup_tag") is None

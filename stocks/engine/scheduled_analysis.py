@@ -2018,6 +2018,39 @@ _ACCUMULATION_SIGNALS = frozenset(
     {"accumulate_candidate", "rotation_candidate", "left_bottom_candidate", "wait_for_pullback"}
 )
 
+# P2-1: technical-indicator freshness tolerance (calendar days). The
+# research candidates quote prices/MA/RSI computed from the HistoryCache
+# daily bars, whose as_of is the last bar's timestamp -- independent of the
+# realtime quotes layer. If a candidate's as_of is older than this window,
+# the quote_stale downgrade applies even when quotes.by_market says fresh
+# (the 2026-08-06 adversarial check: A-share bars stopped at 07-23 while
+# quotes looked fresh, so two-week-old prices were shown as current).
+# Must stay in sync with history_provider.warm_history_cache stale_days.
+_HISTORY_STALE_DAYS = 4
+
+
+def _indicator_as_of_stale(as_of: object) -> bool:
+    """P2-1: True when a candidate's technical-indicator as_of (last daily
+    bar timestamp) is explicitly older than the tolerance window.
+
+    Missing/unparseable as_of returns False here: an unknown-age candidate
+    is not *proven* stale, so we do not downgrade it (the realtime quotes
+    gate already covers the market-level staleness). Only an explicitly
+    old indicator timestamp trips the technical-indicator gate -- this is
+    the 2026-08-06 adversarial case where quotes said fresh but the daily
+    bars feeding price/MA/RSI had stopped updating two weeks earlier.
+    """
+    if not as_of:
+        return False
+    try:
+        ts = datetime.fromisoformat(str(as_of).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_HISTORY_STALE_DAYS)
+    return bool(ts < cutoff)
+
 
 def _build_research_candidates(
     action_signals: dict,
@@ -2080,6 +2113,11 @@ def _build_research_candidates(
             "priority": "research_only",
             "score": item.get("_score"),
             "rank": item.get("rank"),
+            # P2-1: technical-indicator as_of from the HistoryCache daily
+            # bars (last bar timestamp), distinct from the realtime quotes
+            # layer. Used by the freshness gate below; also surfaced so the
+            # render layer can annotate staleness per candidate.
+            "as_of": item.get("as_of"),
         }
         if suspend:
             candidate["reassess_after"] = f"风险解除后再评估（当前状态: {risk_level}）"
@@ -2091,12 +2129,20 @@ def _build_research_candidates(
         market = _research_market(symbol)
         quote_item = by_market.get(market) or {}
         quote_stale = str(quote_item.get("freshness") or "") in STALE_FRESHNESS
-        if quote_stale:
+        # P2-1: the realtime quotes layer can look fresh while the daily
+        # bars feeding price/MA/RSI stopped updating. Treat a candidate whose
+        # indicator as_of is older than the tolerance window as stale too.
+        tech_stale = _indicator_as_of_stale(candidate.get("as_of"))
+        if quote_stale or tech_stale:
             candidate["quote_stale"] = True
             candidate["condition"] = "quote_stale"
             candidate["setup_tag"] = "观察"
-            candidate["reasons"] = ["行情数据过时，暂不评估技术面，待数据恢复后复核"]
-            candidate["sizing_hint"] = "行情数据过时，不提供仓位/止损建议，待数据恢复后评估"
+            if quote_stale:
+                candidate["reasons"] = ["行情数据过时，暂不评估技术面，待数据恢复后复核"]
+                candidate["sizing_hint"] = "行情数据过时，不提供仓位/止损建议，待数据恢复后评估"
+            else:
+                candidate["reasons"] = ["技术指标数据停留较早，暂不评估技术面，待数据更新后复核"]
+                candidate["sizing_hint"] = "技术指标数据过时，不提供仓位/止损建议，待数据更新后评估"
         elif suspend and signal in _ACCUMULATION_SIGNALS:
             # P1-15: "暂停加仓" must not coexist with a concrete
             # accumulation sizing hint. Keep the candidate visible for

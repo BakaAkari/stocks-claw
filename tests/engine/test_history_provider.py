@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pandas as pd
@@ -553,11 +553,13 @@ class TestWarmHistoryCache:
         }
 
     async def test_skip_sufficient_cache(self, tmp_path, sample_instrument_a):
-        """数据充足时跳过 warm,状态为 skipped_cached(D0-3)"""
+        """数据充足且新鲜时跳过 warm,状态为 skipped_cached(D0-3)"""
         cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
-        # 先 warm 足够数据
+        # 先 warm 足够且新鲜的数据（最后 K 线 = 今天）
+        today = datetime.now(timezone.utc).date()
+        days = pd.date_range(today - timedelta(days=9), periods=10, freq="D")
         df = pd.DataFrame({
-            "timestamp": pd.date_range("2024-01-01", periods=10, freq="D"),
+            "timestamp": days,
             "code": ["000300"] * 10,
             "name": ["沪深300"] * 10,
             "market": ["a"] * 10,
@@ -581,6 +583,54 @@ class TestWarmHistoryCache:
         assert item["error"] is None
         assert item["rows"] >= 5
         provider.fetch.assert_not_called()
+
+    async def test_skip_sufficient_but_stale_cache_refetches(self, tmp_path, sample_instrument_a):
+        """P2-1: 数据量足够但最后一根 K 线早于容忍窗口 → 强制重拉,
+        不得以 skipped_cached 把停更缓存当作当日数据。"""
+        cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
+        # 缓存量足够但最后 K 线停在两周前（7/23 场景）
+        old_days = pd.date_range("2026-07-01", periods=20, freq="D")  # 最后一天 07-20
+        old_df = pd.DataFrame({
+            "timestamp": old_days,
+            "code": ["000300"] * 20,
+            "name": ["沪深300"] * 20,
+            "market": ["a"] * 20,
+            "price": [100.0] * 20,
+            "open_price": [100.0] * 20,
+            "high": [102.0] * 20,
+            "low": [98.0] * 20,
+            "prev_close": [100.0] * 20,
+            "volume_lot": [1_000_000] * 20,
+        })
+        await cache.warm(sample_instrument_a, old_df)
+
+        today = datetime.now(timezone.utc).date()
+        fresh_days = pd.date_range(today - timedelta(days=4), periods=5, freq="D")
+        fresh_df = pd.DataFrame({
+            "timestamp": fresh_days,
+            "code": ["000300"] * 5,
+            "name": ["沪深300"] * 5,
+            "market": ["a"] * 5,
+            "price": [100.0] * 5,
+            "open_price": [100.0] * 5,
+            "high": [102.0] * 5,
+            "low": [98.0] * 5,
+            "prev_close": [100.0] * 5,
+            "volume_lot": [1_000_000] * 5,
+        })
+        provider = Mock()
+        provider.fetch = AsyncMock(return_value=fresh_df)
+
+        report = await warm_history_cache(cache, provider, [sample_instrument_a], 5)
+        await cache.close()
+
+        item = _find_report(report, "a:000300")
+        # P2-1: 量足但过时的缓存必须触发重拉(provider.fetch 被调用),而不是
+        # skipped_cached。fetch 成功后 degradation_result 由 provider attrs
+        # 决定(此处 mock 无 attrs → success),重拉是否发生以 fetch 调用为准。
+        assert item["status"] == "ok", f"expected refetch, got {item}"
+        assert item["rows"] == 5
+        provider.fetch.assert_called_once_with(sample_instrument_a, 5)
 
     async def test_warm_failure_continues(self, tmp_path, sample_instrument_a, sample_instrument_us):
         """单个标的失败不影响其他;失败项记录 error 字符串(D0-3)"""
