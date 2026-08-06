@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -47,6 +47,38 @@ _MARKET_TZ = {
 }
 
 
+def _count_trading_days_after(
+    as_of_date,
+    now_date,
+    holidays: frozenset,
+) -> int:
+    """Count trading days in (as_of_date, now_date) — i.e. complete trading
+    days that have *elapsed* between the quote's as_of date and the report
+    generation date, skipping weekends/holidays. Neither endpoint counts:
+    as_of_date's close is the quote we hold; now_date's session is still in
+    progress (or its close may not have been quoted yet).
+
+    Used by freshness (R5-2 audit fix): 0 elapsed → quote is the latest
+    trading day (fresh, even across a weekend); 1 → stale; ≥2 → old.
+    """
+    if not isinstance(as_of_date, date) or not isinstance(now_date, date):
+        return 0
+    if now_date <= as_of_date:
+        return 0
+    count = 0
+    current = as_of_date + timedelta(days=1)
+    while current < now_date:
+        if current.weekday() >= 5:  # 周六/周日
+            current += timedelta(days=1)
+            continue
+        if current.isoformat() in holidays:
+            current += timedelta(days=1)
+            continue
+        count += 1
+        current += timedelta(days=1)
+    return count
+
+
 def _optional_float(value) -> Optional[float]:
     if value is None or value != value:
         return None
@@ -83,6 +115,10 @@ class ContextBuilder:
         event_calendar: Optional[EventCalendar] = None,
         config: Optional[dict] = None,
         fund_nav_provider = None,
+        # R5-2 修正: 各市场节假日(交易日历)。格式 {market: frozenset["YYYY-MM-DD"]}。
+        # freshness 判定需跳过周末/节假日才能正确判断"最近交易日"——
+        # 否则周五行情周一跑会被误判 old(日历日差 3 天)。
+        market_holidays: Optional[dict] = None,
     ):
         self.fetcher = fetcher
         self.portfolio_scaffold = portfolio_scaffold
@@ -93,6 +129,10 @@ class ContextBuilder:
         self.event_calendar = event_calendar
         self._config = config or {}
         self.fund_nav_provider = fund_nav_provider
+        self._market_holidays = {
+            str(market): frozenset(str(h) for h in (holidays or []))
+            for market, holidays in (market_holidays or {}).items()
+        }
 
     async def build(
         self,
@@ -1382,6 +1422,7 @@ class ContextBuilder:
                     market_oldest_as_of,
                     generated_at,
                     tz_name=_MARKET_TZ.get(market, "Asia/Shanghai"),
+                    holidays=self._market_holidays.get(market, frozenset()),
                 )
                 if market_oldest_as_of
                 else {"freshness": "unknown", "age_seconds": None}
@@ -1718,6 +1759,7 @@ class ContextBuilder:
         value: Optional[datetime],
         generated_at: str,
         tz_name: str = "Asia/Shanghai",
+        holidays: Optional[frozenset] = None,
     ) -> dict:
         """Freshness by trading-calendar-day semantics (R5-2).
 
@@ -1726,11 +1768,16 @@ class ContextBuilder:
         4+ hours old at the 19:00 report and gets labelled stale, even though
         it IS the day's closing price (no new quote exists after 15:00 close).
 
-        Trading-day semantics: the quote's as_of date vs the generation date,
-        both in the quote's own exchange time zone. Same trading day = fresh
-        (today's close IS current); previous day = stale; older = old.
-        Callers pass the market's exchange time zone (tz_name) so a US close
-        quote is judged in America/New_York, not UTC/Shanghai.
+        Trading-day semantics: count the trading days *between* the quote's
+        as_of date and the generation date (skipping weekends + holidays).
+        - 0 trading days elapsed  → fresh (the quote is the latest trading
+          day's close; covers after-hours AND weekend/holiday gaps)
+        - 1 trading day elapsed   → stale (one trading day of data missed)
+        - ≥2 trading days elapsed → old
+
+        Without the holiday/weekend skip, Friday's close is "3 calendar days
+        old" on Monday and gets labelled old even though no trading happened
+        since — the exact weekend regression this replaces (R5-2 audit fix).
         """
         if value is None:
             return {"freshness": "unknown", "age_seconds": None}
@@ -1743,15 +1790,18 @@ class ContextBuilder:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         age_seconds = max(0, int((now - value).total_seconds()))
-        # R5-2: 交易日历日语义 —— 市场本地日同日 fresh / 昨日 stale / 更早 old。
+        # 交易日历日语义: 跳过周末与节假日的交易日计数。
         try:
             value_local = value.astimezone(ZoneInfo(tz_name))
             now_local = now.astimezone(ZoneInfo(tz_name))
         except Exception:
             value_local, now_local = value, now
-        if value_local.date() == now_local.date():
+        traded_elapsed = _count_trading_days_after(
+            value_local.date(), now_local.date(), holidays or frozenset()
+        )
+        if traded_elapsed <= 0:
             freshness = "fresh"
-        elif (now_local.date() - value_local.date()).days == 1:
+        elif traded_elapsed == 1:
             freshness = "stale"
         else:
             freshness = "old"

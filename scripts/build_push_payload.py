@@ -12,6 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 _SESSION_LABELS = {
     "cn_post_open": "A股开盘后",
@@ -333,8 +334,7 @@ def _render_trading_payload(payload: dict) -> str:
     gen = payload.get("generated_at") or ""
     if gen:
         try:
-            from zoneinfo import ZoneInfo
-            gen_dt = datetime.fromisoformat(str(gen).replace("Z", "+00:00"))
+            gen_dt = _parse_dt(str(gen))
             gen_local = gen_dt.astimezone(ZoneInfo("Asia/Shanghai"))
             lines.append(f"*生成时间 {gen_local.strftime('%Y-%m-%d %H:%M')}*")
         except (ValueError, TypeError):
@@ -995,7 +995,10 @@ def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
     # R5-10: manual_review 时 §3 已展示 no_action_reasons 全文,§5 不得
     # 再通过 why/do_not_do 重复同一标的的抑制/延后原因(8/6 实测广发纳指
     # 在 §3 和 §5 各出现一次)。
-    already_shown = set(no_action_reasons) if manual_review_only else set()
+    # 注意 §3 只渲染前 3 条(no_action_reasons[:3]),§5 只应跳过这前 3 条
+    # ——若 reasons > 3,第 4+ 条必须保留在 §5,否则用户完全看不到
+    # (R5-10 审查修正)。
+    already_shown = set(no_action_reasons[:3]) if manual_review_only else set()
     for text in why:
         if text in action_sentences:
             continue

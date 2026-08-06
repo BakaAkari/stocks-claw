@@ -718,9 +718,10 @@ class TestMacroData:
         assert quality["freshness"] == "old"
         assert quality["filled_fields"] == 9
         assert quality["missing_as_of"] == 0
-        # New: tiered freshness (R5-2: 日历日语义,7/2 vs 7/3 差 1 天 → stale)
+        # New: tiered freshness (R5-2 交易日历: 7/2 周四 → 7/3 周五,之间
+        # 无完整交易日 → fresh)
         assert quality["market"]["as_of"] == "2026-07-02T00:00:00+00:00"
-        assert quality["market"]["freshness"] == "stale"
+        assert quality["market"]["freshness"] == "fresh"
         assert quality["official"]["as_of"] == "2026-05-01T00:00:00+00:00"
         assert quality["official"]["next_release"] == "2026-07-12"
 
@@ -1164,9 +1165,9 @@ class TestDataQuality:
             "message": "network failed",
         }])
         cache = HistoryCache(base_dir=temp_dir, ttl=86400)
-        # R5-2: 历史回退数据需跨交易日才判 stale(旧语义 now-6h 同日会被
-        # 日历日规则判 fresh,无法验证"陈旧历史"场景)。
-        historical_at = datetime.now(timezone.utc) - timedelta(days=2)
+        # R5-2: 历史回退数据需跨多个交易日才判 old(now-5d 至少跨 3 个
+        # 交易日,不依赖运行日星期几;now-2d 可能在周一只有 1 个交易日差)。
+        historical_at = datetime.now(timezone.utc) - timedelta(days=5)
         await cache.warm(
             instrument,
             pd.DataFrame([{
@@ -1269,7 +1270,8 @@ class TestDataQuality:
         )
 
         assert quality["as_of"] == "2026-07-01T07:00:00+00:00"
-        assert quality["freshness"] == "old"
+        # R5-2 交易日历: 7/1(周三)→7/3(周五)之间仅 7/2(周四)1 个完整交易日 → stale
+        assert quality["freshness"] == "stale"
         assert quality["missing_as_of"] == 1
         assert quality["by_market"]["a"]["as_of"] == "2026-07-01T07:00:00+00:00"
         assert quality["by_market"]["us"]["as_of"] == "2026-07-02T20:00:00+00:00"
@@ -1372,15 +1374,15 @@ class TestDataQuality:
             quotes,
             [],
         )
-        # R5-2: 交易日历日语义。A 股 7/15 盘中报价(沪 7/15 06:30 → 与生成
-        # 沪 7/15 14:45 同日)→ fresh;US 7/14 收盘(美东 7/14 16:00)vs
-        # 生成(美东 7/15 02:45)→ 跨日 stale(美股当日尚未开盘,7/14
-        # 收盘即"昨日")。
-        assert quality["freshness"] == "stale"
+        # R5-2 交易日历: A股 7/15 盘中报价(沪 7/15 06:30,与生成沪 7/15
+        # 14:45 同日)→ 0 完整交易日 → fresh;US 7/14 收盘(美东 7/14
+        # 16:00)vs 生成(美东 7/15 02:45,美股尚未开盘)→ 0 完整交易日
+        # → fresh(7/14 即最新交易日收盘)。
+        assert quality["freshness"] == "fresh"
         # A 股市场独立 freshness 应为 fresh
         assert quality["by_market"]["a"]["freshness"] == "fresh"
-        # US 市场独立 freshness:昨日收盘 → stale
-        assert quality["by_market"]["us"]["freshness"] == "stale"
+        # US 市场独立 freshness:7/14 是最新交易日 → fresh
+        assert quality["by_market"]["us"]["freshness"] == "fresh"
 
 
 class TestAnalysisContextSerialization:

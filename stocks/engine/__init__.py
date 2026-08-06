@@ -309,6 +309,19 @@ class StocksEngine:
             else:
                 self._event_watcher = None
 
+        # R5-2 修正: 从 scheduled_sessions.json 加载各市场节假日,传入
+        # ContextBuilder 供 freshness 交易日历判定(周末/节假日跨日不误伤)。
+        _market_holidays: dict[str, set[str]] = {}
+        try:
+            _sched = load_scheduled_config(self.config_dir)
+            for _mname, _mcfg in (_sched.get("markets") or {}).items():
+                if isinstance(_mcfg, dict):
+                    _market_holidays[str(_mname)] = {
+                        str(h) for h in (_mcfg.get("holidays") or [])
+                    }
+        except Exception:
+            pass  # 无交易日历时 freshness 退化为纯日历日差(保守)
+
         self.context_builder = ContextBuilder(
             fund_nav_provider=self.fund_nav_provider,
             fetcher=self.fetcher,
@@ -318,6 +331,7 @@ class StocksEngine:
             macro_provider=self.macro_provider,
             event_calendar=self.event_calendar,
             config=self._config,
+            market_holidays=_market_holidays,
         )
         self.persistence = DataPersistence(
             base_dir=str(self._local_data_dir / "snapshots"),

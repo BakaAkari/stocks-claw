@@ -8,20 +8,19 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-06 (fourteenth update) — **第五轮对抗性校验
-> （R5-2/4/5/7/8/10：freshness 交易日历日语义 / 资产合计 / 生成时间 /
-> 高风险持续提示 / 估值 key 修正 / §3§5 去重）**。此前：2026-08-06
-> （thirteenth）第四轮对抗性校验 P5-1..P5-7；2026-08-06（twelfth）
-> C1 报告决策支持层补全；2026-08-06（eleventh）四轮全量修复。
+> Last updated: 2026-08-06 (fifteenth update) — **五轮修复回溯审查：
+> R5-2 修正为真实交易日历（周末/节假日不再误伤）、R5-10 修正
+> §3/§5 去重边界（第 4+ 条不再丢失）、R5-5 复用 _parse_dt**。
+> 此前：2026-08-06（fourteenth）第五轮对抗性校验 R5-2/4/5/7/8/10；
+> （thirteenth）第四轮 P5-1..P5-7；（twelfth）C1 决策支持层。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
 
-## 2026-08-06 第五轮对抗性校验(R5-2/4/5/7/8/10)
+## 2026-08-06 五轮修复回溯审查（R5-2 交易日历 / R5-10 去重边界）
 
 **Full pytest 1386 passed, 7 skipped, 1 deselected（仅排除既有基线失败
 `test_advice_feedback::TestLedgerWrite::test_engine_rollup_reads_ledger`）；
-ruff/compileall clean。方法：NAS 生产环境用最新代码（a9a828f）重新
-触发完整报告（8/6 21:08 cn_after_close），从普通用户/设计师/交易分析
-师三视角审查，逐项回源码验证后一次性修复。**
+ruff/compileall clean。审查方法：对 5 轮全部修复逐个回源码复查，
+重点找我自己的修复引入的新问题（边界、口径、同源一致性）。**
 
 ## 2026-08-06 第四轮对抗性校验(P5-1..P5-7)
 
@@ -81,7 +80,41 @@ ruff/compileall clean；新增 12 个回归测试（test_report_defects_p234.py
 - ruff/compileall clean;
 - 已 commit + push + NAS 同步(见 git log C1 相关 commit)。
 
-### R5 修复明细(本轮)
+### 回溯审查发现并修正(本轮)
+
+- **R5-2 修正为真实交易日历**(`context_builder.py` `_freshness_from_datetime`
+  + 新增 `_count_trading_days_after` + `market_holidays` 参数):
+  上一轮把 freshness 从"时间差"改成"日历日差",但没跳过周末/节假日——
+  周五行情周一跑日历日差 3 天 → old → 研判全拒(每周一误伤),国庆等
+  长假期更严重。修正:按"行情 as_of 后完整流逝的交易日数"判定
+  (跳过周末 + holidays),0 交易日 fresh / 1 stale / ≥2 old;新增
+  `_MARKET_TZ` 市场时区 + ContextBuilder 从 `scheduled_sessions.json`
+  加载各市场节假日。验证:周五→周一 fresh、国庆后首日 fresh、
+  错过 2 交易日 old。
+- **R5-10 修正 §3/§5 去重边界**(`build_push_payload.py`):上一轮
+  `already_shown` 跳过全部 no_action_reasons,但 §3 只显示前 3 条——
+  reasons > 3 时第 4+ 条既不在 §3 也不在 §5,用户完全看不到。
+  修正:`already_shown = set(no_action_reasons[:3])`,第 4+ 条保留在 §5。
+- **R5-5 优化**(`build_push_payload.py`):生成时间渲染复用 `_parse_dt`,
+  ZoneInfo 移到模块级 import(消除函数内重复导入)。
+
+### 审查确认正确(未改动)
+
+- **R5-4** total_assets_cny 加总口径正确(available_now 已扣安全垫、
+  to_dict locked 已减 planned_release,补回 safety/unresolved 不重不漏)。
+  仅注释"占比"未实现(文档-实现不一致,轻)。
+- **R5-7** 高风险持续提示:`suspend_accumulation` 仅 hedge/reduce 档为
+  True,unchanged+该标志精确对应持续高风险,无误报。
+- **R5-8** 估值 key:`valuation_age_days`/`as_of` 与写入 key 一致,
+  flag 判定同源。
+- **P5-1** 明日计划 gate:指令卡与明日计划调用同一 `_is_executable`,
+  完全同源无矛盾。
+- **P3-1** 顶层覆盖为裁决器 `to_dict()` 后字段名一致,下游消费正确。
+
+### 记录为低风险观察(未修)
+
+- **P5-3** 翻译层大小写敏感:`"critical"`(小写)可翻译,上游若输出
+  `"Critical"`(大写)会回退英文。8/6 实测正确,依赖上游大小写稳定。
 
 - **R5-2(核心) freshness 交易日历日语义**(`context_builder.py`
   `_freshness_from_datetime` + `_MARKET_TZ`):旧逻辑按纯时间差
