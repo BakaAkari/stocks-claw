@@ -8,15 +8,63 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-05 (ninth update) — **发版流程基础设施落地**
-> （RELEASE.md + scripts/release_check.py，版本号统一为 2.10.1）。
+> Last updated: 2026-08-06 (tenth update) — **2026-08-05 盘后报告六类
+> 根因缺陷修复 + 标签映射收敛**（`d34a8b0` / `a8dd57d`，HEAD）。
+> 此前：2026-08-05 发版流程基础设施落地（RELEASE.md +
+> scripts/release_check.py，版本号统一为 2.10.1）。
 > 此前：2026-08-04 M4 约束模型升级（不可逆/分池/硬上限 + 约束即金融记忆）。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
-> Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
-> （不可逆/分池/硬上限 + 约束即金融记忆 + 用户中立化加载路径）。
-> 此前：2026-08-03 三连修复（institution_type 链路、LLM 重试/备用模型链、
-> 风险状态路径锚定，`v2.9-p0-fixes`）。
-> Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
+
+## 2026-08-06 报告缺陷修复（review-driven, `d34a8b0` + `a8dd57d`）
+
+**Full pytest 1356 passed, 7 skipped, 0 failed；ruff/compileall clean；
+NAS 8/5 `us_after_close` artifact 重放渲染 15 项断言全 PASS；已同步 NAS
+生产并修复其 cron 权限故障（root 属主文件 → hermes）。**
+
+### Fix 1 — 六类根因缺陷（2026-08-05 盘后报告实测暴露）
+
+R1–R6 全部为确定性渲染/门控代码缺陷，非 LLM 幻觉：
+
+- **R1 大类约束渲染成单票占比**（`presentation.py` `_conflict_reason`）：
+  `bucket_ratio` 是权益大类占比（0.127）却被挂到单票名下，报告显示
+  "NVDA 当前占组合12.7%"。改为"NVIDIA：触发止盈信号，但权益大类当前
+  占组合12.7%（低于下限25%）"，保留 `label（code）：` 前缀兼容解析。
+- **R2 行情过时仍输出精确金额**（`presentation.py` + `build_push_payload.py`）：
+  被 gate 拒绝的动作在行情 stale 时不再携带 `estimated_amount_cny`，渲染
+  "行情数据过时，金额待数据恢复后确认"（fail-closed）。黄金 ¥36,850
+  NAS 口径自洽（30%×122,833），缺陷是 stale 手工估值仍输出精确金额。
+- **R3 风险标签自相矛盾**（`presentation.py`）：level "降风险" + transition
+  "风险升级"拼贴矛盾 → transition 改相对语义"较上次升级/较上次缓和/
+  与上次持平"。
+- **R4 "无新证据"与"风险升级"并存**（`build_push_payload.py`）：
+  `_section_window_changes` 只查 outlook_delta → payload 新增 `window_delta`
+  字段 + `_window_delta_human_changes()` 消费确定性变化（风险档位迁移/
+  动作调整/冲突新增），first_in_session 且风险刚升级时也显示风险档位变化。
+- **R5 research 候选不过行情新鲜度 gate**（`scheduled_analysis.py` +
+  `presentation.py`）：A股数据过时仍给精确价格/布局建议 → 新增
+  `data_quality` 门控，stale 候选降级"观察"、reasons 替换为数据边界说明。
+- **R6 suspend 仍给布局建议**（同上）：`suspend_accumulation` 时加仓类
+  候选 sizing_hint 降级"仅观察"，setup_tag 降级"观察"。
+
+### Fix 2 — 标签映射收敛（去硬编码，`a8dd57d`）
+
+- `presentation.py` 新增模块级 `TRANSITION_LABELS` / `STALE_FRESHNESS`
+  单一权威；risk 结构保留 `transition_key` 原始枚举。
+- `build_push_payload.py` 镜像映射值同步 + 注释（刻意不依赖引擎层）；
+  渲染按枚举分支而非比较中文字符串。
+- `scheduled_analysis.py` 复用 `STALE_FRESHNESS`；`_ACCUMULATION_SIGNALS`
+  提升为模块级常量。
+- 修复：同一 escalated 在报告两处渲染"升级"与"较上次升级"并存的不一致。
+
+### 生产环境运维（同会话完成）
+
+NAS `/mnt/user/code-project/stocks-claw` 权限故障修复：8/5 20:59 起
+root 属主文件阻塞 hermes 用户 cron（PermissionError，报告停更于 8/5
+21:19）→ 全部 chown hermes:users，cron 恢复正常。8/5 原 artifact 已
+恢复（强制重跑为 degraded 不覆盖生产数据）。
+
+Known limitation (honest): 修复从下一份真实报告起生效；8/5 已推送的
+报告无法撤回。LLM 研判层未改动（数据层缺陷，待行情源恢复）。
 
 ## M4 — Constraint model upgrade (landed 2026-08-04)
 
