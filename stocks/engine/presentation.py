@@ -17,6 +17,22 @@ _SIGNAL_LABELS = {
     "add": "加仓", "hold": "持有", "wait": "等待",
 }
 
+# P1-13: risk transition is a *relative* direction from the previous window.
+# Single source of truth for transition phrasing, shared by presentation and
+# the push-payload renderer so "降风险（较上次升级）" never drifts into a
+# self-contradictory "降风险（风险升级）" or a mismatched "升级" in another
+# renderer.
+TRANSITION_LABELS = {
+    "escalated": "较上次升级", "deescalated": "较上次缓和", "stable": "与上次持平",
+    "unchanged": "与上次持平", "candidate": "候选状态待确认",
+    "expired": "已过期", "initial": "初始化", "reconfirmed": "再确认",
+}
+
+# P1-15: per-market quote freshness values that render as "stale". Single
+# source of truth shared by the research-candidate gate (scheduled_analysis)
+# and the executable-action gate (presentation).
+STALE_FRESHNESS = frozenset({"stale", "old", "missing", "no_data", "unknown", ""})
+
 # ── Phase 2: 平台/操作通道显示 ──
 _PLATFORM_NAME = {
     "brokerage": "证券账户",
@@ -362,7 +378,6 @@ def _display_timestamp(value: str) -> str:
     return parsed.strftime("%Y-%m-%d %H:%M UTC")
 
 
-_STALE_FRESHNESS = frozenset({"stale", "old", "missing", "no_data", "unknown", ""})
 _EXECUTABLE_STATUS = frozenset({"full", "adjusted_to_step"})
 
 
@@ -387,7 +402,7 @@ def _market_quote_stale(market: str, by_market: dict) -> bool:
     item = by_market.get(market)
     if not isinstance(item, dict):
         return True
-    return str(item.get("freshness") or "") in _STALE_FRESHNESS
+    return str(item.get("freshness") or "") in STALE_FRESHNESS
 
 
 def _is_executable(raw: dict, item: dict, by_market: dict) -> bool:
@@ -968,11 +983,9 @@ def build_user_view(
     # read as contradictory. "降风险（风险升级）" sounds like the two halves
     # argue; the transition is a *relative* direction from the previous
     # window, so phrase it as such ("较上次升级") instead of an absolute
-    # state ("风险升级").
-    transition_text = {
-        "escalated": "较上次升级", "deescalated": "较上次缓和", "stable": "与上次持平",
-        "unchanged": "与上次持平", "candidate": "候选状态待确认",
-    }.get(transition, "状态待确认")
+    # state ("风险升级"). Shared with the push-payload renderer via
+    # TRANSITION_LABELS so both surfaces stay in sync.
+    transition_text = TRANSITION_LABELS.get(transition, "状态待确认")
     cash_schedule = decision.get("cash_schedule") or {}
     cash_view = _cash_view(cash_schedule)
     # M1: an approved-but-review-pending sell keeps strategic_exit visible in
@@ -1005,6 +1018,10 @@ def build_user_view(
         "risk": {
             "label": risk_label(level),
             "transition": transition_text,
+            # P1-16: keep the raw enum alongside the rendered text so the
+            # push-payload renderer can branch on state without comparing
+            # Chinese strings (which would silently break on wording edits).
+            "transition_key": transition,
             "suspend_accumulation": bool((risk_state or {}).get("suspend_accumulation")),
             "reasons": _risk_reasons(risk_state or {}),
             "release_condition": str((risk_state or {}).get("release_condition") or "等待风险状态满足解除条件"),

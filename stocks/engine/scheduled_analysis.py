@@ -2011,6 +2011,14 @@ def _research_market(symbol: str) -> str:
     return market.strip().lower()
 
 
+# P1-15: research-only signals that imply building/accumulating a position.
+# When suspend_accumulation is active these must lose their concrete sizing
+# guidance ("暂停加仓" + "分批布局 2-4%" would contradict each other).
+_ACCUMULATION_SIGNALS = frozenset(
+    {"accumulate_candidate", "rotation_candidate", "left_bottom_candidate", "wait_for_pullback"}
+)
+
+
 def _build_research_candidates(
     action_signals: dict,
     risk_state: dict,
@@ -2046,12 +2054,10 @@ def _build_research_candidates(
 
     # P1-15: per-market quote freshness, same shape presentation._is_executable
     # consumes (quotes.by_market.<market>.freshness). Missing market entry
-    # fails closed to stale.
-    _STALE_FRESHNESS = frozenset({"stale", "old", "missing", "no_data", "unknown", ""})
+    # fails closed to stale. Single source of truth: presentation.STALE_FRESHNESS.
+    from stocks.engine.presentation import STALE_FRESHNESS
+
     by_market = ((data_quality or {}).get("quotes") or {}).get("by_market") or {}
-    _ACCUMULATION_SIGNALS = frozenset(
-        {"accumulate_candidate", "rotation_candidate", "left_bottom_candidate", "wait_for_pullback"}
-    )
 
     candidates = []
     for item in (action_signals.get("items") or []):
@@ -2084,7 +2090,7 @@ def _build_research_candidates(
         # just called stale.
         market = _research_market(symbol)
         quote_item = by_market.get(market) or {}
-        quote_stale = str(quote_item.get("freshness") or "") in _STALE_FRESHNESS
+        quote_stale = str(quote_item.get("freshness") or "") in STALE_FRESHNESS
         if quote_stale:
             candidate["quote_stale"] = True
             candidate["condition"] = "quote_stale"

@@ -38,12 +38,16 @@ _CONFIDENCE_LABELS = {
     "low": "\u4f4e",
 }
 # P1-14: human labels for deterministic window_delta risk/action changes.
+# P1-16: values must stay in sync with presentation.TRANSITION_LABELS /
+# _RISK_LABELS / _SIGNAL_LABELS. This script deliberately avoids importing
+# the stocks engine (keeps the renderer runnable without pandas), so the
+# mapping is mirrored here -- keep the two in lockstep.
 _RISK_LEVEL_LABELS = {
     "normal": "常态", "watch": "观察", "reduce": "降风险", "hedge": "对冲/高风险",
 }
 _TRANSITION_LABELS = {
-    "escalated": "升级", "deescalated": "缓和", "stable": "持平",
-    "unchanged": "持平", "candidate": "候选待确认", "expired": "已过期",
+    "escalated": "较上次升级", "deescalated": "较上次缓和", "stable": "与上次持平",
+    "unchanged": "与上次持平", "candidate": "候选状态待确认", "expired": "已过期",
     "initial": "初始化", "reconfirmed": "再确认",
 }
 _ACTION_LABELS = {
@@ -438,9 +442,13 @@ def _section_window_changes(assistant: dict, window_delta: dict | None = None) -
     # with "风险状态: 降风险（较上次升级）".
     if not deterministic:
         risk = assistant.get("risk") or {}
-        risk_transition = str(risk.get("transition") or "")
-        if risk_transition in ("较上次升级", "较上次缓和"):
+        # P1-16: branch on the raw enum (transition_key) rather than the
+        # rendered Chinese text, which would silently break if wording
+        # changes in presentation.TRANSITION_LABELS.
+        risk_key = str(risk.get("transition_key") or "")
+        if risk_key in ("escalated", "deescalated"):
             risk_label = str(risk.get("label") or "风险状态")
+            risk_transition = str(risk.get("transition") or "")
             deterministic = [f"- 风险档位变化: {risk_label}（{risk_transition}）"]
     if deterministic:
         lines.extend(deterministic)
