@@ -277,7 +277,7 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `capital_allocation.available_cash_cny` 与 `net_deployable_cny` 只从 cash/T0 和已批准回收计算；
   T1/T2/场外基金/股票价值单列为 `strategic_exit_value_cny`。
 - `window_delta` 仅比较语义键，忽略 `decision_id` 中的 run ID 和 `generated_at` 等运行时变化。
-- `portfolio_decision.cash_schedule` 区分 `immediate_cash_cny`、`settling_cash_cny`、`strategic_exit_value_cny`、`locked_value_cny`，不得把持仓总值直接称为"今天可动用"。同一结构额外输出五个规范字段 `available_now`、`confirmed_settling`、`planned_release`、`strategic_exit`、`locked`（`locked` = `locked_value_cny - planned_release_cny`，即计划内到期释放已从锁定值中剔除，不重复计入）与 `unresolved_settlement`（未确认结算方式的卖出资金，绝不计入 `available_now` 或 `confirmed_settling`）；`user_view.assistant_brief.cash` 逐字投影这五个规范字段，`unresolved_settlement` 只作为 `data_notes` 提示出现，不构成第六个资金分类。
+- `portfolio_decision.cash_schedule` 区分 `immediate_cash_cny`、`settling_cash_cny`、`strategic_exit_value_cny`、`locked_value_cny`，不得把持仓总值直接称为"今天可动用"。同一结构额外输出五个规范字段 `available_now`、`confirmed_settling`、`planned_release`、`strategic_exit`、`locked`（`locked` = `locked_value_cny - planned_release_cny`，即计划内到期释放已从锁定值中剔除，不重复计入）与 `unresolved_settlement`（未确认结算方式的卖出资金，绝不计入 `available_now` 或 `confirmed_settling`）；`user_view.assistant_brief.cash` 逐字投影这五个规范字段，另含 `safety_buffer`（安全垫，从 `available_now` 划出、不计入可用，P1-8）、`unresolved_settlement`（仅作金额字段供 §6 引用，不构成第六个资金分类）与 `total_assets_cny`（各桶加总，R5-4 供"资产合计"行展示，与各桶同源可审计）。
 - category fallback `hold` 可提高 intelligence driver 字段覆盖率,但不等于独立方向情报。
 - `confidence` 表示当前证据与新鲜度,不表示历史胜率或未来收益概率。
 - 2026-07-15 历史交易质量审查见 `../docs/archive/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`；现行边界以 `VISION.md`、`../PLAN.md` 和 `../ROADMAP.md` 为准。

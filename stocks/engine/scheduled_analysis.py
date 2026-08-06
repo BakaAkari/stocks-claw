@@ -724,7 +724,7 @@ class ScheduledAnalysisRunner:
                         build_advisory_outlook,
                         context,
                         session_id=session_id,
-                        market=run["market"],
+                        market=occurrence.session.primary_market,
                         config=self.config,
                         now=run["generated_at"],
                     )

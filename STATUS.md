@@ -8,19 +8,19 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-06 (fifteenth update) — **五轮修复回溯审查：
-> R5-2 修正为真实交易日历（周末/节假日不再误伤）、R5-10 修正
-> §3/§5 去重边界（第 4+ 条不再丢失）、R5-5 复用 _parse_dt**。
-> 此前：2026-08-06（fourteenth）第五轮对抗性校验 R5-2/4/5/7/8/10；
-> （thirteenth）第四轮 P5-1..P5-7；（twelfth）C1 决策支持层。
+> Last updated: 2026-08-06 (sixteenth update) — **全量健康检查：
+> C1-WP2 降级修正(主市场行情,不再被跨市场 stale 误伤) +
+> market 参数传错修正 + 死代码 _render_delta_changes 删除 +
+> DATA_MODEL cash 字段契约更新**。此前：(fifteenth)五轮修复回溯审查；
+> （fourteenth）第五轮对抗性校验 R5-2/4/5/7/8/10。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
 
-## 2026-08-06 五轮修复回溯审查（R5-2 交易日历 / R5-10 去重边界）
+## 2026-08-06 全量健康检查（C1-WP2 修正 / 死代码清理 / 契约更新）
 
 **Full pytest 1386 passed, 7 skipped, 1 deselected（仅排除既有基线失败
 `test_advice_feedback::TestLedgerWrite::test_engine_rollup_reads_ledger`）；
-ruff/compileall clean。审查方法：对 5 轮全部修复逐个回源码复查，
-重点找我自己的修复引入的新问题（边界、口径、同源一致性）。**
+ruff/compileall clean。方法：对 5 轮修复之外的整仓做健康扫描——
+降级链路、缓存刷新、汇率、契约、死代码、运行时渲染。**
 
 ## 2026-08-06 第四轮对抗性校验(P5-1..P5-7)
 
@@ -80,7 +80,36 @@ ruff/compileall clean；新增 12 个回归测试（test_report_defects_p234.py
 - ruff/compileall clean;
 - 已 commit + push + NAS 同步(见 git log C1 相关 commit)。
 
-### 回溯审查发现并修正(本轮)
+### 健康检查发现并修正(本轮)
+
+- **C1-WP2 降级误伤(真实缺陷)**:`_apply_freshness_downgrade` 的
+  `stale_quotes = any(market_fresh)` 遍历所有市场——A股盘后报告(主市场
+  A股 fresh)被美股 stale(8/5 收盘,跨日正确语义)拖累而降级,把"正确
+  跨日 stale"误当"主市场数据滞后"。修正:新增 `primary_market` 参数,
+  只检查主市场行情;未指定时退化为任一市场(保守)。
+- **market 参数传错(真实缺陷)**:`scheduled_analysis.py` 727 行传
+  `run["market"]`(=None,session.market 为 None),导致 primary_market
+  恒为空、C1-WP2 修正不生效。改为 `occurrence.session.primary_market`
+  (cn/us/global 实际主市场)。
+- **死代码 `_render_delta_changes`(112 行)删除**:被
+  `_render_delta_changes_concise` 取代后无调用,全仓 grep 确认无引用。
+- **DATA_MODEL cash 字段契约更新**:`user_view.assistant_brief.cash`
+  实际含 8 个 key(5 规范 + safety_buffer + unresolved_settlement +
+  total_assets_cny),文档此前只说"五个规范字段 + data_notes",滞后 3 字段。
+
+### 记录为观察项(未修)
+
+- **P2-2 定期刷新分支缺 scan 去重**:首次 warm 有 `_dedupe_instruments`,
+  定期刷新(12h)分支直接传 scan_instruments——若上游含重复会 warm 两次。
+  低风险(取决于 sector_scan 构造),待验证实际输入。
+- **currency_conversion degraded 无用户提示**:USD 汇率走
+  stale_cache/hardcoded_fallback 时 status=degraded,但 asset_completeness
+  只报 `supported_fx`(failed),degraded 静默。8/6 实测 cache 汇率新鲜
+  (source=cache),未触发;低概率触发时用户不知汇率非最新。
+- **P2-4 window_level_change 渲染层闲置**:字段在 presentation 生成、
+  scheduled_analysis 重建,但 build_push_payload 未消费。升级/降级场景
+  用户能看到"较上次升级"但看不到"从哪升到哪"。轻量呈现缺口,非逻辑错误。
+- **P5-3 翻译层大小写敏感**(沿用上轮记录)。
 
 - **R5-2 修正为真实交易日历**(`context_builder.py` `_freshness_from_datetime`
   + 新增 `_count_trading_days_after` + `market_holidays` 参数):

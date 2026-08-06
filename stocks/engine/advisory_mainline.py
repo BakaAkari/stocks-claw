@@ -271,16 +271,20 @@ def _downgrade_confidence(confidence: str) -> str:
 def _apply_freshness_downgrade(
     outlook: dict,
     context: AnalysisContext,
+    *,
+    primary_market: str = "",
 ) -> dict:
     """C1-WP2: 关键数据过旧时确定性降级研判置信度(不依赖 LLM)。
 
     输入 context.data_quality:
     - macro.official.freshness in {old, stale} → 官方统计滞后(8/6 实测 6/1)
-    - quotes 任一主市场 freshness in {old, stale} → 行情滞后
+    - quotes 主市场(primary_market)freshness in {old, stale} → 行情滞后
     规则:任一触发且该 horizon confidence 为 medium/high → 降一级;
     data_limitations 追加"研判基于 N 天前宏观数据,可信度已降级"。
 
-    不改 rationale/validation 文本 —— 诚实保留 LLM 原话,只调可信度。
+    健康检查修正:降级只看主市场行情,不看 any market。否则 A股盘后
+    报告(主市场 A股 fresh)会被美股 stale(8/5 收盘,跨日正确语义)
+    拖累而降级,把"正确跨日 stale"误当"主市场数据滞后"。
     """
     dq = (context.data_quality or {}) if isinstance(context.data_quality, dict) else {}
     macro = dq.get("macro") or {}
@@ -289,11 +293,16 @@ def _apply_freshness_downgrade(
     official_as_of = str(official.get("as_of") or "")[:10]
     quotes = dq.get("quotes") or {}
     markets = (quotes.get("by_market") or {}) if isinstance(quotes, dict) else {}
-    market_fresh = [
-        str((m or {}).get("freshness") or "")
-        for m in markets.values()
-        if isinstance(m, dict)
-    ]
+    # 主市场行情 freshness;未指定时退化为任一市场(保守)。
+    primary = str(primary_market or "")
+    if primary and primary in markets:
+        market_fresh = [str((markets[primary] or {}).get("freshness") or "")]
+    else:
+        market_fresh = [
+            str((m or {}).get("freshness") or "")
+            for m in markets.values()
+            if isinstance(m, dict)
+        ]
     stale_official = official_fresh in {"old", "stale"}
     stale_quotes = any(f in {"old", "stale"} for f in market_fresh)
     if not (stale_official or stale_quotes):
@@ -418,4 +427,7 @@ def build_advisory_outlook(
     # 5. Project into the display-shaped outlook dict.
     projected = _project_outlook(advisory, receipt, generated_at=generated_at)
     # C1-WP2: 关键数据过旧时确定性降级置信度(不改 rationale 文本)。
-    return _apply_freshness_downgrade(projected, context)
+    # 健康检查修正: 只按主市场行情降级,避免跨市场 stale 误伤。
+    return _apply_freshness_downgrade(
+        projected, context, primary_market=market
+    )
