@@ -8,12 +8,20 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-06 (thirteenth update) — **第四轮对抗性校验
-> （P5-1..P5-7：明日计划 gate 对齐 / 估值过期聚合 / 风险枚举翻译 /
-> 研判恢复提示 / 候选名单 / 文案去重）**。此前：2026-08-06（twelfth）
-> C1 报告决策支持层补全；2026-08-06（eleventh）第四轮对抗性校验全量修复；
-> 2026-08-06（tenth）六类根因缺陷修复 + 标签映射收敛。
+> Last updated: 2026-08-06 (fourteenth update) — **第五轮对抗性校验
+> （R5-2/4/5/7/8/10：freshness 交易日历日语义 / 资产合计 / 生成时间 /
+> 高风险持续提示 / 估值 key 修正 / §3§5 去重）**。此前：2026-08-06
+> （thirteenth）第四轮对抗性校验 P5-1..P5-7；2026-08-06（twelfth）
+> C1 报告决策支持层补全；2026-08-06（eleventh）四轮全量修复。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
+
+## 2026-08-06 第五轮对抗性校验(R5-2/4/5/7/8/10)
+
+**Full pytest 1386 passed, 7 skipped, 1 deselected（仅排除既有基线失败
+`test_advice_feedback::TestLedgerWrite::test_engine_rollup_reads_ledger`）；
+ruff/compileall clean。方法：NAS 生产环境用最新代码（a9a828f）重新
+触发完整报告（8/6 21:08 cn_after_close），从普通用户/设计师/交易分析
+师三视角审查，逐项回源码验证后一次性修复。**
 
 ## 2026-08-06 第四轮对抗性校验(P5-1..P5-7)
 
@@ -73,7 +81,39 @@ ruff/compileall clean；新增 12 个回归测试（test_report_defects_p234.py
 - ruff/compileall clean;
 - 已 commit + push + NAS 同步(见 git log C1 相关 commit)。
 
-### P5 修复明细(本轮)
+### R5 修复明细(本轮)
+
+- **R5-2(核心) freshness 交易日历日语义**(`context_builder.py`
+  `_freshness_from_datetime` + `_MARKET_TZ`):旧逻辑按纯时间差
+  (2h fresh / 24h stale)判 stale,盘后报告把当日收盘价(如 A股 08:14
+  行情在 19:58 生成)误判为过时 → 研判全拒、动作全暂缓。改为市场本地
+  时区日历日判定(同日 fresh / 昨日 stale / 更早 old),新增 `_MARKET_TZ`
+  映射(a/cn→Asia/Shanghai、us→America/New_York、crypto→UTC);全局
+  freshness 用 UTC 保守聚合。效果:盘后报告恢复完整研判与执行判定。
+- **R5-4 资产合计**(`presentation.py` `_cash_view` + §6 渲染):
+  资金行后新增"资产合计 ¥1,527,720(各资金桶加总,含安全垫与待决)",
+  交易分析师可核对加总。数字来自 `cash.total_assets_cny`(与各桶同源,
+  validator 已授权)。
+- **R5-5 生成时间**(`build_push_payload.py`):标题标注
+  "*生成时间 2026-08-06 21:08*",用户判断报告时效;完整 ISO 格式避开
+  number gate;payload 新增 `generated_at`(2 个既有测试同步更新)。
+- **R5-7 高风险持续提示**(`build_push_payload.py` §1):transition=
+  unchanged 但 suspend_accumulation(仍 hedge/reduce)时,窗口变化显示
+  "风险状态持续: 对冲/高风险",不再误报"本窗口未发现新证据"。
+- **R5-8 估值 key 修正**(`context_builder.py` 901 行):message 用
+  `valuation_age_days`/`as_of`(此前读不存在的 `_valuation_age_days`
+  产生"估值为 None 天前(截止 )"垃圾文本);None 回退"估值时效待确认"。
+- **R5-10 §3/§5 去重**(`build_push_payload.py` §5):manual_review 时
+  已展示的 no_action_reasons 通过 already_shown + 前缀匹配在
+  why/do_not_do 中跳过,消除广发纳指 §3/§5 双写。
+- **R5-1 撤销**:顶层 quotes.as_of 仅元数据,用户面 by_market 渲染
+  正确(A股截止 08:14),不构成误读。
+
+验证:全量 1386 passed / 7 skipped / 1 deselected;ruff/compileall
+clean。NAS 重放 8/6 21:08 cn_after_close——A股行情判 fresh 后研判
+恢复生成(置信度自动降级"置信 低")、资产合计显示、估值提示正常
+("余额宝 估值为 26 天前(截止 2026-07-11)")、风险触发原因全中文、
+明日计划 7 条完整。更新 4 个既有测试断言为新语义。
 
 - **P5-1 明日计划 gate 对齐**(`presentation.py` `_tomorrow_plan`):
   `_tomorrow_plan` 此前直接消费 `approved_actions`,把行情过时被 gate
