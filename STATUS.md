@@ -8,11 +8,20 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-06 (twelfth update) — **C1 报告决策支持层补全
-> （冲突解读 / 研判边界降级 / 明日计划）**。此前：2026-08-06（eleventh）
-> 第四轮对抗性校验全量修复（P2-2/P2-3/P2-4/P2-5/P3-1/P3-3/P3-4/P4-1/
-> P4-1b）；2026-08-06（tenth）六类根因缺陷修复 + 标签映射收敛。
+> Last updated: 2026-08-06 (thirteenth update) — **第四轮对抗性校验
+> （P5-1..P5-7：明日计划 gate 对齐 / 估值过期聚合 / 风险枚举翻译 /
+> 研判恢复提示 / 候选名单 / 文案去重）**。此前：2026-08-06（twelfth）
+> C1 报告决策支持层补全；2026-08-06（eleventh）第四轮对抗性校验全量修复；
+> 2026-08-06（tenth）六类根因缺陷修复 + 标签映射收敛。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
+
+## 2026-08-06 第四轮对抗性校验(P5-1..P5-7)
+
+**Full pytest 1386 passed, 7 skipped, 1 deselected（仅排除既有基线失败
+`test_advice_feedback::TestLedgerWrite::test_engine_rollup_reads_ledger`）；
+ruff/compileall clean。方法：用当前修复后代码重新触发真实报告
+（8/6 19:49 cn_after_close），从普通用户/设计师/交易分析师三视角
+审查输出与源码底层，验证修复效果。**
 
 ## 2026-08-06 C1 报告决策支持层补全
 
@@ -63,6 +72,34 @@ ruff/compileall clean；新增 12 个回归测试（test_report_defects_p234.py
   (冲突 tilt 4 + 降级 4 + 明日计划 4);
 - ruff/compileall clean;
 - 已 commit + push + NAS 同步(见 git log C1 相关 commit)。
+
+### P5 修复明细(本轮)
+
+- **P5-1 明日计划 gate 对齐**(`presentation.py` `_tomorrow_plan`):
+  `_tomorrow_plan` 此前直接消费 `approved_actions`,把行情过时被 gate
+  的动作仍列为 high 执行,与指令卡"暂缓执行"矛盾。修复:传入
+  `by_market`,用与指令卡相同的 `_is_executable` gate——可执行 → high,
+  被 gate → medium 复核(文案即"暂缓执行,等待数据恢复")。
+- **P5-2 估值过期聚合**(`build_push_payload.py` §5):14 条"手工估值超
+  30 天"提示被 `collected[:8]`+`ordered[:4]` 截断,用户看不到半数持仓
+  估值过期。修复:估值类提示单独计数聚合为一行"N 项持仓为手工估值
+  (超过 30 天未更新),精确调仓前需先更新金额(前 3 个标的等)",不占
+  前 4 上限。
+- **P5-3 风险枚举翻译**(`presentation.py` `_risk_trigger_text`):
+  "Critical cluster: 1 critical" 等英文内部枚举直出用户面。修复:确定性
+  翻译层(长 token 优先,数字保留,未知回退原文不伪造)。
+- **P5-4 研判恢复提示**(`advisory_mainline.py`):行情过旧/快照过旧
+  的 unavailable message 补"行情恢复后自动重试 / 下次定时窗口自动刷新"。
+- **P5-5 候选名单**(`build_push_payload.py` §4):"另有 N 个候选"不再
+  空泛,列出候选名称(前 6 个 + 等 N 个)。
+- **P5-6 随 P5-1 覆盖**:明日计划与暂缓区不再矛盾重复。
+- **P5-7 文案去重**(`presentation.py`):`_deferred_action_text` 已含
+  label,不再重复拼接("XXX:XXX:暂缓执行" → "XXX:暂缓执行")。
+
+验证:真实重放 8/6 19:49 cn_after_close——明日计划 512480 显示
+"② 暂缓执行,等待数据恢复"(与指令卡一致)、"13 项持仓为手工估值"
+聚合行、5 个候选名单齐全、"行情恢复后自动重试"提示。新增 7 个回归
+测试(明日计划 gate 2 + 翻译 2 + 聚合 1 + 名单 1 + 文案 1)。
 
 
 

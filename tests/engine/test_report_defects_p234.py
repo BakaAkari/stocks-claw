@@ -276,13 +276,28 @@ def test_freshness_downgrade_does_not_touch_rationale():
 # ── C1-WP3: 明日计划 ────────────────────────────────────────────────
 
 
+def _fresh_by_market() -> dict:
+    return {"a": {"status": "ok", "freshness": "fresh"},
+            "us": {"status": "ok", "freshness": "fresh"}}
+
+
 def test_tomorrow_plan_traces_approved_actions():
     plan = _tomorrow_plan(
         {"approved_actions": [{
             "position_id": "a_510300", "signal": "reduce",
             "action_description": "减仓 525 股", "ratio": 0.2,
+            "execution_status": "full", "final_ratio": 0.2,
+            "executable_quantity": 525,
         }]},
-        [], {},
+        [], {
+            "a_510300": {
+                "position_id": "a_510300",
+                "display_name": "沪深300ETF",
+                "instrument_key": "a:510300",
+                "classification": {"exposure_tags": ["沪深300"]},
+            }
+        },
+        by_market=_fresh_by_market(),
         data_notes=[], risk_state={}, structured_outlook=None,
     )
     assert plan[0]["source"] == "approved_action"
@@ -296,6 +311,7 @@ def test_tomorrow_plan_uses_conflict_tilt():
             {"label": "科创50ETF", "code": "588000", "tilt": "constraint",
              "tilt_reason": "权益低配 12.7% 低于下限 25%"},
         ], {},
+        by_market=_fresh_by_market(),
         data_notes=[], risk_state={}, structured_outlook=None,
     )
     assert any("维持现状" in p["action"] and p["source"] == "conflict_tilt" for p in plan)
@@ -303,7 +319,8 @@ def test_tomorrow_plan_uses_conflict_tilt():
 
 def test_tomorrow_plan_emits_observation_when_empty():
     plan = _tomorrow_plan(
-        {}, [], {}, data_notes=[], risk_state={}, structured_outlook=None,
+        {}, [], {}, by_market=_fresh_by_market(),
+        data_notes=[], risk_state={}, structured_outlook=None,
     )
     assert plan == [{"action": "观察：明日无新增动作，维持当前仓位",
                      "position": "", "priority": "low", "source": "no_action"}]
@@ -312,6 +329,7 @@ def test_tomorrow_plan_emits_observation_when_empty():
 def test_tomorrow_plan_includes_risk_and_low_confidence_notes():
     plan = _tomorrow_plan(
         {}, [], {},
+        by_market=_fresh_by_market(),
         data_notes=["¥36,850 的卖出资金结算方式待确认"],
         risk_state={"level": "hedge", "transition": "unchanged"},
         structured_outlook={"near_term": {"confidence": "low"}},
@@ -320,3 +338,130 @@ def test_tomorrow_plan_includes_risk_and_low_confidence_notes():
     assert "data_note" in sources
     assert "risk_state" in sources
     assert "outlook_confidence" in sources
+
+
+def test_tomorrow_plan_gate_alignment_does_not_conflict_with_card():
+    # P5-1: 行情过时导致 _is_executable=False 的动作,明日计划不得列为
+    # high 执行(与指令卡"暂缓执行"矛盾)。必须降级为 medium 复核。
+    stale_market = {"a": {"status": "ok", "freshness": "old"}}
+    plan = _tomorrow_plan(
+        {"approved_actions": [{
+            "position_id": "cn_broker_512480", "signal": "stop_loss",
+            "action_description": "止损清仓", "ratio": 1.0,
+            "execution_status": "full", "final_ratio": 1.0,
+            "executable_quantity": 5000,
+        }]},
+        [], {
+            "cn_broker_512480": {
+                "position_id": "cn_broker_512480",
+                "display_name": "半导体ETF",
+                "instrument_key": "a:512480",
+                "classification": {"exposure_tags": ["半导体"]},
+            }
+        },
+        by_market=stale_market,
+        data_notes=[], risk_state={}, structured_outlook=None,
+    )
+    assert plan[0]["priority"] == "medium"
+    assert plan[0]["source"] == "approved_action_review"
+    assert "暂缓执行" in plan[0]["action"] or "数据恢复" in plan[0]["action"]
+
+
+def test_tomorrow_plan_executable_stays_high_when_quotes_fresh():
+    # P5-1: 行情新鲜时动作保持 high 执行
+    plan = _tomorrow_plan(
+        {"approved_actions": [{
+            "position_id": "cn_broker_512480", "signal": "stop_loss",
+            "action_description": "止损清仓", "ratio": 1.0,
+            "execution_status": "full", "final_ratio": 1.0,
+            "executable_quantity": 5000,
+        }]},
+        [], {
+            "cn_broker_512480": {
+                "position_id": "cn_broker_512480",
+                "display_name": "半导体ETF",
+                "instrument_key": "a:512480",
+                "classification": {"exposure_tags": ["半导体"]},
+            }
+        },
+        by_market=_fresh_by_market(),
+        data_notes=[], risk_state={}, structured_outlook=None,
+    )
+    assert plan[0]["priority"] == "high"
+    assert plan[0]["source"] == "approved_action"
+
+
+# ── P5-3: risk reasons 英文枚举翻译 ─────────────────────────────────
+
+
+def test_risk_reasons_translate_english_enums():
+    from stocks.engine.presentation import _risk_reasons
+
+    reasons = _risk_reasons({
+        "level": "hedge",
+        "triggers": [
+            {"condition": "Critical cluster", "value": "1 critical"},
+            {"condition": "Geopolitical crisis", "value": "geopolitics critical"},
+            {"condition": "VIX > 35", "value": "VIX=36.2"},
+        ],
+    })
+    assert any("关键集群事件" in r and "关键级别" in r for r in reasons), reasons
+    assert any("地缘政治危机" in r and "地缘局势关键" in r for r in reasons), reasons
+    # VIX 数字保持原样
+    assert any("VIX=36.2" in r for r in reasons), reasons
+    # 无英文枚举残留
+    for r in reasons:
+        assert "Critical cluster" not in r
+        assert "geopolitics critical" not in r
+
+
+def test_risk_reasons_unknown_trigger_falls_back_raw():
+    from stocks.engine.presentation import _risk_reasons
+
+    reasons = _risk_reasons({
+        "level": "reduce",
+        "triggers": [{"condition": "Mystery condition", "value": "x"}],
+    })
+    # 未知枚举保留原文(不伪造翻译)
+    assert any("Mystery condition" in r for r in reasons)
+
+
+# ── P5-2: 估值过期聚合行 + P5-5: 候选名单 ──────────────────────────
+
+
+def test_blocked_section_aggregates_valuation_stale_notes():
+    from scripts.build_push_payload import _section_blocked_and_deferred
+
+    assistant = {
+        "data_notes": [
+            "广发纳指100联接A 手工估值超过 30 天，精确调仓需先更新金额",
+            "大成纳指100联接A 手工估值超过 30 天，精确调仓需先更新金额",
+            "华安黄金ETF联接C 手工估值超过 30 天，精确调仓需先更新金额",
+            "A股行情数据已过时（截止 2026-08-06 08:14 UTC）",
+        ],
+        "do_not_do": [],
+        "why": [],
+        "risk": {"suspend_accumulation": False},
+    }
+    lines = _section_blocked_and_deferred({"status": "no_action", "actions": [], "no_action_reasons": []}, assistant)
+    joined = "\n".join(lines)
+    assert "3 项持仓为手工估值" in joined, joined
+    # 行情过时仍在
+    assert "A股行情数据已过时" in joined
+
+
+def test_setup_section_lists_overflow_candidate_names():
+    from scripts.build_push_payload import _section_setup_candidates
+
+    research = [
+        {"display_label": f"候选{i}ETF", "score": 1.0 - i * 0.1,
+         "setup_tag": "观察", "reasons": ["趋势"]}
+        for i in range(5)
+    ]
+    lines = _section_setup_candidates({"research": research})
+    joined = "\n".join(lines)
+    # top3 显示 + 其余 2 个列名
+    assert "候选0ETF" in joined
+    assert "另有 2 个候选" in joined
+    assert "候选3ETF" in joined
+    assert "候选4ETF" in joined

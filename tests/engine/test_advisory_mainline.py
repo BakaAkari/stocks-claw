@@ -221,7 +221,7 @@ class TestBuildAdvisoryOutlook:
             llm_client=client, now=NOW,
         )
         assert outlook["status"] == "unavailable"
-        assert outlook["message"] == "研判待复核：目标市场行情数据过旧或缺失"
+        assert outlook["message"] == "研判待复核：目标市场行情数据过旧或缺失（行情恢复后自动重试）"
         assert client.calls == 0
 
     def test_missing_market_entry_blocks(self) -> None:
@@ -245,7 +245,7 @@ class TestBuildAdvisoryOutlook:
             llm_client=client, now=NOW,
         )
         assert outlook["status"] == "unavailable"
-        assert outlook["message"] == "研判待复核：数据快照过旧"
+        assert outlook["message"] == "研判待复核：数据快照过旧（下次定时窗口自动刷新）"
         assert client.calls == 0
 
     def test_missing_falsification_fails_validation(self) -> None:

@@ -347,10 +347,17 @@ def build_advisory_outlook(
     #    context snapshot mean no judgment may be issued.
     if _quotes_freshness_blocked(context, market):
         logger.info("advisory mainline: quotes freshness gate blocked (%s)", market)
-        return _unavailable("研判待复核：目标市场行情数据过旧或缺失", generated_at=generated_at)
+        # P5-4: 给用户可行动的恢复提示(行情恢复后下个检查点自动重试)
+        return _unavailable(
+            "研判待复核：目标市场行情数据过旧或缺失（行情恢复后自动重试）",
+            generated_at=generated_at,
+        )
     if _snapshot_too_old(context, now):
         logger.info("advisory mainline: context snapshot older than 90 minutes")
-        return _unavailable("研判待复核：数据快照过旧", generated_at=generated_at)
+        return _unavailable(
+            "研判待复核：数据快照过旧（下次定时窗口自动刷新）",
+            generated_at=generated_at,
+        )
 
     # 2. LLM client resolution.  "auto" resolves the primary client plus the
     #    configured fallback-model chain from config; an explicit client

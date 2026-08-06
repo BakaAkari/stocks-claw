@@ -602,7 +602,7 @@ def test_user_view_contains_deterministic_conflict_counts_risk_reasons_and_data_
     assert brief["conflict_summary"] == [
         {"action_label": "减仓", "count": 3}, {"action_label": "止盈", "count": 1}
     ]
-    assert brief["risk"]["reasons"] == ["Geopolitical crisis：geopolitics critical"]
+    assert brief["risk"]["reasons"] == ["地缘政治危机：地缘局势关键"]
     assert brief["data_notes"] == [
         "美股行情数据已过时（截止 2026-07-16 20:00 UTC）",
         "宏观数据较旧（截止 2026-06-01 00:00 UTC）",

@@ -639,7 +639,16 @@ def _section_setup_candidates(assistant: dict, next_checkpoint: str = "") -> lis
 
     overflow = len(research) - len(top)
     if overflow > 0:
-        lines.append(f"- 另有 {overflow} 个候选，详情待人工进一步筛选")
+        # P5-5: 给出候选名单,不空泛说"详情待筛选"——用户可直接看到
+        # 剩余候选是谁,再决定是否人工进一步查看。
+        rest_labels = [
+            str((item.get("display_label") or item.get("label") or "候选"))
+            for item in sorted_items[len(top):]
+        ]
+        rest_text = "、".join(rest_labels[:6])
+        if len(rest_labels) > 6:
+            rest_text += f" 等 {overflow} 个"
+        lines.append(f"- 另有 {overflow} 个候选: {rest_text}（详情待人工进一步筛选）")
     return lines
 
 
@@ -935,9 +944,16 @@ def _pending_item_type(text: str) -> str:
 
 def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
     """§5 禁止与延后 — manual_review 冲突已在 §3 呈现时不重复；
-    带金额的 data_notes 归到 §6 组合与检查点的“待决事项”。"""
+    带金额的 data_notes 归到 §6 组合与检查点的“待决事项”。
+
+    P5-2: 估值过期类提示("手工估值超过 N 天")单独聚合展示——它们
+    数量大(8/6 实测 14 条)且同质,逐条挤占前 4 上限会让用户看不到
+    "半数持仓估值过期"这个整体事实。聚合为一条带计数,避免被截断。
+    """
     lines: list[str] = [_section_heading("禁止与延后")]
     collected: list[str] = []
+    valuation_stale_count = 0
+    valuation_stale_seen: set[str] = set()
 
     status_raw = str(card.get("status") or "").strip().lower()
     actions = card.get("actions") or []
@@ -968,6 +984,13 @@ def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
     data_notes = assistant.get("data_notes") or []
     for note in data_notes:
         if note and note not in collected and not _has_currency_amount(note):
+            # P5-2: 估值过期类单独计数聚合,不逐条占位
+            if "手工估值超过" in note or "估值超过" in note:
+                norm = note.split(" 手工估值")[0].split(" 估值")[0]
+                if norm not in valuation_stale_seen:
+                    valuation_stale_seen.add(norm)
+                valuation_stale_count += 1
+                continue
             collected.append(note)
 
     risk = assistant.get("risk") or {}
@@ -996,6 +1019,11 @@ def _section_blocked_and_deferred(card: dict, assistant: dict) -> list[str]:
         lines.append("- 无")
     for text in ordered:
         lines.append(f"- {text}")
+
+    # P5-2: 估值过期聚合行(不占前 4 上限)
+    if valuation_stale_count:
+        lines.append(f"- {valuation_stale_count} 项持仓为手工估值（超过 30 天未更新），"
+                     f"精确调仓前需先更新金额（{', '.join(list(valuation_stale_seen)[:3])} 等）")
 
     return lines
 

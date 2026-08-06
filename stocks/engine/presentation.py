@@ -339,6 +339,7 @@ def _tomorrow_plan(
     conflict_details: list[dict],
     by_id: dict[str, dict],
     *,
+    by_market: dict,
     data_notes: list[str],
     risk_state: dict,
     structured_outlook: dict | None,
@@ -351,6 +352,10 @@ def _tomorrow_plan(
     - data_notes            → 待决资金等提示项
     - risk_state            → 风险档位(升/降级提示)
     - structured_outlook    → 研判(降级则标注低可信)
+
+    P5-1: 与 instruction_card 的 gate 对齐 —— 只有通过 _is_executable
+    (行情新鲜 + 可执行数量)的动作才列为 high 执行;被 gate 的降级为
+    medium 复核,绝不与指令卡的"暂缓执行"矛盾。
 
     不承诺收益、不下单,只给人工确认清单。无操作时输出观察项。
     """
@@ -368,13 +373,25 @@ def _tomorrow_plan(
         amount_hint = ""
         if isinstance(ratio, (int, float)) and ratio > 0:
             amount_hint = f"（按 {ratio*100:.0f}% 比例）"
-        plan.append({
-            "action": f"{label}：{desc}{amount_hint}",
-            # 用户面不暴露内部 position_id,用公开 code/名称
-            "position": public_instrument_code(item.get("instrument_key", ""), "") or label,
-            "priority": "high",
-            "source": "approved_action",
-        })
+        # P5-1: 与指令卡同 gate。可执行 → high;被 gate(行情过时等) → medium 复核
+        if _is_executable(action, item, by_market):
+            plan.append({
+                "action": f"{label}：{desc}{amount_hint}",
+                # 用户面不暴露内部 position_id,用公开 code/名称
+                "position": public_instrument_code(item.get("instrument_key", ""), "") or label,
+                "priority": "high",
+                "source": "approved_action",
+            })
+        else:
+            reason = _deferred_action_text(action, item, by_market)
+            # P5-7: _deferred_action_text 已含 label("XXX：暂缓执行..."),
+            # 不再重复拼接 label,否则出现"XXX：XXX：暂缓执行"。
+            plan.append({
+                "action": reason,
+                "position": public_instrument_code(item.get("instrument_key", ""), "") or label,
+                "priority": "medium",
+                "source": "approved_action_review",
+            })
 
     # 2. 冲突倾向(constraint → 维持观察;manual → 人工裁定)
     for detail in (conflict_details or [])[:3]:
@@ -511,6 +528,51 @@ def _conflict_summary(conflicts: list[dict]) -> list[dict]:
     ]
 
 
+# P5-3: risk_warning 的 trigger condition 是英文内部枚举,直接透传用户面
+# 会产生"Critical cluster: 1 critical"这类机器语言。这里做确定性翻译,
+# 保留数值部分(VIX=xx、-x.x%),只翻译英文触发词。
+_RISK_TRIGGER_TRANSLATIONS = {
+    "Critical cluster": "关键集群事件",
+    "Broad negative": "广泛负面事件",
+    "Geopolitical crisis": "地缘政治危机",
+    "Severe drawdown": "严重回撤",
+    "Drawdown warning": "回撤预警",
+    "critical": "关键级别",
+    "geopolitics critical": "地缘局势关键",
+    "clusters": "个集群",
+    "elevated": "偏高",
+}
+
+
+def _risk_trigger_text(condition: str, value: str) -> str:
+    """Translate an English risk-trigger condition/value pair to Chinese.
+
+    Condition is usually a short enum like ``Critical cluster``; value is
+    usually a numeric fragment (``1 critical``, ``VIX=36.2``, ``-12.3%``)
+    or empty.  Translates known enum tokens, preserves numbers verbatim,
+    falls back to the raw text when a token is unknown (never fabricates).
+
+    Longest token first: ``geopolitics critical`` must match before the
+    shorter ``critical`` substring inside it (P5-3 regression).
+    """
+    cond = str(condition or "").strip()
+    val = str(value or "").strip()
+    ordered = sorted(
+        _RISK_TRIGGER_TRANSLATIONS.items(),
+        key=lambda kv: len(kv[0]),
+        reverse=True,
+    )
+    for en, zh in ordered:
+        if cond == en:
+            cond = zh
+            break
+    # value 里的英文枚举 token 也翻译(长 token 优先)
+    for en, zh in ordered:
+        if en in val:
+            val = val.replace(en, zh)
+    return f"{cond}：{val}" if val else cond
+
+
 def _risk_reasons(risk_state: dict) -> list[str]:
     """Build human-readable risk reasons from actual risk triggers.
 
@@ -531,7 +593,8 @@ def _risk_reasons(risk_state: dict) -> list[str]:
         if not condition:
             continue
         value = str(trigger.get("value") or "").strip()
-        text = f"{condition}：{value}" if value else condition
+        # P5-3: 英文触发枚举翻译为用户可读中文
+        text = _risk_trigger_text(condition, value)
         if text not in reasons:
             reasons.append(text)
     level = str((risk_state or {}).get("level") or "")
@@ -1222,10 +1285,12 @@ def build_user_view(
             "release_condition": str((risk_state or {}).get("release_condition") or "等待风险状态满足解除条件"),
         },
         # C1-WP3: 确定性明日计划(非 LLM 创作,输入可追溯)
+        # P5-1: by_market 传入与指令卡同 gate,杜绝"明日计划让执行/指令卡让等待"
         "tomorrow_plan": _tomorrow_plan(
             decision,
             conflict_details,
             by_id,
+            by_market=by_market,
             data_notes=data_notes,
             risk_state=risk_state,
             structured_outlook=structured_outlook,
