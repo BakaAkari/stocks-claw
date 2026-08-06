@@ -513,6 +513,8 @@ class ContextBuilder:
         price_source = method
         as_of = position.valuation_input.as_of
         market_value = None
+        # P3-4: 估值时效天数(仅手工/净值路径有意义),供数据边界分层呈现
+        valuation_age_days: int | None = None
 
         if method == "market_quote":
             quantity = position.holding.quantity if position.holding else None
@@ -566,8 +568,13 @@ class ContextBuilder:
             price_source = method
             if market_value is None:
                 flags.append("missing_manual_amount")
-            if self._is_stale_as_of(position.valuation_input.as_of, generated_at):
+            valuation_age_days = self._valuation_age_days(position.valuation_input.as_of, generated_at)
+            if valuation_age_days is not None and valuation_age_days > 30:
                 flags.append("stale_manual")
+            elif valuation_age_days is not None and valuation_age_days >= 7:
+                # P3-4: 7-30 天估值(支付宝基金/银行理财周频净值)与当日行情
+                # 混入同一资金数字,标记 mid-stale 供数据边界呈现。
+                flags.append("stale_manual_mid")
 
         conversion = None
         market_value_cny = None
@@ -669,6 +676,7 @@ class ContextBuilder:
             "price": price,
             "price_source": price_source,
             "as_of": as_of,
+            "valuation_age_days": valuation_age_days,
             "market_value": round(market_value, 4) if market_value is not None else None,
             "market_value_cny": round(market_value_cny, 4) if market_value_cny is not None else None,
             "fx_rate": conversion.rate if conversion else None,
@@ -882,6 +890,19 @@ class ContextBuilder:
                     "capability": "valuation",
                     "message": f"{item['display_name']} 手工估值超过 30 天，精确调仓需先更新金额",
                 })
+            if "stale_manual_mid" in flags:
+                # P3-4: 估值 7-30 天的手工资产与当日行情混入同一资金数字,
+                # 交易员无法区分时效。作为 degraded 提示呈现,不阻断。
+                issues.append({
+                    "position_id": item["position_id"],
+                    "severity": "degraded",
+                    "capability": "valuation_age",
+                    "message": (
+                        f"{item['display_name']} 估值为 {item.get('_valuation_age_days')} 天前"
+                        "（截止 " + str(item.get("valuation_as_of") or "")[:10] + "），"
+                        "与当日行情混算，金额为近似值"
+                    ),
+                })
             if "missing_quote" in flags:
                 issues.append({
                     "position_id": item["position_id"],
@@ -943,6 +964,20 @@ class ContextBuilder:
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
         return (now - parsed).days > 30
+
+    @staticmethod
+    def _valuation_age_days(value: Optional[str], generated_at: str) -> Optional[int]:
+        """返回估值时间到生成时间的日历天数;无法解析时返回 None(P3-4)。"""
+        parsed = ContextBuilder._parse_iso_datetime(value)
+        if parsed is None:
+            return None
+        try:
+            now = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        except ValueError:
+            now = datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return max(0, int((now - parsed).days))
 
     async def _backfill_stale_us_quotes(
         self,
@@ -1505,12 +1540,19 @@ class ContextBuilder:
         missing_as_of = max(0, len(filled) - len(as_of_values))
         if status == "ok" and missing_as_of:
             status = "partial"
+        # P4-1b: age_seconds 必须与 as_of 同源。此前 as_of 取最老字段
+        # (官方统计 6/1),age_seconds 却取市场层新鲜度(7/31),同一节点
+        # 两个字段指向不同日期,下游误判宏观只旧 6 天(8/6 实测
+        # as_of=6/1 但 age_seconds=543,715≈6.3 天,自相矛盾)。
+        overall_dt = oldest_as_of or market_dt
+        overall_fresh = self._freshness_from_datetime(overall_dt, generated_at) if overall_dt else {
+            "freshness": "unknown", "age_seconds": None}
         return {
             "status": status,
             "source": macro_snapshot.get("source", "unknown"),
             "as_of": oldest_as_of.isoformat() if oldest_as_of else None,
-            "freshness": market_fresh["freshness"],
-            "age_seconds": market_fresh["age_seconds"],
+            "freshness": overall_fresh["freshness"],
+            "age_seconds": overall_fresh["age_seconds"],
             "filled_fields": len(filled),
             "missing_fields": missing,
             "missing_as_of": missing_as_of,
@@ -2056,9 +2098,17 @@ class ContextBuilder:
             lines.append(" 暂无行情数据")
         lines.append("")
 
-        # 宏观数据
+        # 宏观数据（带数据时点,避免把滞后值当实时——P4-1）
         if macro_snapshot:
-            lines.append("【宏观环境】")
+            macro_as_of = (
+                macro_snapshot.get("market_as_of")
+                or macro_snapshot.get("official_as_of")
+                or macro_snapshot.get("timestamp")
+            )
+            as_of_note = (
+                f"（数据时点 {str(macro_as_of)[:10]}）" if macro_as_of else "（数据时点未知）"
+            )
+            lines.append(f"【宏观环境】{as_of_note}")
             lines.append(" 市场定价代理（日度/实时，以字段观测日为准）:")
             if macro_snapshot.get("vix") is not None:
                 vix = macro_snapshot["vix"]

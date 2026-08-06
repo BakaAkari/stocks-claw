@@ -8,14 +8,86 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-06 (tenth update) — **2026-08-05 盘后报告六类
-> 根因缺陷修复 + 标签映射收敛**（`d34a8b0` / `a8dd57d`，HEAD）。
-> 此前：2026-08-05 发版流程基础设施落地（RELEASE.md +
-> scripts/release_check.py，版本号统一为 2.10.1）。
-> 此前：2026-08-04 M4 约束模型升级（不可逆/分池/硬上限 + 约束即金融记忆）。
+> Last updated: 2026-08-06 (eleventh update) — **第四轮对抗性校验全量修复
+> （P2-2/P2-3/P2-4/P2-5/P3-1/P3-3/P3-4/P4-1/P4-1b，第三轮 P2-1 已随
+> 5e977bd 交付）**。此前：2026-08-06（tenth）六类根因缺陷修复 + 标签映射
+> 收敛（`d34a8b0` / `a8dd57d`）；2026-08-05 发版流程基础设施落地。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
 
-## 2026-08-06 报告缺陷修复（review-driven, `d34a8b0` + `a8dd57d`）
+## 2026-08-06 第四轮对抗性校验全量修复（`5e977bd` + 本批未提交）
+
+**Full pytest 1368 passed, 7 skipped, 1 deselected（仅排除既有基线失败
+`test_advice_feedback::TestLedgerWrite::test_engine_rollup_reads_ledger`）；
+ruff/compileall clean；新增 9 个回归测试
+（tests/engine/test_report_defects_p234.py + test_engine + test_scheduled_analysis）。**
+
+### 四轮校验背景
+
+对抗性校验（数字间/层间自洽交叉验证）从 8/5、8/6 生产 artifact 深挖出
+四个家族的系统性缺陷——不是单一 bug,而是"数据时间基准不统一 + 门控/
+标注只看一层"在数据层、覆盖层、估值层、研判层的反复表现:
+
+- **时间戳族**:P2-1(门控层,已随 5e977bd 修)、P2-2(覆盖层)、P3-3/P3-4(估值层)
+- **双写族**:P3-1(双份 cash_schedule)、P2-5(backfill 重复)
+- **fail-closed 呈现族**:P2-3(汇率失败无提示)、P4-1b(macro 节点自相矛盾)
+- **研判族**:P4-1(宏观数据滞后仍给"置信中")
+
+### Fix — 本批 9 项（工作区未提交,commit 待授权）
+
+- **P2-2 scan 池行情覆盖缺口**（`engine/__init__.py`）:quotes 只拉持仓/
+  核心(11 个),scan 池(27 个)行情从不实时拉取,K 线停在 warm 首次拉取日
+  (7/23 断档)。引入**定期 stale 刷新**:`_history_last_refresh` +
+  `history_refresh_interval_hours`(默认 12h),每次 build 距上次刷新超期
+  即对 scan 池重跑 warm_history_cache(过时 K 线被 stale_days 强制重拉,
+  新鲜量足走 skipped_cached,成本可控)。
+- **P3-4 估值三套时间基准混用**（`context_builder.py`）:持仓估值分三类
+  (A股 8/6 实时 / 美股 8/5 / 支付宝基金·银行理财 7/3-8/4),混入同一资金
+  数字。新增 `_valuation_age_days` + `stale_manual_mid` 标记(7-30 天),
+  数据边界新增 `valuation_age` issue,data_notes 呈现"估值为 N 天前,与
+  当日行情混算,金额为近似值"。
+- **P3-1 双份 cash_schedule 不一致**（`scheduled_analysis.py`）:顶层
+  build_cash_schedule(空 approved_sales)得到毛值 523,472,裁决器内部用
+  真实 sales 重算得净额 486,622,双写漂移。修复:顶层用裁决器结果覆盖。
+- **P2-5 history_backfill 重复项**（`engine/__init__.py`）:warm_targets
+  = instruments + scan_instruments 有交集(5 个标的各出现 2 次)。
+  `_dedupe_instruments` 去重。
+- **P2-3 汇率失败资金无提示**（`presentation.py` `_data_notes`）:HKD
+  84.46 转换失败(asset_completeness=blocked)但 data_notes 无提示,资金
+  按 0 计入。修复:data_notes 消费 asset_completeness 的 blocked +
+  valuation_age/valuation issue。
+- **P4-1b macro as_of 与 age_seconds 自相矛盾**（`context_builder.py`）:
+  as_of 取最老字段(6/1)但 age_seconds 取市场层(7/31,6.3 天)。修复:
+  两者同源,均取最老 as_of。
+- **P4-1 研判用 6/1 宏观数据给"置信中"**（`unified_snapshot.py` +
+  `context_builder.py`）:macro fact 的 as_of 伪造为当前时间;官方统计以
+  裸文本进 raw_prompt 无时间戳。修复:fact as_of 用 field_sources 真实
+  时间戳 + 跳过分层元数据键;raw_prompt 宏观区块标注"数据时点 YYYY-MM-DD"。
+- **P2-4 风险状态基准双轨**（`presentation.py` + `scheduled_analysis.py`）:
+  window_delta 的 level 迁移(session 级)与 transition_key(observation 级)
+  并存产生"降风险→对冲/高风险"+"与上次持平"矛盾。修复:user_view.risk
+  增加 `window_level_change`(窗口级迁移文本),渲染层可消歧;build_user_view
+  移到 window_delta 计算后调用(保持恰好一次)。
+- **P3-3 跨报告估值异常**（前 23/27 持仓纹丝不动）:系 P2-2 后果(scan 池
+  持仓 K 线停更),由 P2-2 修复覆盖,无需独立代码。
+- **P3-2 资金桶加总可审计性**:**确认已由 P1-8 覆盖**——cash_view 已含
+  `safety_buffer` 字段,push_payload 已渲染"安全垫 ¥76,321(不计入可用)",
+  加总关系可验证。无新代码。
+
+### 验证
+
+- 全量 `1368 passed, 7 skipped, 1 deselected`(新增 9 个回归测试:P2-2
+  定期刷新、P3-1 双写一致、P3-4 mid-stale 呈现、P2-3 blocked issue 呈现、
+  P4-1 fact as_of、P4-1b age 同源、P2-4 窗口迁移文本等);
+- ruff/compileall clean;
+- 生产重放与 NAS 同步:待 commit/push 后执行。
+
+### 既有基线
+
+- `test_advice_feedback::TestLedgerWrite::test_engine_rollup_reads_ledger`
+  仍失败(git stash 证实 HEAD 31d2fff 即失败,与校验无关,按仓库纪律不
+  扩 scope,记录)。
+
+
 
 **Full pytest 1356 passed, 7 skipped, 0 failed；ruff/compileall clean；
 NAS 8/5 `us_after_close` artifact 重放渲染 15 项断言全 PASS；已同步 NAS

@@ -28,6 +28,31 @@ TRANSITION_LABELS = {
     "expired": "已过期", "initial": "初始化", "reconfirmed": "再确认",
 }
 
+# P2-4: 风险档位英文枚举 → 中文(与 risk_label 的 label 值对齐,用于
+# window_delta 迁移文本)。
+_RISK_LEVEL_LABELS = {
+    "normal": "常态", "watch": "观察", "reduce": "降风险", "hedge": "对冲/高风险",
+}
+
+
+def _window_level_change_text(window_delta: dict | None) -> str:
+    """P2-4: 本窗口风险档位迁移文本(窗口级基准),用于与观察级
+    transition_key 消歧。window_delta.changes 里若有 risk_state.level
+    变化,返回 \"(本窗口: 降风险 → 对冲/高风险)\";否则返回空串。
+
+    与 user_view.risk.transition(观察级\"与上次持平\")并存时,渲染层
+    可据此向用户说明两个基准,避免\"持平\"与\"迁移\"并排的误读。
+    """
+    if not window_delta:
+        return ""
+    changes = (window_delta.get("changes") or [])
+    for ch in changes:
+        if str(ch.get("field")) == "risk_state.level":
+            old = _RISK_LEVEL_LABELS.get(str(ch.get("old") or ""), str(ch.get("old") or "?"))
+            new = _RISK_LEVEL_LABELS.get(str(ch.get("new") or ""), str(ch.get("new") or "?"))
+            return f"（本窗口: {old} → {new}）"
+    return ""
+
 # P1-15: per-market quote freshness values that render as "stale". Single
 # source of truth shared by the research-candidate gate (scheduled_analysis)
 # and the executable-action gate (presentation).
@@ -481,6 +506,22 @@ def _data_notes(data_boundaries: dict) -> list[str]:
     macro = quality.get("macro") or {}
     if str(macro.get("freshness") or "") in {"old", "stale"}:
         notes.append(f"宏观数据较旧（截止 {_display_timestamp(macro.get('as_of'))}）")
+    # P2-3/P3-4: asset_completeness 的 blocked/degraded issue 必须呈现,
+    # 不能只存在 data_quality 节点里(8/6 实测: HKD 汇率失败 blocked,
+    # 支付宝基金 7/31 估值混入资金数字,data_notes 均无提示)。
+    completeness = quality.get("asset_completeness") or {}
+    seen: set[str] = set()
+    for issue in (completeness.get("issues") or []):
+        msg = str(issue.get("message") or "").strip()
+        if not msg or msg in seen:
+            continue
+        seen.add(msg)
+        capability = str(issue.get("capability") or "")
+        severity = str(issue.get("severity") or "")
+        # blocked(汇率失败等)必须呈现;degraded 只呈现估值时效类
+        # (valuation_age/valuation),避免噪音淹没关键提示。
+        if severity == "blocked" or capability in {"valuation_age", "valuation"}:
+            notes.append(msg)
     return notes
 
 
@@ -779,6 +820,7 @@ def build_user_view(
     session_intent: str,
     structured_outlook: dict | None = None,
     outlook_delta: dict | None = None,
+    window_delta: dict | None = None,
 ) -> dict:
     """Build the deterministic trade-card and assistant presentation contract."""
     decision = portfolio_decision or {}
@@ -1022,6 +1064,13 @@ def build_user_view(
             # push-payload renderer can branch on state without comparing
             # Chinese strings (which would silently break on wording edits).
             "transition_key": transition,
+            # P2-4: 风险状态表述基准消歧。risk_state.transition 是观察级
+            # (相对上次观察),window_delta 是本窗口 session 级对比。当本
+            # 窗口确实发生了 level 迁移(window_delta 有 risk_state.level
+            # 变化)而 transition_key=unchanged 时,文案\"与上次持平\"与
+            # 窗口变化卡\"降风险→对冲/高风险\"并排会让用户误读——这里
+            # 显式补一个窗口基准注记,渲染层据其消歧。
+            "window_level_change": _window_level_change_text(window_delta),
             "suspend_accumulation": bool((risk_state or {}).get("suspend_accumulation")),
             "reasons": _risk_reasons(risk_state or {}),
             "release_condition": str((risk_state or {}).get("release_condition") or "等待风险状态满足解除条件"),

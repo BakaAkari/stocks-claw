@@ -43,7 +43,7 @@ from stocks.domain.models import (
 from stocks.engine.advice_feedback import compute_feedback_rollup, make_feedback
 from stocks.engine.asset_intake_service import apply_intake_draft, build_intake_draft
 from stocks.engine.config_loader import load_engine_config
-from stocks.engine.context_builder import ContextBuilder
+from stocks.engine.context_builder import ContextBuilder, _dedupe_instruments
 from stocks.engine.economic_event_watcher import EconomicEventWatcher
 from stocks.engine.event_calendar import (
     EventCalendar,
@@ -333,6 +333,19 @@ class StocksEngine:
         self._history_warm_last_failed_at: datetime | None = None
         # 距上次失败 < 10 分钟内不重试,防止每次 build 打满上游
         self._history_warm_retry_cooldown = timedelta(minutes=10)
+        # P2-2:scan 池行情覆盖缺口 —— warm 只在进程首次触发,之后 scan 标的
+        # 的 K 线停在 warm 首次拉取日(7/23 断档)。引入定期 stale 刷新:
+        # 距上次刷新超过 history_refresh_interval(默认 12h)时,对
+        # scan 池标的重跑 warm_history_cache(其 stale_days 判定会强制重拉
+        # 过时 K 线,量足且新鲜的走 skipped_cached,成本可控)。
+        refresh_cfg = (self._config.get("cache") or {}).get("history_refresh_interval_hours", 12)
+        try:
+            self._history_refresh_interval = timedelta(
+                hours=max(1, int(refresh_cfg))
+            )
+        except (TypeError, ValueError):
+            self._history_refresh_interval = timedelta(hours=12)
+        self._history_last_refresh: datetime | None = None
 
         # 3. 初始化可选的兼容分析模块（主分析仍由外部 Agent 完成）
         llm_cfg = self._config["llm"]
@@ -1159,7 +1172,13 @@ class StocksEngine:
             and instruments
         ):
             try:
-                warm_targets = list(instruments) + list(scan_instruments)
+                # P2-5: warm_targets 去重 —— instruments(watchlist)与
+                # scan_instruments(扫描池)有交集,不去重会导致同一标的
+                # warm 两次、history_backfill 报告出现重复项(8/6 实测
+                # a:561560/NVDA/XLE 各 2 条)。
+                warm_targets = _dedupe_instruments(
+                    list(instruments) + list(scan_instruments)
+                )
                 logger.info(f"Warming history cache for {len(warm_targets)} instruments...")
                 report = await warm_history_cache(
                     self.history_cache,
@@ -1187,6 +1206,52 @@ class StocksEngine:
             except Exception as e:
                 logger.warning(f"History cache warm raised: {e}")
                 self._history_warm_last_failed_at = datetime.now(timezone.utc)
+
+        # P2-2:scan 池定期 stale 刷新。首次 warm 只保证"量足",scan 标的
+        # 的 K 线可能停在 warm 首次拉取日(7/23 断档实锤)。此后每次 build
+        # 距上次刷新超过间隔(默认 12h)时重跑 warm_history_cache:
+        # 过时 K 线被其 stale_days 判定强制重拉,新鲜且量足的走
+        # skipped_cached。刷新失败不影响本次 build(走冷却),只记日志。
+        if (
+            self.history_cache
+            and self._history_warmed
+            and scan_instruments
+            and not cooldown_active
+        ):
+            now = datetime.now(timezone.utc)
+            due = (
+                self._history_last_refresh is None
+                or (now - self._history_last_refresh) >= self._history_refresh_interval
+            )
+            if due:
+                try:
+                    logger.info(
+                        f"Periodic history refresh for {len(scan_instruments)} scan instruments..."
+                    )
+                    report = await warm_history_cache(
+                        self.history_cache,
+                        self._history_provider,
+                        scan_instruments,
+                        lookback_days=60,
+                    )
+                    refreshed = [
+                        r for r in report if r["status"] in ("ok", "skipped_cached")
+                    ]
+                    if refreshed:
+                        self._history_last_refresh = now
+                        self._history_backfill_report = report
+                        logger.info(
+                            f"History refresh done: {len(refreshed)}/{len(report)} usable"
+                        )
+                    else:
+                        self._history_warm_last_failed_at = now
+                        logger.warning(
+                            f"History refresh all-failed for {len(report)} instruments; "
+                            f"cooldown {self._history_warm_retry_cooldown} before retry"
+                        )
+                except Exception as e:
+                    logger.warning(f"History periodic refresh raised: {e}")
+                    self._history_warm_last_failed_at = datetime.now(timezone.utc)
 
         # 2. 获取新闻（或空列表）
         news: list[NewsItem] = []

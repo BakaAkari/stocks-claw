@@ -621,3 +621,52 @@ class TestFetchNewsIntegration:
         minimal_engine.news_aggregator.fetch = AsyncMock(return_value=[])
         result = await minimal_engine.fetch_news()
         assert result == []
+
+    async def test_periodic_history_refresh_rewarms_scan_pool(
+        self, minimal_engine, monkeypatch
+    ):
+        """P2-2: 首次 warm 之后,scan 池标的 K 线可能停在 warm 首次拉取日。
+        定期刷新(history_refresh_interval 到点)应重新调用 warm_history_cache,
+        让过时 K 线被 stale_days 判定强制重拉,而不是永远 skipped_cached。"""
+        from datetime import timedelta
+
+        import stocks.engine as engine_mod
+
+        # 首次 warm 已完成
+        minimal_engine._history_warmed = True
+        minimal_engine._history_last_refresh = None  # 从未刷新 → 到点
+        # 缩短刷新间隔,保证本次 build 判定 due
+        minimal_engine._history_refresh_interval = timedelta(hours=1)
+
+        calls: list[list] = []
+
+        async def fake_warm(cache, provider, instruments, lookback_days=60):
+            calls.append(list(instruments))
+            return [{"symbol": f"{i.market}:{i.code}", "status": "skipped_cached",
+                     "rows": 60} for i in instruments]
+
+        # __init__ 通过 from ... import warm_history_cache 绑定符号,
+        # 必须 patch engine 模块属性而不是 history_provider 模块。
+        monkeypatch.setattr(engine_mod, "warm_history_cache", fake_warm)
+
+        # 需要一个带 scan_instruments 的 build;构造最小 scan 池
+        scan_inst = Instrument(code="513770", name="港股互联网ETF", market="a")
+        minimal_engine._sector_scan = [scan_inst]
+
+        # 最小化外部依赖:不拉 news/quotes,走 build_context
+        minimal_engine.macro_provider = None
+        minimal_engine.context_builder.macro_provider = None
+        minimal_engine.news_aggregator.fetch = AsyncMock(return_value=[])
+        minimal_engine.fetcher.fetch_quotes = AsyncMock(return_value={})
+        minimal_engine.fetcher.fetch_history = AsyncMock(return_value=[])
+
+        await minimal_engine.build_context(
+            include_news=False, include_quotes=False, include_history=False,
+        )
+
+        # 定期刷新应触发 warm(至少一次),且目标是 scan 池标的
+        assert len(calls) >= 1
+        flat = [f"{i.market}:{i.code}" for sub in calls for i in sub]
+        assert "a:513770" in flat
+        # 刷新成功后 _history_last_refresh 被更新
+        assert minimal_engine._history_last_refresh is not None

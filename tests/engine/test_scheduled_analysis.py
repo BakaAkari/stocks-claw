@@ -1283,3 +1283,30 @@ def test_capital_allocation_never_funds_adds_across_isolated_pools():
     assert cand["pool"] == "domestic"
     assert cand["pool_label"] == "国内池"
     assert cand["funding_deployable_cny"] == pytest.approx(4_250.0)
+
+
+def test_artifact_top_level_cash_schedule_matches_adjudicator(tmp_path):
+    """P3-1: 顶层 cash_schedule 必须与裁决器(portfolio_decision)结果一致。
+    8/6 实测顶层 unresolved=0/strategic_exit=523,472,裁决那份
+    unresolved=36,850/486,622 —— 双写漂移。修复后顶层用裁决结果覆盖。"""
+    from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
+    from tests.engine.test_scheduled_analysis import _run
+
+    engine, config = _engine_with_enough_for_outlook(tmp_path)
+    runner = ScheduledAnalysisRunner(
+        engine, config=config, artifact_dir=config["artifact_dir"],
+    )
+    runner.outlook_synthesizer = FakeSynth()
+    now = datetime.fromisoformat("2026-07-06T15:00:00+08:00")
+
+    result = _run(runner.run_session("cn_after_close", now=now))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+
+    top = artifact.get("cash_schedule") or {}
+    dec = (artifact.get("portfolio_decision") or {}).get("cash_schedule") or {}
+    # 关键字段必须逐字一致
+    for key in ("available_now", "strategic_exit", "locked",
+                "planned_release", "unresolved_settlement"):
+        assert top.get(key) == dec.get(key), (
+            f"cash_schedule.{key} 双写漂移: top={top.get(key)} decision={dec.get(key)}"
+        )

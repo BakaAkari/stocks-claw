@@ -1333,6 +1333,13 @@ def build_scheduled_run(
             }],
             cash_schedule=cash_schedule,
         )
+    # P3-1: 顶层 cash_schedule 必须与裁决器结果一致。build_cash_schedule
+    # 在 scheduled_analysis 这里用空 approved_sales 调用,得到的是"未裁决"
+    # 毛值(strategic_exit 含待结算);adjudicate_portfolio 内部用真实
+    # approved_sales 重算过(净额)。两份并存且不一致(8/6 实测顶层
+    # 523,472 vs 裁决 486,622),下游消费方可能拿错份 → 用裁决结果覆盖。
+    if getattr(portfolio_decision, "cash_schedule", None):
+        cash_schedule = portfolio_decision.cash_schedule
     session_intent_props = _session_intent_props(session)
     filtered_action_signals = _filter_action_signals_by_market(
         context.get("action_signals") or {}, session.primary_market
@@ -1371,19 +1378,8 @@ def build_scheduled_run(
         },
     }
     portfolio_decision_dict = portfolio_decision.to_dict() if portfolio_decision else {}
-    if attach_user_view:
-        portfolio_decision_dict["user_view"] = build_user_view(
-            portfolio_decision_dict,
-            context.get("position_valuations") or [],
-            position_reviews,
-            research_candidates,
-            risk_state,
-            data_boundaries=data_boundaries,
-            session_id=session.id,
-            session_intent=session.intent,
-            structured_outlook=structured_outlook,
-            outlook_delta=outlook_delta,
-        )
+    # 注: build_user_view 在 window_delta 计算后调用一次(见下文),
+    # 以携带 P2-4 窗口级风险迁移信息 —— 保持"恰好一次"。
     run = {
         "schema_version": SCHEDULED_RUN_SCHEMA_VERSION,
         "run_id": occurrence.run_id,
@@ -1457,6 +1453,23 @@ def build_scheduled_run(
     window_delta = compute_window_delta(
         previous_run, run, session_id=session.id, market=session.market
     )
+    # P2-4: 风险状态表述基准消歧。build_user_view 需要在 window_delta
+    # 已知后重建一次,让 user_view.risk.window_level_change 携带窗口级
+    # 迁移信息(与观察级 transition_key 并存时供渲染层消歧)。
+    if attach_user_view and window_delta is not None:
+        portfolio_decision_dict["user_view"] = build_user_view(
+            portfolio_decision_dict,
+            context.get("position_valuations") or [],
+            position_reviews,
+            research_candidates,
+            risk_state,
+            data_boundaries=data_boundaries,
+            session_id=session.id,
+            session_intent=session.intent,
+            structured_outlook=structured_outlook,
+            outlook_delta=outlook_delta,
+            window_delta=window_delta.to_dict() if hasattr(window_delta, "to_dict") else None,
+        )
     notification = _notification(
         session=session, priority=priority, now=generated_at,
         quiet_hours=config.get("quiet_hours") or {}, window_delta=window_delta,
