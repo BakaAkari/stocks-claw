@@ -43,6 +43,10 @@ def test_entrypoint_renders_and_persists_sanitized_payload(tmp_path):
     data = json.loads((payload / "cn_after_close.json").read_text())
     assert set(data) == {
         "payload_version", "session_label", "market_date", "delivery", "session_type", "user_view",
+        # P1-14: deterministic window_delta travels with the payload so the
+        # "本窗口变化" section can surface risk/action/conflict changes even
+        # when the LLM outlook_delta is empty.
+        "window_delta",
     }
 
 

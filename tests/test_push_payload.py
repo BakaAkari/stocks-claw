@@ -187,6 +187,10 @@ def test_payload_contains_only_delivery_metadata_and_user_view():
         "delivery",
         "user_view",
         "session_type",
+        # P1-14: deterministic window_delta travels with the payload so the
+        # "本窗口变化" section can surface risk/action/conflict changes even
+        # when the LLM outlook_delta is empty.
+        "window_delta",
     }
     text = json.dumps(payload, ensure_ascii=False)
     for forbidden in (

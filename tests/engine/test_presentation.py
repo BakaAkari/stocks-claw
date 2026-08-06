@@ -529,8 +529,11 @@ def test_manual_review_prioritizes_humanized_portfolio_conflict_over_research_su
                            session_id="cn_pre_open", session_intent="pre_open_plan")
     card = view["instruction_card"]
     assert card["status_label"] == "等待人工确认"
+    # P1-11: bucket_ratio is the asset-class weight, never the instrument's
+    # own. The conflict text must name the bucket separately so "权益当前
+    # 占组合15.6%" is not read as 沪深300ETF's own weight.
     assert card["no_action_reasons"][0] == (
-        "沪深300ETF（510300）：权益当前占组合15.6%，低于目标下限，但技术信号要求减仓；方向冲突，需人工确认"
+        "沪深300ETF（510300）：触发减仓信号，但权益大类当前占组合15.6%（低于下限目标下限），方向冲突，需人工确认"
     )
     assert "a_510300" not in str(view)
     assert "reduce" not in str(view)

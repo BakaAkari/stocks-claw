@@ -37,6 +37,19 @@ _CONFIDENCE_LABELS = {
     "medium": "\u4e2d",
     "low": "\u4f4e",
 }
+# P1-14: human labels for deterministic window_delta risk/action changes.
+_RISK_LEVEL_LABELS = {
+    "normal": "常态", "watch": "观察", "reduce": "降风险", "hedge": "对冲/高风险",
+}
+_TRANSITION_LABELS = {
+    "escalated": "升级", "deescalated": "缓和", "stable": "持平",
+    "unchanged": "持平", "candidate": "候选待确认", "expired": "已过期",
+    "initial": "初始化", "reconfirmed": "再确认",
+}
+_ACTION_LABELS = {
+    "stop_loss": "止损", "take_profit": "止盈", "reduce": "减仓",
+    "add": "加仓", "hold": "持有", "wait": "等待", "accumulate": "分批布局",
+}
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?%?")
 
 
@@ -124,6 +137,13 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
         "delivery": delivery,
         "session_type": "trading",
         "user_view": view,
+        # P1-14: deterministic window delta travels with the payload so the
+        # "本窗口变化" section can report risk-state / action / conflict
+        # changes even when the LLM outlook_delta is empty. Previously a
+        # risk escalation (or any adjudicator change) with no outlook_delta
+        # rendered as "本窗口未发现需要改变计划的新证据" -- the exact
+        # contradiction observed in the 2026-08-05 us_after_close report.
+        "window_delta": artifact.get("window_delta") or {},
     }
 
 
@@ -268,7 +288,7 @@ def _render_trading_payload(payload: dict) -> str:
     sections: list[list[str]] = []
 
     # 1. 本窗口变化
-    delta_section = _section_window_changes(assistant)
+    delta_section = _section_window_changes(assistant, payload.get("window_delta") or {})
     if delta_section:
         sections.append(delta_section)
 
@@ -316,8 +336,82 @@ def _section_heading(title: str) -> str:
     return f"**{title}**"
 
 
-def _section_window_changes(assistant: dict) -> list[str]:
-    """§1 本窗口变化 — outlook_delta 或"无新证据"。走势研判本身放到 §2。"""
+def _window_delta_human_changes(window_delta: dict) -> list[str]:
+    """Render deterministic risk/action/conflict changes from window_delta.
+
+    P1-14: window_delta.changes carry risk_state.level/transition moves,
+    approved/suppressed action ratio revisions, and unresolved conflict
+    additions. These are objective, user-relevant changes that must appear
+    even when the LLM outlook_delta is empty. Unknown raw fields are
+    skipped; every emitted line is derived from a known field shape.
+    """
+    lines: list[str] = []
+    changes = window_delta.get("changes") or []
+    if not isinstance(changes, list):
+        return lines
+    seen: set[str] = set()
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        field = str(change.get("field") or "")
+        if field == "initial":
+            continue
+        old = change.get("old")
+        new = change.get("new")
+        if field.startswith("risk_state."):
+            key = field.split(".", 1)[1]
+            if key == "level":
+                old_l = _RISK_LEVEL_LABELS.get(str(old or ""), str(old or "未知"))
+                new_l = _RISK_LEVEL_LABELS.get(str(new or ""), str(new or "未知"))
+                text = f"风险档位: {old_l} → {new_l}"
+            elif key == "transition":
+                text = f"风险状态变化: {_TRANSITION_LABELS.get(str(new or ''), str(new or '待确认'))}"
+            elif key == "candidate_level":
+                cand = _RISK_LEVEL_LABELS.get(str(new or ""), str(new or "无"))
+                text = f"风险候选档位: {cand}"
+            else:
+                text = f"风险状态字段更新: {key}"
+        elif field.startswith("approved_action."):
+            if isinstance(old, dict) and isinstance(new, dict):
+                sig_old = _ACTION_LABELS.get(str(old.get("signal") or ""), str(old.get("signal") or "动作"))
+                sig_new = _ACTION_LABELS.get(str(new.get("signal") or ""), str(new.get("signal") or "动作"))
+                if sig_old == sig_new:
+                    text = f"获批动作调整: {sig_new}"
+                else:
+                    text = f"获批动作变化: {sig_old} → {sig_new}"
+            else:
+                text = "获批动作有调整"
+        elif field == "portfolio_decision.unresolved_conflicts":
+            old_count = len(old) if isinstance(old, list) else 0
+            new_count = len(new) if isinstance(new, list) else 0
+            if new_count > old_count:
+                text = f"新增 {new_count - old_count} 项方向冲突，需人工确认"
+            elif new_count < old_count:
+                text = f"方向冲突减少 {old_count - new_count} 项"
+            else:
+                text = "方向冲突集合有变化"
+        elif field.startswith("portfolio_decision."):
+            key = field.split(".", 1)[1]
+            text = f"组合决策更新: {key}"
+        else:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        lines.append(f"- {text}")
+    return lines[:4]
+
+
+def _section_window_changes(assistant: dict, window_delta: dict | None = None) -> list[str]:
+    """§1 本窗口变化 — outlook_delta 或确定性 window_delta 或"无新证据"。
+
+    The LLM outlook_delta is preferred when present; when it is empty,
+    deterministic window_delta changes (risk moves, action revisions,
+    conflict additions) are rendered instead. Only when both are empty do
+    we claim "无新证据" -- otherwise the report can contradict itself
+    (P1-14: 2026-08-05 us_after_close said "未发现新证据" while risk had
+    just escalated).
+    """
     lines: list[str] = [_section_heading("本窗口变化")]
     outlook_delta = assistant.get("outlook_delta") or {}
     changes = (outlook_delta.get("changes") or {}) if isinstance(outlook_delta, dict) else {}
@@ -334,6 +428,22 @@ def _section_window_changes(assistant: dict) -> list[str]:
                 lines.append(f"- 来源新增: {', '.join(str(x) for x in added[:3])}")
             if removed:
                 lines.append(f"- 来源移除: {', '.join(str(x) for x in removed[:3])}")
+        return lines
+
+    deterministic = _window_delta_human_changes(window_delta or {})
+    # P1-14 follow-up: on the first run of a session (window_delta carries
+    # only an "initial" record), the risk state can still have just
+    # escalated/deescalated relative to the previous session's run. Surface
+    # that move from assistant.risk so "本窗口未发现新证据" never coexists
+    # with "风险状态: 降风险（较上次升级）".
+    if not deterministic:
+        risk = assistant.get("risk") or {}
+        risk_transition = str(risk.get("transition") or "")
+        if risk_transition in ("较上次升级", "较上次缓和"):
+            risk_label = str(risk.get("label") or "风险状态")
+            deterministic = [f"- 风险档位变化: {risk_label}（{risk_transition}）"]
+    if deterministic:
+        lines.extend(deterministic)
         return lines
 
     lines.append("- 本窗口未发现需要改变计划的新证据")
@@ -703,8 +813,15 @@ def _format_reference_line(ref: dict, *, with_label: bool = False) -> str:
     qty = ref.get("executable_quantity")
     if isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0:
         tail.append(f"参考数量 {int(qty)}")
+    # P1-12: when the gate rejected the action because quotes were
+    # stale/missing, the estimated amount computed from that stale valuation
+    # must not be quoted as a reference figure. Surface the block reason
+    # instead so the user knows the amount is unavailable, not forgotten.
+    blocked_reason = str(ref.get("amount_blocked_reason") or "")
     amount = ref.get("estimated_amount_cny")
-    if isinstance(amount, (int, float)) and not isinstance(amount, bool) and amount > 0:
+    if blocked_reason:
+        tail.append(blocked_reason)
+    elif isinstance(amount, (int, float)) and not isinstance(amount, bool) and amount > 0:
         tail.append(f"参考金额 ¥{float(amount):,.0f}")
     line = f"参考: {' '.join(head)}"
     if tail:

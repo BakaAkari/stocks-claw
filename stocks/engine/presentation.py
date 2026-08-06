@@ -240,7 +240,18 @@ def _conflict_reason(conflict: dict, by_id: dict[str, dict]) -> str:
     action = signal_label(conflict.get("signal", ""))
     bucket_min = conflict.get("bucket_min")
     bucket_min_text = f"{float(bucket_min) * 100:.0f}%" if isinstance(bucket_min, (int, float)) else "目标下限"
-    return f"{label}：{bucket}当前占组合{ratio_text}，低于{bucket_min_text}，但技术信号要求{action}；方向冲突，需人工确认"
+    # P1-11: bucket_ratio is the *asset-class* weight, never the instrument's
+    # own weight. The old phrasing "{label}:{bucket}当前占组合{ratio}%" read
+    # as if the instrument held that much of the portfolio (e.g. "NVDA 当前占
+    # 组合 12.7%" when NVDA was 0.5% and 12.7% was the equity bucket).
+    # Keep the leading "label（code）：" form so _no_action_conflict_details
+    # in build_push_payload can still split label/code, but make the body
+    # name the instrument and the bucket separately so the two quantities
+    # cannot be conflated.
+    return (
+        f"{label}：触发{action}信号，但{bucket}大类当前占组合{ratio_text}"
+        f"（低于下限{bucket_min_text}），方向冲突，需人工确认"
+    )
 
 
 def _conflict_detail(conflict: dict, by_id: dict[str, dict]) -> dict[str, Any]:
@@ -797,14 +808,22 @@ def build_user_view(
             # proposal (ratio / quantity / amount) as structured reference
             # data so the report can show it next to the manual-review
             # conflict the user has to resolve.
+            # P1-12: a gate rejection caused by stale/missing quotes must not
+            # carry a precise estimated amount -- that number was computed
+            # from the same stale valuation that made the action non-
+            # executable. Render layers then know not to quote it as a
+            # reference amount.
             ratio = raw.get("final_ratio")
             if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and ratio > 0:
+                market = _instrument_market(item.get("instrument_key", ""))
+                quote_stale = _market_quote_stale(market, by_market)
                 suppressed_reference.append({
                     "display_label": _display_for_position(item),
                     "signal_type": signal_label(raw.get("signal", "")),
                     "ratio": raw.get("final_ratio"),
                     "executable_quantity": raw.get("executable_quantity"),
-                    "estimated_amount_cny": raw.get("estimated_amount_cny"),
+                    "estimated_amount_cny": None if quote_stale else raw.get("estimated_amount_cny"),
+                    "amount_blocked_reason": "行情数据过时，金额待数据恢复后确认" if quote_stale else None,
                 })
             continue
         label = _display_for_position(item)
@@ -910,13 +929,26 @@ def build_user_view(
             if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool)
             else None
         )
+        # P1-15: freshness-gated research candidates carry quote_stale (set
+        # by _build_research_candidates when the market's quotes are
+        # stale/missing). Render them as pure observation: no setup tag, no
+        # reasons that quote precise prices, and the sizing hint already
+        # replaced by the data-boundary note upstream. Also honor the
+        # risk_suspend_accumulation condition by downgrading any remaining
+        # setup tag to observation so "暂停加仓" never coexists with a
+        # "趋势布局" claim.
+        condition = str(candidate.get("condition") or "")
+        if candidate.get("quote_stale") or condition == "risk_suspend_accumulation":
+            setup_tag = "观察"
+        else:
+            setup_tag = _research_signal_label(str(candidate.get("signal") or ""))
         research.append({
             "display_label": display_label(name, symbol),
             "action_hint": str(candidate.get("action_hint") or "仅供观察，不形成交易动作"),
             "reassess_after": reassess_after,
             "category": str(candidate.get("category") or ""),
             "pool": str(candidate.get("pool") or ""),
-            "setup_tag": _research_signal_label(str(candidate.get("signal") or "")),
+            "setup_tag": setup_tag,
             "reasons": [str(r) for r in (candidate.get("reasons") or []) if r][:2],
             "score": score,
             "sizing_hint": str(candidate.get("sizing_hint") or ""),
@@ -932,9 +964,14 @@ def build_user_view(
 
     level = str((risk_state or {}).get("level") or "normal")
     transition = str((risk_state or {}).get("transition") or "stable")
+    # P1-13: level label ("降风险" for reduce) and transition text must not
+    # read as contradictory. "降风险（风险升级）" sounds like the two halves
+    # argue; the transition is a *relative* direction from the previous
+    # window, so phrase it as such ("较上次升级") instead of an absolute
+    # state ("风险升级").
     transition_text = {
-        "escalated": "风险升级", "deescalated": "风险缓和", "stable": "状态未变",
-        "unchanged": "状态未变", "candidate": "候选状态待确认",
+        "escalated": "较上次升级", "deescalated": "较上次缓和", "stable": "与上次持平",
+        "unchanged": "与上次持平", "candidate": "候选状态待确认",
     }.get(transition, "状态待确认")
     cash_schedule = decision.get("cash_schedule") or {}
     cash_view = _cash_view(cash_schedule)

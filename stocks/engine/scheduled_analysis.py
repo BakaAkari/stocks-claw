@@ -1361,6 +1361,7 @@ def build_scheduled_run(
         risk_state,
         session,
         blocked_symbols=_blocked_symbols(context.get("position_valuations") or []),
+        data_quality=context_quality,
     )
     data_boundaries = {
         "data_quality": context_quality,
@@ -1995,17 +1996,44 @@ def _blocked_symbols(position_valuations: list[dict]) -> set[str]:
     return blocked
 
 
+def _research_market(symbol: str) -> str:
+    """Extract the market prefix from an instrument symbol (a:513770 -> a).
+
+    P1-15: research candidates must be freshness-gated per market like
+    executable actions are. The symbol format is the same one the fetcher
+    uses (market:symbol); an unknown or empty prefix fails closed to '' so
+    callers treat the candidate as unverifiable.
+    """
+    value = str(symbol or "")
+    if ":" not in value:
+        return ""
+    market, _, _ = value.partition(":")
+    return market.strip().lower()
+
+
 def _build_research_candidates(
     action_signals: dict,
     risk_state: dict,
     session: ScheduledSession,
     *,
     blocked_symbols: set[str] | None = None,
+    data_quality: dict | None = None,
 ) -> list[dict]:
     """Build research_candidates from action_signals, filtered by risk state.
 
     research_only signals go here, never into the action section.
-    When suspend_accumulation is active, candidates must note reassessment condition.
+    When suspend_accumulation is active, candidates must note reassessment
+    condition, and accumulation-oriented candidates lose their sizing
+    guidance (P1-15: "暂停加仓" plus a "分批布局 2-4%" hint is a
+    contradiction).
+
+    Freshness gate (P1-15): a candidate whose market quotes are
+    stale/missing is marked quote_stale so render layers downgrade it to
+    pure observation instead of presenting price/MA20-based setup claims.
+    The 2026-08-05 us_after_close report listed three A-share ETF
+    candidates with precise prices while data_notes said A-share quotes
+    were stale -- the candidate pipeline must not contradict its own data
+    boundary notes.
 
     Diversity rule: one signal class (e.g., left_bottom_candidate) must not
     monopolize the display list. We round-robin across signal types so the user
@@ -2015,6 +2043,15 @@ def _build_research_candidates(
 
     suspend = risk_state.get("suspend_accumulation", False)
     risk_level = risk_state.get("level", "normal")
+
+    # P1-15: per-market quote freshness, same shape presentation._is_executable
+    # consumes (quotes.by_market.<market>.freshness). Missing market entry
+    # fails closed to stale.
+    _STALE_FRESHNESS = frozenset({"stale", "old", "missing", "no_data", "unknown", ""})
+    by_market = ((data_quality or {}).get("quotes") or {}).get("by_market") or {}
+    _ACCUMULATION_SIGNALS = frozenset(
+        {"accumulate_candidate", "rotation_candidate", "left_bottom_candidate", "wait_for_pullback"}
+    )
 
     candidates = []
     for item in (action_signals.get("items") or []):
@@ -2041,8 +2078,29 @@ def _build_research_candidates(
         if suspend:
             candidate["reassess_after"] = f"风险解除后再评估（当前状态: {risk_level}）"
             candidate["condition"] = "risk_suspend_accumulation"
-        # Inject human-readable sizing + stop-loss + risk conflict guidance.
-        candidate["sizing_hint"] = _research_sizing_hint(signal, risk_level, suspend)
+        # P1-15: freshness gate. A stale candidate is downgraded to pure
+        # observation: no setup tag, no sizing guidance, reasons replaced by
+        # the data-boundary note so the report never quotes precise prices it
+        # just called stale.
+        market = _research_market(symbol)
+        quote_item = by_market.get(market) or {}
+        quote_stale = str(quote_item.get("freshness") or "") in _STALE_FRESHNESS
+        if quote_stale:
+            candidate["quote_stale"] = True
+            candidate["condition"] = "quote_stale"
+            candidate["setup_tag"] = "观察"
+            candidate["reasons"] = ["行情数据过时，暂不评估技术面，待数据恢复后复核"]
+            candidate["sizing_hint"] = "行情数据过时，不提供仓位/止损建议，待数据恢复后评估"
+        elif suspend and signal in _ACCUMULATION_SIGNALS:
+            # P1-15: "暂停加仓" must not coexist with a concrete
+            # accumulation sizing hint. Keep the candidate visible for
+            # tracking but strip the actionable guidance.
+            candidate["sizing_hint"] = (
+                "当前风险状态暂停加仓，仅观察；风险解除后再评估仓位与止损"
+            )
+        else:
+            # Inject human-readable sizing + stop-loss + risk conflict guidance.
+            candidate["sizing_hint"] = _research_sizing_hint(signal, risk_level, suspend)
         candidates.append(candidate)
 
     # Round-robin across signal types to avoid a single theme (e.g., deep
