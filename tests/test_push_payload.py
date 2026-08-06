@@ -919,3 +919,37 @@ def test_strategic_exit_shown_with_pending_review_sell():
     text_with = render_push_payload(payload)
     assert "卖出后可释放 ¥613,470" in text_with
     assert validate_payload_text(payload, text_with) == []
+
+
+# ── R5-10 回溯修正: §3/§5 去重边界 ───────────────────────────────────
+
+
+def test_blocked_section_keeps_reasons_beyond_section3_cap():
+    """R5-10 修正: §3(可执行动作)只显示 no_action_reasons[:3],§5(禁止与
+    延后)的 already_shown 只应跳过这前 3 条——第 4+ 条必须保留在 §5,
+    否则冲突理由 >3 条时用户完全看不到(修正前 already_shown 跳过全部)。
+
+    回归锁: 若有人把 already_shown 改回 set(no_action_reasons)(跳过
+    全部),第 4 条会从报告消失,此测试失败。
+    """
+    artifact = _artifact()
+    card = artifact["portfolio_decision"]["user_view"]["instruction_card"]
+    reasons = [
+        "沪深300ETF（510300）：方向冲突，需人工确认",
+        "科创50ETF（588000）：方向冲突，需人工确认",
+        "半导体ETF（512480）：方向冲突，需人工确认",
+        "消费ETF（159928）：方向冲突，需人工确认",  # 第 4 条,§3 不显示
+    ]
+    card["no_action_reasons"] = reasons
+    brief = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+    brief["why"] = reasons
+    brief["do_not_do"] = reasons
+
+    payload = build_push_payload(artifact, now="2026-07-17T15:27:00+08:00")
+    text = render_push_payload(payload)
+    blocked = text[text.index("**禁止与延后**"):text.index("**组合与检查点**")]
+    # §3 只显示前 3 条(不重复断言,但第 4 条必须在 §5 出现)
+    assert "消费ETF（159928）：方向冲突，需人工确认" in blocked
+    # 前 3 条已被 §3 展示,§5 不应重复(去重生效)
+    assert "沪深300ETF（510300）：方向冲突，需人工确认" not in blocked
+    assert validate_payload_text(payload, text) == []

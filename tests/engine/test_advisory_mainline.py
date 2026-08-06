@@ -13,6 +13,7 @@ from pathlib import Path
 
 from stocks.domain.models import AnalysisContext, MarketState, PortfolioMapping
 from stocks.engine.advisory_mainline import (
+    _apply_freshness_downgrade,
     build_advisory_outlook,
     resolve_mainline_llm_client,
 )
@@ -578,3 +579,64 @@ class TestResolveMainlineLLMClients:
         monkeypatch.delenv("OPENAI_COMPATIBLE_BASE_URL", raising=False)
         monkeypatch.chdir(tmp_path)
         assert resolve_mainline_llm_clients({"llm": {"outlook": {}}}) == []
+
+
+class TestFreshnessDowngradePrimaryMarket:
+    """C1-WP2 健康检查修正: 降级只按主市场行情,不被跨市场 stale 误伤。
+
+    8/6 实测: A股盘后报告(主市场 A股 fresh)被美股 stale(8/5 收盘,
+    跨日正确语义)拖累而降级——把"正确跨日 stale"误当"主市场数据滞后"。
+    修正后: primary_market 传入时只检查该市场;未传入时退化为任一市场。
+    """
+
+    def _outlook(self) -> dict:
+        return {
+            "status": "ok",
+            "near_term": {"horizon": "3-7天", "confidence": "high", "direction": "supportive"},
+            "medium_term": {"horizon": "1-3个月", "confidence": "medium", "direction": "neutral"},
+            "data_limitations": [],
+        }
+
+    def _ctx(self, *, a_fresh: str = "fresh", us_fresh: str = "fresh") -> AnalysisContext:
+        return AnalysisContext(
+            generated_at="2026-08-06T12:00:00+00:00",
+            assets=[], asset_count=0, portfolio_constraints={}, portfolio_profile={},
+            quotes={}, news=[], news_count=0, market_state=MarketState(),
+            portfolio_mapping=PortfolioMapping(), drift_checks=[], recent_snapshots=[],
+            raw_prompt_input="test",
+            data_quality={
+                "quotes": {
+                    "by_market": {
+                        "a": {"status": "ok", "freshness": a_fresh},
+                        "us": {"status": "ok", "freshness": us_fresh},
+                    },
+                },
+            },
+        )
+
+    def test_primary_fresh_cross_market_stale_no_downgrade(self) -> None:
+        # 主市场 A股 fresh + 次市场美股 stale(跨日) → 不降级。
+        # 修正前 any(market_fresh) 会误伤降级 —— 本测试锁住修复。
+        out = _apply_freshness_downgrade(
+            self._outlook(), self._ctx(a_fresh="fresh", us_fresh="stale"),
+            primary_market="a",
+        )
+        assert out["near_term"]["confidence"] == "high"
+        assert out["medium_term"]["confidence"] == "medium"
+        assert out["data_limitations"] == []
+
+    def test_primary_stale_downgrades(self) -> None:
+        out = _apply_freshness_downgrade(
+            self._outlook(), self._ctx(a_fresh="stale", us_fresh="fresh"),
+            primary_market="a",
+        )
+        assert out["near_term"]["confidence"] == "medium"  # high→medium
+        assert out["medium_term"]["confidence"] == "low"   # medium→low
+        assert any("行情数据滞后" in lim for lim in out["data_limitations"])
+
+    def test_no_primary_falls_back_to_any_market(self) -> None:
+        # 未传 primary_market(旧调用方) → 保守退化,任一 stale 即降级。
+        out = _apply_freshness_downgrade(
+            self._outlook(), self._ctx(a_fresh="fresh", us_fresh="stale"),
+        )
+        assert out["near_term"]["confidence"] == "medium"

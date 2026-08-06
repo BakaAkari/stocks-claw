@@ -1301,6 +1301,57 @@ class TestDataQuality:
         assert quality["freshness"] == "fresh"
         assert quality["by_market"]["a"]["freshness"] == "fresh"
 
+    def test_quote_quality_friday_close_monday_run_is_fresh(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+    ):
+        # R5-2 回溯修正: 交易日历语义必须跳过周末。周五(8/7)收盘行情
+        # 在周一(8/10)盘后跑,日历日差 3 天,但中间无交易日——周五收盘
+        # 就是最新有效价,必须判 fresh。若有人把交易日计数改回纯日历日差,
+        # 此测试会失败(回归为 old → 研判全拒,每周一误伤)。
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        instrument = Instrument("000001", "平安银行", "a")
+        quotes = {
+            "a": [Quote(instrument, price=10.0, as_of="2026-08-07T08:14:00+00:00")]
+        }
+
+        quality = builder._quote_quality(
+            "2026-08-10T12:00:00+00:00",  # 周一 20:00 沪
+            [instrument],
+            quotes,
+            [],
+        )
+
+        assert quality["freshness"] == "fresh"
+        assert quality["by_market"]["a"]["freshness"] == "fresh"
+
+    def test_quote_quality_missed_two_trading_days_is_old(
+        self,
+        mock_fetcher,
+        mock_scaffolds,
+    ):
+        # R5-2 回溯修正: 错过完整交易日(周四 8/6 行情,下周二 8/11 跑,
+        # 中间 8/7 周五 + 8/10 周一 = 2 个交易日)→ old。真实数据断档
+        # 必须能暴露,不能因跳过周末而误判新鲜。
+        portfolio_scaffold, market_scaffold = mock_scaffolds
+        builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
+        instrument = Instrument("000001", "平安银行", "a")
+        quotes = {
+            "a": [Quote(instrument, price=10.0, as_of="2026-08-06T08:14:00+00:00")]
+        }
+
+        quality = builder._quote_quality(
+            "2026-08-11T12:00:00+00:00",  # 周二 20:00 沪
+            [instrument],
+            quotes,
+            [],
+        )
+
+        assert quality["freshness"] == "old"
+        assert quality["by_market"]["a"]["freshness"] == "old"
+
     def test_quote_quality_all_missing_as_of_is_unknown(
         self,
         mock_fetcher,

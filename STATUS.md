@@ -8,19 +8,18 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-06 (sixteenth update) — **全量健康检查：
-> C1-WP2 降级修正(主市场行情,不再被跨市场 stale 误伤) +
-> market 参数传错修正 + 死代码 _render_delta_changes 删除 +
-> DATA_MODEL cash 字段契约更新**。此前：(fifteenth)五轮修复回溯审查；
-> （fourteenth）第五轮对抗性校验 R5-2/4/5/7/8/10。
-> Next: 双引擎信息面专项 / 用户中立化清理 / W1（按需求分析 §7 排序）。
+> Last updated: 2026-08-06 (seventeenth update) — **闭环审计补测试：
+> 新增 6 个回归测试(R5-2 周末交易日 2 个 / C1-WP2 主市场降级 3 个 /
+> R5-10 §3§5 去重边界 1 个),全量 1392 passed**。此前：(sixteenth)
+> 全量健康检查 C1-WP2 修正/死代码清理/契约更新；(fifteenth)五轮
+> 修复回溯审查。Next: 双引擎信息面专项 / 用户中立化清理 / W1。
 
-## 2026-08-06 全量健康检查（C1-WP2 修正 / 死代码清理 / 契约更新）
+## 2026-08-06 闭环审计补测试（6 个回归测试）
 
-**Full pytest 1386 passed, 7 skipped, 1 deselected（仅排除既有基线失败
+**Full pytest 1392 passed, 7 skipped, 1 deselected（仅排除既有基线失败
 `test_advice_feedback::TestLedgerWrite::test_engine_rollup_reads_ledger`）；
-ruff/compileall clean。方法：对 5 轮修复之外的整仓做健康扫描——
-降级链路、缓存刷新、汇率、契约、死代码、运行时渲染。**
+ruff/compileall clean。目的：把健康检查/回溯审查发现的缺陷锁进测试，
+防止未来改动重新引入（闭环审计 3 个测试缺口）。**
 
 ## 2026-08-06 第四轮对抗性校验(P5-1..P5-7)
 
@@ -80,7 +79,24 @@ ruff/compileall clean；新增 12 个回归测试（test_report_defects_p234.py
 - ruff/compileall clean;
 - 已 commit + push + NAS 同步(见 git log C1 相关 commit)。
 
-### 健康检查发现并修正(本轮)
+### 闭环审计补测试(本轮)
+
+- **R5-2 周末交易日回归(2 个)**(`test_context_builder.py`):
+  `test_quote_quality_friday_close_monday_run_is_fresh`(周五行情周一跑
+  → fresh,锁住"交易日计数跳过周末")+ `test_quote_quality_missed_two_trading_days_is_old`
+  (错过 2 交易日 → old,锁住"真实断档必须暴露")。
+- **C1-WP2 主市场降级回归(3 个)**(`test_advisory_mainline.py`
+  `TestFreshnessDowngradePrimaryMarket`):主市场 fresh + 次市场 stale
+  不降级(锁住 any-market 误伤修复)、主市场 stale 降级、未传
+  primary_market 时退化为任一市场(保守)。
+- **R5-10 §3/§5 去重边界(1 个)**(`test_push_payload.py`):
+  `test_blocked_section_keeps_reasons_beyond_section3_cap`——4 条
+  no_action_reasons,第 4 条必须保留在 §5(锁住 already_shown[:3]
+  修正),前 3 条不重复。
+
+验证:全量 1392 passed / 7 skipped / 1 deselected;ruff/compileall
+clean。闭环状态:5 轮修复(代码+测试+验证+交付)全部闭环,剩余
+基线失败 1 项(advice_feedback rollup,非本轮引入)待单独诊断。
 
 - **C1-WP2 降级误伤(真实缺陷)**:`_apply_freshness_downgrade` 的
   `stale_quotes = any(market_fresh)` 遍历所有市场——A股盘后报告(主市场
