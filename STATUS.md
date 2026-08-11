@@ -8,11 +8,47 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-06 (seventeenth update) — **闭环审计补测试：
-> 新增 6 个回归测试(R5-2 周末交易日 2 个 / C1-WP2 主市场降级 3 个 /
-> R5-10 §3§5 去重边界 1 个),全量 1392 passed**。此前：(sixteenth)
-> 全量健康检查 C1-WP2 修正/死代码清理/契约更新；(fifteenth)五轮
-> 修复回溯审查。Next: 双引擎信息面专项 / 用户中立化清理 / W1。
+> Last updated: 2026-08-11 (eighteenth update) — **官方统计 freshness
+> 发布周期语义修复(P4-1 家族根因)：宏观官方统计(CPI/失业率/利率)不再被
+> 交易日语义误判为 old，研判置信度恢复 medium；补 1 个回归测试,全量
+> 1392 passed / 4 预存失败 / 7 skipped**。此前：(seventeenth)闭环审计
+> 补测试 6 个；(sixteenth)全量健康检查 C1-WP2 修正/死代码清理/契约更新。
+> Next: 双引擎信息面专项 / 用户中立化清理 / W1。
+
+## 2026-08-11 官方统计 freshness 发布周期语义修复（P4-1 家族根因）
+
+**Full pytest 1392 passed, 4 failed(预存基线: test_advice_feedback 3 个 +
+test_engine 1 个, stash 验证与本次无关), 7 skipped; ruff/compileall clean;
+新增 1 个回归测试(`_official_freshness` 发布周期语义 6 场景)。**
+
+**问题**: 8/11 排查"研判待复核: LLM 分析端未配置"(实为 .secret key 断链,
+已修)后,发现所有 session 置信度全 low。根因:`context_builder._macro_quality`
+对官方统计层用 `_freshness_from_datetime`(交易日语义)判定新鲜度。官方统计
+是 FRED 月度序列, as_of 是数据所属月份(如 CPIAUCSL 6-01 = 6 月数据, 7-14
+发布), 8-11 距 6-01 跨 ~50 交易日 → 永远判 old → `compute_confidence_cap`
+命中"宏观数据超过发布周期" → cap=low → LLM 置信度全 low。数据本身是最新
+一期(7 月 CPI 8-12 才发布), 是判定语义错了。
+
+**修复** (`context_builder.py`):
+- 新增 `_official_freshness()`: 官方统计走**发布周期语义** —— 用
+  `next_official_release`(event_calendar 官方日程, 缺失回退启发式)推导
+  "期望最新数据期" = next_release 月 - 2, 与 as_of 比期次差: <=0 → fresh,
+  ==1 → stale, >=2 → old。FRED 未按发布日更新的滞后(as_of 落后期望一期)
+  正确判 stale, 而非被天数窗口放过。
+- 顶层 `macro.freshness` 以官方层发布周期语义为主(市场层 FRED 日频滞后
+  1-2 交易日/原油数天是数据源特性, 不拖累研判置信度; 仅 market 层整体
+  missing 时以其为准)。
+- `outlook_evidence.compute_confidence_cap` / `advisory_mainline.
+  _apply_freshness_downgrade` 无需改动(读到的 freshness 已恢复)。
+
+**验证**: 重新生成 `us_post_open` 真实 artifact —— macro.freshness
+old → fresh, official.freshness old → fresh, near/medium_term 置信度
+low → medium, "宏观官方统计滞后,可信度已自动降级" limitation 消失。
+market 层保持 old(原油 8-03 是 FRED 源滞后, 独立展示不参与研判)。
+
+**关联**: P4-1b 测试(`test_macro_quality_as_of_matches_age_source`)本身
+测通用 `_freshness_from_datetime`(未改), 保留; `test_context_builder.py`
+的 `test_macro_quality_uses_oldest_field_as_of` 断言更新为 fresh 语义。
 
 ## 2026-08-06 闭环审计补测试（6 个回归测试）
 
@@ -481,6 +517,20 @@ LLM 成功时报告可用可参考；剩余 P1（情报层 0 方向信号、资�
   created; real `.local/financial_assets.json` hash unchanged.
 - Tag: `v2.8-e1e2-complete` remains at `cc1eaa0` (not an ancestor of HEAD;
   left untouched — re-tagging is the user's call).
+
+## Baseline (as of 2026-08-11, eighteenth update)
+
+- HEAD (code baseline, verified): `cf42ac9` — "fix: 官方统计 freshness 发布周期语义(P4-1 家族根因)"
+- Branch: `master`, **2 commits ahead of origin/master** (60fad07, cf42ac9 — 未 push)
+- Working tree: **clean** (verified — `git status --short`)
+- Full pytest: **1392 passed, 7 skipped, 4 failed** (4 预存失败经 stash
+  验证与本次无关: test_advice_feedback 3 个 + test_engine 1 个)
+- ruff: **clean**; compileall: **clean**; git diff --check: **clean**
+- Tag: `v2.11-official-freshness-fix` at `cf42ac9` (annotated)
+- Smoke (2026-08-11): real `us_post_open` regenerated — macro.freshness
+  old→fresh, official.freshness old→fresh, near/medium confidence
+  low→medium, "宏观官方统计滞后可信度已自动降级" limitation 消失;
+  market 层 old 保留(原油 8-03 FRED 源滞后, 独立展示)。
 
 ## De-hardcode landing (verified 2026-07-31)
 

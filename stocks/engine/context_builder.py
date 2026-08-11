@@ -1587,8 +1587,16 @@ class ContextBuilder:
         # 市场数据新鲜度
         market_fresh = self._freshness_from_datetime(market_dt, generated_at) if market_dt else {
             "freshness": "unknown", "age_seconds": None}
-        # 官方统计新鲜度
-        official_fresh = self._freshness_from_datetime(official_dt, generated_at) if official_dt else {
+        # 官方统计新鲜度：发布周期语义（月度数据），非交易日语义。
+        # 官方统计 as_of 是"数据所属月份"（如 CPI 6-01 = 6 月数据，7-14 发布），
+        # 用交易日语义会把月频数据永远判 old（6-01 → 8-11 ≈ 50 交易日）。
+        # 正确语义：只要 FRED 已发布的最新一期（as_of）距离下一次官方发布
+        # （next_release）仍在发布周期内，该数据就是"当前可获取的最新一期"→ fresh。
+        official_fresh = self._official_freshness(
+            official_dt,
+            macro_snapshot.get("next_official_release"),
+            generated_at,
+        ) if official_dt else {
             "freshness": "unknown", "age_seconds": None}
 
         # 整体 as_of 仍保留为市场数据 as_of（兼容旧引用）
@@ -1611,9 +1619,14 @@ class ContextBuilder:
         # (官方统计 6/1),age_seconds 却取市场层新鲜度(7/31),同一节点
         # 两个字段指向不同日期,下游误判宏观只旧 6 天(8/6 实测
         # as_of=6/1 但 age_seconds=543,715≈6.3 天,自相矛盾)。
-        overall_dt = oldest_as_of or market_dt
-        overall_fresh = self._freshness_from_datetime(overall_dt, generated_at) if overall_dt else {
-            "freshness": "unknown", "age_seconds": None}
+        # 顶层宏观新鲜度: 以官方统计（发布周期语义）为主。市场数据
+        # （VIX/美债/汇率/黄金/原油）是 FRED 日频序列,滞后 1-2 个交易日
+        # 乃至原油滞后数天均为 FRED 发布节奏特性,不应用交易日语义把
+        # "FRED 已发布的最新一期"误判为 old（8/11 修复）。仅当市场层整体
+        # 不可用（missing/unknown）时以市场层状态为准。
+        overall_fresh = official_fresh
+        if market_fresh["freshness"] in ("missing", "unknown", "not_configured"):
+            overall_fresh = market_fresh
         return {
             "status": status,
             "source": macro_snapshot.get("source", "unknown"),
@@ -1802,6 +1815,86 @@ class ContextBuilder:
         if traded_elapsed <= 0:
             freshness = "fresh"
         elif traded_elapsed == 1:
+            freshness = "stale"
+        else:
+            freshness = "old"
+        return {"freshness": freshness, "age_seconds": age_seconds}
+
+    def _official_freshness(
+        self,
+        official_dt: Optional[datetime],
+        next_release: Optional[str],
+        generated_at: str,
+    ) -> dict:
+        """官方统计新鲜度：发布周期语义（月度数据），非交易日语义。
+
+        官方统计字段（CPI/失业率/利率）是 FRED 月度序列，as_of 表示数据所属
+        月份（如 CPIAUCSL 观测点 2026-06-01 = 6 月数据，7-14 发布）。用交易日
+        语义（_freshness_from_datetime）会把任何月频数据判为 old（6-01 到
+        8-11 跨 ~50 个交易日），从而永久压低研判置信度 —— 这是 8/11 修复的
+        误判：数据本身是最新一期，只是发布节奏是月度。
+
+        正确语义：判断 as_of 是否为"FRED 当前可获取的最新一期"。FRED 序列的
+        观测点日期即已发布期次，最新观测点（as_of）就是数据源已发布的最新
+        一期。若 as_of 距离下一次官方发布（next_release）仍在发布周期内，
+        则数据是当前最新一期 → fresh；超过一个发布周期仍未更新 → stale；
+        超过多个周期 → old。
+
+        判定依据（非硬编码）：
+        - next_release 已知（event_calendar 官方日程，缺失时回退启发式估算）：
+          期望最新数据期 = next_release 发布期（发布月 - 1 的月份）。as_of 与
+          期望期比较,以"期次差"（月份差）判定: <=0 → fresh, ==1 → stale,
+          >=2 → old。这样发布日已过而 FRED 未更新的情况（as_of 落后期望
+          一期）会被正确判 stale,而不是被天数窗口放过。
+        - 无 next_release：回退到 FRED 数据自证 —— as_of 就是序列最新观测
+          点（数据源已发布的最新一期），期望最新期 = 当前月 - 1（月度数据
+          当月发布上月）。月份差判定同上。
+        """
+        if official_dt is None:
+            return {"freshness": "unknown", "age_seconds": None}
+        try:
+            now = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError):
+            now = datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        if official_dt.tzinfo is None:
+            official_dt = official_dt.replace(tzinfo=timezone.utc)
+        age_seconds = max(0, int((now - official_dt).total_seconds()))
+
+        def _month_index(dt: datetime) -> int:
+            return dt.year * 12 + dt.month
+
+        def _expectation_month() -> int:
+            """期望最新数据期（月份序号）。
+
+            next_release 发布的是"发布月 - 1"的数据（如 8-12 发布 7 月 CPI）。
+            发布日前当前可获取的最新一期是"发布月 - 2"的数据（6 月）；
+            发布日及之后应是"发布月 - 1"（7 月）。calendar 的 next_release
+            取 >= today 的最近未来发布日,故发布日后它跳到下下期 —— 期望期
+            始终 = next_release 月 - 2 恰好对应"当前应可获取的最新一期"。
+            """
+            if next_release:
+                try:
+                    nd = datetime.fromisoformat(str(next_release).replace("Z", "+00:00"))
+                    if nd.tzinfo is None:
+                        nd = nd.replace(tzinfo=timezone.utc)
+                    y, m = nd.year, nd.month - 2
+                    if m <= 0:
+                        y, m = y - 1, m + 12
+                    return y * 12 + m
+                except (AttributeError, TypeError, ValueError):
+                    pass
+            # 无发布日程: 期望最新期 = 当前月 - 1（月度数据当月发布上月）
+            y, m = now.year, now.month - 1
+            if m <= 0:
+                y, m = y - 1, m + 12
+            return y * 12 + m
+
+        lag = _expectation_month() - _month_index(official_dt)
+        if lag <= 0:
+            freshness = "fresh"
+        elif lag == 1:
             freshness = "stale"
         else:
             freshness = "old"

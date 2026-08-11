@@ -27,6 +27,13 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 push "明日计划"节）。全量 1380 passed / 7 skipped / 1 deselected；
 ruff clean。下一步按需求分析 §7：双引擎信息面专项 / 用户中立化清理 / W1。
 
+**2026-08-11 官方统计 freshness 发布周期语义修复**（P4-1 家族根因，
+`context_builder.py`）：官方统计（CPI/失业率/利率）新鲜度改走发布周期
+语义（`_official_freshness` + `next_official_release`），不再被交易日语义
+误判 old；顶层 macro.freshness 以官方层为主。全量 1392 passed / 4 预存
+失败 / 7 skipped；真实 `us_post_open` artifact 验证置信度 low → medium。
+详见 `STATUS.md` §2026-08-11。
+
 ## Backlog (do not start before the current task closes)
 
 - **M1** — Report structure upgrade *(done 2026-07-31, `382207b`)*.

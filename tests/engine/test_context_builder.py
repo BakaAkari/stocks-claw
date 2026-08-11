@@ -715,7 +715,10 @@ class TestMacroData:
 
         assert quality["status"] == "ok"
         assert quality["as_of"] == "2026-05-01T00:00:00+00:00"
-        assert quality["freshness"] == "old"
+        # 8/11 修复: 官方统计走发布周期语义。next_release=7-12 发布 6 月 CPI,
+        # 期望最新期 = 7-2 = 5 月, as_of 5-01 正是最新一期 → fresh（此前
+        # 交易日语义把月频数据永远判 old）。
+        assert quality["freshness"] == "fresh"
         assert quality["filled_fields"] == 9
         assert quality["missing_as_of"] == 0
         # New: tiered freshness (R5-2 交易日历: 7/2 周四 → 7/3 周五,之间
@@ -723,7 +726,50 @@ class TestMacroData:
         assert quality["market"]["as_of"] == "2026-07-02T00:00:00+00:00"
         assert quality["market"]["freshness"] == "fresh"
         assert quality["official"]["as_of"] == "2026-05-01T00:00:00+00:00"
+        assert quality["official"]["freshness"] == "fresh"
         assert quality["official"]["next_release"] == "2026-07-12"
+
+    def test_official_freshness_uses_release_period_semantics(self):
+        """8/11 修复: 官方统计新鲜度 = 发布周期语义, 非交易日语义。
+
+        场景: 8-11 生成, CPI as_of=6-01(6 月数据, 7-14 已发布), 下一次官方
+        发布 8-12(7 月 CPI)。期望最新期 = 8-2 = 6 月, as_of 正好是最新一期
+        → fresh。此前交易日语义判 old, 导致所有研判置信度被压到 low。
+        """
+        builder = ContextBuilder.__new__(ContextBuilder)
+        cb = builder
+
+        def _as_of(s): return cb._parse_iso_datetime(s)
+
+        # 核心场景: 发布周期内 → fresh
+        r = cb._official_freshness(
+            _as_of("2026-06-01T00:00:00+00:00"), "2026-08-12", "2026-08-11T14:40:00+00:00")
+        assert r["freshness"] == "fresh", r
+
+        # 发布日已过但 FRED 未更新(as_of 落后期望 7 月一期) → stale
+        r = cb._official_freshness(
+            _as_of("2026-06-01T00:00:00+00:00"), "2026-09-11", "2026-08-13T14:40:00+00:00")
+        assert r["freshness"] == "stale", r
+
+        # FRED 正常更新到 7-01 → fresh
+        r = cb._official_freshness(
+            _as_of("2026-07-01T00:00:00+00:00"), "2026-09-11", "2026-08-13T14:40:00+00:00")
+        assert r["freshness"] == "fresh", r
+
+        # 真实滞后(3 个月前) → old
+        r = cb._official_freshness(
+            _as_of("2026-03-01T00:00:00+00:00"), "2026-08-12", "2026-08-11T14:40:00+00:00")
+        assert r["freshness"] == "old", r
+
+        # 无 next_release → 回退期望期 = 当前月-1, 6 月数据在 8 月 → stale(保守)
+        r = cb._official_freshness(
+            _as_of("2026-06-01T00:00:00+00:00"), None, "2026-08-11T14:40:00+00:00")
+        assert r["freshness"] == "stale", r
+
+        # 跨年边界: 12-20 生成, as_of 11-01, next_release 1-12 → 期望期 12 月(跨年) → fresh
+        r = cb._official_freshness(
+            _as_of("2026-11-01T00:00:00+00:00"), "2027-01-12", "2026-12-20T10:00:00+00:00")
+        assert r["freshness"] == "fresh", r
 
 
 class TestEarningsEventProjection:
