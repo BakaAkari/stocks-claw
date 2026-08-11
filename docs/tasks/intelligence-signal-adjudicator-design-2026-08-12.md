@@ -1,9 +1,11 @@
 # 情报信号裁决器（Intelligence Signal Adjudicator）设计
 
-> 状态: PLANNED (2026-08-12)
+> 状态: PLANNED — v2 修订 (2026-08-12, 两轮对抗性校验后)
 > 前置: v2.11-intel-llm-pipeline-fix (信号已能产生, MODE=llm 21 signals)
 > 相关: `intelligence_analyzer.py` / `news_intelligence_store.py` /
 > `quant_action.py::_build_drivers` / `risk_warning.py` / `context_builder.py`
+> v1 → v2: 两轮对抗性校验发现 4 实质缺陷(D1-D4) + 2 衍生问题(D5-D6),
+> 修正后裁决器定位从"生成后一次性过滤"改为"消费时实时质量门"。
 
 ## 1. 背景与问题
 
@@ -37,6 +39,39 @@
 - **与现有消费路径兼容** — 不改变 `match_intelligence` 的四层匹配逻辑
   和 `_build_drivers` 的 driver 结构；裁决器插在信号存储与 digest
   构建之间。
+
+## 2.5 对抗性校验记录（v1 → v2 修正依据）
+
+### 第二轮校验（2026-08-12）发现的缺陷
+
+| # | 缺陷 | 证据 | 影响 |
+|---|---|---|---|
+| D1 | R1 前提不成立 — LLM 不返回 `source_article_ids` | 实测 8-11 重放: 信号 keys 只有 `symbol/direction/rationale_cn/confidence/falsification_cn`, **无 article_ids**; `_LLM_PROMPT_SYSTEM` 的信号 schema 也没要求 | 按 v1 实施 R1 → **全部 LLM 信号 rejected → 信号层重新归零** |
+| D2 | LLM 输出不稳定 — 裁决不可复现 | 同批数据两次调用: 21 signals vs 3 signals; GLD 0.75 vs 0.72 | 裁决结果依赖"哪次调用", 不是稳定事实; hard reject 会在波动时误杀 |
+| D3 | R3 时间逻辑错误 — "生成时裁决"无法处理过期 | `save_signals` 按天写, `latest_signals` 读当天文件; digest 构建(2058)不再重裁 | 信号存 6h 后过期照样进消费端 → TTL 失效 |
+| D4 | from_dict/to_dict 不同步 — 新字段存了读不回 | `IntelligenceSignal.from_dict` 只取固定 key | R1/R3/R4 字段丢失, 裁决信息不持久 |
+| D5 | R1 误杀规则信号 — category_padding/rule_fallback 天生无 article_ids | padding 是 `match_intelligence` 有意为之的 neutral 补位 | 溯源规则一刀切会杀掉规则层信号 |
+| D6 | R2 hard reject 误杀持仓信号 | NVDA buy 0.65 < 0.70 门槛, 但 NVDA 是持仓标的 | 真实方向信号被门槛丢掉 |
+
+### v2 修正（对应上表）
+
+- **R1 修正**: 只对 `generation_method == "llm"` 的信号强制 `source_article_ids`;
+  rule_fallback/category_padding 跳过溯源（它们的 provenance 是规则本身）。
+  同时必须改 `_LLM_PROMPT_SYSTEM` 信号 schema 加入 source_article_ids,
+  并**先验证 LLM 服从**（若 LLM 不服从 → R1 不能上线, 改为 DQ note）。
+- **R2 修正**: 不设 hard reject。三档: ≥0.70 passed / 0.55-0.70 weak /
+  <0.55 仍 weak + note(low_confidence)。理由: LLM 输出不稳定(D2),
+  hard reject 会在波动时误杀 NVDA 0.65 这类真实持仓信号; 弱信号只
+  降级展示不丢弃, 保留信息。
+- **R3 修正**: 裁决移到 **digest 构建时(消费时)** — TTL 用
+  `generated_at + valid_until` 实时判断; 存储保存原始信号+valid_until,
+  消费时过滤过期。不在生成时裁决。
+- **D4 修复**: `from_dict`/`to_dict` 同步新增字段(source_article_ids /
+  valid_until / dissent / adjudication / reject_reason), 否则存了读不回。
+
+### 第三轮校验（2026-08-12）结论
+
+见 §10.1（第三轮对抗性校验结果）。
 
 ## 3. 裁决器位置（数据流）
 
@@ -188,3 +223,31 @@ reject_reason: str = ""                    # 丢弃原因(用于 data_quality_no
 - 裁决器接入后，观察 1-2 周真实报告，校准置信度门槛（0.70 是否过严/
   过松）与 TTL 表（critical 6h 是否符合实际事件衰减）。
 - 若 weak 信号长期无价值，降级为纯 research 展示或直接弃用。
+## 10.1 第三轮对抗性校验（2026-08-12）
+
+### 校验方法
+对 v2 修正逐条实测/追代码，重点攻击"v2 修正本身是否引入新问题"。
+
+### 发现
+
+| # | 问题 | 证据 | 修正 |
+|---|---|---|---|
+| E1 | R1 可行性已验证 — 但实施必须改 `_parse_signals` 接住 `source_article_ids` | 实验 prompt(加溯源要求) 后 LLM 4/4 带 article_ids 且引用正确(BTCUSDT[2,3,4]=比特币跌、GLD[3,4,13]=黄金避险、USO[6,12,24]=美伊/油价、NVDA[5]=Cramer); v1 的 `_parse_signals` 不解析该字段 | `_parse_signals` 增加 `source_article_ids` 解析, 否则字段进了 raw result 却丢在解析层 |
+| E2 | 消费端双路径 — v2 没指明裁决插哪 | 代码: `top_signals` 喂 LLM(scheduled_analysis:1805), `parsed_signals` 喂确定性匹配(context_builder:2062); 两路径独立 | **裁决器插入点 = digest 构建内(2058-2062 之间)**: 一次裁决同时过滤 raw_signals(喂 LLM) 和 parsed_signals(喂匹配), 两路径一致, 无泄漏 |
+| E3 | R2 去 hard reject 后 weak 消费语义未定义 | v2 只写"weak 只展示不进 driver", 无实现点 | weak: 从 raw_signals **保留**(供 LLM 展示), 从 parsed_signals **排除**(不驱动 action card); top_signals 中 weak 标 `"weak": true` 供 LLM 区分 |
+
+### 结论
+v2 修正方向正确(R1 分来源、R2 不 hard reject、R3 消费时、D4 同步字段)，
+且 R1 的 LLM 服从性已实测通过。剩余是**实施级问题**(E1-E3), 不是设计级
+缺陷。裁决器定位最终确定: **digest 构建内的一次性裁决, 双消费路径共用**。
+
+### 实施前检查清单(基于三轮校验)
+- [ ] `_LLM_PROMPT_SYSTEM` 信号 schema 加 `source_article_ids`(实验已验证服从)
+- [ ] `_parse_signals` 解析 `source_article_ids`
+- [ ] `IntelligenceSignal` 5 新字段 + from_dict/to_dict 同步
+- [ ] `signal_adjudicator.py`: R1 分来源(仅 llm 强制溯源) / R2 三档不 hard reject /
+      R3 TTL 表(consumption-time) / R4 同 symbol 聚合(dissent)
+- [ ] digest 构建内插裁决(2058-2062 之间), raw+parsed 双路径一致
+- [ ] weak 标 `"weak": true` 进 top_signals, 不进 parsed_signals
+- [ ] 验收: 8-11 重放 + 全量测试基线 + ruff/compileall
+
