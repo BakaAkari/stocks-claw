@@ -2038,6 +2038,7 @@ class ContextBuilder:
             _compute_coverage,
             match_intelligence,
         )
+        from stocks.engine.signal_adjudicator import adjudicate_signals
 
         intelligence_dir = self._config.get("intelligence_dir")
         if not intelligence_dir:
@@ -2057,11 +2058,10 @@ class ContextBuilder:
 
             raw_signals = (signals_payload or {}).get("signals", [])
             parsed_signals = [IntelligenceSignal.from_dict(item) for item in raw_signals]
-            matched = []
-            for position in positions or []:
-                matched.extend(match_intelligence(position, parsed_signals))
-            coverage = _compute_coverage(matched)
 
+            # 统一时间语义(G1): source_at 单一来源, 全部经 _parse_iso_datetime
+            # (astimezone utc) 归一化。brief 与 signals 时间戳可能带/不带
+            # 时区, 统一 UTC 后比较。
             brief_path = repo_root / ".local" / "intelligence" / "latest_brief.json"
             brief = {}
             if brief_path.exists():
@@ -2078,9 +2078,26 @@ class ContextBuilder:
                 health = {"status": "missing", "age_minutes": None, "risk_eligible": False}
             else:
                 health = _compute_brief_health(now_dt, source_dt)
+            risk_eligible = bool(health.get("risk_eligible"))
+
+            # 裁决器(2026-08-12, docs v4.1): 消费时质量门 — R1 溯源 /
+            # R2 置信度三档 / R3 TTL / R4 dissent; 批级 batch_stale 由
+            # risk_eligible 决定(G2/G3)。双路径共用同一裁决结果:
+            # passed → 确定性匹配; passed+weak → top_signals(标 weak)。
+            articles_input = len(snapshot.articles) if snapshot is not None else 0
+            adj = adjudicate_signals(
+                parsed_signals,
+                now=now_dt,
+                articles_input=articles_input,
+                batch_stale=not risk_eligible,
+            )
+            # 确定性面: 只消费 passed
+            matched = []
+            for position in positions or []:
+                matched.extend(match_intelligence(position, adj.passed))
+            coverage = _compute_coverage(matched)
 
             clusters = (clusters_payload or {}).get("clusters", [])
-            risk_eligible = bool(health.get("risk_eligible"))
             return {
                 "status": "ok" if risk_eligible else health["status"],
                 "snapshot_at": snapshot.collected_at.isoformat() if snapshot else None,
@@ -2108,7 +2125,22 @@ class ContextBuilder:
                     }
                     for c in clusters[:5]
                 ] if risk_eligible else [],
-                "top_signals": [dict(signal) for signal in raw_signals] if risk_eligible else [],
+                "top_signals": [
+                    {
+                        "symbol": sig.symbol,
+                        "name": sig.name,
+                        "direction": sig.direction,
+                        "rationale": sig.rationale,
+                        "confidence": sig.confidence,
+                        "urgency": sig.urgency,
+                        "generation_method": sig.generation_method,
+                        "adjudication": sig.adjudication,
+                        "weak": sig.adjudication == "weak",
+                        "dissent": sig.dissent,
+                    }
+                    for sig in [*adj.passed, *adj.weak]
+                ] if risk_eligible else [],
+                "adjudication_summary": adj.summary(),
             }
         except Exception as exc:  # noqa: BLE001
             logger = get_logger("context_builder")

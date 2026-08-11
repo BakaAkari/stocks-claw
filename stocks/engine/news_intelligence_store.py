@@ -118,6 +118,12 @@ class IntelligenceSignal:
     generation_method: str = "rule_fallback"
     match_method: str = "unmatched"
     source_as_of: "Optional[datetime]" = None
+    # 裁决器字段(2026-08-12, D4 同步 from_dict/to_dict):
+    source_article_ids: list[int] = field(default_factory=list)  # R1 溯源
+    valid_until: "Optional[datetime]" = None                     # R3 有效期
+    dissent: "Optional[dict]" = None                             # R4 冲突证据
+    adjudication: str = "pending"          # pending/passed/weak/rejected
+    reject_reason: str = ""                # 丢弃原因(用于 data_quality_notes)
 
     def to_dict(self) -> dict:
         d = {
@@ -136,6 +142,13 @@ class IntelligenceSignal:
         }
         if self.source_as_of is not None:
             d["source_as_of"] = self.source_as_of.isoformat()
+        d["source_article_ids"] = list(self.source_article_ids)
+        if self.valid_until is not None:
+            d["valid_until"] = self.valid_until.isoformat()
+        if self.dissent is not None:
+            d["dissent"] = self.dissent
+        d["adjudication"] = self.adjudication
+        d["reject_reason"] = self.reject_reason
         return d
 
     @classmethod
@@ -144,6 +157,10 @@ class IntelligenceSignal:
         raw = data.get("source_as_of")
         if raw:
             source_as_of = _parse_iso(raw)
+        valid_until = None
+        raw_vu = data.get("valid_until")
+        if raw_vu:
+            valid_until = _parse_iso(raw_vu)
         return cls(
             symbol=data["symbol"],
             name=data["name"],
@@ -158,6 +175,11 @@ class IntelligenceSignal:
             generation_method=data.get("generation_method", "rule_fallback"),
             match_method=data.get("match_method", "unmatched"),
             source_as_of=source_as_of,
+            source_article_ids=[int(i) for i in (data.get("source_article_ids") or [])],
+            valid_until=valid_until,
+            dissent=data.get("dissent"),
+            adjudication=data.get("adjudication", "pending"),
+            reject_reason=data.get("reject_reason", ""),
         )
 
 

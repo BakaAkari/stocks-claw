@@ -1232,6 +1232,8 @@ def build_scheduled_run(
         "field": 0, "directional": 0, "padding": 0,
         "exact": 0, "proxy": 0, "category": 0,
     }
+    # E3(2026-08-12): weak 信号只进 LLM 面展示, 排除出确定性面 —
+    # 不驱动 action card direction。只消费 passed。
     intel_signals: dict[str, dict] = {
         s.get("symbol", ""): {
             "symbol": s.get("symbol", ""),
@@ -1240,7 +1242,7 @@ def build_scheduled_run(
             "rationale": s.get("rationale", ""),
         }
         for s in (intel_digest.get("top_signals") or [])
-        if s.get("symbol")
+        if s.get("symbol") and not s.get("weak")
     }
     # 提取多维度交叉分析上下文
     market_state = context.get("market_state") or {}
@@ -1836,7 +1838,10 @@ def build_intelligence_agent_task(session: ScheduledSession) -> dict:
         ],
         "data_reference": {
             "事件": "intelligence_digest.top_clusters[] — theme, summary, sentiment, urgency, affected_markets",
-            "信号": "intelligence_digest.top_signals[] — direction, symbol, rationale",
+            "信号": "intelligence_digest.top_signals[] — direction, symbol, rationale, "
+                "adjudication(passed/weak), weak(bool)。weak=True 表示低置信/弱情报，"
+                "只能作为观察线索，不得作为确认方向或买卖依据；只有 passed 信号可"
+                "作为方向性信号引用",
             "宏观": "macro — market(日频: VIX/美债10Y/美元指数/汇率/黄金/原油, 见 data_quality.macro.market) + official(月频: CPI/失业率/联邦基金利率, 见 data_quality.macro.official, 含 next_release 预估)",
             "行情": "quotes — SPY, QQQ, VIXY, GLD, USO, UUP, NVDA 等 ETF/个股报价",
         },

@@ -664,7 +664,7 @@ class LLMIntelligenceAnalyzer:
         '{"schema_version":1,"dedup_articles":[{"article_ids":[0,3],"representative_title":"...","duplicate_count":2}],'
         '"clusters":[{"theme":"geopolitics","sub_cluster":"us_iran","summary_cn":"...","article_ids":[0,3],'
         '"sentiment":{"equity":"bearish","oil":"bullish","gold":"bullish"},"urgency":"critical","confidence":0.85}],'
-        '"cross_cluster_synthesis_cn":"","signals":[{"symbol":"USO","direction":"buy","rationale_cn":"...",'
+        '"cross_cluster_synthesis_cn":"","signals":[{"symbol":"USO","direction":"buy","rationale_cn":"...","source_article_ids":[0,3],'
         '"confidence":0.75,"falsification_cn":"..."}],"notes":[]}'
     )
 
@@ -806,8 +806,11 @@ class LLMIntelligenceAnalyzer:
                     ))
                 clusters = backfilled
 
-            # Pad missing categories with hold signals
-            signals = self._pad_category_signals(signals, clusters)
+            # F3(2026-08-12): 不再调用 _pad_category_signals — analyzer 层
+            # 静态 9 类 padding 与消费端 match_intelligence 的动态
+            # category padding 双层冗余; 保留消费端(按实际持仓 exposure_tag
+            # 补位, _compute_coverage 已排除其 directional 统计)。
+            # signals 保持真实 LLM 候选(3-4 条), 不注入规则 hold 占位。
 
             return AnalysisResult(
                 analyzed_at=analyzed_at,
@@ -1084,6 +1087,7 @@ class LLMIntelligenceAnalyzer:
                 generated_at=datetime.now(timezone.utc),
                 generation_method="llm",
                 source_as_of=datetime.now(timezone.utc),
+                source_article_ids=[int(i) for i in (s.get("source_article_ids") or [])],
             ))
         return signals
 
@@ -1191,6 +1195,7 @@ class MatchedSignal:
     match_method: str       # exact / proxy / exposure_tag / category
     source_as_of: datetime
     urgency: str = "medium"
+    dissent: "Optional[dict]" = None  # R4 冲突证据(2026-08-12)
 
 
 def coerce_intelligence_signals(raw_signals) -> list[IntelligenceSignal]:
@@ -1253,6 +1258,7 @@ def match_intelligence(
                 match_method="exact",
                 source_as_of=sig.source_as_of or sig.generated_at,
                 urgency=sig.urgency,
+                dissent=sig.dissent,
             ))
             seen_symbols.add(sym_lower)
             continue
@@ -1268,6 +1274,7 @@ def match_intelligence(
                 match_method="proxy",
                 source_as_of=sig.source_as_of or sig.generated_at,
                 urgency=sig.urgency,
+                dissent=sig.dissent,
             ))
             seen_symbols.add(sym_lower)
             continue
@@ -1284,6 +1291,7 @@ def match_intelligence(
                 match_method="exposure_tag",
                 source_as_of=sig.source_as_of or sig.generated_at,
                 urgency=sig.urgency,
+                dissent=sig.dissent,
             ))
             seen_symbols.add(sym_lower)
 

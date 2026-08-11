@@ -810,8 +810,11 @@ class TestTradingSessionBriefHealth:
         assert digest["brief_generated_at"] == "2026-07-13T09:05:00+00:00"
         assert digest["top_signals"] == []
         assert digest["top_clusters"] == []
-        assert digest["intelligence_coverage"]["field"] >= 1
-        assert digest["intelligence_coverage"]["directional"] >= 1
+        # G3(2026-08-12): stale 批级 → 确定性面也降级(batch_stale),
+        # 消除"LLM 面空、确定性面照常"的不一致 — coverage 不再 >= 1。
+        assert digest["intelligence_coverage"]["field"] == 0
+        assert digest["intelligence_coverage"]["directional"] == 0
+        assert digest.get("adjudication_summary", {}).get("batch_stale") is True
 
         now = datetime(2026, 7, 15, 10, 0, 0, tzinfo=timezone.utc)
         occurrence = SessionOccurrence(
@@ -849,7 +852,8 @@ class TestTradingSessionBriefHealth:
         card = run["action_cards"][0]
         intel_driver = next(d for d in card["drivers"] if d["source"] == "intelligence")
         assert run["intelligence_health"]["status"] == "stale"
-        assert run["intelligence_coverage"]["directional"] >= 1
+        # G3: stale 批级 → 确定性面降级, coverage 不再 >= 1
+        assert run["intelligence_coverage"]["directional"] == 0
         assert intel_driver["signal"] == "unavailable"
         assert card["intelligence_conflict"] == "none"
         assert card["dissent"] is None

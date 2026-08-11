@@ -27,12 +27,13 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 push "明日计划"节）。全量 1380 passed / 7 skipped / 1 deselected；
 ruff clean。下一步按需求分析 §7：双引擎信息面专项 / 用户中立化清理 / W1。
 
-**2026-08-11 情报 LLM 分析路径修复**（信号层悬空根因，`intelligence_analyzer.py`）：
-凭证解析三处断链（base_url 不读 .secret / key 读错服务 / 推理模型
-reasoning_content 未回退）→ LLM 调用从未成功 → 信号常年 0。修复后真实
-数据 21 信号产出并匹配持仓。同日另两修复：估值时效按资产角色分层
-（issues 7→2）、官方统计 freshness 发布周期语义（置信度 low → medium）。
-全量 1395 passed / 4 预存失败 / 7 skipped。详见 `STATUS.md` §2026-08-11。
+**2026-08-12 情报信号裁决器实施**（docs v4.1，`signal_adjudicator.py` 新建）：
+五轮对抗性校验后落地 — 前置清理双层 padding（F3）+ 四道规则（R1 溯源 /
+R2 置信度三档 / R3 TTL / R4 dissent）+ 双路径一致（G3）+ weak 契约（E3）。
+8-11 重放：analyze 纯 LLM 6 信号（无 padding），裁决 passed 2 / weak 4 /
+reject 0。全量 1413 passed / 4 预存失败 / 7 skipped。前日：LLM 路径三断链
+修复（信号 0→真实产出）、估值时效分层（issues 7→2）、freshness 语义
+（置信度 low→medium）。详见 `STATUS.md` §2026-08-12。
 
 ## Backlog (do not start before the current task closes)
 

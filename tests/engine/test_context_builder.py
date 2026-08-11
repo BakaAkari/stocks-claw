@@ -70,7 +70,15 @@ def test_intelligence_digest_preserves_complete_signal_payload(
         config={"intelligence_dir": str(intelligence_dir)},
     )
     digest = builder._build_intelligence_digest(repo_root=tmp_path)
-    assert digest["top_signals"] == [signal.to_dict()]
+    # 裁决器(v4.1): rule_fallback 跳过溯源, 但 confidence 0.55 < 0.70 →
+    # weak; top_signals 是裁决后投影(非完整 to_dict), weak 标 True。
+    assert len(digest["top_signals"]) == 1
+    ts = digest["top_signals"][0]
+    assert ts["symbol"] == "a:588000"
+    assert ts["adjudication"] == "weak"
+    assert ts["weak"] is True
+    assert ts["direction"] == "hold"
+    assert "generated_at" not in ts  # 投影不含原始时间戳
 
 
 def test_intelligence_digest_preserves_source_rich_clusters(

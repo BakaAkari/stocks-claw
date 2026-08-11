@@ -8,12 +8,14 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-11 (eighteenth update) — **情报 LLM 分析路径修复
-> (信号层悬空根因): 凭证解析三处断链(base_url 不读 .secret / key 读错
-> 服务 / 推理模型 reasoning_content 未回退) → LLM 每次调用失败静默回退
-> 规则 → 信号常年 0；修复后真实数据 21 信号产出并匹配持仓**。本日另两
-> 修复: 估值时效按资产角色分层(issues 7→2)、官方统计 freshness 发布周期
-> 语义(置信度 low→medium)。全量 1395 passed / 4 预存失败 / 7 skipped。
+> Last updated: 2026-08-12 (nineteenth update) — **情报信号裁决器实施
+> (docs v4.1, 五轮对抗性校验 D1-D6/E1-E3/F1-F3/G1-G3 后落地): 前置清理
+> 双层 padding(F3) + 四道规则(R1 溯源/R2 置信度三档/R3 TTL/R4 dissent)
+> + 双路径一致(G3) + weak 契约**。8-11 重放: analyze 纯 LLM 6 信号(无
+> padding), 裁决 passed 2(GLD/NEM) weak 4(ITA/NVDA/USO/XLE), reject 0。
+> 全量 1413 passed / 4 预存失败 / 7 skipped; ruff clean。
+> 前日修复: LLM 路径三断链(信号 0→真实产出)、估值时效分层(issues 7→2)、
+> freshness 发布周期语义(置信度 low→medium)。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1。
 
 ## 2026-08-11 官方统计 freshness 发布周期语义修复（P4-1 家族根因）
@@ -117,6 +119,51 @@ buy 信号直接匹配到持仓, DQ 含"美伊和谈方向相反矛盾"真实分
 
 **遗留**: 信号进入数据链路后仍需 Layer 3 裁决器(溯源校验/置信度门槛/
 时效衰减/冲突聚合)——见讨论方案, 待独立任务实施。
+
+## 2026-08-12 情报信号裁决器实施（docs v4.1）
+
+**Full pytest 1413 passed, 4 failed(预存基线), 7 skipped; ruff/compileall
+clean; 新增 18 个裁决器单测(test_signal_adjudicator.py)。**
+
+**背景**: 8-11 LLM 路径修复后信号层恢复产出, 但产生后直接进消费端,
+无确定性防线。设计经五轮对抗性校验(D1-D6/E1-E3/F1-F3/G1-G3)后定稿
+`docs/tasks/intelligence-signal-adjudicator-design-2026-08-12.md` v4.1。
+
+**实施内容**:
+1. **F3 前置清理**: 去掉 `_pad_category_signals` 调用 — analyzer 层静态
+   9 类 padding 与消费端 match_intelligence 动态 padding 双层冗余;
+   保留消费端(按实际持仓 tag 补位, coverage 已排除其 directional)。
+   analyze() 输出 = 纯 LLM 真实信号, 不再注入规则 hold 占位。
+2. **IntelligenceSignal 5 新字段** (D4): source_article_ids / valid_until /
+   dissent / adjudication / reject_reason + to_dict/from_dict 同步。
+3. **R1 溯源**: `_LLM_PROMPT_SYSTEM` 信号 schema 加 source_article_ids,
+   `_parse_signals` 解析; 仅 llm 信号强制溯源(D5), rule_fallback/padding
+   跳过。8-11 重放: 6 条 LLM 信号全带溯源, reject 0。
+4. **R2 置信度三档**(D2/D6): ≥0.70 passed / 0.55-0.70 weak / <0.55 weak+
+   note。不 hard reject — LLM 输出不稳定, 弱信号降级不丢弃。
+5. **R3 TTL**(D3): 消费时裁决(digest 构建内), urgency→TTL 表
+   (critical 6h/high 12h/medium 24h/low 72h)。
+6. **R4 dissent**: 同 symbol passed 信号反向 → confidence 加权取主流 +
+   结构化 dissent 证据; quant_action._build_drivers 遇 dissent 附加
+   "存在反向证据"。
+7. **G2/G3 批级**: risk_eligible(48h) 批级门 + R3 条级门串联; stale 时
+   确定性面也 batch_stale 降级, 消除"LLM 面空、确定性面照常"不一致。
+8. **E3 weak 契约**: weak 进 top_signals(标 weak:true) 供 LLM 展示,
+   排除出确定性面(scheduled_analysis intel_signals 过滤 weak);
+   agent_task 提示注明 weak 只能作观察线索。
+9. **G1 时间语义**: 确认 `_parse_iso_datetime` 已 astimezone(utc);
+   digest 内 source_at 单一来源统一 UTC。
+
+**验证**: 8-11 重放 — analyze MODE=llm 9 clusters / 6 signals(纯 llm,
+无 padding); 裁决 passed 2(GLD 0.80 buy, NEM 0.70 buy) weak 4
+(ITA/NVDA/USO/XLE 0.65) reject 0; 全量 1413 passed / 4 预存失败 /
+7 skipped; ruff/compileall/diff-check clean。
+
+**测试适配**: test_context_builder top_signals 投影断言(weak 标 True)、
+test_intelligence_trust stale 时 coverage=0(G3 行为)。
+
+**遗留**: 裁决器门槛(0.70/0.55)与 TTL 表需 1-2 周真实报告校准; 方向
+信号稳定性依赖单次 LLM 采样, 多轮采样+合并属后续。
 
 ## 2026-08-06 闭环审计补测试（6 个回归测试）
 
@@ -588,13 +635,15 @@ LLM 成功时报告可用可参考；剩余 P1（情报层 0 方向信号、资�
 
 ## Baseline (as of 2026-08-11, eighteenth update)
 
-- HEAD (code baseline, verified): `b18c9a0` — "fix: 情报 LLM 分析路径三处断链修复(信号层悬空根因)"
-- Branch: `master`, **4 commits ahead of origin/master** (60fad07, eae783e, b08aae7, b18c9a0 — 未 push)
+- HEAD (code baseline, verified): 待 amend (情报信号裁决器实施)
+- Branch: `master`, **5 commits ahead of origin/master** (60fad07, eae783e,
+  b08aae7, 90cb658, 裁决器 — 未 push)
 - Working tree: **clean** (verified — `git status --short`)
-- Full pytest: **1395 passed, 7 skipped, 4 failed** (4 预存失败经 stash
+- Full pytest: **1413 passed, 7 skipped, 4 failed** (4 预存失败经 stash
   验证与本次无关: test_advice_feedback 3 个 + test_engine 1 个)
 - ruff: **clean**; compileall: **clean**; git diff --check: **clean**
-- Tag: `v2.11-official-freshness-fix`(eae783e) + `v2.11-asset-role-tiering`(b08aae7) 已 push; 本修复待打 tag
+- Tag: `v2.11-official-freshness-fix`(eae783e) + `v2.11-asset-role-tiering`(b08aae7) +
+  `v2.11-intel-llm-pipeline-fix`(90cb658) 已 push; 裁决器待打 tag
 - Smoke (2026-08-11): real `us_post_open` regenerated —
   ① 官方统计 freshness: macro/official old→fresh, confidence low→medium,
   "宏观官方统计滞后可信度已自动降级" limitation 消失; market 层 old 保留

@@ -440,10 +440,15 @@ def _build_drivers(*, tech, signal, action, votes, intelligence_signals, positio
     matched = match_intelligence(position, parsed_signals)
     if matched:
         intel_dir = _intel_consensus_direction_from_matched(matched)
-        intel_reasons = [
-            f"{m.matched_symbol}: {m.direction} ({m.rationale[:80]}) [{m.generation_method}]"
-            for m in matched[:2]
-        ]
+        intel_reasons = []
+        for m in matched[:2]:
+            reason = f"{m.matched_symbol}: {m.direction} ({m.rationale[:80]}) [{m.generation_method}]"
+            if m.dissent:
+                evidence = m.dissent.get("evidence") or []
+                if evidence:
+                    ev = evidence[0]
+                    reason += f" [存在反向证据: {ev.get('direction')} conf={ev.get('confidence')}]"
+            intel_reasons.append(reason)
         provenance = {
             "match_count": len(matched),
             "generation_methods": sorted({m.generation_method for m in matched}),
