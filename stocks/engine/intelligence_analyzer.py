@@ -688,43 +688,70 @@ class LLMIntelligenceAnalyzer:
         self.fallback_to_rules = fallback_to_rules
         self._target_signal_count = 8  # minimum signals per run
         self._env_file_path = env_file_path
+        # _api_key_override: 保留字段供未来传参扩展; 当前 __init__ 无 api_key 参数
+        self._api_key_override: Optional[str] = None
         self._base_url_override = base_url
         self._fallback = IntelligenceAnalyzer(lookback_hours=6, holdings=list(self.holdings))
         self._api_key: Optional[str] = None
         self._base_url: Optional[str] = None
 
     def _load_api_config(self) -> tuple[str, str]:
+        """解析 LLM API key 与 base_url。
+
+        8/11 修复: 与 `stocks/engine/__init__.py::_load_openai_config` 完全对齐
+        —— 优先级 传参 > 进程环境变量 > `.secret/*.md` bare-value 文件。
+        此前本方法从 `/opt/data/.env` 读 OPENAI_COMPATIBLE_API_KEY, 该 key
+        (sk-UDyoWeD) 对 deepseek base_url 返回 401, 且 base_url 从不读 env
+        文件 → 每次 LLM 调用失败 → 静默回退规则分析 → 信号层常年 0 信号。
+        """
         if self._api_key and self._base_url:
             return self._api_key, self._base_url
 
-        # Resolve .env file path (parameter > env > default)
+        secret_dir = Path(__file__).resolve().parents[2] / ".secret"
+
+        # 显式传入 secret env 文件时沿用 KEY=VALUE 解析(兼容旧配置)
+        env_key = ""
+        env_url = ""
         if self._env_file_path is not None:
             env_file = Path(self._env_file_path)
-        elif os.environ.get("STOCKS_SECRET_ENV_FILE"):
-            env_file = Path(os.environ["STOCKS_SECRET_ENV_FILE"])
-        else:
-            env_file = Path("/opt/data/.env")
-        api_key = ""
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                line = line.strip()
-                if line.startswith("OPENAI_COMPATIBLE_API_KEY="):
-                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    break
-                if line.startswith("OPENAI_API_KEY=") and "COMPATIBLE" not in line:
-                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
-        api_key = api_key or os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
-        # Resolve base URL (parameter > env > config fallback)
-        base_url = (
-            self._base_url_override
-            or os.environ.get("OPENAI_BASE_URL")
-            or os.environ.get("STOCKS_LLM__FALLBACK_BASE_URL")
-            or ""  # no default: fail closed when unconfigured
-        )
+            if env_file.exists():
+                for line in env_file.read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip("\"'")
+                    if k in ("OPENAI_COMPATIBLE_API_KEY", "OPENAI_API_KEY") and not env_key:
+                        env_key = v
+                    if k in ("OPENAI_BASE_URL", "OPENAI_COMPATIBLE_BASE_URL", "STOCKS_LLM__FALLBACK_BASE_URL") and not env_url:
+                        env_url = v
 
-        self._api_key = api_key
-        self._base_url = base_url
-        return api_key, base_url
+        # key 优先级: 传参 > os.environ > env 文件 > .secret 工作文件
+        api_key = self._api_key_override
+        if not api_key:
+            api_key = os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            api_key = env_key
+        if not api_key:
+            key_file = secret_dir / "openai-key.md"
+            if key_file.exists():
+                api_key = key_file.read_text("utf-8").strip()
+
+        # base_url 优先级: 传参 > os.environ > env 文件 > .secret 工作文件
+        base_url = self._base_url_override
+        if not base_url:
+            base_url = os.environ.get("OPENAI_BASE_URL", "") or os.environ.get("STOCKS_LLM__FALLBACK_BASE_URL", "")
+        if not base_url:
+            base_url = env_url
+        if not base_url:
+            url_file = secret_dir / "openai-base-url.md"
+            if url_file.exists():
+                base_url = url_file.read_text("utf-8").strip()
+
+        self._api_key = api_key or ""
+        self._base_url = base_url or ""
+        return self._api_key, self._base_url
 
     def analyze(self, snapshots: list[IntelligenceSnapshot]) -> AnalysisResult:
         analyzed_at = datetime.now(timezone.utc)
@@ -825,7 +852,9 @@ class LLMIntelligenceAnalyzer:
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
-            "max_tokens": 8000,
+            # 8/11 修复: deepseek-v4-flash 是推理模型, 思考链占用大量 token,
+            # 8000 会被 finish_reason=length 截断导致 content 为空。提到 24000。
+            "max_tokens": 24000,
         }, ensure_ascii=False).encode("utf-8")
 
         req = urllib.request.Request(
@@ -840,7 +869,12 @@ class LLMIntelligenceAnalyzer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             result = json.loads(resp.read().decode("utf-8"))
 
-        content = result["choices"][0]["message"]["content"].strip()
+        # 8/11 修复: 推理模型(content 为空)时回退 reasoning_content,
+        # 与 outlook_synthesizer._parse_response 同源处理。
+        message = result["choices"][0].get("message", {})
+        content = (message.get("content") or "").strip()
+        if not content:
+            content = (message.get("reasoning_content") or "").strip()
         # Extract JSON from markdown code block if present
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()

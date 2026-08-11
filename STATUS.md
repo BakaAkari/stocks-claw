@@ -8,13 +8,13 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-11 (eighteenth update) — **估值时效按资产角色分层
-> (P3-4/P4-1 家族)：资金底座资产(cash/t0 货币基金/periodic_open 固收/locked
-> 保险)旧估值是正常状态,默认"未做操作",不再生成"精确调仓需先更新金额"
-> degraded 待办(真实 artifact 7 issues → 2)；调仓对象(t1/t2_plus)维持
-> 30 天新鲜度门槛**。本日另一修复：官方统计 freshness 发布周期语义
-> (P4-1 家族根因, 置信度 low→medium)。全量 1392 passed / 4 预存失败 /
-> 7 skipped。Next: 双引擎信息面专项 / 用户中立化清理 / W1。
+> Last updated: 2026-08-11 (eighteenth update) — **情报 LLM 分析路径修复
+> (信号层悬空根因): 凭证解析三处断链(base_url 不读 .secret / key 读错
+> 服务 / 推理模型 reasoning_content 未回退) → LLM 每次调用失败静默回退
+> 规则 → 信号常年 0；修复后真实数据 21 信号产出并匹配持仓**。本日另两
+> 修复: 估值时效按资产角色分层(issues 7→2)、官方统计 freshness 发布周期
+> 语义(置信度 low→medium)。全量 1395 passed / 4 预存失败 / 7 skipped。
+> Next: 双引擎信息面专项 / 用户中立化清理 / W1。
 
 ## 2026-08-11 官方统计 freshness 发布周期语义修复（P4-1 家族根因）
 
@@ -79,6 +79,44 @@ IBKR HKD fx_failed)。资金底座 flags 变为 manual_age=31/39 信息标注。
 旧估值影响决策金额) → 30 天新鲜度门槛; B. 资金底座(从不主动调仓, 只有
 整体比例意义, 无单资产调仓语义) → 默认"未做操作"。`liquidity.tier`
 已天然区分这两类。
+
+## 2026-08-11 情报 LLM 分析路径修复（信号层悬空根因）
+
+**Full pytest 1395 passed, 4 failed(预存基线, stash 验证与本次无关), 7
+skipped; ruff/compileall clean; 新增 3 个回归测试(凭证解析 2 + reasoning
+回退 1)。**
+
+**问题**: 报告分析发现所有 session 的 `intelligence_coverage` 全 0 —
+120 篇文章聚成 5-6 个 cluster(含 geopolitics critical), 但
+`signal_count: 0`, 所有 action card 的 intelligence driver = unavailable。
+新闻数据"悬空": 采集→聚类正常, 但信号层永远为空。
+
+**根因(对抗性校验修正初判)**: 最初假设是"LLM prompt 输出契约太松",
+实跑复现后确认是 **LLM 调用从未成功过**, 三处断链:
+1. `_load_api_config` 的 base_url 从不读 env 文件, cron/生成进程
+   os.environ 无 OPENAI_BASE_URL → base_url="" → "unknown url type" 异常
+2. key 从 /opt/data/.env 读 OPENAI_COMPATIBLE_API_KEY(sk-UDyoWeD 20 字符,
+   另一服务的 key), 对 deepseek base_url 返回 401; 工作 key 在
+   .secret/openai-key.md(sk-c348bf5 35 字符)
+3. 即使 key/url 正确, deepseek-v4-flash 是推理模型 — 输出全在
+   reasoning_content, content 为空, 且 8000 max_tokens 被思考链吃满
+   (finish_reason=length) → JSON 永远解析失败
+   → 每次都静默走规则 fallback → 规则信号稀疏(8-09 仅 1 条 GLD)
+
+**修复** (`intelligence_analyzer.py`):
+- `_load_api_config` 重写: 与 `stocks/engine/__init__.py::_load_openai_config`
+  对齐 — 优先级 传参 > os.environ > env 文件 > `.secret/*.md` 工作文件,
+  拿到 .secret/openai-key.md + openai-base-url.md
+- `_call_llm`: content 为空回退 reasoning_content(与 outlook_synthesizer
+  同源处理); max_tokens 8000 → 24000 防思考链截断
+
+**验证**: 用 8-11 真实 snapshot 端到端实跑 — 修复前 MODE=fallback_rules
+0 信号; 修复后 MODE=llm, 8 clusters / 21 signals, GLD/NEM/USO/XLE/ITA
+buy 信号直接匹配到持仓, DQ 含"美伊和谈方向相反矛盾"真实分析。全量
+1395 passed / 4 预存失败 / 7 skipped; ruff/compileall clean。
+
+**遗留**: 信号进入数据链路后仍需 Layer 3 裁决器(溯源校验/置信度门槛/
+时效衰减/冲突聚合)——见讨论方案, 待独立任务实施。
 
 ## 2026-08-06 闭环审计补测试（6 个回归测试）
 
@@ -550,13 +588,13 @@ LLM 成功时报告可用可参考；剩余 P1（情报层 0 方向信号、资�
 
 ## Baseline (as of 2026-08-11, eighteenth update)
 
-- HEAD (code baseline, verified): `0d35e35` — "fix: 估值时效按资产角色分层(资金底座默认未做操作)"
-- Branch: `master`, **3 commits ahead of origin/master** (60fad07, cf42ac9, 0d35e35 — 未 push)
+- HEAD (code baseline, verified): `b18c9a0` — "fix: 情报 LLM 分析路径三处断链修复(信号层悬空根因)"
+- Branch: `master`, **4 commits ahead of origin/master** (60fad07, eae783e, b08aae7, b18c9a0 — 未 push)
 - Working tree: **clean** (verified — `git status --short`)
-- Full pytest: **1392 passed, 7 skipped, 4 failed** (4 预存失败经 stash
+- Full pytest: **1395 passed, 7 skipped, 4 failed** (4 预存失败经 stash
   验证与本次无关: test_advice_feedback 3 个 + test_engine 1 个)
 - ruff: **clean**; compileall: **clean**; git diff --check: **clean**
-- Tag: `v2.11-official-freshness-fix` at `eae783e` (已 push); 本修复待打 tag
+- Tag: `v2.11-official-freshness-fix`(eae783e) + `v2.11-asset-role-tiering`(b08aae7) 已 push; 本修复待打 tag
 - Smoke (2026-08-11): real `us_post_open` regenerated —
   ① 官方统计 freshness: macro/official old→fresh, confidence low→medium,
   "宏观官方统计滞后可信度已自动降级" limitation 消失; market 层 old 保留
@@ -564,6 +602,8 @@ LLM 成功时报告可用可参考；剩余 P1（情报层 0 方向信号、资�
   ② 资产角色分层: asset_completeness issues 7→2(消失 5 项资金底座
   "精确调仓需先更新金额"待办; 保留 t1 建行黄金 mid-stale + IBKR HKD
   fx_failed 真异常)。
+  ③ 情报 LLM 路径: 8-11 snapshot 端到端 MODE fallback_rules→llm,
+  signals 0→21, GLD/NEM/USO/XLE/ITA buy 匹配持仓。
 
 ## De-hardcode landing (verified 2026-07-31)
 

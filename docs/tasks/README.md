@@ -27,12 +27,12 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 push "明日计划"节）。全量 1380 passed / 7 skipped / 1 deselected；
 ruff clean。下一步按需求分析 §7：双引擎信息面专项 / 用户中立化清理 / W1。
 
-**2026-08-11 估值时效按资产角色分层**（P3-4/P4-1 家族，`context_builder.py`）：
-资金底座资产（cash/t0 货币基金/periodic_open 固收/locked 保险）旧估值是
-正常状态，默认"未做操作"，不再生成 degraded 待办（真实 artifact 7 issues
-→ 2）；调仓对象（t1/t2_plus）维持 30 天新鲜度门槛。同日另一修复：官方
-统计 freshness 发布周期语义（置信度 low → medium）。全量 1392 passed /
-4 预存失败 / 7 skipped。详见 `STATUS.md` §2026-08-11。
+**2026-08-11 情报 LLM 分析路径修复**（信号层悬空根因，`intelligence_analyzer.py`）：
+凭证解析三处断链（base_url 不读 .secret / key 读错服务 / 推理模型
+reasoning_content 未回退）→ LLM 调用从未成功 → 信号常年 0。修复后真实
+数据 21 信号产出并匹配持仓。同日另两修复：估值时效按资产角色分层
+（issues 7→2）、官方统计 freshness 发布周期语义（置信度 low → medium）。
+全量 1395 passed / 4 预存失败 / 7 skipped。详见 `STATUS.md` §2026-08-11。
 
 ## Backlog (do not start before the current task closes)
 
