@@ -727,27 +727,31 @@ class LLMIntelligenceAnalyzer:
                     if k in ("OPENAI_BASE_URL", "OPENAI_COMPATIBLE_BASE_URL", "STOCKS_LLM__FALLBACK_BASE_URL") and not env_url:
                         env_url = v
 
-        # key 优先级: 传参 > os.environ > env 文件 > .secret 工作文件
-        api_key = self._api_key_override
-        if not api_key:
-            api_key = os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            api_key = env_key
+        # 优先级(2026-08-12 修正): .secret 工作文件 > env 文件 > os.environ。
+        # 关键: os.environ 的 OPENAI_COMPATIBLE_API_KEY 可能是其他服务
+        # (Lyric/Syl profile) 的残留 key, 对 deepseek base_url 401 —
+        # 之前让 os.environ 优先导致生产路径永远 401 → 回退规则 → 0 信号。
+        # .secret/openai-key.md 是 stocks/engine/__init__.py 消费的权威
+        # 工作 key, 必须最优先。
+        api_key = ""
         if not api_key:
             key_file = secret_dir / "openai-key.md"
             if key_file.exists():
                 api_key = key_file.read_text("utf-8").strip()
+        if not api_key:
+            api_key = env_key
+        if not api_key:
+            api_key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("OPENAI_COMPATIBLE_API_KEY", "")
 
-        # base_url 优先级: 传参 > os.environ > env 文件 > .secret 工作文件
-        base_url = self._base_url_override
-        if not base_url:
-            base_url = os.environ.get("OPENAI_BASE_URL", "") or os.environ.get("STOCKS_LLM__FALLBACK_BASE_URL", "")
-        if not base_url:
-            base_url = env_url
+        base_url = ""
         if not base_url:
             url_file = secret_dir / "openai-base-url.md"
             if url_file.exists():
                 base_url = url_file.read_text("utf-8").strip()
+        if not base_url:
+            base_url = env_url
+        if not base_url:
+            base_url = os.environ.get("OPENAI_BASE_URL", "") or os.environ.get("STOCKS_LLM__FALLBACK_BASE_URL", "")
 
         self._api_key = api_key or ""
         self._base_url = base_url or ""

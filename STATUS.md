@@ -9,13 +9,15 @@ none of them record phase/completion status — that lives here only.
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
 > Last updated: 2026-08-12 (nineteenth update) — **情报信号裁决器实施
-> (docs v4.1, 五轮对抗性校验 D1-D6/E1-E3/F1-F3/G1-G3 后落地): 前置清理
-> 双层 padding(F3) + 四道规则(R1 溯源/R2 置信度三档/R3 TTL/R4 dissent)
-> + 双路径一致(G3) + weak 契约**。8-11 重放: analyze 纯 LLM 6 信号(无
-> padding), 裁决 passed 2(GLD/NEM) weak 4(ITA/NVDA/USO/XLE), reject 0。
+> (docs v4.1) + 生产路径第二个隐藏断链修复**。裁决器: 前置清理双层
+> padding(F3) + 四道规则(R1 溯源/R2 置信度三档/R3 TTL/R4 dissent) +
+> 双路径一致(G3) + weak 契约。断链: engine.yaml analysis_model=kimi-k2.6
+> 与 deepseek key 不匹配 → 生产路径每次 400/401 回退规则 → 0 信号;
+> _load_api_config 优先级改 .secret > os.environ(其他服务残留 key 401)。
+> 修复后生产 watch 真实产出 GLD buy 0.75 + BTCUSDT sell 0.68(带溯源),
+> 裁决 passed 1/weak 1, us_post_open 报告端到端投递, 风险升级对冲/高。
 > 全量 1413 passed / 4 预存失败 / 7 skipped; ruff clean。
-> 前日修复: LLM 路径三断链(信号 0→真实产出)、估值时效分层(issues 7→2)、
-> freshness 发布周期语义(置信度 low→medium)。
+> 前日: LLM 路径三断链、估值时效分层(issues 7→2)、freshness 语义。
 > Next: 双引擎信息面专项 / 用户中立化清理 / W1。
 
 ## 2026-08-11 官方统计 freshness 发布周期语义修复（P4-1 家族根因）
@@ -164,6 +166,25 @@ test_intelligence_trust stale 时 coverage=0(G3 行为)。
 
 **遗留**: 裁决器门槛(0.70/0.55)与 TTL 表需 1-2 周真实报告校准; 方向
 信号稳定性依赖单次 LLM 采样, 多轮采样+合并属后续。
+
+### 同日追加: 生产路径第二个隐藏断链修复（trigger 验证时发现）
+
+裁决器实现后触发 us_post_open 验证, 发现生产路径仍 0 信号 — 虽然
+8-11 已修 `_load_api_config` key/url 解析, 但对抗性追查暴露三层:
+1. **engine.yaml** llm.analysis_model=kimi-k2.6, 与 .secret deepseek key
+   不匹配 → 端点 400 → 每次失败回退规则。engine.yaml 是生产权威配置
+   (覆盖代码默认值), 且注释已写明"强制走 .secret 避免 env 覆盖" —
+   修复时只对齐了代码默认值, 没对齐 yaml。
+2. **_load_api_config 优先级**: os.environ > .secret — os.environ 的
+   OPENAI_COMPATIBLE_API_KEY 是其他服务(Lyric/Syl)残留 key, 对 deepseek
+   401。改为 .secret 工作文件最优先。
+3. config_loader.py 代码默认 analysis_model 同步改 deepseek-v4-flash。
+
+验证: 生产路径 watch run 真正产出信号(GLD buy 0.75 + BTCUSDT sell
+0.68, 带 source_article_ids); 裁决 passed 1(GLD)/weak 1(BTCUSDT);
+us_post_open 报告端到端投递, 风险升级"对冲/高风险"(关键集群事件 1
+关键级别 + 地缘危机 — LLM 情报真实参与风险判定)。全量 1413 passed /
+4 预存失败 / 7 skipped; ruff clean。
 
 ## 2026-08-06 闭环审计补测试（6 个回归测试）
 
@@ -635,9 +656,9 @@ LLM 成功时报告可用可参考；剩余 P1（情报层 0 方向信号、资�
 
 ## Baseline (as of 2026-08-11, eighteenth update)
 
-- HEAD (code baseline, verified): 待 amend (情报信号裁决器实施)
-- Branch: `master`, **5 commits ahead of origin/master** (60fad07, eae783e,
-  b08aae7, 90cb658, 裁决器 — 未 push)
+- HEAD (code baseline, verified): 85f02dc — "fix: LLM 分析生产路径第二个隐藏断链"
+- Branch: `master`, **6 commits ahead of origin/master** (60fad07, eae783e,
+  b08aae7, 90cb658, d6d7c18, 85f02dc — 未 push)
 - Working tree: **clean** (verified — `git status --short`)
 - Full pytest: **1413 passed, 7 skipped, 4 failed** (4 预存失败经 stash
   验证与本次无关: test_advice_feedback 3 个 + test_engine 1 个)

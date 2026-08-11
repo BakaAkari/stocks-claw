@@ -126,7 +126,7 @@ DEFAULT_ENGINE_CONFIG = {
     },
     "llm": {
         "analysis_enabled": False,
-        "analysis_model": "kimi-k2.6",
+        "analysis_model": "deepseek-v4-flash",
         "api_key_env": "OPENAI_API_KEY",
         "base_url_env": "OPENAI_BASE_URL",
         "fallback_base_url": "",  # 留空=未配置；必须经 base_url_env / .secret 提供，禁止默认内网地址

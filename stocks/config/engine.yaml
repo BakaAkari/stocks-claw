@@ -89,7 +89,10 @@ news:
 llm:
   # LLM 深度分析模块（投资建议生成）— 建议由 Agent 主脑处理，此处可禁用
   analysis_enabled: false
-  analysis_model: kimi-k2.6
+  # 2026-08-12: kimi-k2.6 → deepseek-v4-flash — 与 .secret/openai-key.md
+  # (deepseek) 匹配。此前 kimi-k2.6 对 deepseek 端点 400/401 → LLM 分析
+  # 每次失败回退规则 → 信号层 0 信号(与 8-11 三断链同族)。
+  analysis_model: deepseek-v4-flash
   # API Key 从环境变量读取，也可通过 .secret/openai-key.md
   # 注意: 容器运行环境注入的 OPENAI_API_KEY 是旧端点凭据，不可用；
   # 强制走 .secret 文件(openai-key.md / openai-base-url.md)避免 env 覆盖。
