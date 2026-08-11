@@ -311,16 +311,37 @@ class StocksEngine:
 
         # R5-2 修正: 从 scheduled_sessions.json 加载各市场节假日,传入
         # ContextBuilder 供 freshness 交易日历判定(周末/节假日跨日不误伤)。
-        _market_holidays: dict[str, set[str]] = {}
+        # 市场交易日历: 从 scheduled_sessions.json 归一化到 instrument.market
+        # (config 用 cn/us/intelligence, instrument 用 a/us/crypto; cn==a 同市场)
+        _MARKET_INST_MAP = {"cn": "a", "a": "a", "us": "us", "crypto": "crypto"}
+        _market_holidays: dict[str, frozenset[str]] = {}
+        _market_close: dict[str, str] = {}
+        _market_tz: dict[str, str] = {}
         try:
             _sched = load_scheduled_config(self.config_dir)
             for _mname, _mcfg in (_sched.get("markets") or {}).items():
-                if isinstance(_mcfg, dict):
-                    _market_holidays[str(_mname)] = {
-                        str(h) for h in (_mcfg.get("holidays") or [])
-                    }
+                if not isinstance(_mcfg, dict):
+                    continue
+                _inst = _MARKET_INST_MAP.get(str(_mname))
+                if not _inst:
+                    continue
+                _hol = {str(h) for h in (_mcfg.get("holidays") or [])}
+                if _hol or _inst in _market_holidays:
+                    _market_holidays[_inst] = frozenset(_hol)
+                # 收盘时刻: 取 {market}_after_close session 的 time (如 15:00/16:00)
+                for _scfg in (_mcfg.get("sessions") or []):
+                    if isinstance(_scfg, dict) and str(_scfg.get("id") or "").endswith("_after_close"):
+                        if str(_scfg.get("time")) not in (None, ""):
+                            _market_close[_inst] = str(_scfg["time"])
+                # 交易所时区
+                _tz = str(_mcfg.get("exchange_timezone") or "")
+                if _tz:
+                    _market_tz[_inst] = _tz
         except Exception:
             pass  # 无交易日历时 freshness 退化为纯日历日差(保守)
+        self._market_holidays = _market_holidays
+        self._market_close = _market_close
+        self._market_tz = _market_tz
 
         self.context_builder = ContextBuilder(
             fund_nav_provider=self.fund_nav_provider,
@@ -1199,6 +1220,9 @@ class StocksEngine:
                     self._history_provider,
                     warm_targets,
                     lookback_days=60,
+                    market_holidays=self._market_holidays,
+                    market_close=self._market_close,
+                    market_tz=self._market_tz,
                 )
                 self._history_backfill_report = report
                 # 只要有任一标的真正成功回填或缓存已足,视为进程内不再重试;
@@ -1247,6 +1271,9 @@ class StocksEngine:
                         self._history_provider,
                         scan_instruments,
                         lookback_days=60,
+                        market_holidays=self._market_holidays,
+                        market_close=self._market_close,
+                        market_tz=self._market_tz,
                     )
                     refreshed = [
                         r for r in report if r["status"] in ("ok", "skipped_cached")

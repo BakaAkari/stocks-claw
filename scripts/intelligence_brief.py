@@ -47,6 +47,22 @@ def _load_api_key() -> str:
     return os.environ.get("OPENAI_COMPATIBLE_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
 
 
+def _load_base_url() -> str:
+    """从 .env 加载 LLM base_url（与 _load_api_key 对称，兼容环境变量）。"""
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("OPENAI_COMPATIBLE_BASE_URL="):
+                v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if v:
+                    return v
+            if line.startswith("OPENAI_BASE_URL="):
+                v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if v:
+                    return v
+    return os.environ.get("OPENAI_COMPATIBLE_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or ""
+
+
 def _clean_title(title: str) -> str:
     title = title.replace("&nbsp;&nbsp;", " — ")
     title = title.replace("&amp;", "&")
@@ -233,7 +249,7 @@ def _llm_summary(brief: dict) -> str:
         print("[intelligence_brief] _llm_summary: API key not found in .env or env vars", file=_sys.stderr)
         return ""
 
-    base_url = os.environ.get("OPENAI_BASE_URL", "")
+    base_url = _load_base_url()
 
     parts = []
     if brief["macro"]:
@@ -302,7 +318,7 @@ def _translate_texts(texts):
     if not api_key:
         return texts
 
-    base_url = os.environ.get("OPENAI_BASE_URL", "")
+    base_url = _load_base_url()
     indexed = "\n".join(f"[{i}] {t}" for i, t in enumerate(texts))
 
     system = (

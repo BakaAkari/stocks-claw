@@ -21,6 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -569,6 +570,38 @@ _MARKET_TO_HISTORY_SOURCE: dict[str, str] = {
 def _resolve_history_source(market: str) -> str:
     return _MARKET_TO_HISTORY_SOURCE.get(market, "unknown")
 
+def _last_closed_trading_day(
+    market: str,
+    now_local,
+    holidays: frozenset,
+    close_hm: str | None,
+) -> object:
+    """返回该市场"最近一个已收盘交易日"的 date。
+
+    market: instrument.market ('a'/'us'/'crypto')
+    now_local: 该市场交易所本地时区的当前 datetime
+    holidays: frozenset['YYYY-MM-DD']（该市场）
+    close_hm: 'HH:MM' 收盘时刻；crypto 或 None 时视为 7x24 无休(直接 today)
+
+    语义: 当前本地时刻已过收盘点 → 今天就是一个已收盘交易日；
+          否则回溯到上一个 工作日 且 非节假日 的日期。
+    用于替代"today - stale_days"日历日窗口——日历日遇周末/节假日会误判
+    新鲜度(8/6 停更案例: 缓存停在 stale_cutoff 当日, `<` 比较当成新鲜),
+    交易日历判定对任意周末/节假日/停更组合都自洽。
+    """
+    if market == "crypto" or not close_hm:
+        return now_local.date()
+    try:
+        close_h, close_m = (int(x) for x in close_hm.split(":"))
+    except (ValueError, TypeError):
+        return now_local.date()
+    closed_today = (now_local.hour, now_local.minute) >= (close_h, close_m)
+    day = now_local.date() if closed_today else now_local.date() - timedelta(days=1)
+    while day.weekday() >= 5 or day.isoformat() in holidays:
+        day -= timedelta(days=1)
+    return day
+
+
 
 async def warm_history_cache(
     cache: HistoryCache,
@@ -576,6 +609,9 @@ async def warm_history_cache(
     instruments: list[Instrument],
     lookback_days: int = 60,
     stale_days: int = 4,
+    market_holidays: dict | None = None,
+    market_close: dict | None = None,
+    market_tz: dict | None = None,
 ) -> list[dict]:
     """为给定标的列表 warm HistoryCache,返回结构化回填报告(D0-3)。
 
@@ -599,6 +635,7 @@ async def warm_history_cache(
 
     today = datetime.now(timezone.utc).date()
     stale_cutoff = today - timedelta(days=max(1, int(stale_days)))
+    tz_by_market = dict(market_tz or {})
 
     for inst in instruments:
         key = f"{inst.market}:{inst.code}"
@@ -621,7 +658,24 @@ async def warm_history_cache(
                 if not df.empty and "timestamp" in df.columns:
                     last_ts = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").dropna()
                     if not last_ts.empty:
-                        cache_stale = last_ts.iloc[-1].date() < stale_cutoff
+                        last_date = last_ts.iloc[-1].date()
+                        close_hm = (market_close or {}).get(inst.market)
+                        if close_hm is not None:
+                            # 交易日历判据: 缓存缺了"最近已收盘交易日"即过时
+                            tz_name = tz_by_market.get(inst.market)
+                            try:
+                                now_local = datetime.now(ZoneInfo(tz_name)) if tz_name else datetime.now(timezone.utc)
+                            except Exception:
+                                now_local = datetime.now(timezone.utc)
+                            horizon = _last_closed_trading_day(
+                                inst.market,
+                                now_local,
+                                frozenset((market_holidays or {}).get(inst.market, set())),
+                                close_hm,
+                            )
+                            cache_stale = last_date < horizon
+                        else:
+                            cache_stale = last_date < stale_cutoff
             except Exception:
                 cache_stale = True
             if not cache_stale:
@@ -636,7 +690,7 @@ async def warm_history_cache(
             degradation_result = "stale_cache"
             provider_errors["cache"] = (
                 f"cache last bar {df['timestamp'].iloc[-1] if not df.empty else '?'} "
-                f"older than cutoff {stale_cutoff}"
+                f"older than freshness cutoff"
             )
 
         # 拉取历史数据(带一次退避重试)
