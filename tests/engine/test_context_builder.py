@@ -971,7 +971,12 @@ class TestRawPromptStructure:
         assert by_id["broker_000001"]["pnl_pct"] == 31.25
         assert by_id["fund_nasdaq"]["advice_granularity"] == "sector"
         assert by_id["fund_nasdaq"]["proxy"]["instrument_key"] == "us:QQQ"
+        # 8/11 修复: 调仓对象(t2_plus 场外基金)维持 30 天新鲜度门槛
         assert "stale_manual" in by_id["fund_nasdaq"]["flags"]
+        # 8/11 修复: 资金底座(cash/t0/periodic_open/locked)旧估值是正常
+        # 状态, 默认"未做操作"——不再打 stale_manual degraded 待办。
+        assert "stale_manual" not in by_id["bank_cash"]["flags"]
+        assert any(f.startswith("manual_age=") for f in by_id["bank_cash"]["flags"])
         assert context.exposure_summary["exposures"]["nasdaq100"]["value_cny"] == 2000.0
         assert context.liquidity_summary["buckets"]["cash_or_t0"]["value_cny"] == 500.0
         assert context.liquidity_summary["buckets"]["t1_t2"]["value_cny"] == 1050.0

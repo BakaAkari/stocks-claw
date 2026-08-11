@@ -8,12 +8,13 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-11 (eighteenth update) — **官方统计 freshness
-> 发布周期语义修复(P4-1 家族根因)：宏观官方统计(CPI/失业率/利率)不再被
-> 交易日语义误判为 old，研判置信度恢复 medium；补 1 个回归测试,全量
-> 1392 passed / 4 预存失败 / 7 skipped**。此前：(seventeenth)闭环审计
-> 补测试 6 个；(sixteenth)全量健康检查 C1-WP2 修正/死代码清理/契约更新。
-> Next: 双引擎信息面专项 / 用户中立化清理 / W1。
+> Last updated: 2026-08-11 (eighteenth update) — **估值时效按资产角色分层
+> (P3-4/P4-1 家族)：资金底座资产(cash/t0 货币基金/periodic_open 固收/locked
+> 保险)旧估值是正常状态,默认"未做操作",不再生成"精确调仓需先更新金额"
+> degraded 待办(真实 artifact 7 issues → 2)；调仓对象(t1/t2_plus)维持
+> 30 天新鲜度门槛**。本日另一修复：官方统计 freshness 发布周期语义
+> (P4-1 家族根因, 置信度 low→medium)。全量 1392 passed / 4 预存失败 /
+> 7 skipped。Next: 双引擎信息面专项 / 用户中立化清理 / W1。
 
 ## 2026-08-11 官方统计 freshness 发布周期语义修复（P4-1 家族根因）
 
@@ -49,6 +50,35 @@ market 层保持 old(原油 8-03 是 FRED 源滞后, 独立展示不参与研判
 **关联**: P4-1b 测试(`test_macro_quality_as_of_matches_age_source`)本身
 测通用 `_freshness_from_datetime`(未改), 保留; `test_context_builder.py`
 的 `test_macro_quality_uses_oldest_field_as_of` 断言更新为 fresh 语义。
+
+## 2026-08-11 估值时效按资产角色分层（资金底座默认"未做操作"）
+
+**Full pytest 1392 passed, 4 failed(预存基线, stash 验证与本次无关), 7
+skipped; ruff/compileall clean; 更新 1 个回归测试断言。**
+
+**问题**: 报告把余额宝/建行活期/建信现金添利/嘉鑫稳利/香港中银人寿全部
+标记为"手工估值超过 30 天, 精确调仓需先更新金额"(degraded) — 但这些资产
+是资金底座(cash/t0 货币基金/periodic_open 固收/locked 保险), 长期持有、
+从不主动调仓, 旧估值是正常状态。系统拿"单资产调仓"的新鲜度标准(30 天)
+卡"资金底座"资产, 制造不存在的待办。
+
+**修复** (`context_builder.py`):
+- 新增 `_is_cash_base_tier()`: 按资产角色分层 — cash/t0/periodic_open/
+  locked = 资金底座(默认"未做操作", 不按 30 天门槛判 degraded);
+  t1/t2_plus = 调仓对象(维持原有新鲜度门槛, 旧估值影响决策金额)。
+- 资金底座旧估值改为 `manual_age=N` 纯信息标注(供展示/近似值判断),
+  不再触发 stale_manual/degraded issues。
+- 保留两类真异常: 调仓对象(t1 建行黄金 mid-stale, 因是减仓标的)和
+  fx_failed(IBKR HKD 系统功能缺失)仍 degraded。
+
+**验证**: 真实 `us_post_open` artifact — asset_completeness issues
+7 → 2(消失的是 5 项资金底座"需先更新金额"; 保留建行黄金 mid-stale +
+IBKR HKD fx_failed)。资金底座 flags 变为 manual_age=31/39 信息标注。
+
+**设计依据**: 资产角色分两类 — A. 调仓对象(会触发 reduce/add/stop_loss,
+旧估值影响决策金额) → 30 天新鲜度门槛; B. 资金底座(从不主动调仓, 只有
+整体比例意义, 无单资产调仓语义) → 默认"未做操作"。`liquidity.tier`
+已天然区分这两类。
 
 ## 2026-08-06 闭环审计补测试（6 个回归测试）
 
@@ -520,17 +550,20 @@ LLM 成功时报告可用可参考；剩余 P1（情报层 0 方向信号、资�
 
 ## Baseline (as of 2026-08-11, eighteenth update)
 
-- HEAD (code baseline, verified): `cf42ac9` — "fix: 官方统计 freshness 发布周期语义(P4-1 家族根因)"
-- Branch: `master`, **2 commits ahead of origin/master** (60fad07, cf42ac9 — 未 push)
+- HEAD (code baseline, verified): `0d35e35` — "fix: 估值时效按资产角色分层(资金底座默认未做操作)"
+- Branch: `master`, **3 commits ahead of origin/master** (60fad07, cf42ac9, 0d35e35 — 未 push)
 - Working tree: **clean** (verified — `git status --short`)
 - Full pytest: **1392 passed, 7 skipped, 4 failed** (4 预存失败经 stash
   验证与本次无关: test_advice_feedback 3 个 + test_engine 1 个)
 - ruff: **clean**; compileall: **clean**; git diff --check: **clean**
-- Tag: `v2.11-official-freshness-fix` at `cf42ac9` (annotated)
-- Smoke (2026-08-11): real `us_post_open` regenerated — macro.freshness
-  old→fresh, official.freshness old→fresh, near/medium confidence
-  low→medium, "宏观官方统计滞后可信度已自动降级" limitation 消失;
-  market 层 old 保留(原油 8-03 FRED 源滞后, 独立展示)。
+- Tag: `v2.11-official-freshness-fix` at `eae783e` (已 push); 本修复待打 tag
+- Smoke (2026-08-11): real `us_post_open` regenerated —
+  ① 官方统计 freshness: macro/official old→fresh, confidence low→medium,
+  "宏观官方统计滞后可信度已自动降级" limitation 消失; market 层 old 保留
+  (原油 8-03 FRED 源滞后, 独立展示)。
+  ② 资产角色分层: asset_completeness issues 7→2(消失 5 项资金底座
+  "精确调仓需先更新金额"待办; 保留 t1 建行黄金 mid-stale + IBKR HKD
+  fx_failed 真异常)。
 
 ## De-hardcode landing (verified 2026-07-31)
 

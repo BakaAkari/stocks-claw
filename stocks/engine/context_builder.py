@@ -619,7 +619,17 @@ class ContextBuilder:
             if market_value is None:
                 flags.append("missing_manual_amount")
             valuation_age_days = self._valuation_age_days(position.valuation_input.as_of, generated_at)
-            if valuation_age_days is not None and valuation_age_days > 30:
+            # 8/11 修复: 估值时效按"资产角色"分层, 而非一刀切天数。
+            # 资金底座资产(cash/t0 货币基金、periodic_open 固收、locked 保险)
+            # 是长期持有、从不主动调仓的对象——旧估值是正常状态, 默认
+            # "未做操作"(no_action), 不生成 stale_manual/degraded 待办。
+            # 只有调仓对象(t1 股票/ETF、t2_plus 场外基金)才需要 30 天新鲜度
+            # 门槛(它们会触发 reduce/add/stop_loss, 旧估值影响决策金额)。
+            if self._is_cash_base_tier(position.liquidity.tier):
+                # 资金底座: 估值旧不视为缺陷, 但保留天数供展示/近似值标注。
+                if valuation_age_days is not None:
+                    flags.append(f"manual_age={valuation_age_days}")
+            elif valuation_age_days is not None and valuation_age_days > 30:
                 flags.append("stale_manual")
             elif valuation_age_days is not None and valuation_age_days >= 7:
                 # P3-4: 7-30 天估值(支付宝基金/银行理财周频净值)与当日行情
@@ -1899,6 +1909,23 @@ class ContextBuilder:
         else:
             freshness = "old"
         return {"freshness": freshness, "age_seconds": age_seconds}
+
+    @staticmethod
+    def _is_cash_base_tier(tier: Optional[str]) -> bool:
+        """资金底座资产判定（8/11 修复）。
+
+        资金底座 = 长期持有、从不主动调仓的资产角色:
+        - cash / t0: 现金与货币基金(资金桶底座, 无单资产调仓语义)
+        - periodic_open: 固收/银行理财(仅在开放期操作, 平时只做账面参考)
+        - locked: 保险/锁定资产(不可交易, 估值只是账面参考)
+
+        这些资产的旧估值是正常状态, 不按调仓对象的新鲜度标准(30 天)
+        判定为 degraded。调仓对象(t1 股票/ETF、t2_plus 场外基金)维持
+        原有新鲜度门槛。
+        """
+        return str(tier or "").strip().lower() in {
+            "cash", "t0", "periodic_open", "locked",
+        }
 
     async def _enrich_with_indicators(
         self, quotes: dict[str, list[Quote]]
