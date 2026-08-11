@@ -1,6 +1,6 @@
 # 情报信号裁决器（Intelligence Signal Adjudicator）设计 — v4
 
-> 状态: PLANNED — v4 (2026-08-12, 四轮对抗性校验后完整重写)
+> 状态: PLANNED — v4.1 (2026-08-12, 五轮对抗性校验; v4 完整重写 + v4.1 时间语义增补)
 > 前置: v2.11-intel-llm-pipeline-fix (信号已能产生, MODE=llm)
 > 相关: `intelligence_analyzer.py` / `news_intelligence_store.py` /
 > `quant_action.py::_build_drivers` / `risk_warning.py` / `context_builder.py`
@@ -36,6 +36,31 @@ padding 泛滥**三件事叠加，构成当前信号层的核心问题：
   不同（LLM 判断 vs 规则占位），规则不能一刀切。
 - **消费时裁决** — 裁决在 digest 构建时（consumption-time）执行，不在
   生成时；TTL 用实时 `now` 判断。
+
+## 2.5 第五轮校验：时间语义前置条件（G1-G3）
+
+第五轮（2026-08-12）发现 **R3 的时间前提不成立**，必须先修时间语义，
+裁决器才能上线：
+
+| # | 发现 | 证据 | 影响 |
+|---|---|---|---|
+| G1 | brief 时区混用 — source_generated_at 带 +08:00 而 brief_generated_at
+  是 UTC(无后缀)，同文件两种格式 | source=2026-08-12T07:55:00+08:00
+  (真实UTC=08-11T23:55Z), brief=2026-08-11T17:00:46(无后缀) | 解析器
+  按 naive datetime 处理时 age 偏差 8h — R3 critical TTL(6h) 被吞没 |
+| G2 | risk_eligible(48h) vs R3 TTL(6-72h) 层级未定义 | _compute_brief_health
+  max_age_hours=48 | 47h 旧信号: 整批可用但单条过期 — v4 未定义边界行为 |
+| G3 | risk_eligible=false 时双路径不一致已存在 | top_signals 清空(2111)
+  vs parsed_signals 照常(2062) | 加裁决器不处理此边界则"过期信号仍驱动
+  action card"原样保留 |
+
+**v4.1 增补**:
+- G1: 信号/brief 时间戳统一 UTC — 比较前 astimezone(utc)。验收解析
+  误差 < 1 分钟。
+- G2: **两层独立串联** — risk_eligible 批级门(48h) + R3 条级门(6-72h);
+  裁决输出标 stale_batch / expired 两种过期原因。
+- G3: risk_eligible=false 时确定性面也标 batch_stale, 消费端降级 —
+  消除"LLM 空、确定性照常"的不一致; 是否禁用由 quant_action 决策。
 
 ## 3. 前置清理：padding 双层冗余（F3）
 
@@ -238,7 +263,7 @@ reject_reason: str = ""                    # 丢弃原因(用于 data_quality_no
 - 信号层覆盖真实化后，评估是否需要"LLM 多轮采样 + 合并去重"提升
   方向信号稳定性（D2 的根本缓解——当前裁决器接受单次输出波动）。
 
-## 12. 四轮对抗性校验完整记录（整合）
+## 12. 五轮对抗性校验完整记录（整合）
 
 ### 第一轮（v1 → v2）: D1-D6
 
@@ -267,7 +292,40 @@ reject_reason: str = ""                    # 丢弃原因(用于 data_quality_no
 | F2 | 真实 LLM 信号基线 3-4 条, 不是 21 | 四次采样 3/3/3/3 条稳定 | 验收基线改为真实信号数 |
 | F3 | 双层 padding 冗余(analyzer + match_intelligence) | 代码 979 + 1294 | 去 analyzer 层, 保留消费端动态 padding |
 
-### 实施前检查清单（四轮整合）
+### 第四轮（v3 → v4）: F1-F3
+
+| # | 发现 | 证据 | v4 处理 |
+|---|---|---|---|
+| F1 | padding 占 80% 信号, 裁决统计被污染 | 21 条 = 3-4 真实 + 17 padding | 前置清理去 analyzer padding; 分来源统计 |
+| F2 | 真实 LLM 信号基线 3-4 条, 不是 21 | 四次采样 3/3/3/3 条稳定 | 验收基线改为真实信号数 |
+| F3 | 双层 padding 冗余(analyzer + match_intelligence) | 代码 979 + 1294 | 去 analyzer 层, 保留消费端动态 padding |
+
+### 第五轮（v4 → v4.1）: G1-G3
+
+| # | 发现 | 证据 | v4.1 处理 |
+|---|---|---|---|
+| G1 | brief 时区混用 — R3 TTL 计算可能偏差 8 小时 | source=+08:00 vs brief=UTC 同文件 | 统一 UTC 时间语义, 比较前 astimezone(utc) |
+| G2 | risk_eligible(48h) vs R3 TTL(6-72h) 层级未定义 | _compute_brief_health max_age_hours=48 | 两层独立串联: 批级 stale_batch + 条级 expired |
+| G3 | risk_eligible=false 时双路径不一致已存在 | top_signals 清空(2111) vs parsed 照常(2062) | 裁决器输出 batch_stale, 消费端按批级降级 |
+
+### 实施前检查清单（五轮整合）
+- [ ] **时间语义修复(G1)**: 信号/brief 时间戳统一 UTC, 比较前
+      astimezone(utc); 验收解析误差 < 1 分钟
+- [ ] **批级/条级两层(TTL 语义)**(G2): risk_eligible 批级(48h) 与 R3
+      条级(6-72h) 串联; 裁决输出标 stale_batch / expired
+- [ ] **risk_eligible=false 时双路径一致**(G3): 确定性面也标
+      batch_stale, 消费端降级; 消除"LLM 空、确定性照常"
+- [ ] 前置清理: 去 `_pad_category_signals` 调用; 8-11 重放 signals 无
+      padding 混入; 消费端 padding 行为不变; 全量测试同步
+- [ ] `_LLM_PROMPT_SYSTEM` 信号 schema 加 `source_article_ids`（已实验
+      验证服从）
+- [ ] `_parse_signals` 解析 `source_article_ids`
+- [ ] `IntelligenceSignal` 5 新字段 + from_dict/to_dict 同步
+- [ ] `signal_adjudicator.py`: R1 分来源 / R2 三档不 hard reject /
+      R3 TTL consumption-time / R4 dissent
+- [ ] digest 构建内(2058-2062 之间)插裁决, raw+parsed 双路径一致
+- [ ] weak 标 `"weak": true` 进 top_signals, 不进 parsed_signals
+- [ ] 分来源裁决统计(by_generation), 无 padding 假基线
 
 - [ ] 前置清理: 去 `_pad_category_signals` 调用; 8-11 重放 signals 无
       padding 混入; 消费端 padding 行为不变; 全量测试同步
