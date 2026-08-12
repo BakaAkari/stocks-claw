@@ -126,10 +126,40 @@ _RESEARCH_CONFLICT_HINTS = {
 
 
 def _research_sizing_hint(signal: str, risk_level: str, suspend: bool) -> str:
+    """Produce the research-candidate sizing/stop guidance line.
+
+    Non-suspend: return the signal's concrete sizing + stop-loss guidance as-is
+    (optionally annotated with the risk level).
+
+    Suspend (suspend_accumulation=True, i.e. hedge/reduce global risk state):
+    - Pausing accumulation forbids *building* a position, so accumulation
+      phrasing (布局/试仓/轮入/建仓/分批) must not coexist with the pause text.
+    - The stop-loss line is risk PROTECTION for an existing position and is NOT
+      contradicted by pausing accumulation, so it is preserved verbatim.
+    - Non-accumulation signals (wait_for_pullback, reduce_risk, ...) carry no
+      build phrasing and keep their full observation guidance plus a pause note.
+    """
     base = _RESEARCH_SIZING_HINTS.get(str(signal or ""), "仅供参考，不形成交易动作")
     if suspend:
-        base += "；当前风险状态暂停加仓，风险解除后再评估"
-    elif risk_level in ("hedge", "reduce"):
+        stop = ""
+        head = base
+        if "止损：" in base:
+            head, _, stop = base.partition("止损：")
+            stop = "止损：" + stop
+        head = head.strip("；，。 ")
+        # Positive accumulation phrase only (布局/试仓/轮入/分批/轻仓).
+        # wait_for_pullback/reduce_risk/... carry no build directive ("不建仓",
+        # "不追高" are negations of an observe stance, not accumulation), so
+        # they keep their full guidance instead of being flattened to the pause
+        # text.
+        _POSITIVE_BUILD = ("布局", "试仓", "轮入", "分批", "轻仓")
+        if head and any(k in head for k in _POSITIVE_BUILD):
+            build = "暂停加仓，风险解除后再评估"
+        else:
+            build = head
+        parts = [p for p in (build, stop) if p]
+        return "；".join(parts) if parts else "暂停加仓，风险解除后再评估"
+    if risk_level in ("hedge", "reduce"):
         base += f"；当前风险状态为{risk_level}，优先观察风险触发条件"
     return base
 

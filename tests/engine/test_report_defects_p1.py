@@ -113,18 +113,43 @@ def test_research_candidate_stale_market_downgraded():
 
 
 def test_research_candidate_suspend_strips_accumulation_sizing():
+    """suspend 态:真加仓信号(accumulate)必须剥离建仓短语,但保留止损线。
+    止损是已有仓位的风险保护,与"暂停加仓"不冲突——这是对旧版硬编码
+    通用句(整句抹掉止损指导)的回归保护。"""
     signals = {"items": [
-        {"symbol": "us:NVDA", "name": "英伟达", "signal": "wait_for_pullback",
-         "action_hint": "等回踩", "reasons": ["现价高于 MA20"], "_score": 0.5},
+        {"symbol": "a:512400", "name": "有色ETF", "signal": "accumulate_candidate",
+         "action_hint": "趋势与动能配合", "reasons": ["现价高于 MA20"], "_score": 0.5},
     ]}
     risk = {"level": "reduce", "suspend_accumulation": True}
-    dq = {"quotes": {"by_market": {"us": {"freshness": "fresh"}}}}
+    dq = {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}
     cands = _build_research_candidates(signals, risk, None, data_quality=dq)
     assert len(cands) == 1
     cand = cands[0]
     assert cand.get("quote_stale") is None
+    # 建仓短语被剥离
     assert "分批布局" not in cand["sizing_hint"]
-    assert "仅观察" in cand["sizing_hint"]
+    assert "暂停加仓" in cand["sizing_hint"]
+    # 止损线被保留(不再被通用句吞掉)
+    assert "止损" in cand["sizing_hint"]
+
+
+def test_research_candidate_wait_for_pullback_keeps_observation_guidance_when_suspended():
+    """wait_for_pullback 是"等回踩再进"的观望信号,不是加仓信号。
+    suspend 态下必须保留其完整观察指导,而不是被误套成"暂停加仓"——
+    回归保护(旧版把它误划入加仓信号集合)。"""
+    signals = {"items": [
+        {"symbol": "a:512010", "name": "医药ETF", "signal": "wait_for_pullback",
+         "action_hint": "趋势完好但短线过热", "reasons": ["现价高于 MA20"], "_score": 0.4},
+    ]}
+    risk = {"level": "hedge", "suspend_accumulation": True}
+    dq = {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}
+    cands = _build_research_candidates(signals, risk, None, data_quality=dq)
+    assert len(cands) == 1
+    cand = cands[0]
+    assert cand.get("quote_stale") is None
+    # 观察指导保留
+    assert "等回踩" in cand["sizing_hint"] or "回踩" in cand["sizing_hint"]
+    assert "不追高" in cand["sizing_hint"]
 
 
 def test_research_candidate_fresh_market_keeps_guidance_when_not_suspended():

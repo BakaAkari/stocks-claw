@@ -2029,13 +2029,6 @@ def _research_market(symbol: str) -> str:
     return market.strip().lower()
 
 
-# P1-15: research-only signals that imply building/accumulating a position.
-# When suspend_accumulation is active these must lose their concrete sizing
-# guidance ("暂停加仓" + "分批布局 2-4%" would contradict each other).
-_ACCUMULATION_SIGNALS = frozenset(
-    {"accumulate_candidate", "rotation_candidate", "left_bottom_candidate", "wait_for_pullback"}
-)
-
 # P2-1: technical-indicator freshness tolerance (calendar days). The
 # research candidates quote prices/MA/RSI computed from the HistoryCache
 # daily bars, whose as_of is the last bar's timestamp -- independent of the
@@ -2161,15 +2154,13 @@ def _build_research_candidates(
             else:
                 candidate["reasons"] = ["技术指标数据停留较早，暂不评估技术面，待数据更新后复核"]
                 candidate["sizing_hint"] = "技术指标数据过时，不提供仓位/止损建议，待数据更新后评估"
-        elif suspend and signal in _ACCUMULATION_SIGNALS:
-            # P1-15: "暂停加仓" must not coexist with a concrete
-            # accumulation sizing hint. Keep the candidate visible for
-            # tracking but strip the actionable guidance.
-            candidate["sizing_hint"] = (
-                "当前风险状态暂停加仓，仅观察；风险解除后再评估仓位与止损"
-            )
         else:
             # Inject human-readable sizing + stop-loss + risk conflict guidance.
+            # In a suspend state _research_sizing_hint strips accumulation
+            # phrasing (布局/试仓/轮入/建仓/分批) but PRESERVES the stop-loss
+            # line — pausing new entries must not erase existing-position risk
+            # protection. (This replaces a hardcoded generic sentence that
+            # wiped the stop-loss guidance for every candidate.)
             candidate["sizing_hint"] = _research_sizing_hint(signal, risk_level, suspend)
         candidates.append(candidate)
 

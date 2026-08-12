@@ -330,10 +330,16 @@ def _conflict_tilt(conflict: dict, item: dict) -> tuple[str, str]:
 
     if signal in {"reduce", "take_profit"} and ratio is not None and min_ is not None:
         if ratio < min_:
+            # "标醒目":distinguish 获利兑现(take_profit) from 风控离场(reduce).
+            # Both are held from executing by the under-weight constraint, but
+            # they have different intent — Kari must see whether he is being
+            # stopped from banking a profit vs cutting a broken trend, so the
+            # constraint reads as a trade-off the user weighs, not a hidden rule.
+            motive = "获利兑现被组合低配约束暂缓——可权衡是否仍坚持落袋" if signal == "take_profit" else "风控减仓被组合低配约束暂缓——可权衡是否仍执行止损纪律"
             return (
                 "constraint",
                 f"权益（或该大类）当前占比 {ratio*100:.1f}% 已低于下限 {min_*100:.0f}%，"
-                "再减仓会加深低配偏离，倾向维持现状、等回补后再说",
+                f"再减仓会加深低配偏离，倾向维持现状、等回补后再说（{motive}）",
             )
 
     if signal in {"buy", "accumulate", "add"} and ratio is not None and max_ is not None:
