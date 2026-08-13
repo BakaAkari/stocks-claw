@@ -592,6 +592,44 @@ def _risk_trigger_text(condition: str, value: str) -> str:
     return f"{cond}：{val}" if val else cond
 
 
+
+
+def _release_condition_text(risk_state: dict) -> str:
+    """把"等待风险状态满足解除条件"的泛文本补成具体、可预期的解除说明。
+
+    基于 risk_state 已有的 expires_at(状态重估时间) 与 triggers(触发集群),
+    明确告知用户:当前是被什么触发、系统何时会重估、解除的前提是什么。
+    绝不编造系统没有的条件——只用 expires_at 与 trigger 名这些真实字段。
+    """
+    explicit = str((risk_state or {}).get("release_condition") or "").strip()
+    if explicit:
+        return explicit
+    parts: list[str] = []
+    # 直接翻译 risk_state.triggers(结构化、可靠),得到"关键集群事件：1 关键级别"
+    # 这类中文,与"组合与检查点"风险段同源。避免透传英文枚举(Critical cluster),
+    # 也不用 _risk_reasons 在 evidence 缺失时的模糊回退。
+    triggers = (risk_state or {}).get("triggers") or []
+    trig_zh = [
+        _risk_trigger_text(str(t.get("name") or ""), str(t.get("value") or ""))
+        for t in triggers
+        if isinstance(t, dict) and t.get("name")
+    ]
+    if trig_zh:
+        parts.append("当前由" + "、".join(dict.fromkeys(trig_zh)) + "触发")
+    exp = (risk_state or {}).get("expires_at") or ""
+    if exp:
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(str(exp).replace("Z", "+00:00"))
+            local = dt.astimezone()
+            parts.append(f"预计 {local.strftime('%m-%d %H:%M')} 重估风险状态")
+        except (ValueError, TypeError):
+            parts.append(f"预计 {exp} 重估风险状态")
+    if parts:
+        return "；".join(parts) + "；解除需上述风险集群降级后再评估加仓"
+    return "等待风险状态满足解除条件"
+
+
 def _risk_reasons(risk_state: dict) -> list[str]:
     """Build human-readable risk reasons from actual risk triggers.
 
@@ -1237,6 +1275,16 @@ def build_user_view(
             "reasons": [str(r) for r in (candidate.get("reasons") or []) if r][:2],
             "score": score,
             "sizing_hint": str(candidate.get("sizing_hint") or ""),
+            # P0(左侧): 透传左侧位置指标(布林位置/RSI/量比),渲染层据此呈现位置卡。
+            "price_position": candidate.get("price_position"),
+            "rsi_14": candidate.get("rsi_14"),
+            "volume_ratio": candidate.get("volume_ratio"),
+            # P1(左侧): 技术位供分批档位表(MA20/布林下轨/MA60)。
+            "ma_20": candidate.get("ma_20"),
+            "ma_60": candidate.get("ma_60"),
+            "bollinger_lower": candidate.get("bollinger_lower"),
+            # P1(左侧): 现价,用于过滤"价格下方的支撑位"(价格上方是阻力,不是左侧接的档位)。
+            "price": candidate.get("price"),
         })
         if len(research) >= 8:
             break
@@ -1301,7 +1349,7 @@ def build_user_view(
             "window_level_change": _window_level_change_text(window_delta),
             "suspend_accumulation": bool((risk_state or {}).get("suspend_accumulation")),
             "reasons": _risk_reasons(risk_state or {}),
-            "release_condition": str((risk_state or {}).get("release_condition") or "等待风险状态满足解除条件"),
+            "release_condition": _release_condition_text(risk_state or {}),
         },
         # C1-WP3: 确定性明日计划(非 LLM 创作,输入可追溯)
         # P5-1: by_market 传入与指令卡同 gate,杜绝"明日计划让执行/指令卡让等待"

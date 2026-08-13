@@ -8,17 +8,71 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-12 (nineteenth update) — **情报信号裁决器实施
-> (docs v4.1) + 生产路径第二个隐藏断链修复**。裁决器: 前置清理双层
-> padding(F3) + 四道规则(R1 溯源/R2 置信度三档/R3 TTL/R4 dissent) +
-> 双路径一致(G3) + weak 契约。断链: engine.yaml analysis_model=kimi-k2.6
-> 与 deepseek key 不匹配 → 生产路径每次 400/401 回退规则 → 0 信号;
-> _load_api_config 优先级改 .secret > os.environ(其他服务残留 key 401)。
-> 修复后生产 watch 真实产出 GLD buy 0.75 + BTCUSDT sell 0.68(带溯源),
-> 裁决 passed 1/weak 1, us_post_open 报告端到端投递, 风险升级对冲/高。
-> 全量 1413 passed / 4 预存失败 / 7 skipped; ruff clean。
-> 前日: LLM 路径三断链、估值时效分层(issues 7→2)、freshness 语义。
-> Next: 双引擎信息面专项 / 用户中立化清理 / W1。
+> Last updated: 2026-08-13 (twentieth update) — **左侧交易辅助系统改造**。
+> 按 Kari 目标(改成左侧交易者可用)落地一整轮: 左侧位置卡(布林位置/RSI/量比)
+> + 分批支撑位(MA20/布林下轨/MA60, 只显示价格下方支撑) + 产业情报板块
+> (信息整理) + 引擎信号追踪(engine_action 接入 signal_tracker 反馈闭环)
+> + 产业主题扩展(LLM prompt 主题 7→17, signal symbol 优先持仓, 修
+> affected_symbols 退化为 GLD/USO) + 映射表修正(theme_to_exposure 补 9 tag,
+> intel_signal_proxy 修过时代码) + LLM 研判修复(主模型 pro→flash,
+> temperature 1.0→0.2, max_tokens 16384→65536, 修推理模型 reasoning 占满
+> token 导致 content 空) + lookback 30→60(ma_60 可算)。
+> 全量 1414 passed / 4 预存失败 / 7 skipped; compileall/diff-check clean;
+> ruff 本环境未装(不可用)。
+> HEAD 96c2f5a, tag v2.12-left-side-advisor, 工作树 clean。
+> Next: 危机暂停加仓 vs 左侧逆向(危机时允许左侧超跌标的试仓) / 分批档位
+> 表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面专项。
+
+
+## 2026-08-13 左侧交易辅助系统改造（v2.12）
+
+**Full pytest 1414 passed, 4 failed(预存基线: test_advice_feedback 3 个 +
+test_engine 1 个, 与本次无关), 7 skipped; compileall/diff-check clean。**
+
+**目标**: 把系统从"右侧信号引擎"改成"左侧交易者可用"的辅助系统。Kari
+明确: 左侧 = 接受短期浮亏换未来收益, 但"超跌 + 未来上涨可能性"才建议操作。
+
+**改动**（跨 engine/presentation/渲染/LLM 四层）:
+
+1. **左侧位置卡** (`action_signals`/`presentation`/`build_push_payload`):
+   提前布局候选带出布林位置(0下轨~100上轨)/RSI/量比, 让用户一眼判断
+   "跌到哪/超卖没/缩量没"。数据用技术指标已有字段, 零新数据源。
+
+2. **分批支撑位**: MA20/布林下轨/MA60 三档技术位, 只显示价格下方支撑
+   (价格上方是阻力非支撑), 从近到远排序。不替用户定资金比例。
+
+3. **产业情报板块**: 报告新增独立信息整理区(cluster theme 中文/摘要/
+   紧急度), 放在走势研判之后、可执行动作之前(信息→动作阅读顺序)。
+
+4. **引擎信号追踪**: `_track_engine_action_signals` 把 engine_action 信号
+   接入 signal_tracker(此前只追踪 BTC fallback 信号, 与股票系统脱节)。
+
+5. **产业主题扩展**: LLM prompt 主题 7→17(加 semiconductor/consumer/
+   healthcare/defense/utilities 等产业细分), signal symbol 从硬编码 7 美股
+   改为"优先从用户持仓选"(修 affected_symbols 退化为 GLD/USO 的根因)。
+   同步 theme_keywords/theme_markets/theme_to_exposure 三张表。
+
+6. **映射表修正**: theme_to_exposure 补 9 个缺失 exposure_tags(chemical/
+   military/consumer/liquor/commodity/us_equity/qdii 等), intel_signal_proxy
+   修过时代码(alipay_gf_nasdaq/alipay_info/ccb_gold → QQQ/512480/518880)。
+
+7. **LLM 研判修复** (`openai_client`/`advisory_synthesizer`/config):
+   - 主模型 deepseek-v4-pro → deepseek-v4-flash(更快, 适配大 prompt)。
+   - temperature 1.0 → 0.2(推理模型高温度输出不稳定)。
+   - max_tokens 16384 → 65536(关键: 推理模型 reasoning 占满 16384 token
+     导致最终答案 content 空 → json.loads 失败 → 研判降级)。
+   - prompt 加规则: 自由文本用 display_name, 不用内部 position_id(修
+     ccb_gold 泄漏到报告触发 internal-token 检查)。
+
+8. **lookback 30→60** (`context_builder`): ma_60 长期趋势线可算。
+
+9. **signal_quality_report.py**: 信号质量报告脚本(消费 signals+settlements,
+   按 source/方向/窗口统计胜率, 诚实标注样本不足)。
+
+**验证**: 真实 scheduled-run 端到端 —— 研判恢复完整("沪深300涨0.49%、
+科创50涨1.85%..."), 产业情报新主题生效(宏观数据/科技), 情报信号产出
+A股代码 a:518880 + 持仓代码 us:NVDA/us:XLE/us:ITA(不再是 GLD/USO),
+无内部代码泄漏。
 
 ## 2026-08-11 官方统计 freshness 发布周期语义修复（P4-1 家族根因）
 

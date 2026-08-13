@@ -456,8 +456,11 @@ class ContextBuilder:
         frames = {}
         for key, instrument in universe.items():
             try:
+                # P1(左侧): lookback 30→60,让 ma_60(长期趋势支撑线)可计算。
+                # 左侧交易者判断"长期趋势破没破"依赖 MA60;30 根只够算 ma_20。
+                # 数据源支持 60/500(advice_review 已用 500),无额外成本。
                 frames[key] = await self.history_cache.get_history(
-                    instrument, lookback_bars=30
+                    instrument, lookback_bars=60
                 )
             except Exception as e:
                 logger = get_logger("context_builder")

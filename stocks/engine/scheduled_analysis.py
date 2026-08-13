@@ -1372,6 +1372,12 @@ def build_scheduled_run(
         blocked_symbols=_blocked_symbols(context.get("position_valuations") or []),
         data_quality=context_quality,
     )
+    # P0-1: 引擎动作信号接入 signal_tracker(反馈闭环),失败不阻断主流程。
+    # repo_root 由 helper 内部 resolve,避免调用处作用域依赖。
+    _track_engine_action_signals(
+        research_candidates,
+        generated_at_iso,
+    )
     data_boundaries = {
         "data_quality": context_quality,
         "source_context": {
@@ -2063,6 +2069,83 @@ def _indicator_as_of_stale(as_of: object) -> bool:
     return bool(ts < cutoff)
 
 
+
+
+def _track_engine_action_signals(
+    candidates: list[dict],
+    generated_at: str,
+    repo_root: Path | None = None,
+) -> None:
+    """P0-1: 把引擎 research 候选(accumulate/left_bottom/wait_for_pullback 等)
+    记录到 SignalTracker,让 A股/美股动作信号开始积累结算胜率。
+
+    之前 tracker 只记录 intelligence 的 LLM/fallback 信号(主要是 BTC),
+    引擎给用户的股票动作信号从不进 tracker —— 反馈闭环断在源头。
+    这里补齐: 每个候选 = 一个方向性信号(direction 由信号类型映射),
+    以 symbol 的现价作为 generation_price。
+
+    失败只告警不阻断主流程(与 intelligence 追踪同风格)。
+    """
+    if not candidates:
+        return
+    from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
+    try:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        try:
+            now = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            pass
+        if repo_root is None:
+            repo_root = Path(__file__).resolve().parents[2]
+        tracker = SignalTracker(repo_root / ".local" / "signal_tracker")
+        # 方向映射: accumulate/rotation/left_bottom/wait_for_pullback = 观察买入意图;
+        # reduce_risk = 减仓意图; 其余跳过或标记 hold。
+        direction_map = {
+            "accumulate_candidate": "buy",
+            "rotation_candidate": "buy",
+            "left_bottom_candidate": "buy",
+            "wait_for_pullback": "buy",
+            "reduce_risk": "sell",
+            "avoid_catching_falling_knife": "hold",
+        }
+        tracked: list[TrackedSignal] = []
+        for c in candidates:
+            signal = str(c.get("signal") or "")
+            direction = direction_map.get(signal)
+            if direction is None or direction == "hold":
+                continue
+            symbol = str(c.get("symbol") or "")
+            if not symbol:
+                continue
+            price = c.get("price")
+            if price is None:
+                continue
+            tracked.append(TrackedSignal(
+                signal_id=(
+                    f"{now.strftime('%Y%m%dT%H%M%S')}_{symbol.replace(':', '_')}_{direction}"
+                ),
+                generated_at=now,
+                symbol=symbol,
+                direction=direction,
+                rationale=str(c.get("action_hint") or "")[:200],
+                generation_price=float(price),
+                confidence=float(c.get("score") or 0) if c.get("score") is not None else None,
+                source="engine_action",
+                urgency="medium",
+                regime={"vix": None, "mode": "engine"},
+            ))
+        if tracked:
+            tracker.record_batch(tracked)
+            get_logger("scheduled_analysis").info(
+                f"tracked {len(tracked)} engine action signals"
+            )
+    except Exception as exc:  # noqa: BLE001 - 追踪失败不影响主流程
+        get_logger("scheduled_analysis").warning(
+            f"track_engine_action_signals failed: {exc}"
+        )
+
+
 def _build_research_candidates(
     action_signals: dict,
     risk_state: dict,
@@ -2124,6 +2207,16 @@ def _build_research_candidates(
             "priority": "research_only",
             "score": item.get("_score"),
             "rank": item.get("rank"),
+            # P0-1: generation_price 供 signal_tracker 记录(反馈闭环)。
+            "price": item.get("price"),
+            # P0(左侧): 左侧位置指标(布林位置/RSI/量比),渲染层据此呈现位置卡。
+            "price_position": item.get("price_position"),
+            "rsi_14": item.get("rsi_14"),
+            "volume_ratio": item.get("volume_ratio"),
+            # P1(左侧): 技术位供分批档位表(MA20/布林下轨/MA60)。
+            "ma_20": item.get("ma_20"),
+            "ma_60": item.get("ma_60"),
+            "bollinger_lower": item.get("bollinger_lower"),
             # P2-1: technical-indicator as_of from the HistoryCache daily
             # bars (last bar timestamp), distinct from the realtime quotes
             # layer. Used by the freshness gate below; also surfaced so the

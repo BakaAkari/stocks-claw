@@ -49,6 +49,11 @@ def test_entrypoint_renders_and_persists_sanitized_payload(tmp_path):
         "window_delta",
         # R5-5: 报告生成时间(渲染标题标注,用户判断报告时效)。
         "generated_at",
+        # 缺口3: 引擎已算出的持仓信号参考(止损位/建议比例),渲染层据此把
+        # 被压制冲突的决策价位/比例带给用户。
+        "signal_reference_by_position",
+        # P0: 产业情报(整理后的 cluster,渲染"产业情报"板块)。
+        "intelligence_brief",
     }
 
 

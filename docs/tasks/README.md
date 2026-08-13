@@ -35,6 +35,15 @@ reject 0。全量 1413 passed / 4 预存失败 / 7 skipped。前日：LLM 路径
 修复（信号 0→真实产出）、估值时效分层（issues 7→2）、freshness 语义
 （置信度 low→medium）。详见 `STATUS.md` §2026-08-12。
 
+**2026-08-13 左侧交易辅助系统改造**（v2.12，`96c2f5a`）：按 Kari 目标
+把系统改成左侧交易者可用。左侧位置卡（布林位置/RSI/量比）+ 分批支撑位
+（MA20/布林下轨/MA60）+ 产业情报板块（信息整理）+ 引擎信号追踪（反馈
+闭环）+ 产业主题扩展（LLM prompt 7→17，signal symbol 优先持仓，修
+affected_symbols 退化）+ 映射表修正（theme_to_exposure/intel_signal_proxy）
++ LLM 研判修复（flash/temperature 0.2/max_tokens 65536）+ lookback 30→60
++ signal_quality_report 脚本。全量 1414 passed / 4 预存失败 / 7 skipped。
+详见 `STATUS.md` §2026-08-13。
+
 ## Backlog (do not start before the current task closes)
 
 - **M1** — Report structure upgrade *(done 2026-07-31, `382207b`)*.

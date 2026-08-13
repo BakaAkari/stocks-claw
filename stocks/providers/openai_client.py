@@ -101,8 +101,15 @@ class LLMClient:
                 {"role": "system", "content": "You are a helpful financial analyst. Respond in JSON only, no markdown fences."},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 1.0,
-            "max_tokens": 16384,
+            # 2026-08-13: 1.0 -> 0.2。deepseek-v4 系列是推理模型,temperature=1.0
+            # 下输出不稳定(时而 content=JSON 成功,时而 content 空/reasoning_content
+            # 为推理过程非 JSON,导致 advisory 的 json.loads 失败)。0.2 与情报分析
+            # (analysis_temperature 0.1) 对齐,让研判 JSON 输出稳定。
+            "temperature": 0.2,
+            # 2026-08-13: 16384 -> 65536。deepseek-v4-flash 是推理模型,大 prompt
+            # (137KB snapshot) 下 reasoning 消耗 ~16K token 占满 max_tokens,导致
+            # 最终答案 content 为空 → json.loads 失败。留足空间给 reasoning+content。
+            "max_tokens": 65536,
         }
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(

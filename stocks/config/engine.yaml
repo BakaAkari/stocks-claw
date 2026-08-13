@@ -101,10 +101,13 @@ llm:
   # 中长期研判综合器
   outlook:
     enabled: true
-    model: deepseek-v4-pro
+    # 2026-08-13: 主模型 deepseek-v4-pro -> deepseek-v4-flash。
+    # 319KB 大 snapshot prompt 下 v4-pro 响应 >300s 超时(advisory synthesis
+    # 连续失败);flash 更快,适配大 prompt 研判。flash 失败时兜底 v4-pro。
+    model: deepseek-v4-flash
     # 主模型失败（超时/传输/解析错误）时按顺序尝试的备用模型，
     # 与主模型共用同一端点和密钥
-    fallback_models: ["deepseek-v4-flash"]
+    fallback_models: ["deepseek-v4-pro"]
     # 每个模型的额外重试次数（0=不重复，1=失败后重试一次）
     retry_attempts: 1
     # 凭据改走 .secret/openai-key.md 与 openai-base-url.md(容器 env 不注入,

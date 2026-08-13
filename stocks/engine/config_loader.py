@@ -132,7 +132,9 @@ DEFAULT_ENGINE_CONFIG = {
         "fallback_base_url": "",  # 留空=未配置；必须经 base_url_env / .secret 提供，禁止默认内网地址
         "outlook": {
             "enabled": True,
-            "model": "deepseek-v4-pro",
+            # 2026-08-13: 主模型 -> deepseek-v4-flash(大 snapshot prompt 下 v4-pro
+            # 超时,flash 更快)。engine.yaml 可覆盖。
+            "model": "deepseek-v4-flash",
             "fallback_models": [],  # 主模型失败时按顺序尝试的备用模型（共用端点/密钥）
             "retry_attempts": 0,    # 每个模型的额外重试次数
             "api_key_env": "OPENAI_COMPATIBLE_API_KEY",
@@ -223,42 +225,57 @@ DEFAULT_ENGINE_CONFIG = {
         # and intelligence_analyzer to associate external signals (e.g. QQQ, GLD)
         # with the user's actual positions. Add/modify mappings here without code changes.
         "intel_signal_proxy": {
+            # 2026-08-13 修正: 旧表含过时代码(alipay_gf_nasdaq/alipay_info/
+            # ccb_gold/a_510300/a_512890),与当前持仓 instrument_key(us:QQQ/
+            # a:510300 等)不匹配,proxy 匹配永远失败。value 为持仓 symbol
+            # (不含 market: 前缀),匹配 inst_key.endswith(":symbol")。
             "USO": "XLE",
             "GLD": "NEM",
             "NEM": "NEM",
             "GOLD": "NEM",
-            "QQQ": "alipay_gf_nasdaq",
+            "QQQ": "QQQ",
             "SPY": "SPY",
             "ITA": "ITA",
             "NVDA": "NVDA",
             "XLE": "XLE",
-            "KWEB": "alipay_info",
-            "FXI": "a_510300",
-            "ASHR": "a_510300",
+            "KWEB": "512480",
+            "FXI": "510300",
+            "ASHR": "510300",
             "GDX": "NEM",
             "SLV": "NEM",
-            "GC=F": "ccb_gold",
-            "XAU": "ccb_gold",
-            "GC": "ccb_gold",
+            "GC=F": "518880",
+            "XAU": "518880",
+            "GC": "518880",
             "518880": "518880",
             "TLT": "SGOV",
             "SHY": "SGOV",
             "SGOV": "SGOV",
-            "IWM": "a_512890",
-            "BTCUSDT": "alipay_info",
+            "IWM": "512890",
+            # BTCUSDT 删除: Kari 无加密货币持仓,旧映射 alipay_info 无意义。
         },
         # Event theme → exposure bucket tags mapping. Used by finalize_decision to map
         # macro events to portfolio exposure buckets.
         "theme_to_exposure": {
-            "geopolitics": ["energy", "defense", "gold", "oil_gas", "aerospace", "mining"],
-            "energy": ["energy", "oil_gas"],
-            "technology": ["tech", "semiconductor", "ai", "star_board", "nasdaq100"],
-            "earnings": ["tech", "ai", "semiconductor", "nasdaq100"],
-            "monetary_policy": ["gold", "fixed_income", "us_rates", "cash_like", "money_market", "bank_wmp", "credit_plus"],
-            "crypto": ["crypto"],
+            # 2026-08-13 扩展: 与 LLM prompt 的 17 主题对齐,加入产业细分主题
+            # (semiconductor/new_energy/consumer/defense/utilities 等),让"消费白酒"
+            # "半导体库存""军工订单"等产业细分情报能关联到对应持仓(旧表只有
+            # 宏观大类,粒度太粗)。标签均来自持仓 classification.exposure_tags。
+            "geopolitics": ["energy", "defense", "gold", "oil_gas", "aerospace", "mining", "military", "commodity"],
+            "monetary_policy": ["gold", "fixed_income", "us_rates", "cash_like", "money_market", "bank_wmp", "credit_plus", "us_equity", "qdii", "commodity"],
+            "macro_data": ["a_share", "broad_index", "blue_chip", "us_equity", "qdii"],
+            "china_policy": ["a_share", "broad_index", "blue_chip", "dividend_low_vol", "high_dividend", "active_equity", "star_board", "utilities", "power", "consumer", "liquor", "chemical", "cyclical", "military"],
+            "earnings": ["tech", "ai", "semiconductor", "nasdaq100", "us_equity", "qdii", "consumer_tech", "consumer", "liquor"],
+            "energy": ["energy", "oil_gas", "chemical", "cyclical"],
+            "technology": ["tech", "ai", "semiconductor", "nasdaq100", "us_equity", "qdii", "consumer_tech", "star_board"],
+            "semiconductor": ["semiconductor", "ai", "tech", "star_board"],
+            "new_energy": ["energy", "power", "utilities", "chemical", "oil_gas"],
+            "consumer": ["consumer", "liquor", "consumer_tech"],
             "healthcare": ["healthcare", "bio"],
             "financials": ["financials"],
-            "china_policy": ["a_share", "broad_index", "blue_chip", "dividend_low_vol", "high_dividend", "active_equity", "star_board", "utilities", "power"],
+            "real_estate": ["real_estate"],
+            "defense": ["defense", "aerospace", "military"],
+            "utilities": ["utilities", "power"],
+            "crypto": ["crypto"],
             "general": [],
         },
         # Exposure bucket tag → constraint category mapping. Kept here as a single
@@ -281,10 +298,20 @@ DEFAULT_ENGINE_CONFIG = {
         "theme_markets": {
             "geopolitics": ["equity", "oil", "gold", "dxy"],
             "monetary_policy": ["equity", "bond", "dxy", "gold"],
-            "earnings": ["equity", "tech"],
-            "technology": ["equity", "tech"],
-            "energy": ["oil", "equity", "energy"],
             "macro_data": ["equity", "bond", "dxy", "gold"],
+            "china_policy": ["equity", "china_assets"],
+            "earnings": ["equity", "tech"],
+            "energy": ["oil", "equity", "energy"],
+            "technology": ["equity", "tech"],
+            "semiconductor": ["equity", "tech"],
+            "new_energy": ["equity", "energy", "tech"],
+            "consumer": ["equity"],
+            "healthcare": ["equity"],
+            "financials": ["equity"],
+            "real_estate": ["equity", "bond"],
+            "defense": ["equity", "gold"],
+            "utilities": ["equity", "energy"],
+            "crypto": ["crypto", "equity"],
         },
         # Theme → exposure bucket tags for category padding in LLM analyzer.
         "category_to_positions": {
@@ -337,12 +364,22 @@ DEFAULT_ENGINE_CONFIG = {
         ],
         # Theme keywords for the keyword-rules analyzer (English, lower-case matching).
         "theme_keywords": {
-            "geopolitics": ["war", "conflict", "tension", "sanction", "iran", "israel", "ukraine", "russia", "china", "taiwan", "military", "strike", "drone", "attack"],
+            "geopolitics": ["war", "conflict", "tension", "sanction", "iran", "israel", "ukraine", "russia", "taiwan", "military", "strike", "drone", "attack"],
             "monetary_policy": ["fed", "federal reserve", "interest rate", "rate hike", "rate cut", "powell", "fomc", "central bank", " ECB ", "BOJ", "PBOC", "yield"],
-            "earnings": ["earnings", "revenue", "profit", "guidance", "beat", "miss", "EPS", "quarterly", "reported", "results"],
-            "technology": ["AI", "artificial intelligence", "chip", "semiconductor", "nvidia", "tesla", "big tech", "magnificent seven", "tech stock", "cloud"],
-            "energy": ["oil", "crude", "energy", "OPEC", "gas", "petroleum", "renewable", "solar"],
             "macro_data": ["CPI", "inflation", "PPI", "GDP", "nonfarm", "unemployment", "jobs report", "retail sales", "PMI", "industrial production"],
+            "china_policy": ["PBOC", "NDRC", "CSRC", "state council", "stimulus", "subsidy", "regulatory", "china policy", "reform", "dual circulation"],
+            "earnings": ["earnings", "revenue", "profit", "guidance", "beat", "miss", "EPS", "quarterly", "reported", "results"],
+            "energy": ["oil", "crude", "energy", "OPEC", "gas", "petroleum", "natural gas"],
+            "technology": ["AI", "artificial intelligence", "big tech", "magnificent seven", "tech stock", "cloud", "data center", "software"],
+            "semiconductor": ["semiconductor", "chip", "foundry", "wafer", "tsmc", "nvidia", "gpu", "memory", "dram", "hbm", "export control"],
+            "new_energy": ["solar", "photovoltaic", "ev", "electric vehicle", "lithium", "battery", "energy storage", "wind power", "tesla", "renewable"],
+            "consumer": ["consumer", "retail", "luxury", "baijiu", "liquor", "moutai", "e-commerce", "food", "beverage", "consumption"],
+            "healthcare": ["pharma", "biotech", "drug", "medicine", "FDA", "clinical", "vaccine", "hospital", "medical device"],
+            "financials": ["bank", "broker", "insurance", "financial", "NPL", "interest margin", "securities", "asset management"],
+            "real_estate": ["real estate", "property", "housing", "mortgage", "developer", "construction", "home sales"],
+            "defense": ["defense", "military", "weapon", "aerospace", "missile", "drone", "navy", "army", "defence"],
+            "utilities": ["utility", "power grid", "electricity", "power plant", "nuclear", "gas power", "hydropower"],
+            "crypto": ["bitcoin", "crypto", "stablecoin", "ethereum", "blockchain", "digital currency"],
         },
         # Sentiment keywords for the keyword-rules analyzer.
         "positive_keywords": ["surge", "rally", "jump", "soar", "gain", "rise", "record high", "bullish", "strong", "beat", "raise guidance", "optimistic"],

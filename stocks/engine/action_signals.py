@@ -533,6 +533,23 @@ def compute_action_signals(
             "reasons": reasons,
             "action_hint": _SIGNAL_ACTION_HINTS[signal],
             "as_of": rotation_item.get("as_of"),
+            # P0-1: 保留现价供 signal_tracker 记录 generation_price(反馈闭环)。
+            # 优先 rotation_item 的现价;rotation items 通常不带绝对价格,
+            # 退而用 ma_5(5日均线≈现价,与技术指标同源),不引入新数据源。
+            "price": rotation_item.get("price")
+            or (indicators.get("ma_5") if isinstance(indicators, dict) else None),
+            # P0(左侧): 保留三个"位置"指标供渲染层呈现左侧位置卡。
+            # price_position=布林位置(0下轨超卖~100上轨), rsi_14=RSI, volume_ratio=量比。
+            # 这些是技术指标已算好的客观数据,零新数据源。round 到固定精度,
+            # 确保与渲染数字一致(数字门禁: 存储值与渲染值 round4 后须相等)。
+            "price_position": (round(float(indicators["price_position"]), 0) if isinstance(indicators, dict) and indicators.get("price_position") is not None else None),
+            "rsi_14": (round(float(indicators["rsi_14"]), 0) if isinstance(indicators, dict) and indicators.get("rsi_14") is not None else None),
+            "volume_ratio": (round(float(indicators["volume_ratio"]), 1) if isinstance(indicators, dict) and indicators.get("volume_ratio") is not None else None),
+            # P1(左侧): 保留技术位供渲染层生成分批档位表(一档MA20/二档布林下轨/三档MA60)。
+            # round(2) 存储与渲染 {:.2f} 对齐(数字门禁)。
+            "ma_20": (round(float(indicators["ma_20"]), 2) if isinstance(indicators, dict) and indicators.get("ma_20") is not None else None),
+            "ma_60": (round(float(indicators["ma_60"]), 2) if isinstance(indicators, dict) and indicators.get("ma_60") is not None else None),
+            "bollinger_lower": (round(float(indicators["bollinger"]["lower"]), 2) if isinstance(indicators, dict) and isinstance(indicators.get("bollinger"), dict) and indicators["bollinger"].get("lower") is not None else None),
             "_indicators_raw": indicators,
             "_rotation_item": rotation_item,
         }

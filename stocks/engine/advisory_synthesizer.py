@@ -116,6 +116,7 @@ Rules:
 - Do NOT output absolute CNY amounts. Use ratios, share counts, or "defer".
 - Include "do_not_do" items where the evidence is too weak or the risk is high.
 - In "data_limitations", list missing or stale data that would change your view.
+- In user-facing free-text fields (market_assessment, portfolio_assessment, rationale, drivers, sector_opportunities, asset_class_opportunities, watchlist_candidates, scenarios), always use the human-readable display_name (e.g. 建行黄金/贵金属) — never the internal position_id (e.g. ccb_gold, alipay_info) or bare instrument codes (e.g. a_512480, 518880). The report is read by a human.
 - The user is the final decision maker. You are providing evidence-based advice.
 
 Snapshot:

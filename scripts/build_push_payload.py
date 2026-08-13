@@ -142,6 +142,12 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
         "delivery": delivery,
         "session_type": "trading",
         "user_view": view,
+        # P0: 产业情报(整理后的 cluster),供渲染层输出"产业情报"板块
+        "intelligence_brief": _intelligence_brief(artifact),
+        # 缺口3: 把引擎已算出的持仓信号参考(止损位/建议比例/动作)带进渲染层,
+        # 让"可执行动作-冲突"区能给用户带出决策所需的具体价位与比例,而不是
+        # 只有"等待人工确认"。
+        "signal_reference_by_position": _signal_reference_by_position(artifact),
         # P1-14: deterministic window delta travels with the payload so the
         # "本窗口变化" section can report risk-state / action / conflict
         # changes even when the LLM outlook_delta is empty. Previously a
@@ -158,6 +164,50 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
 
 _IDENTITY_CODE = re.compile(r"[（(]([^（）()]+)[）)]\s*$")
 _EXECUTABLE_STATUS = frozenset({"full", "adjusted_to_step"})
+
+
+
+
+def _signal_reference_by_position(artifact: dict) -> dict[str, dict]:
+    """地图 position_id -> {stop_price, ratio_pct, signal, label, reason}.
+
+    引擎在 action_cards(原始信号卡) 层已算出每个持仓的建议减仓/止盈比例与
+    止损位(stop_price)。这些是"如果你决定执行该信号,系统给出的价位与比例",
+    是左侧交易者做决策时最需要的信息之一。渲染层需要它,才能在被压制的
+    conflict/manual_review 区把"系统建议的止损位/比例"带给用户——
+    否则报告只说"等待人工确认",用户看不到系统其实已经算出了答案。
+    """
+    out: dict[str, dict] = {}
+    for c in (artifact.get("action_cards") or []):
+        if not isinstance(c, dict):
+            continue
+        pid = str(c.get("position_id") or "")
+        if not pid:
+            continue
+        ratio = c.get("final_ratio")
+        if ratio is None:
+            ratio = c.get("ratio")
+        ratio_pct = None
+        if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
+            ratio_pct = round(float(ratio) * 100)
+        stop = c.get("stop_price")
+        # 止损位 round 到 2 位小数存储:数字门禁(validate_payload_text)只授权
+        # payload 里实际存在的数值,若存完整浮点(315.1087)而渲染 {stop:g}
+        # 输出 315.109,两者对不上会被"unauthorized number"拦截。round 2 位后
+        # 渲染 {stop:g}=315.11 与授权值精确一致,且对交易执行足够精确。
+        stop_price = round(float(stop), 2) if isinstance(stop, (int, float)) and not isinstance(stop, bool) else None
+        card = {
+            "label": str(c.get("display_name") or c.get("name") or pid),
+            "signal": c.get("signal"),
+            "signal_label": str(c.get("signal") or "动作"),
+            "stop_price": stop_price,
+            "ratio_pct": ratio_pct,
+            "action": str(c.get("action") or ""),
+        }
+        # 只保留有决策价值的卡(有比例或止损位或非hold动作)
+        if ratio_pct or c.get("stop_price") is not None or str(c.get("signal") or "") not in ("hold", ""):
+            out[pid] = card
+    return out
 
 
 def _instrument_identity(display_label: str) -> str:
@@ -288,6 +338,121 @@ def _render_intelligence_payload(payload: dict) -> str:
     return "\n".join(lines)
 
 
+
+
+# ===== P0: 产业情报板块 =====
+
+_THEME_LABELS = {
+    "geopolitics": "地缘政治",
+    "monetary_policy": "货币政策",
+    "macro_data": "宏观数据",
+    "china_policy": "中国政策",
+    "energy": "能源",
+    "technology": "科技",
+    "semiconductor": "半导体",
+    "new_energy": "新能源",
+    "consumer": "消费",
+    "healthcare": "医药",
+    "financials": "金融",
+    "real_estate": "地产",
+    "defense": "军工",
+    "utilities": "电力公用",
+    "crypto": "加密货币",
+    "earnings": "财报",
+    "tech": "科技",
+    "macro": "宏观",
+    "regulation": "监管",
+    "supply_chain": "供应链",
+}
+
+_URGENCY_LABELS = {"critical": "紧急", "high": "高", "moderate": "中", "medium": "中", "low": "低"}
+
+
+def _clean_intel_summary(summary: str) -> str:
+    s = str(summary or "").strip()
+    s = re.sub(r"^\[[^\]]+\]\s*", "", s)
+    if len(s) > 48:
+        s = s[:48] + "…"
+    return s
+
+
+def _intelligence_brief(artifact: dict) -> list[dict]:
+    cd = artifact.get("context_digest") or {}
+    ig = cd.get("intelligence_digest") or {}
+    clusters = ig.get("top_clusters") or []
+    brief = []
+    for c in clusters[:5]:
+        if not isinstance(c, dict):
+            continue
+        summary = _clean_intel_summary(c.get("summary"))
+        if not summary:
+            continue
+        theme = str(c.get("theme") or "")
+        urgency = str(c.get("urgency") or "")
+        brief.append({
+            "theme": _THEME_LABELS.get(theme, theme),
+            "summary": summary,
+            "urgency": _URGENCY_LABELS.get(urgency, urgency),
+        })
+    return brief
+
+
+def _section_intelligence_brief(clusters: list[dict]) -> list[str]:
+    if not clusters:
+        return []
+    lines = [_section_heading("产业情报")]
+    for c in clusters:
+        tag = str(c.get("theme") or "")
+        if c.get("urgency"):
+            tag += f"·{c['urgency']}"
+        lines.append(f"- [{tag}] {c.get('summary')}")
+    return lines
+
+
+def _decision_summary(card: dict, assistant: dict, signal_ref: dict | None = None) -> list[str]:
+    """生成报告开头的极简决策摘要(今日要点)。
+
+    只从确定性字段提取:风险状态、待确认冲突、布局候选、可用资金。
+    待确认数用 signal_ref(reduce/take_profit/stop_loss),与"组合与检查点"
+    的"待你确认"列表同口径,避免摘要与资金区数字打架。
+    不引入新数字(资金/占比均来自 assistant.cash / card 既有值,已通过数字门禁)。
+    无内容则返回空列表(不输出空摘要)。
+    """
+    lines: list[str] = []
+    # 风险状态
+    risk = (assistant.get("risk") or {})
+    risk_label = str(risk.get("label") or "").strip()
+    # 待确认冲突(减仓/止盈类): 与资金区"待你确认"同源(signal_ref)
+    sell_conflicts = [
+        item for item in (signal_ref or {}).values()
+        if str(item.get("signal_label") or "") in ("reduce", "take_profit", "stop_loss")
+    ]
+    # 布局候选
+    research = assistant.get("research") or []
+    # 可用资金(来自 assistant.cash,渲染资金区同源)
+    cash = assistant.get("cash") or {}
+    try:
+        avail = float(cash.get("available_now") or 0)
+    except (TypeError, ValueError):
+        avail = 0.0
+
+    bits: list[str] = []
+    if risk_label:
+        bits.append(f"风险:{risk_label}")
+    if sell_conflicts:
+        bits.append(f"待你定夺:{len(sell_conflicts)}个减仓/止盈")
+    if research:
+        top = str(research[0].get("display_label") or "")
+        if top:
+            bits.append(f"关注:{top}")
+    if avail > 0:
+        bits.append(f"可用资金 ¥{avail:,.0f}")
+    if bits:
+        lines.append(f"- 今日要点: {'｜'.join(bits)}")
+    return lines
+
+
+
 def _render_trading_payload(payload: dict) -> str:
     view = payload.get("user_view") or {}
     card = view.get("instruction_card") or {}
@@ -305,8 +470,17 @@ def _render_trading_payload(payload: dict) -> str:
     if outlook_section:
         sections.append(outlook_section)
 
+    # 2.5 产业情报(信息整理,放在走势研判之后、动作之前)
+    intel_section = _section_intelligence_brief(payload.get("intelligence_brief") or [])
+    if intel_section:
+        sections.append(intel_section)
+
     # 3. 可执行动作
-    action_section = _section_executable_actions(card)
+    action_section = _section_executable_actions(
+        card,
+        payload.get("signal_reference_by_position"),
+        (assistant.get("conflict_details") or []),
+    )
     if action_section:
         sections.append(action_section)
 
@@ -321,7 +495,9 @@ def _render_trading_payload(payload: dict) -> str:
         sections.append(blocked_section)
 
     # 6. 组合与检查点 (M1: merged former sections 4 and 5)
-    impact_section = _section_portfolio_and_checkpoint(card, assistant)
+    impact_section = _section_portfolio_and_checkpoint(
+        card, assistant, payload.get("signal_reference_by_position")
+    )
     if impact_section:
         sections.append(impact_section)
 
@@ -339,6 +515,12 @@ def _render_trading_payload(payload: dict) -> str:
             lines.append(f"*生成时间 {gen_local.strftime('%Y-%m-%d %H:%M')}*")
         except (ValueError, TypeError):
             pass
+    # D: 决策摘要置顶(不破坏 M1 六段顺序;标题+时间后紧跟今日要点)
+    summary = _decision_summary(card, assistant, payload.get("signal_reference_by_position"))
+    if summary:
+        lines.append("")
+        lines.extend(summary)
+
     if not sections:
         lines.append("")
         lines.append("当前无输出内容")
@@ -349,6 +531,31 @@ def _render_trading_payload(payload: dict) -> str:
         lines.extend(section)
 
     return "\n".join(lines)
+
+
+
+
+# C: LLM 生成的占位 reasoning(无信息量)不渲染。已知变体:英文占位 +
+# 中英文空泛表述。匹配到的 rationale 直接丢弃,不向用户展示。
+_LLM_PLACEHOLDER_PATTERNS = (
+    "Candidate identified by LLM analyst",
+    "candidate identified by llm analyst",
+    "LLM 分析识别",
+    "由 LLM 分析师识别",
+    "identified by llm",
+)
+
+
+def _rationale_text(rationale: str) -> str:
+    """过滤 LLM 占位 reasoning,返回可展示的理由;空则返回空串。"""
+    r = str(rationale or "").strip()
+    if not r:
+        return ""
+    for p in _LLM_PLACEHOLDER_PATTERNS:
+        if p in r:
+            return ""
+    return r
+
 
 
 def _section_heading(title: str) -> str:
@@ -484,6 +691,41 @@ def _section_window_changes(assistant: dict, window_delta: dict | None = None) -
     return lines
 
 
+
+
+def _quant_validation_for_sector(sector_text: str, research: list[dict]) -> str:
+    """把 LLM sector 观点与 quant 引擎信号交叉校验，返回一行量化校验标注。
+
+    sector_text 常带内部 symbol（如 a:512690 / us:IGV）；research 是"提前
+    布局"区的 quant 候选（display_label 带代码）。提取 sector 里的代码，
+    在 research 中匹配，命中则标注 quant 的真实信号；未命中则如实标注
+    "当前无技术信号"。绝不用 LLM 文本编造量化状态。
+
+    已知边界：只覆盖 sector_views 结构化条目；LLM 自由文本(summary)里的
+    口头观点无法可靠解析，不做脆弱的文本猜测。
+    """
+    if not sector_text or not research:
+        return ""
+    m = re.search(r"(?::|（|\()([0-9]{6})", str(sector_text))
+    code = m.group(1) if m else ""
+    if not code:
+        # us 标的用大写代码（IGV、XLE...）
+        m2 = re.search(r"us:([A-Z]{2,6})", str(sector_text))
+        code = m2.group(1) if m2 else ""
+    if not code:
+        return ""
+    signal_label = None
+    for r in research:
+        label = str(r.get("display_label") or "")
+        if code in label:
+            signal_label = r.get("setup_tag") or r.get("signal") or None
+            break
+    if signal_label:
+        return f"量化信号: {signal_label}（引擎）"
+    return "量化校验: 当前无技术信号（中性）"
+
+
+
 def _section_market_outlook(assistant: dict) -> list[str]:
     """§2 走势研判 — 短期 + 中期方向、驱动、证伪线、组合影响。
 
@@ -534,8 +776,9 @@ def _section_market_outlook(assistant: dict) -> list[str]:
             piece = f"{hlabel}: {d}" if d else hlabel
             if c:
                 piece += f"（置信 {c}）"
-            if rationale:
-                piece += f" — {rationale}"
+            rr = _rationale_text(rationale)
+            if rr:
+                piece += f" — {rr}"
             lines.append(f"- {piece}")
         validation = str(h.get("validation") or "")
         falsification = str(h.get("falsification") or "")
@@ -545,6 +788,7 @@ def _section_market_outlook(assistant: dict) -> list[str]:
             lines.append(f"  证伪：{falsification}")
 
     shown_lines = 0
+    research = assistant.get("research") or []
     for sv in (outlook.get("sector_views") or [])[:3]:
         sector = sv.get("sector") or ""
         direction_key = str(sv.get("direction") or "")
@@ -552,8 +796,12 @@ def _section_market_outlook(assistant: dict) -> list[str]:
         rationale = str(sv.get("rationale") or "")
         if sector and d:
             piece = f"- {sector}: {d}"
-            if rationale:
-                piece += f" — {rationale}"
+            rr = _rationale_text(rationale)
+            if rr:
+                piece += f" — {rr}"
+            qv = _quant_validation_for_sector(sector, research)
+            if qv:
+                piece += f"（{qv}）"
             lines.append(piece)
             shown_lines += 1
         if shown_lines >= 3:
@@ -566,8 +814,9 @@ def _section_market_outlook(assistant: dict) -> list[str]:
         rationale = str(av.get("rationale") or "")
         if asset_class and d:
             piece = f"- {asset_class}: {d}"
-            if rationale:
-                piece += f" — {rationale}"
+            rr = _rationale_text(rationale)
+            if rr:
+                piece += f" — {rr}"
             lines.append(piece)
 
     return lines
@@ -625,6 +874,72 @@ def _setup_candidate_tail(item: dict) -> str | None:
     return cleaned[:60] if cleaned else None
 
 
+def _left_position_line(item: dict) -> str | None:
+    """左侧位置卡: 布林位置/RSI/量比(左侧交易者判断"跌到哪/超卖没/缩量没")。
+
+    布林位置 0%=下轨超卖 ~ 100%=上轨超买; RSI<30 超卖, >70 超买; 量比<1 缩量。
+    三个字段均缺失则返回 None(不输出空行)。数字来自 engine 已 round 的值,
+    渲染精度与存储一致(数字门禁要求 round4 后相等)。
+    """
+    parts = []
+    pp = item.get("price_position")
+    rsi = item.get("rsi_14")
+    vr = item.get("volume_ratio")
+    if pp is not None:
+        try:
+            parts.append(f"布林 {int(round(float(pp)))}%")
+        except (TypeError, ValueError):
+            pass
+    if rsi is not None:
+        try:
+            parts.append(f"RSI {int(round(float(rsi)))}")
+        except (TypeError, ValueError):
+            pass
+    if vr is not None:
+        try:
+            parts.append(f"量比 {float(vr):.1f}")
+        except (TypeError, ValueError):
+            pass
+    if not parts:
+        return None
+    return "位置: " + "｜".join(parts)
+
+
+def _left_batch_plan(item: dict) -> str | None:
+    """分批支撑位: 价格下方的技术支撑(MA20/MA60/布林下轨),从近到远排序。
+
+    只保留价格下方的支撑位(价格上方的是阻力,不是左侧分批接的档位),按价位
+    从高到低排序(最近的支撑在前)。只给技术价位,不替用户定资金比例。
+    价格 round(2) 存储,渲染 {:.2f} 对齐(数字门禁)。
+    """
+    price = item.get("price")
+    if price is None:
+        return None
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return None
+    supports = []
+    for name, val in (
+        ("MA20", item.get("ma_20")),
+        ("MA60", item.get("ma_60")),
+        ("布林下轨", item.get("bollinger_lower")),
+    ):
+        if val is None:
+            continue
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            continue
+        if v < price:  # 只在价格下方的支撑位
+            supports.append((v, name))
+    if not supports:
+        return None
+    supports.sort(key=lambda x: -x[0])  # 从高到低: 最近的支撑在前
+    steps = [f"{name}({v:.2f})" for v, name in supports]
+    return "分批支撑: " + " / ".join(steps) + "（技术位，非买卖指令）"
+
+
 def _section_setup_candidates(assistant: dict, next_checkpoint: str = "") -> list[str]:
     """§4 提前布局 — 从 research 提升到主段，展示 top 2-3 候选。"""
     lines: list[str] = [_section_heading("提前布局")]
@@ -659,6 +974,12 @@ def _section_setup_candidates(assistant: dict, next_checkpoint: str = "") -> lis
             lines.append(f"- **{label}**（{tag}{score_text}）")
         if sizing_hint:
             lines.append(f"  仓位/止损: {sizing_hint}")
+        pos_line = _left_position_line(item)
+        if pos_line:
+            lines.append(f"  {pos_line}")
+        batch_plan = _left_batch_plan(item)
+        if batch_plan:
+            lines.append(f"  {batch_plan}")
         reassess = item.get("reassess_after")
         if reassess and reassess != checkpoint_ref:
             lines.append(f"  复核: {reassess}")
@@ -872,8 +1193,59 @@ def _format_reference_line(ref: dict, *, with_label: bool = False) -> str:
     return line
 
 
-def _section_executable_actions(card: dict) -> list[str]:
-    """§3 可执行动作 — manual_review 时列出待决冲突和参考值，并给出决策分支。"""
+
+def _append_signal_reference_lines(
+    lines: list[str], detail: dict, signal_ref: dict | None
+) -> None:
+    """给一个 manual-review 冲突项补上引擎已算出的决策参考(止损位/建议比例)。
+
+    detail 来自 conflict, 带 label(display_name) 与 code(public code);
+    signal_ref 以 position_id 为键。这里通过 code/label 反向匹配到对应持仓,
+    输出"若执行:建议比例 + 止损位"行,让 Kari 在被压制时也能看到系统的答案。
+    """
+    if not signal_ref:
+        return
+    code = str(detail.get("code") or "")
+    label = str(detail.get("label") or "")
+    ref = None
+    for pid, item in signal_ref.items():
+        # match by public code embedded in label, or by label containment
+        label_match = (label and str(item.get("label") or "") in label) or (
+            str(item.get("label") or "") == label
+        )
+        if (code and (code in str(item.get("label") or ""))) or label_match:
+            ref = item
+            break
+    if not ref:
+        return
+    signal_label = str(ref.get("signal_label") or "")
+    ratio = ref.get("ratio_pct")
+    stop = ref.get("stop_price")
+    bits: list[str] = []
+    if signal_label and signal_label != "动作":
+        bits.append(f"信号:{signal_label}")
+    if isinstance(ratio, (int, float)):
+        bits.append(f"系统建议 {ratio:.0f}%")
+    if isinstance(stop, (int, float)):
+        bits.append(f"止损位≈{stop:g}")
+    if bits:
+        lines.append(f"  参考: {'；'.join(bits)}（若你决定执行该信号）")
+
+
+
+def _section_executable_actions(
+    card: dict, signal_ref: dict | None = None, conflicts: list[dict] | None = None
+) -> list[str]:
+    """§3 可执行动作 — manual_review 时列出待决冲突和参考值，并给出决策分支。
+
+    缺口3: signal_ref(signal_reference_by_position) 携带引擎已算出的持仓
+    止损位与建议比例,在冲突后给用户带出"若决定执行该信号,系统建议的价位与
+    比例",把"等待人工确认"补成可决策的信息。
+
+    conflicts(assistant_brief.conflict_details)携带全部被压制方向冲突;除
+    no_action_reasons 已列的头部冲突外,这里把其余 减仓/止盈 类冲突也补全,
+    避免 AAPL/VST 这类被压制的减仓信号(带止损位)在报告里完全不可见。
+    """
     lines: list[str] = [_section_heading("可执行动作")]
     actions = card.get("actions") or []
     status_raw = str(card.get("status") or "").strip().lower()
@@ -904,12 +1276,38 @@ def _section_executable_actions(card: dict) -> list[str]:
                     ref_line = _format_reference_line(ref)
                     if ref_line:
                         lines.append(f"    {ref_line}")
+                # 缺口3: 给该冲突补上引擎已算出的止损位/建议比例,让用户知道
+                # 若他决定执行该信号,系统给出的价位与比例是什么。
+                _append_signal_reference_lines(lines, detail, signal_ref)
             for ref in suppressed[:3]:
                 if id(ref) in matched:
                     continue
                 ref_line = _format_reference_line(ref, with_label=True)
                 if ref_line:
                     lines.append(f"  {ref_line}")
+            # 缺口3: no_action_reasons 只保留头部2条,其余被压制的 减仓/止盈
+            # 冲突(如 AAPL/VST)若不补全,Kari 在报告里完全看不到它们的止损位。
+            # 这里把 conflicts 中未被上面 reason 循环覆盖的 减仓/止盈/止损 类
+            # 全部列出,每条带系统建议比例与止损位。
+            already = set()
+            for reason in no_action_reasons[:3]:
+                r = str(reason or "")
+                if r:
+                    already.add(r.split("：",1)[0].strip())
+            for c in (conflicts or []):
+                act = str(c.get("action") or "")
+                if act not in ("减仓", "止盈", "止损"):
+                    continue
+                clabel = str(c.get("label") or "")
+                if any(clabel in a for a in already):
+                    continue
+                lines.append(
+                    f"  · **{clabel}** [决策冲突] 触发{act}信号，但被组合约束暂缓"
+                )
+                branch = str(c.get("branch") or "")
+                if branch:
+                    lines.append(f"    分支: {branch}")
+                _append_signal_reference_lines(lines, c, signal_ref)
             return lines
 
         lines.append(f"- 状态: {status_label or '当前无需操作'}")
@@ -1073,7 +1471,9 @@ def _has_currency_amount(text: str) -> bool:
     return bool(re.search(r"[¥$€]\s*-?\d|CNY\s*-?\d|-?\d[\d,]*\s*元", text))
 
 
-def _section_portfolio_and_checkpoint(card: dict, assistant: dict) -> list[str]:
+def _section_portfolio_and_checkpoint(
+    card: dict, assistant: dict, signal_ref: dict | None = None
+) -> list[str]:
     """§6 组合与检查点 — 风险状态 + 现金 + 待决事项 + 执行后 + 下一检查点。"""
     lines: list[str] = [_section_heading("组合与检查点")]
     risk = assistant.get("risk") or {}
@@ -1121,6 +1521,20 @@ def _section_portfolio_and_checkpoint(card: dict, assistant: dict) -> list[str]:
     ) or bool(cash.get("pending_sell"))
     if has_sell_action and strategic_exit > 0:
         cash_parts.append(f"卖出后可释放 ¥{strategic_exit:,.0f}")
+    # 缺口4: 资金与待执行信号桥接 —— pending_sell 时,把"卖出后可释放"的
+    # 资金与可执行动作区列出的待确认 减仓/止盈 信号对应起来,让 Kari 知道
+    # 这笔可释放资金来自哪些被压制的信号,而非孤立的一笔钱。
+    if has_sell_action and signal_ref:
+        sell_labels = [
+            str(item.get("label") or "")
+            for item in signal_ref.values()
+            if str(item.get("signal_label") or "") in ("reduce", "take_profit", "stop_loss")
+        ]
+        sell_labels = list(dict.fromkeys(x for x in sell_labels if x))
+        if sell_labels:
+            lines.append(
+                f"- 待你确认的减仓/止盈信号: {'、'.join(sell_labels[:6])}（若执行，卖出后可释放上述资金）"
+            )
 
     if safety_buffer > 0:
         cash_parts.append(f"安全垫 ¥{safety_buffer:,.0f}（不计入可用）")
@@ -1201,13 +1615,46 @@ def _section_portfolio_and_checkpoint(card: dict, assistant: dict) -> list[str]:
     plan = assistant.get("tomorrow_plan") or []
     if plan:
         lines.append(_section_heading("明日计划"))
-        for item in plan[:6]:
+        # A: 压缩重复 —— 相同括号说明的条目(如多个标的因同一组合约束"维持现状")
+        # 合并为一行,标的前缀合并,理由只保留一份,避免同一理由复制 N 遍。
+        groups: dict[str, list[tuple[str, str]]] = {}
+        order: list[str] = []
+        for item in plan[:8]:
             action_text = str(item.get("action") or "").strip()
             if not action_text:
                 continue
             prio = str(item.get("priority") or "low")
             marker = {"high": "①", "medium": "②", "low": "③"}.get(prio, "·")
-            lines.append(f"- {marker} {action_text}")
+            # 提取括号理由作为合并键(没有括号则整条独立)。
+            # 从冒号后开始匹配,避免把"科创50ETF（588000）"这种标的前缀括号
+            # 混入合并键,导致本应合并的同理由条目 key 不同。
+            key = action_text
+            m_key = re.search(r"[：:].*（.*）", action_text)
+            if m_key:
+                key = m_key.group(0)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append((marker, action_text))
+        for key in order:
+            entries = groups[key]
+            if len(entries) == 1:
+                lines.append(f"- {entries[0][0]} {entries[0][1]}")
+                continue
+            # 多条目: 合并标的(取每个 action 冒号前的部分),括号理由保留一份
+            subjects = []
+            for _marker, text in entries:
+                head = text.split("：", 1)[0] if "：" in text else text.split(":", 1)[0]
+                subjects.append(head.strip())
+            first_marker = entries[0][0]
+            merged = "、".join(dict.fromkeys(x for x in subjects if x))
+            # key 以"："开头(冒号后的括号理由段),直接拼接避免双冒号
+            if key.startswith("："):
+                lines.append(f"- {first_marker} {merged}{key}")
+            elif key.startswith(":"):
+                lines.append(f"- {first_marker} {merged}{key}")
+            else:
+                lines.append(f"- {first_marker} {merged}：{key}")
 
     return lines
 
