@@ -244,7 +244,7 @@ def _signal_for_item(
         and (rsi is None or rsi < t['pullback_rsi'])
     ):
         reasons.append(f"轮动排名前段且回踩 MA20 {ma20:.2f} 附近，趋势未破")
-        reasons.append(f"MA20 仍在 MA60 {ma60:.2f} 上方（回调非反转）")
+        reasons.append("MA20 仍在 MA60 上方（回调非反转）")
         if rsi is not None:
             reasons.append(f"RSI {rsi:.1f} 未超买")
         return "accumulate_candidate", reasons
@@ -318,8 +318,8 @@ def _signal_for_item(
         and t['accumulate_rsi_low'] <= rsi < t['accumulate_rsi_high']
         and (r5 is None or r5 > t['knife_r5'])
     ):
-        reasons.append(f"现价 {price:.2f} 回踩 MA20 {ma20:.2f} 附近（偏离 {(price/ma20-1)*100:+.1f}%）")
-        reasons.append(f"MA20 {ma20:.2f} 仍在 MA60 {ma60:.2f} 上方，趋势结构未破（回调非反转）")
+        reasons.append(f"现价 {price:.2f} 回踩 MA20 {ma20:.2f} 附近")
+        reasons.append("MA20 在 MA60 上方，趋势未破")
         reasons.append(f"RSI {rsi:.1f} 中性，动能未恶化")
         if macd_hist is not None and macd_hist > 0:
             reasons.append(f"MACD 柱 {macd_hist:.3f} 为正")
