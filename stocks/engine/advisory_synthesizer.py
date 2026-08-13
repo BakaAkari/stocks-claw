@@ -36,6 +36,13 @@ validation, falsification, scenario descriptions, statements, limitations,
 checkpoints) in Simplified Chinese — the output is rendered verbatim into a
 Chinese push report. Keep tickers, instrument codes, and metric names as-is.
 
+User trading style (left-side / value-oriented; advice MUST reflect these):
+- 不追高：不在上涨途中追买，等回调到支撑位分批介入。
+- 回调分批：趋势未破(MA20>MA60)的回调中分批加仓，不一次性满仓。
+- 破位果断砍：跌破关键均线/趋势破位时果断止损，不抱侥幸。
+- 接受短期浮亏换未来收益：左侧买入可能短期浮亏，属可接受。
+- 买入建议表述「回调分批」，止损建议明确「破位条件与价位」。
+
 Output JSON format:
 {{
   "advisory_id": "auto-generated-by-system",
@@ -46,8 +53,8 @@ Output JSON format:
   "actions": [],
   "hold_decisions": [],
   "do_not_do": ["string"],
-  "sector_opportunities": [{{"target": "板块名", "action": "buy|sell|reduce|add", "reasoning": "中文理由"}}],
-  "asset_class_opportunities": [{{"target": "资产类别", "action": "buy|sell|reduce|add", "reasoning": "中文理由"}}],
+  "sector_opportunities": [{{"target": "板块名", "action": "buy|sell|reduce|add", "reasoning": "中文理由", "affected_positions": ["受影响的持仓中文名或代码"]}}],
+  "asset_class_opportunities": [{{"target": "资产类别", "action": "buy|sell|reduce|add", "reasoning": "中文理由", "affected_positions": ["受影响的持仓中文名或代码"]}}],
   "watchlist_candidates": [],
   "scenarios": [3 个情景, name 必须是 base/bull/risk],
   "forecast_candidates": [],
@@ -158,6 +165,7 @@ def _parse_actions(items: list[Any], *, default_action: str = "") -> tuple[Advis
                 size_type=str(item.get("size_type", "defer")),
                 reasoning=str(item.get("reasoning", "")),
                 evidence_refs=tuple(item.get("evidence_refs", []) or []),
+                affected_positions=tuple(item.get("affected_positions", []) or []),
                 execute_when=str(item.get("execute_when", "")),
                 cancel_when=str(item.get("cancel_when", "")),
                 horizon=str(item.get("horizon", "medium")),

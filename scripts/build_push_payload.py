@@ -798,6 +798,9 @@ def _section_market_outlook(assistant: dict) -> list[str]:
             rr = _rationale_text(rationale)
             if rr:
                 piece += f" — {rr}"
+            affected = [str(a) for a in (sv.get("affected_positions") or []) if a and "暂无" not in str(a)]
+            if affected:
+                piece += f"（关联持仓：{'、'.join(affected)}）"
             qv = _quant_validation_for_sector(sector, research)
             if qv:
                 piece += f"（{qv}）"
@@ -816,6 +819,9 @@ def _section_market_outlook(assistant: dict) -> list[str]:
             rr = _rationale_text(rationale)
             if rr:
                 piece += f" — {rr}"
+            affected = [str(a) for a in (av.get("affected_positions") or []) if a and "暂无" not in str(a)]
+            if affected:
+                piece += f"（关联持仓：{'、'.join(affected)}）"
             lines.append(piece)
 
     return lines

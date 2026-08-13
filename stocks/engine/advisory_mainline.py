@@ -197,7 +197,7 @@ def _project_views(actions: tuple, *, key: str) -> list[dict]:
     views: list[dict] = []
     for action in actions:
         direction = _DIRECTION_BY_ACTION.get(action.action, "neutral")
-        view = {key: action.target, "direction": direction, "rationale": action.reasoning}
+        view = {key: action.target, "direction": direction, "rationale": action.reasoning, "affected_positions": list(action.affected_positions)}
         views.append({k: v for k, v in view.items() if v})
     return views
 

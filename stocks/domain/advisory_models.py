@@ -135,6 +135,7 @@ class AdvisoryAction:
     size_type: ActionSizeType
     reasoning: str
     evidence_refs: tuple[str, ...] = ()
+    affected_positions: tuple[str, ...] = ()
     execute_when: str = ""
     cancel_when: str = ""
     horizon: ActionHorizon = "medium"
