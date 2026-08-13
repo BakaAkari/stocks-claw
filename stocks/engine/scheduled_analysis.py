@@ -2268,9 +2268,22 @@ def _build_research_candidates(
     by_signal: dict[str, list[dict]] = {s: [] for s in order}
     for c in candidates:
         by_signal.setdefault(c.get("signal"), []).append(c)
+    # P-market-focus: 候选 round-robin 按主市场优先（与 presentation 动作排序对齐），
+    # 避免跨市场候选（如 A股 ETF 轮动 score 普遍高于美股）占满 8 个名额、挤出主市场候选。
+    primary_market = str(getattr(session, "primary_market", "") or "")
+
+    def _market_rank(symbol: str) -> int:
+        m = _research_market(symbol)
+        if primary_market == "us":
+            return 0 if m == "us" else 1
+        if primary_market == "cn":
+            return 0 if m == "a" else 1
+        return 1
+
     for group in by_signal.values():
         group.sort(
             key=lambda x: (
+                _market_rank(str(x.get("symbol") or "")),
                 -(x.get("score") or 0),
                 x.get("rank") or 999,
                 str(x.get("symbol") or ""),
