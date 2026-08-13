@@ -76,7 +76,8 @@
           "time": "09:55",
           "intent": "post_open_decision",
           "push": "digest",
-          "primary_market": "us"
+          "primary_market": "us",
+          "focus": "us+欧美市场"
         },
         {
           "id": "us_after_close",

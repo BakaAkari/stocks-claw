@@ -791,6 +791,7 @@ class ScheduledAnalysisRunner:
             data_boundaries=run.get("data_boundaries") or {},
             session_id=run["session"],
             session_intent=occurrence.session.intent,
+            primary_market=occurrence.session.primary_market,
             structured_outlook=structured_outlook_for_view,
             outlook_delta=outlook_delta_for_view,
         )
@@ -3421,6 +3422,7 @@ _SESSION_INTENT_PROPERTIES = {
         "can_review_closed": False,
     },
     "us_pre_close": {"focus": "us+欧美市场", "can_recommend_new": True, "can_review_closed": False},
+    "us_post_open": {"focus": "us+欧美市场", "can_recommend_new": True, "can_review_closed": False},
     "us_after_close": {
         "focus": "us+欧美市场",
         "can_recommend_new": False,

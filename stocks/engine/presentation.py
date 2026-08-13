@@ -680,6 +680,28 @@ def _instrument_market(instrument_key: str) -> str:
     return market.strip().lower()
 
 
+def _market_is_primary(market: str, primary_market: str) -> bool:
+    """判断 instrument 市场前缀是否属于 session 主市场。"""
+    if primary_market == "us":
+        return market == "us"
+    if primary_market == "cn":
+        return market == "a"
+    return False
+
+
+def _sort_approved_by_primary_market(actions: list[dict], by_id: dict, primary_market: str) -> list[dict]:
+    """主市场动作优先（stable sort，同市场保持裁决器原序）。"""
+    if not primary_market or not actions:
+        return list(actions)
+
+    def _key(action: dict) -> int:
+        item = by_id.get(str(action.get("position_id") or ""), {})
+        key = str(item.get("instrument_key") or "")
+        return 0 if _market_is_primary(_instrument_market(key), primary_market) else 1
+
+    return sorted(actions, key=_key)
+
+
 def _quote_by_market(data_boundaries: dict) -> dict:
     quality = (data_boundaries or {}).get("data_quality") or {}
     return ((quality.get("quotes") or {}).get("by_market") or {})
@@ -1089,6 +1111,7 @@ def build_user_view(
     data_boundaries: dict | None = None,
     session_id: str,
     session_intent: str,
+    primary_market: str = "",
     structured_outlook: dict | None = None,
     outlook_delta: dict | None = None,
     window_delta: dict | None = None,
@@ -1099,6 +1122,11 @@ def build_user_view(
     reviews_by_id = _position_review_map(position_reviews)
     by_market = _quote_by_market(data_boundaries or {})
     all_approved = decision.get("approved_actions") or []
+    # P-market-focus: 按主市场优先排序 approved_actions（stable），
+    # 避免跨市场动作（如 A股止盈）占用本 session 主市场动作的展示名额。
+    if primary_market:
+        all_approved = _sort_approved_by_primary_market(all_approved, by_id, primary_market)
+        decision = {**decision, "approved_actions": all_approved}
     approved_cards = all_approved[:3]
 
     # TASK-001E1 defect 4: the research-dedup identity set covers *every*
