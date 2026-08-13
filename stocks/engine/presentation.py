@@ -556,7 +556,7 @@ _RISK_TRIGGER_TRANSLATIONS = {
     "Geopolitical crisis": "地缘政治危机",
     "Severe drawdown": "严重回撤",
     "Drawdown warning": "回撤预警",
-    "critical": "关键级别",
+    "critical": "个",  # "1 critical" 是"N个critical集群", 不是"关键级别"
     "geopolitics critical": "地缘局势关键",
     "clusters": "个集群",
     "elevated": "偏高",

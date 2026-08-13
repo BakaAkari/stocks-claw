@@ -405,7 +405,7 @@ def test_risk_reasons_translate_english_enums():
             {"condition": "VIX > 35", "value": "VIX=36.2"},
         ],
     })
-    assert any("关键集群事件" in r and "关键级别" in r for r in reasons), reasons
+    assert any("关键集群事件" in r and "1 个" in r for r in reasons), reasons
     assert any("地缘政治危机" in r and "地缘局势关键" in r for r in reasons), reasons
     # VIX 数字保持原样
     assert any("VIX=36.2" in r for r in reasons), reasons

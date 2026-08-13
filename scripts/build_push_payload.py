@@ -437,7 +437,7 @@ def _decision_summary(card: dict, assistant: dict, signal_ref: dict | None = Non
     if risk_label:
         bits.append(f"风险:{risk_label}")
     if sell_conflicts:
-        bits.append(f"待你定夺:{len(sell_conflicts)}个减仓/止盈")
+        bits.append(f"减仓/止盈:{len(sell_conflicts)}个")
     if research:
         top = str(research[0].get("display_label") or "")
         if top:
@@ -797,14 +797,18 @@ def _section_market_outlook(assistant: dict) -> list[str]:
             if not label:
                 continue
             slabel = scene_labels.get(sname, sname)
-            piece = f"- {slabel}情景: {label}"
+            # label 可能已含"X情景"前缀, 去重避免"基准情景: 基准情景:..."
+            for prefix in ("基准情景", "乐观情景", "风险情景"):
+                if label.startswith(prefix):
+                    label = label[len(prefix):].lstrip("：: ")
+                    break
+            lines.append(f"- {slabel}情景：{label}")
             validation = [str(v) for v in (scene.get("validation") or []) if v]
             if validation:
-                piece += f"（触发：{'；'.join(validation)}）"
+                lines.append(f"  触发：{'；'.join(validation)}")
             invalidation = [str(v) for v in (scene.get("invalidation") or []) if v]
             if invalidation:
-                piece += f"（证伪：{'；'.join(invalidation)}）"
-            lines.append(piece)
+                lines.append(f"  证伪：{'；'.join(invalidation)}")
 
     shown_lines = 0
     research = assistant.get("research") or []
@@ -1606,7 +1610,7 @@ def _section_portfolio_and_checkpoint(
         sell_labels = list(dict.fromkeys(x for x in sell_labels if x))
         if sell_labels:
             lines.append(
-                f"- 待你确认的减仓/止盈信号: {'、'.join(sell_labels[:6])}（若执行，卖出后可释放上述资金）"
+                f"- 减仓/止盈信号: {'、'.join(sell_labels[:6])}（若执行，卖出后可释放上述资金）"
             )
 
     if safety_buffer > 0:
