@@ -794,6 +794,21 @@ def _data_notes(data_boundaries: dict) -> list[str]:
     macro = quality.get("macro") or {}
     if str(macro.get("freshness") or "") in {"old", "stale"}:
         notes.append(f"宏观数据较旧（截止 {_display_timestamp(macro.get('as_of'))}）")
+    # P1-5 fix: 宏观 composite as_of 取 field_sources 中最旧字段(通常是月频 CPI/失业率/
+    # 利率), 而 freshness 按"官方统计发布周期内即最新一期"判为 fresh——两者并存会让用户
+    # 困惑("as_of 7-01 却标 fresh")。诚实澄清: 区分月频官方字段与日频市场类宏观字段。
+    macro_fs = macro.get("field_sources") or {}
+    _monthly_macro = {"official_stats.cpi_yoy", "official_stats.us_unemployment",
+                      "official_stats.fed_funds_rate"}
+    _monthly_dates = [
+        str(md.get("as_of") or "")[:10]
+        for k, md in macro_fs.items() if k in _monthly_macro and isinstance(md, dict)
+    ]
+    if _monthly_dates and str(macro.get("freshness") or "") == "fresh":
+        notes.append(
+            f"宏观官方统计字段（CPI/失业率/利率）数据点至 {_monthly_dates[0]}，"
+            "属月度发布周期；市场类宏观（VIX/汇率/利率/金油）为最新行情"
+        )
     # P2-3/P3-4: asset_completeness 的 blocked/degraded issue 必须呈现,
     # 不能只存在 data_quality 节点里(8/6 实测: HKD 汇率失败 blocked,
     # 支付宝基金 7/31 估值混入资金数字,data_notes 均无提示)。

@@ -74,8 +74,42 @@ class SignalTracker:
         self.signals_file = self.dir / "signals.jsonl"
         self.settlements_file = self.dir / "settlements.jsonl"
 
+    # P2-5 fix: 语义去重窗口。同一标的同一方向信号在窗口内仅记一次,避免每小时生成
+    # 导致 GLD/symbol buy 同一持久状态反复刷屏(一个月 100+ 条),使 24h 结算失真。
+    # 不同方向(如 buy -> reduce)仍会保留,不误删合法信号翻转。
+    DEDUP_WINDOW_SECONDS = 6 * 3600
+
+    def _recent_keys(self) -> set[tuple[str, str]]:
+        """Return (symbol, direction) seen within the dedup window."""
+        recent: set[tuple[str, str]] = set()
+        if not self.signals_file.exists():
+            return recent
+        try:
+            with open(self.signals_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    ts = d.get("generated_at")
+                    try:
+                        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    except (ValueError, TypeError):
+                        continue
+                    if (datetime.now(timezone.utc) - dt).total_seconds() <= self.DEDUP_WINDOW_SECONDS:
+                        recent.add((str(d.get("symbol") or ""), str(d.get("direction") or "")))
+        except OSError:
+            pass
+        return recent
+
     def record(self, signal: TrackedSignal) -> None:
         """Write a new signal to the tracking file."""
+        # skip duplicate symbol+direction within dedup window
+        if (signal.symbol, signal.direction) in self._recent_keys():
+            return
         try:
             with open(self.signals_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(signal.to_dict(), ensure_ascii=False) + "\n")

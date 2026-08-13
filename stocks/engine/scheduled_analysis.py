@@ -1393,6 +1393,10 @@ def build_scheduled_run(
         "schema_version": SCHEDULED_RUN_SCHEMA_VERSION,
         "run_id": occurrence.run_id,
         "generated_at": generated_at_iso,
+        # P0-2 fix: 记录生产代码版本(commit hash + dirty flag),让 artifact 可追溯、
+        # 跨窗口可比。修复前同一持仓同一天相邻窗口常因盘中部署而用不同版本代码裁决
+        # (cn=需人工确认 / us=直接执行), 无版本记录则无法定位该漂移。
+        "code_version": _code_version(),
         "market": session.market,
         "session": session.id,
         "market_date": occurrence.market_date.isoformat(),
@@ -2386,6 +2390,41 @@ def _build_execution_review_summary(recent_advice: list[dict]) -> dict:
     }
 
 
+
+def _code_version() -> dict:
+    """返回生产代码版本快照: git commit hash、dirty flag、包版本。
+
+    供 artifact 'code_version' 字段用于跨窗口可追溯与版本漂移定位。
+    无法获取 git 信息时返回 unknown,不阻断生成。
+    """
+    import subprocess
+    commit = None
+    dirty = None
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(Path(__file__).resolve().parents[2]),
+        ).stdout.strip() or None
+        dirty_out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(Path(__file__).resolve().parents[2]),
+        ).stdout.strip()
+        dirty = bool(dirty_out)
+    except Exception:
+        commit, dirty = None, None
+    try:
+        from stocks import __version__
+        ver = __version__
+    except Exception:
+        ver = None
+    return {
+        "commit": commit or "unknown",
+        "dirty": dirty if dirty is not None else None,
+        "version": ver,
+    }
+
 def format_run_markdown(run: dict) -> str:
     """Render the deterministic trade-card-first human report."""
     decision = run.get("portfolio_decision") or {}
@@ -2418,6 +2457,16 @@ def format_run_markdown(run: dict) -> str:
             else:
                 estimate = "（估算）" if action.get("amount_is_estimate") else ""
                 lines.append(f"  - 预计金额: ¥{float(amount):,.0f}{estimate}")
+            # P1-2/P2-3 fix: 呈现触发依据(decision_reason)与操作平台/渠道——
+            # Kari"以明确止盈/止损点为决策依据",只见指令不见依据等于把答案藏进抽屉。
+            decision_reason = action.get("decision_reason")
+            if decision_reason:
+                lines.append(f"  - 依据: {decision_reason}")
+            platform = action.get("platform")
+            channel = action.get("operation_channel")
+            if platform:
+                channel_txt = f"（{channel}）" if channel and channel != platform else ""
+                lines.append(f"  - 平台: {platform}{channel_txt}")
             lines.append(f"  - 取消条件: {action.get('cancel_condition', '条件不再成立时取消')}")
             lines.append(f"  - 到账: {action.get('settlement_display', '到账时间待确认')}")
             lines.append(f"  - 下次检查: {action.get('next_checkpoint', '下一交易窗口复核')}")
@@ -2492,6 +2541,12 @@ def format_run_markdown(run: dict) -> str:
     if research:
         for item in research[:8]:
             lines.append(f"- **{item.get('display_label', '未命名标的')}**: {item.get('action_hint', '仅供观察')}")
+            # P1-6 fix: 渲染 sizing/止损纪律(仓位/止损位)。左侧交易者"以明确止盈/止损
+            # 点为决策依据",试仓的仓位与止损是 Kari 需要的最低信息;这些已存在 JSON 的
+            # sizing_hint, 之前渲染层丢弃了它。
+            sizing = item.get("sizing_hint")
+            if sizing:
+                lines.append(f"  - 仓位/止损: {sizing}")
             if item.get("reassess_after"):
                 lines.append(f"  - 再评估: {item['reassess_after']}")
     else:
