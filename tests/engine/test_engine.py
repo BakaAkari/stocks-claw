@@ -640,7 +640,7 @@ class TestFetchNewsIntegration:
 
         calls: list[list] = []
 
-        async def fake_warm(cache, provider, instruments, lookback_days=60):
+        async def fake_warm(cache, provider, instruments, lookback_days=60, **kwargs):
             calls.append(list(instruments))
             return [{"symbol": f"{i.market}:{i.code}", "status": "skipped_cached",
                      "rows": 60} for i in instruments]

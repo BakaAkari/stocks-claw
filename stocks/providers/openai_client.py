@@ -126,7 +126,13 @@ class LLMClient:
         msg = result["choices"][0]["message"]
         content = msg.get("content", "").strip()
         if not content:
-            content = msg.get("reasoning_content", "").strip()
+            # 推理模型(deepseek-v4) content 为空 = reasoning 占满 max_tokens,
+            # 最终答案没产出。不能拿 reasoning_content(推理过程,非 JSON)冒充
+            # 答案,否则上层 json.loads 失败。抛异常让上层 fallback 并记录原因。
+            raise RuntimeError(
+                "LLM returned empty content (reasoning consumed max_tokens); "
+                "raise max_tokens or use a non-reasoning model"
+            )
         return content
 
 

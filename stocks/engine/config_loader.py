@@ -313,29 +313,6 @@ DEFAULT_ENGINE_CONFIG = {
             "utilities": ["equity", "energy"],
             "crypto": ["crypto", "equity"],
         },
-        # Theme → exposure bucket tags for category padding in LLM analyzer.
-        "category_to_positions": {
-            "gold": ["us:NEM", "a:518880", "ccb_gold"],
-            "us_tech": ["us:NVDA", "us:QQQ"],
-            "us_energy": ["us:XLE"],
-            "us_defense": ["us:ITA"],
-            "china_broad": ["a:510300", "a:512890", "a:511880", "a:516020"],
-            "china_sci": ["a:588000", "a:512480", "a:561560"],
-            "qdii": ["alipay_gf_nasdaq", "alipay_dc_nasdaq"],
-            "active": ["alipay_info"],
-            "bonds": ["us:SGOV", "a:159110"],
-        },
-        "category_to_themes": {
-            "gold": ["geopolitics", "monetary_policy", "macro_data"],
-            "us_energy": ["geopolitics", "energy"],
-            "us_tech": ["technology", "earnings", "monetary_policy"],
-            "us_defense": ["geopolitics"],
-            "china_broad": ["macro_data", "monetary_policy", "china_policy"],
-            "china_sci": ["technology", "china_policy"],
-            "qdii": ["technology", "monetary_policy"],
-            "active": ["technology", "earnings"],
-            "bonds": ["monetary_policy", "macro_data"],
-        },
         # Symbol → asset class mapping for market impact scoring.
         "symbol_to_asset": {
             "SPY": "equity", "QQQ": "equity", "NVDA": "equity", "IWM": "equity",

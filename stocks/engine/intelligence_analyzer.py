@@ -785,31 +785,12 @@ class LLMIntelligenceAnalyzer:
             market_impact = self._build_market_impact(llm_result, clusters, macro, signals)
             data_quality = self._build_quality(llm_result, articles, clusters, signals)
 
-            # Backfill affected_symbols from signals when LLM skips them in clusters
-            signal_symbols = {s.symbol for s in signals}
-            if signal_symbols:
-                backfilled = []
-                for cluster in clusters:
-                    syms = list(cluster.affected_symbols) if cluster.affected_symbols else []
-                    if not syms:
-                        # Assign signal symbols whose rationale or direction aligns
-                        # with the cluster theme. Simple: take all signal symbols as
-                        # they are already thematic to the news flow.
-                        syms = sorted(signal_symbols)[:3]
-                    backfilled.append(EventCluster(
-                        cluster_id=cluster.cluster_id,
-                        theme=cluster.theme,
-                        event_type=cluster.event_type,
-                        summary=cluster.summary,
-                        articles=cluster.articles,
-                        affected_markets=cluster.affected_markets,
-                        affected_symbols=syms,
-                        sentiment=cluster.sentiment,
-                        urgency=cluster.urgency,
-                        confidence=cluster.confidence,
-                        formed_at=cluster.formed_at,
-                    ))
-                clusters = backfilled
+            # affected_symbols 保持 LLM 原样(LLM 标了就标了,没标就空)。
+            # 旧 backfill 用 sorted(signal_symbols)[:3] 一刀切回填,让所有
+            # cluster 的 affected_symbols 相同(能源 cluster 标黄金),产生错误
+            # 关联。真正的主题→持仓匹配在消费端 match_intelligence
+            # (theme_to_exposure)。market_impact 在本段之前已用原样 clusters
+            # 算完,不受影响。
 
             # F3(2026-08-12): 不再调用 _pad_category_signals — analyzer 层
             # 静态 9 类 padding 与消费端 match_intelligence 的动态
@@ -983,97 +964,6 @@ class LLMIntelligenceAnalyzer:
                 formed_at=datetime.now(timezone.utc),
             ))
         return clusters
-
-    def _pad_category_signals(
-        self, signals: list[IntelligenceSignal], clusters: list[EventCluster]
-    ) -> list[IntelligenceSignal]:
-        """Ensure every holding category has at least one signal.
-
-        If the LLM didn't cover a category, add a hold signal with the
-        reasoning sourced from the most relevant cluster.
-        """
-        # Category → target symbol mapping (legacy defaults; configure via
-        # DEFAULT_ENGINE_CONFIG["intelligence"]["category_to_positions"]).
-        categories: dict[str, list[str]] = dict(
-            _INTELLIGENCE_CFG.get("category_to_positions", {})
-            or {
-                'gold': ['us:NEM', 'a:518880', 'ccb_gold'],
-                'us_tech': ['us:NVDA', 'us:QQQ'],
-                'us_energy': ['us:XLE'],
-                'us_defense': ['us:ITA'],
-                'china_broad': ['a:510300', 'a:512890', 'a:511880', 'a:516020'],
-                'china_sci': ['a:588000', 'a:512480', 'a:561560'],
-                'qdii': ['alipay_gf_nasdaq', 'alipay_dc_nasdaq'],
-                'active': ['alipay_info'],
-                'bonds': ['us:SGOV', 'a:159110'],
-            }
-        )
-        # Category → cluster theme mapping for rationale sourcing
-        category_theme: dict[str, list[str]] = dict(
-            _INTELLIGENCE_CFG.get("category_to_themes", {})
-            or {
-                'gold': ['geopolitics', 'monetary_policy', 'macro_data'],
-                'us_energy': ['geopolitics', 'energy'],
-                'us_tech': ['technology', 'earnings', 'monetary_policy'],
-                'us_defense': ['geopolitics'],
-                'china_broad': ['macro_data', 'monetary_policy', 'china_policy'],
-                'china_sci': ['technology', 'china_policy'],
-                'qdii': ['technology', 'monetary_policy'],
-                'active': ['technology', 'earnings'],
-                'bonds': ['monetary_policy', 'macro_data'],
-            }
-        )
-
-        # Build reverse proxy: for each signal symbol, what position symbols does it cover?: for each signal symbol, what position symbols does it cover?
-        # E.g. GLD → {"NEM", "a:518880", "ccb_gold"}
-        proxy_covered = set()
-        for s in signals:
-            proxy_covered.add(s.symbol)  # direct match
-            if s.symbol in _INTEL_SIGNAL_PROXY:
-                proxy_covered.add(_INTEL_SIGNAL_PROXY[s.symbol])
-            # Also check if any category symbol contains this signal symbol
-            # E.g. "NVDA" signal → "us:NVDA" position
-            for cat_syms in categories.values():
-                for pos in cat_syms:
-                    if pos.lower().endswith(f":{s.symbol.lower()}") or pos == s.symbol:
-                        proxy_covered.add(pos)
-
-        padded = list(signals)
-        for cat, syms in categories.items():
-            # Only emit for symbols NOT already covered by LLM signals or proxy
-            uncovered = [s for s in syms if s not in proxy_covered]
-            if not uncovered:
-                continue
-            # Find relevant cluster for rationale
-            themes = category_theme.get(cat, ['general'])
-            relevant_clusters = [c for c in clusters if c.theme in themes]
-            if relevant_clusters:
-                best = max(relevant_clusters, key=lambda c: c.confidence)
-                rationale = f"主题[{best.theme}]无直接利空：{best.summary[:60]}"
-                urgency = best.urgency
-                conf = min(0.65, best.confidence)
-            else:
-                rationale = "无相关重大事件，维持持有"
-                urgency = "low"
-                conf = 0.55
-            # Emit hold signal for EVERY uncovered symbol in this category
-            for target in uncovered:
-                padded.append(IntelligenceSignal(
-                    symbol=target,
-                    name=cat,
-                    direction="hold",
-                    horizon="short_term",
-                    rationale=rationale,
-                    falsification="重大事件改变基本面格局",
-                    risk_source="主题切换或突发事件",
-                    confidence=conf,
-                    urgency=urgency,
-                    generated_at=datetime.now(timezone.utc),
-                    generation_method="category_padding",
-                    match_method="category",
-                    source_as_of=datetime.now(timezone.utc),
-                ))
-        return padded
 
     def _parse_signals(self, llm_result: dict) -> list[IntelligenceSignal]:
         signals = []

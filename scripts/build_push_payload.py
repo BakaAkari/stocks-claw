@@ -359,10 +359,6 @@ _THEME_LABELS = {
     "utilities": "电力公用",
     "crypto": "加密货币",
     "earnings": "财报",
-    "tech": "科技",
-    "macro": "宏观",
-    "regulation": "监管",
-    "supply_chain": "供应链",
 }
 
 _URGENCY_LABELS = {"critical": "紧急", "high": "高", "moderate": "中", "medium": "中", "low": "低"}

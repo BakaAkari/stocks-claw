@@ -22,6 +22,11 @@ from tests.engine.test_unified_snapshot import _minimal_context
 NOW = datetime(2026, 8, 1, 8, 0, tzinfo=timezone.utc)
 
 
+def _recent(days_ago: int) -> str:
+    """相对实时 now 的记录时间,避免硬编码过去时间落在 7 天窗口外。"""
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+
+
 def _record(created_at: str, **overrides) -> dict:
     record = {
         "created_at": created_at,
@@ -149,10 +154,10 @@ class TestLedgerWrite:
 
     def test_engine_rollup_reads_ledger(self, engine) -> None:
         _save(engine, _record(
-            (NOW - timedelta(days=1)).isoformat(),
+            _recent(1),
             feedback=make_feedback("partial", "部分执行"),
         ))
-        _save(engine, _record((NOW - timedelta(days=2)).isoformat()))
+        _save(engine, _record(_recent(2)))
         rollup = engine.advice_feedback_rollup(7)
         assert rollup["marked_total"] == 1
         assert rollup["unmarked"] == 1
@@ -166,11 +171,11 @@ class TestSnapshotReflow:
             _minimal_context(),
             recent_advice=[
                 _record(
-                    "2026-07-31T10:00:00+00:00",
+                    _recent(1),
                     feedback={"status": "accepted", "note": "好",
-                              "marked_at": "2026-08-01T00:00:00+00:00"},
+                              "marked_at": _recent(0)},
                 ),
-                _record("2026-07-30T10:00:00+00:00"),
+                _record(_recent(2)),
             ],
         )
         snapshot = build_unified_snapshot(context, session="cn_after_close")
@@ -213,7 +218,7 @@ class TestCLI:
         assert engine.list_advice()[0]["feedback"]["note"] == "smoke"
 
     def test_rollup_readonly(self, engine, capsys) -> None:
-        _save(engine, _record("2026-07-31T10:00:00+00:00",
+        _save(engine, _record(_recent(1),
                               feedback=make_feedback("deferred", "下周再看")))
         self._adapter(engine).run(["--advice-rollup"])
         out = json.loads(capsys.readouterr().out)

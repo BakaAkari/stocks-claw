@@ -263,38 +263,6 @@ class TestLLMIntelligenceAnalyzerCredentials:
             assert cluster.urgency in {"low", "medium", "high", "critical"}
             assert cluster.sentiment in {"positive", "negative", "neutral"}
 
-    def test_category_padding_covers_every_configured_holding(self) -> None:
-        analyzer = LLMIntelligenceAnalyzer()
-        direct_signal = IntelligenceSignal(
-            symbol="NVDA",
-            name="NVIDIA",
-            direction="buy",
-            horizon="short_term",
-            rationale="AI demand remains strong",
-            falsification="Demand weakens",
-            risk_source="llm_analysis",
-            confidence=0.8,
-            urgency="medium",
-            generated_at=datetime.now(timezone.utc),
-        )
-        padded = analyzer._pad_category_signals([direct_signal], [])
-        by_symbol = {signal.symbol: signal for signal in padded}
-        expected_positions = {
-            "us:NEM", "a:518880", "ccb_gold", "us:NVDA", "us:QQQ",
-            "us:XLE", "us:ITA", "a:510300", "a:512890", "a:511880",
-            "a:588000", "a:512480", "a:561560", "a:516020", "alipay_gf_nasdaq",
-            "alipay_dc_nasdaq", "alipay_info", "us:SGOV", "a:159110",
-        }
-        covered_positions = set(by_symbol) | {"us:NVDA"}
-        assert expected_positions <= covered_positions
-        assert by_symbol["NVDA"] is direct_signal
-        assert all(
-            signal.direction == "hold"
-            for symbol, signal in by_symbol.items()
-            if symbol != "NVDA"
-        )
-
-
 class TestIntelligenceHarvester:
     @pytest.mark.asyncio
     async def test_harvest_without_keys(self, tmp_path: Path) -> None:
