@@ -387,6 +387,7 @@ def _intelligence_brief(artifact: dict) -> list[dict]:
         urgency = str(c.get("urgency") or "")
         brief.append({
             "theme": _THEME_LABELS.get(theme, theme),
+            "theme_key": theme,  # 保留英文 theme 供第三门"产业有逻辑"匹配
             "summary": summary,
             "urgency": _URGENCY_LABELS.get(urgency, urgency),
         })
@@ -481,7 +482,9 @@ def _render_trading_payload(payload: dict) -> str:
         sections.append(action_section)
 
     # 4. 提前布局 (M1: new)
-    setup_section = _section_setup_candidates(assistant, card.get("next_checkpoint") or "")
+    setup_section = _section_setup_candidates(
+        assistant, card.get("next_checkpoint") or "", payload.get("intelligence_brief") or []
+    )
     if setup_section:
         sections.append(setup_section)
 
@@ -870,6 +873,49 @@ def _setup_candidate_tail(item: dict) -> str | None:
     return cleaned[:60] if cleaned else None
 
 
+# 第三门"产业有逻辑": 候选产业关键词 → 情报主题(英文 theme)。黄金/宽基
+# 关联两个主题(黄金=地缘避险+货币,宽基=宏观+中国政策),美股代码用小写匹配。
+_INDUSTRY_THEME_KEYWORDS = {
+    "semiconductor": ["半导体", "芯片", "科创", "nvda", "amd", "英伟达", "博通"],
+    # 半导体是科技子集,同时关联 technology(如 AI 算力情报支撑半导体 ETF)
+    "technology": ["科技", "软件", "信息", "算力", "纳指", "igv", "苹果", "apple", "云计算", "互联网", "半导体", "芯片", "nvda", "amd"],
+    "new_energy": ["新能源", "光伏", "锂电", "电池", "储能", "电动车"],
+    "utilities": ["电力", "公用", "vst"],
+    "energy": ["能源", "石油", "原油", "化工", "有色", "稀土", "钢铁", "煤炭", "xle"],
+    "defense": ["军工", "国防", "航天", "ita"],
+    "geopolitics": ["黄金", "贵金属", "金矿", "nem"],
+    "monetary_policy": ["黄金", "贵金属", "固收", "债券", "sgov"],
+    "consumer": ["消费", "白酒", "酒", "食品", "零售"],
+    "healthcare": ["医药", "医疗", "生物", "创新药"],
+    "financials": ["金融", "银行", "券商", "保险"],
+    "real_estate": ["地产", "房地产", "基建"],
+    "macro_data": ["沪深300", "红利", "宽基", "中证"],
+    "china_policy": ["沪深300", "红利", "宽基", "中证"],
+}
+
+
+def _candidate_themes(label: str) -> list[str]:
+    """从候选 display_label 提取产业主题(中文关键词 + 美股代码)。"""
+    text = str(label or "").lower()
+    themes = []
+    for theme, keywords in _INDUSTRY_THEME_KEYWORDS.items():
+        if any(kw.lower() in text for kw in keywords):
+            themes.append(theme)
+    return themes
+
+
+def _related_intel_line(label: str, brief: list[dict]) -> str | None:
+    """第三门"产业有逻辑": 候选产业主题 ∩ 活跃情报主题,带出关联情报。"""
+    candidate_themes = set(_candidate_themes(label))
+    if not candidate_themes:
+        return None
+    matches = [c for c in (brief or []) if c.get("theme_key") in candidate_themes]
+    if not matches:
+        return None
+    best = matches[0]
+    return f"产业逻辑: [{best['theme']}] {best['summary']}"
+
+
 def _left_position_line(item: dict) -> str | None:
     """左侧位置卡: 布林位置/RSI/量比(左侧交易者判断"跌到哪/超卖没/缩量没")。
 
@@ -936,7 +982,7 @@ def _left_batch_plan(item: dict) -> str | None:
     return "分批支撑: " + " / ".join(steps) + "（技术位，非买卖指令）"
 
 
-def _section_setup_candidates(assistant: dict, next_checkpoint: str = "") -> list[str]:
+def _section_setup_candidates(assistant: dict, next_checkpoint: str = "", intel_brief: list[dict] | None = None) -> list[str]:
     """§4 提前布局 — 从 research 提升到主段，展示 top 2-3 候选。"""
     lines: list[str] = [_section_heading("提前布局")]
     research = assistant.get("research") or []
@@ -976,6 +1022,11 @@ def _section_setup_candidates(assistant: dict, next_checkpoint: str = "") -> lis
         batch_plan = _left_batch_plan(item)
         if batch_plan:
             lines.append(f"  {batch_plan}")
+        # 第三门"产业有逻辑": left_bottom(左侧超跌)候选带出关联产业情报。
+        if "左侧超跌" in tag:
+            intel_line = _related_intel_line(label, intel_brief)
+            if intel_line:
+                lines.append(f"  {intel_line}")
         reassess = item.get("reassess_after")
         if reassess and reassess != checkpoint_ref:
             lines.append(f"  复核: {reassess}")

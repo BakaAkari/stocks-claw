@@ -1260,8 +1260,14 @@ def build_user_view(
         # risk_suspend_accumulation condition by downgrading any remaining
         # setup tag to observation so "暂停加仓" never coexists with a
         # "趋势布局" claim.
+        # 激进方案(2026-08-13): 唯一豁免 left_bottom_candidate —— 危机时
+        # 左侧超跌保留"左侧超跌"标签(不降级为观察),sizing_hint 已降为
+        # "危机试仓 1%"。数据过时(quote_stale)仍硬降级(无数据不试仓)。
         condition = str(candidate.get("condition") or "")
-        if candidate.get("quote_stale") or condition == "risk_suspend_accumulation":
+        is_left_bottom = str(candidate.get("signal") or "") == "left_bottom_candidate"
+        if candidate.get("quote_stale") or (
+            condition == "risk_suspend_accumulation" and not is_left_bottom
+        ):
             setup_tag = "观察"
         else:
             setup_tag = _research_signal_label(str(candidate.get("signal") or ""))

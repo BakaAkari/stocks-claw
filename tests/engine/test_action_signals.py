@@ -63,20 +63,27 @@ class TestSignalRules:
         assert item["signal"] == "wait_for_pullback"
 
     def test_deep_downtrend_with_slowing_decline_is_left_bottom_candidate(self):
-        # 深跌但近5根未继续加速，符合左侧轻仓观察条件。
-        prices = [150 - i * 1.2 for i in range(40)]
+        # 趋势未破的深跌: 前45根涨(100→190),后15根深跌但跌势放缓,
+        # MA20 仍在 MA60 上方(多头排列未破 = 回调非反转,左侧可接)。
+        prices = [100 + i * 2.0 for i in range(45)]
+        prices += [190, 182, 175, 169, 164, 160, 157, 155, 153.5, 152.5,
+                   151.8, 151.2, 150.8, 150.5, 150.3]
         result = _run({"us:AAA": prices}, {"us:AAA": _inst("AAA")})
         item = _by_symbol(result)["us:AAA"]
         assert item["signal"] == "left_bottom_candidate"
         assert any("跌势放缓" in reason for reason in item["reasons"])
+        assert any("趋势结构未破" in reason for reason in item["reasons"])
 
     def test_crash_that_stops_accelerating_is_left_bottom_candidate(self):
-        # 高位急跌后末段跌速稳定，不再满足“加速下跌”条件，转为左侧候选。
-        prices = [150.0] * 30 + [150 - i * 4 for i in range(1, 11)]
+        # 高位急跌后末段跌速稳定,且趋势未破(MA20>MA60),转为左侧候选。
+        prices = [100 + i * 2.375 for i in range(40)]
+        prices += [195, 188, 182, 177, 173, 170, 168, 166.5, 165.3, 164.3,
+                   163.6, 163.0, 162.5, 162.1, 161.8, 161.5, 161.3, 161.1, 161.0, 160.9]
         result = _run({"us:AAA": prices}, {"us:AAA": _inst("AAA")})
         item = _by_symbol(result)["us:AAA"]
         assert item["signal"] == "left_bottom_candidate"
         assert any("跌势放缓" in reason for reason in item["reasons"])
+        assert any("趋势结构未破" in reason for reason in item["reasons"])
 
     def test_flat_is_neutral_hold(self):
         # 单标的宇宙(排名无统计意义)+横盘 → 不得误判为轮动候选

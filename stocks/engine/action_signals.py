@@ -141,6 +141,18 @@ def _research_sizing_hint(signal: str, risk_level: str, suspend: bool) -> str:
     """
     base = _RESEARCH_SIZING_HINTS.get(str(signal or ""), "仅供参考，不形成交易动作")
     if suspend:
+        # 激进方案(2026-08-13): 危机时左侧超跌(left_bottom)不暂停,降为"危机
+        # 试仓 1%"。三重门: 超跌+趋势未破已由 left_bottom 条件保证(含 ma60
+        # 门槛),产业逻辑在渲染层带出情报关联。左侧交易者危机超跌恰是机会,
+        # 但必须少量试仓+严格止损,不是无脑抄底。
+        if str(signal or "") == "left_bottom_candidate":
+            stop = ""
+            if "止损：" in base:
+                _, _, stop = base.partition("止损：")
+                stop = "止损：" + stop
+            head = "危机左侧试仓（轻仓 1%，风险自担，严格止损）"
+            parts = [p for p in (head, stop) if p]
+            return "；".join(parts)
         stop = ""
         head = base
         if "止损：" in base:
@@ -175,6 +187,7 @@ def _signal_for_item(
     price: Optional[float],
     ma5: Optional[float],
     ma20: Optional[float],
+    ma60: Optional[float],
     rsi: Optional[float],
     macd_hist: Optional[float],
     price_position: Optional[float],
@@ -195,10 +208,14 @@ def _signal_for_item(
 
     reasons: list[str] = []
 
-    # 1. 左侧抄底：深跌超卖且跌势放缓，轻仓试仓
+    # 1. 左侧抄底：深跌超卖且跌势放缓，轻仓试仓。
+    # 三重门之一"趋势未破": MA20 仍在 MA60 上方 = 多头排列 = 长期趋势未破坏。
+    # 深跌(price<MA20)但 MA20>MA60 是"回调";MA20<MA60 是"反转"(不接)。
     if (
         ma20 is not None
         and price < ma20 * (1 + t['left_bottom_pullback_cooldown'])
+        and ma60 is not None
+        and ma20 > ma60
         and ((rsi is not None and rsi <= t['left_bottom_rsi_max']) or
                (price_position is not None and price_position <= t['left_bottom_price_position_max']))
         and r20 is not None
@@ -207,6 +224,7 @@ def _signal_for_item(
         and r5 > r20  # 5-day total跌幅 not worse than 20-day total (stabilizing)
     ):
         reasons.append(f"现价 {price:.2f} 低于 MA20 {ma20:.2f}，不超过{t['left_bottom_pullback_cooldown']*100:.0f}%")
+        reasons.append(f"MA20 {ma20:.2f} 仍在 MA60 {ma60:.2f} 上方，趋势结构未破（回调非反转）")
         if rsi is not None and rsi <= t['left_bottom_rsi_max']:
             reasons.append(f"RSI {rsi:.1f} 处于超卖或接近超卖区（≤{t['left_bottom_rsi_max']}）")
         if price_position is not None and price_position <= t['left_bottom_price_position_max']:
@@ -495,6 +513,7 @@ def compute_action_signals(
             price=price,
             ma5=indicators.get("ma_5"),
             ma20=indicators.get("ma_20"),
+            ma60=indicators.get("ma_60"),
             rsi=indicators.get("rsi_14"),
             macd_hist=macd.get("hist"),
             price_position=indicators.get("price_position"),
