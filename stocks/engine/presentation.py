@@ -1211,6 +1211,36 @@ def build_user_view(
             "operation_channel": op_hint,
         })
 
+    # P0-3 fix: approved_cards=all_approved[:3] 把超名额但可执行的获批卖出动作
+    # 直接排除在展示之外，导致场外基金止盈(无实时行情被gate拒)+被截断的可执行动作
+    # 对用户完全不可见。遍历 all_approved，凡未成为卡片的获批卖出(reduce/止盈/止损)
+    # 都纳入 suppressed reference，让渲染层能呈现"还有N项获批动作"。
+    shown_pids = {str(raw.get("position_id") or "") for raw in approved_cards}
+    for raw in all_approved:
+        pid = str(raw.get("position_id") or "")
+        if pid in shown_pids:
+            continue
+        if str(raw.get("signal") or "") not in {"reduce", "take_profit", "stop_loss"}:
+            continue
+        item = by_id.get(pid, {})
+        ratio = raw.get("final_ratio")
+        if not (isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and ratio > 0):
+            continue
+        label = _display_for_position(item)
+        already = {r.get("display_label") for r in suppressed_reference}
+        if label in already:
+            continue
+        market = _instrument_market(item.get("instrument_key", ""))
+        quote_stale = _market_quote_stale(market, by_market)
+        suppressed_reference.append({
+            "display_label": label,
+            "signal_type": signal_label(raw.get("signal", "")),
+            "ratio": raw.get("final_ratio"),
+            "executable_quantity": raw.get("executable_quantity"),
+            "estimated_amount_cny": None if quote_stale else raw.get("estimated_amount_cny"),
+            "amount_blocked_reason": "行情数据过时，金额待数据恢复后确认" if quote_stale else None,
+        })
+
     no_action_reasons = list(deferred_reasons)
     approved_pids = {str(raw.get("position_id") or "") for raw in approved_cards}
     for conflict in decision.get("unresolved_conflicts") or []:

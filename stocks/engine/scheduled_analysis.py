@@ -2425,6 +2425,23 @@ def format_run_markdown(run: dict) -> str:
         for reason in (card.get("no_action_reasons") or ["当前没有满足执行条件的获批动作"])[0:2]:
             lines.append(f"- 原因: {reason}")
         lines.append(f"- 下次检查: {card.get('next_checkpoint', '下一交易窗口复核')}")
+    # P0-3 fix: 被展示名额(actions[:3])截断的可执行动作不得静默消失——显式提示用户
+    # 还有几项未展示，避免 Kari 看不到完整的止盈/减仓指令。
+    overflow = int(card.get("actions_overflow") or 0)
+    if overflow > 0:
+        lines.append(f"- 注: 另有 {overflow} 项已获批可执行动作未在此完整展示，请以下一窗口/完整复核为准")
+    # P0-3 fix: 被执行/数据门禁暂缓但仍获批的动作(如场外基金无实时行情)须呈现，
+    # 不得静默丢弃——Kari 明确要求"系统有问题就告诉我系统有问题，不要掩盖"。
+    for ref in (card.get("suppressed_actions_reference") or [])[:3]:
+        ratio = ref.get("ratio")
+        ratio_txt = f" {ratio * 100:.0f}%" if isinstance(ratio, (int, float)) else ""
+        amount = ref.get("estimated_amount_cny")
+        amount_txt = f"，金额 {float(amount):,.0f} 元" if amount is not None else ""
+        note = f"（{ref.get('amount_blocked_reason')}）" if ref.get("amount_blocked_reason") else ""
+        lines.append(
+            f"- **{ref.get('signal_type', '动作')}｜{ref.get('display_label', '未命名持仓')}**"
+            f"{ratio_txt}{amount_txt}{note}（暂缓，待人工核实）"
+        )
 
     lines.extend(["", "**私人投资助理**", "", "**为什么这样安排**"])
     for reason in (assistant.get("why") or ["当前决策以组合裁决结果为准"])[0:5]:
@@ -2449,6 +2466,11 @@ def format_run_markdown(run: dict) -> str:
     for key in ("available_now", "confirmed_settling", "planned_release", "strategic_exit", "locked", "safety_buffer"):
         item = cash.get(key) or {}
         lines.append(f"- {item.get('label', '资金待确认')}: ¥{float(item.get('amount_cny') or 0.0):,.0f}")
+    # P0-4 fix: "到账途中/卖出后可用"含已批准但尚未确认成交的卖出估算。
+    # 引擎 stateless，无法知道 Kari 是否已执行卖出；必须诚实标注"估算、以成交为准"，
+    # 否则 Kari 会把建议回款当成真金在途（Kari 核心原则：系统有问题就说，不要掩盖）。
+    if cash.get("pending_sell"):
+        lines.append("- 注: “到账途中/卖出后可用”含已批准但尚未确认成交的卖出估算，实际到账以成交为准")
 
     risk = assistant.get("risk") or {}
     lines.extend(["", "**组合与风险**"])
