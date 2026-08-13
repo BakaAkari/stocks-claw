@@ -46,10 +46,10 @@ Output JSON format:
   "actions": [],
   "hold_decisions": [],
   "do_not_do": ["string"],
-  "sector_opportunities": [],
-  "asset_class_opportunities": [],
+  "sector_opportunities": [{{"target": "板块名", "action": "buy|sell|reduce|add", "reasoning": "中文理由"}}],
+  "asset_class_opportunities": [{{"target": "资产类别", "action": "buy|sell|reduce|add", "reasoning": "中文理由"}}],
   "watchlist_candidates": [],
-  "scenarios": [],
+  "scenarios": [3 个情景, name 必须是 base/bull/risk],
   "forecast_candidates": [],
   "next_checkpoints": ["string"],
   "data_limitations": ["string"]
@@ -88,15 +88,16 @@ Action object fields:
   "confidence": "low|medium|high"
 }}
 
-Scenario object fields:
+Scenario object fields (MUST output exactly 3 scenarios, one per name):
 {{
-  "name": "string",
+  "name": "base|bull|risk",
   "description": "string",
   "trigger": "string",
   "invalidation": "string",
   "evidence_refs": ["fact_id"],
   "confidence": "low|medium|high"
 }}
+- base = 基准情景(当前趋势延续), bull = 乐观情景(利好兑现), risk = 风险情景(利空兑现)。
 
 Forecast object fields:
 {{
@@ -111,6 +112,8 @@ Forecast object fields:
 }}
 
 Rules:
+- MUST output exactly 3 scenarios, one each with name "base"/"bull"/"risk" (基准/乐观/风险情景).
+- sector_opportunities / asset_class_opportunities MUST be structured objects with a directional action (buy/sell/reduce/add), never plain strings and never "watch" — the report needs the direction, not just "observe".
 - Every action must include at least one `evidence_refs` from the snapshot.
 - Every action object must include a valid `action` field (buy|sell|reduce|add|hold|watch|defer); never omit it, even in `hold_decisions` — each hold decision must carry "action": "hold".
 - Do NOT output absolute CNY amounts. Use ratios, share counts, or "defer".
