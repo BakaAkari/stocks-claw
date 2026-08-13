@@ -813,7 +813,7 @@ _OUTLOOK_ALLOWED_TOP = frozenset({
 _OUTLOOK_HORIZON_ALLOWED = frozenset({
     "horizon", "direction", "confidence", "rationale", "validation", "falsification",
 })
-_OUTLOOK_VIEW_ALLOWED = frozenset({"asset_class", "asset", "sector", "direction", "rationale"})
+_OUTLOOK_VIEW_ALLOWED = frozenset({"asset_class", "asset", "sector", "direction", "rationale", "affected_positions"})
 _OUTLOOK_SCENARIO_ALLOWED = frozenset({
     "label", "drivers", "portfolio_effect", "validation", "invalidation",
 })
@@ -887,9 +887,14 @@ def project_outlook_for_display(outlook: dict | None) -> dict:
                     projected = {}
                     for vk in _OUTLOOK_VIEW_ALLOWED:
                         vv = item.get(vk)
-                        s = _str(vv)
-                        if s is not None:
-                            projected[vk] = s
+                        if vk == "affected_positions":
+                            lst = _str_list(vv, max_items=6)
+                            if lst:
+                                projected[vk] = lst
+                        else:
+                            s = _str(vv)
+                            if s is not None:
+                                projected[vk] = s
                     if projected:
                         items.append(projected)
                     if len(items) >= max_items:
