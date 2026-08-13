@@ -8,6 +8,16 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
+> Last updated: 2026-08-13 (twenty-first update) — **危机左侧试仓(激进方案)**。
+> 按 Kari 决策(路线B激进): 危机时左侧超跌标的允许少量试仓,不做一刀切暂停。
+> 三重门: 超跌(left_bottom 已有) + 趋势未破(新增 MA20>MA60 多头排列) +
+> 产业有逻辑(新增 产业关键词→情报主题映射,left_bottom 带出关联情报)。
+> 危机豁免: suspend 时 left_bottom 降为"危机试仓 1% 严格止损",setup_tag
+> 保留"左侧超跌"。全量 1416 passed / 0 failed / 7 skipped。
+> HEAD 05cfa08, 工作树 clean。
+> 前次: 左侧交易辅助系统改造(v2.12) + 迭代残留清理(32d9ad6)。
+> Next: 分批档位表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面。
+
 > Last updated: 2026-08-13 (twentieth update) — **左侧交易辅助系统改造**。
 > 按 Kari 目标(改成左侧交易者可用)落地一整轮: 左侧位置卡(布林位置/RSI/量比)
 > + 分批支撑位(MA20/布林下轨/MA60, 只显示价格下方支撑) + 产业情报板块
@@ -23,6 +33,29 @@ none of them record phase/completion status — that lives here only.
 > Next: 危机暂停加仓 vs 左侧逆向(危机时允许左侧超跌标的试仓) / 分批档位
 > 表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面专项。
 
+
+## 2026-08-13 危机左侧试仓（激进方案 v2.13）
+
+**Full pytest 1416 passed, 0 failed, 7 skipped。**
+
+**目标**: Kari 拍板路线 B(激进)——危机时左侧超跌标的允许少量试仓,把
+左侧逆向真正落进信号层,不做危机一刀切"暂停加仓"。
+
+**三重门**:
+1. 超跌: left_bottom_candidate 已有条件(RSI≤40 或布林≤25 + r20≤-10 + 跌势放缓)。
+2. 趋势未破(新增): MA20>MA60 = 多头排列未破坏,区分"回调"(可接)与"反转"(不接)。
+3. 产业有逻辑(新增): 产业关键词→情报主题映射表,left_bottom 候选带出关联
+   产业情报(黄金→地缘+货币,宽基→宏观+中国政策,半导体→半导体+科技)。
+
+**危机豁免**:
+- sizing hint: suspend 时 left_bottom 不替换成"暂停加仓",降为"危机左侧
+  试仓(轻仓 1%,风险自担,严格止损)"。
+- setup_tag: suspend 时 left_bottom 保留"左侧超跌"标签不降级(数据过时
+  quote_stale 仍硬降级,无数据不试仓)。
+
+**验证**: 单元测试验证映射(半导体/黄金/宽基/军工/有色/酒/医药 → 正确
+theme), 全量 1416 passed。当前 A股 ETF 温和上涨无 left_bottom 触发,
+第三门逻辑就位等市场深跌时触发。
 
 ## 2026-08-13 左侧交易辅助系统改造（v2.12）
 
