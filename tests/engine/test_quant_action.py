@@ -57,3 +57,36 @@ class TestMa20PullbackAddRatios:
 
     def test_third_tier_below_two_pct(self):
         assert self.review(97.5).ratio == pytest.approx(-0.05)
+
+
+class TestHighConvictionAdd:
+    """变现侧：高置信(技术面确定性高) → 加仓比例与上限上调。"""
+
+    @staticmethod
+    def review(price: float, r20: float = 3.0):
+        engine = QuantActionEngine(
+            {"ma_20": 100.0, "macd": {"hist": 1.0}, "rsi_14": 50.0, "r20": r20},
+            {},
+        )
+        return engine.review_position(
+            position_id="p", price=price, cost=100.0, pnl_pct=0.0,
+            one_day_change_pct=0.0, current_weight_pct=1.0, quantity=1.0,
+        )
+
+    def test_deep_pullback_high_conviction_adds_5pct_and_15pct_limit(self):
+        r = self.review(97.5)  # deviation 2.5% → evidence 0.725 ≥ 0.7
+        assert r.signal == "add"
+        assert r.ratio == pytest.approx(-0.05)
+        assert r.position_limit_pct == pytest.approx(15.0)
+
+    def test_shallow_pullback_regular_add_2pct_5pct_limit(self):
+        r = self.review(99.5, r20=1.0)  # deviation 0.5% → evidence 0.425, 趋势未确认
+        assert r.signal == "add"
+        assert r.ratio == pytest.approx(-0.02)
+        assert r.position_limit_pct == pytest.approx(5.0)
+
+    def test_trend_confirmed_add_uses_10pct_limit(self):
+        r = self.review(101.0)  # price > ma20, r20=3 → 趋势确认 → 上限 10%
+        assert r.signal == "add"
+        assert r.ratio == pytest.approx(-0.02)
+        assert r.position_limit_pct == pytest.approx(10.0)

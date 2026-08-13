@@ -36,6 +36,10 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "chase_enabled": False,
     "trend_break_extra_deviation_pct": 0.0,
     "max_single_position_pct": 15.0,
+    # ── 变现侧：高置信加仓 ──
+    "high_conviction_evidence_threshold": 0.7,
+    "high_conviction_add_ratio": 0.05,
+    "high_conviction_limit_pct": 15.0,
 }
 
 # ── 旧键名 → 新键名映射（用于兼容迁移）──

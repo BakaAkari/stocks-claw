@@ -141,6 +141,10 @@ _DEFAULT_QUANT_CONFIG: dict = {
     "left_add_min_rsi": 40.0,
     "ma20_pullback_add_ratios": [0.02],
     "trend_break_extra_deviation_pct": 0.0,
+    # ── 变现侧：高置信加仓（高胜率要重仓变现，不能永远轻仓）──
+    "high_conviction_evidence_threshold": 0.7,
+    "high_conviction_add_ratio": 0.05,
+    "high_conviction_limit_pct": 15.0,
 }
 
 
@@ -335,32 +339,51 @@ class QuantActionEngine:
             near_ma20 = 0.97 <= price / ma20 <= 1.03
             rsi_ok = rsi is None or (c["left_add_min_rsi"] <= rsi <= c["left_add_max_rsi"])
             macd_ok = macd_hist is None or macd_hist >= 0
-            # 仓位上限门：已接近 position_limit → 不加仓
-            limit = c.get("default_position_limit_pct", 5.0)
+            # 回踩偏离度 → 技术面确定性（与 _build 高置信判定同源）
+            deviation_ma20 = (ma20 - price) / ma20  # >0 = 低于MA20
+            evidence_from_retrace = min(0.8, 0.35 + deviation_ma20 * 15.0)
+            technical_evidence = round(evidence_from_retrace, 2)
+            high_conviction = technical_evidence >= float(c.get("high_conviction_evidence_threshold", 0.7))
+            # 趋势确认（与 _build 同源）：价格站上 MA20 + R20>2 + MACD 未走坏
+            r20 = self.indicators.get("r20")
+            trend_confirmed = (
+                price > ma20
+                and r20 is not None and r20 > 2.0
+                and (macd_hist is None or macd_hist > 0)
+            )
+            # 仓位上限门：高置信 → 15%；趋势确认 → 10%；否则默认 5%
+            if high_conviction:
+                limit = float(c.get("high_conviction_limit_pct", 15.0))
+            elif trend_confirmed:
+                limit = float(c.get("trend_confirmed_limit_pct", 10.0))
+            else:
+                limit = float(c.get("default_position_limit_pct", 5.0))
             weight_ok = (current_weight_pct or 0) < limit * 0.8
             if near_ma20 and rsi_ok and macd_ok and weight_ok                     and pnl_pct is not None and pnl_pct < 5.0:
                 ladder = c.get("ma20_pullback_add_ratios", [0.02])
-                # MA20 偏离驱动档位（与触发条件同源）
-                deviation_ma20 = (ma20 - price) / ma20  # >0 = 低于MA20
-                tier = 0
-                if deviation_ma20 > 0.02 and len(ladder) > 2:
-                    tier = 2
-                elif deviation_ma20 > 0.01 and len(ladder) > 1:
-                    tier = 1
-                add_size = ladder[min(tier, len(ladder) - 1)]
-                add_pct = round(add_size * 100)
-                tier_label = ["首档", "二档", "三档"][tier] if tier < 3 else f"档位{tier+1}"
+                # 变现侧：高置信 → 加仓比例上调；否则按 MA20 偏离阶梯
+                if high_conviction:
+                    add_size = float(c.get("high_conviction_add_ratio", 0.05))
+                    add_pct = round(add_size * 100)
+                    tier_label = "高置信"
+                else:
+                    tier = 0
+                    if deviation_ma20 > 0.02 and len(ladder) > 2:
+                        tier = 2
+                    elif deviation_ma20 > 0.01 and len(ladder) > 1:
+                        tier = 1
+                    add_size = ladder[min(tier, len(ladder) - 1)]
+                    add_pct = round(add_size * 100)
+                    tier_label = ["首档", "二档", "三档"][tier] if tier < 3 else f"档位{tier+1}"
                 facts_extras = [
                     f"价格回踩 MA20（偏离 {deviation_ma20:.1%}），RSI {rsi}，MACD 未走坏",
                 ]
-                if len(ladder) > 1:
+                if not high_conviction and len(ladder) > 1:
                     remaining = [f"{round(s*100)}%" for s in ladder[tier+1:]]
                     if remaining:
                         facts_extras.append(
                             f"加仓阶梯({tier_label} {add_pct}%)：偏离扩大后→ {', '.join(remaining)}"
                         )
-                evidence_from_retrace = min(0.8, 0.35 + deviation_ma20 * 15.0)
-                technical_evidence = round(evidence_from_retrace, 2)
                 return self._build(position_id, "add",
                     f"回踩 MA20（偏离 {deviation_ma20:.1%}），加仓 {add_pct}%（{tier_label}）", -add_size,
                     facts_extras,
@@ -390,7 +413,12 @@ class QuantActionEngine:
             and r20 is not None and r20 > 2.0
             and (macd_hist is None or macd_hist > 0)
         )
-        if trend_confirmed:
+        # 变现侧：高置信 → 上限上调（优先级高于趋势确认）
+        high_conviction = technical_evidence >= float(c.get("high_conviction_evidence_threshold", 0.7))
+        if high_conviction:
+            limit = c.get("high_conviction_limit_pct", 15.0)
+            facts.append("高置信，单标上限可拓展至 15%")
+        elif trend_confirmed:
             limit = c["trend_confirmed_limit_pct"]
             facts.append("趋势确认，单标上限可拓展至 10%")
 

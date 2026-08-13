@@ -197,6 +197,10 @@ DEFAULT_ENGINE_CONFIG = {
         "trend_confirmed_limit_pct": 10.0,
         "left_add_max_rsi": 65.0,
         "left_add_min_rsi": 40.0,
+        # 变现侧：高置信加仓
+        "high_conviction_evidence_threshold": 0.7,
+        "high_conviction_add_ratio": 0.05,
+        "high_conviction_limit_pct": 15.0,
         # Signal thresholds used by action_signals.py; add per-market overrides here.
         "thresholds": {
             "knife_r5": -3.0,
