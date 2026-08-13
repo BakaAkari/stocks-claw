@@ -926,11 +926,9 @@ class TestGoldOverAllocationAdd:
 class TestEquityUnderWeightReduceNoAlternative:
     """Equity under min with reduce signal but no alternative -> review_required."""
 
-    def test_review_required_when_no_alternative(self):
+    def test_reduce_approved_when_no_alternative(self):
         """Equity under min + reduce signal + no alternative equity buy ->
-        review_required, and NO fabricated partial action (P1-1: the
-        conflict is handed to the user unresolved; the old 50%-default
-        execution was removed)."""
+        approved (左侧风控减仓豁免权益低配约束, 直接批准, 不锁死成 conflict)."""
         cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
                             raw_signal="reduce", raw_ratio=0.3)]
         positions = [
@@ -951,13 +949,13 @@ class TestEquityUnderWeightReduceNoAlternative:
             run_id=_run_id(), rule_version=RULE_VERSION,
         )
 
-        assert decision.status == "review_required"
-        assert decision.approved_actions == []
-        assert len(decision.unresolved_conflicts) > 0
-        assert decision.unresolved_conflicts[0]["position_id"] == "cn_588000"
+        assert len(decision.approved_actions) == 1
+        assert decision.approved_actions[0].signal == "reduce"
+        assert "豁免权益低配约束" in decision.approved_actions[0].reason
+        assert len(decision.unresolved_conflicts) == 0
 
-    def test_unresolved_conflict_mentions_equity_bucket(self):
-        """The unresolved conflict must reference the equity bucket."""
+    def test_reduce_reason_mentions_equity_underweight(self):
+        """The approved reduce action's reason must reference equity under-weight."""
         cards = [_make_card("cn_588000", signal="reduce", ratio=0.3,
                             raw_signal="reduce", raw_ratio=0.3)]
         positions = [
@@ -974,8 +972,8 @@ class TestEquityUnderWeightReduceNoAlternative:
             cards, evidences, constraints, risk, _liquidity(),
             run_id=_run_id(), rule_version=RULE_VERSION,
         )
-        conflict_texts = [c.get("message", "") for c in decision.unresolved_conflicts]
-        assert any("权益" in t for t in conflict_texts)
+        reduce_reasons = [a.reason for a in decision.approved_actions if a.signal == "reduce"]
+        assert any("权益低配" in r for r in reduce_reasons)
 
 
 # ── Fixture 4: 权益低配减仓有替代 ─────────────────────────────────────

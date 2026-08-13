@@ -897,50 +897,53 @@ def adjudicate_portfolio(
             else:
                 did = make_decision_id(run_id, reduce_pid, card.get("raw_signal", ""),
                                        card.get("raw_ratio", 0.0), rule_version)
-                equity_value = sum(
-                    (ev.get("market_value_cny", 0.0) or 0.0)
-                    for ev in evidences.values()
-                    if "\u6743\u76ca" in _get_exposure_buckets(ev)
-                )
-                portfolio_value = sum(
-                    ev.get("market_value_cny", 0.0) or 0.0
-                    for ev in evidences.values()
-                )
-                conflicts.append({
-                    "position_id": reduce_pid,
-                    "signal": card.get("signal", ""),
-                    "bucket": "权益",
-                    "bucket_ratio": round(equity_pct, 6),
-                    "bucket_min": round(equity_min_pct, 6),
-                    "bucket_value_cny": round(equity_value, 2),
-                    "portfolio_value_cny": round(portfolio_value, 2),
-                    "calculation": "position-deduplicated exposure_tags -> bucket",
-                    "message": (
-                        f"权益占比 {equity_pct*100:.1f}% 低于下限 {equity_min_pct*100:.0f}%，"
-                        f"但 {reduce_pid} 触发 {card.get('signal', '')}。未找到替代，需人工审核。"
-                    ),
-                    "decision_id": did,
-                })
-                if card.get("signal") == "stop_loss":
+                sig = card.get("signal", "")
+                # 左侧交易纪律(遇高减仓/趋势破位砍)是主动操作, 不应被"权益低配"
+                # 组合约束锁死。减仓后资金等回调再分批买回(高抛低吸), 权益占比
+                # 会恢复, 因此豁免低配约束、直接批准, 仅保留"权益低配需复核"提示。
+                # 比例用 quant_action 计算的 card ratio, 不编造默认值。
+                if sig in ("stop_loss", "take_profit", "reduce"):
+                    if sig == "stop_loss":
+                        reason = "硬止损不受约束限制，但权益低配需复核"
+                    elif sig == "take_profit":
+                        reason = "左侧止盈(遇高减仓)豁免权益低配约束：兑现后等回调再分批买回，权益低配需复核"
+                    else:
+                        reason = "左侧风控减仓(趋势转弱)豁免权益低配约束：降低敞口是纪律，权益低配需复核"
                     approved.append(_finalize_approved_action(
-                        position_id=reduce_pid, signal=card["signal"],
+                        position_id=reduce_pid, signal=sig,
                         action_description=card.get("action", ""),
                         ratio=card.get("ratio", 0.0), decision_id=did,
-                        reason="硬止损不受约束限制，但权益低配需复核",
+                        reason=reason,
                         ev=evidences.get(reduce_pid, {}), card=card,
                         execution_rules=execution_rules,
                     ))
                     suppressed_pids.add(reduce_pid)
                 else:
-                    # Adversarial review P1-1: a directional conflict
-                    # (equity under-weight vs reduce signal, no replacement)
-                    # must be handed to the user unresolved. The previous
-                    # "execute 50% by default" rule fabricated an arbitrary
-                    # number in exactly the situation where VISION §3.3
-                    # forbids default-rule answers. No approved action is
-                    # produced; the conflict above is the only output.
+                    equity_value = sum(
+                        (ev.get("market_value_cny", 0.0) or 0.0)
+                        for ev in evidences.values()
+                        if "权益" in _get_exposure_buckets(ev)
+                    )
+                    portfolio_value = sum(
+                        ev.get("market_value_cny", 0.0) or 0.0
+                        for ev in evidences.values()
+                    )
+                    conflicts.append({
+                        "position_id": reduce_pid,
+                        "signal": sig,
+                        "bucket": "权益",
+                        "bucket_ratio": round(equity_pct, 6),
+                        "bucket_min": round(equity_min_pct, 6),
+                        "bucket_value_cny": round(equity_value, 2),
+                        "portfolio_value_cny": round(portfolio_value, 2),
+                        "calculation": "position-deduplicated exposure_tags -> bucket",
+                        "message": (
+                            f"权益占比 {equity_pct*100:.1f}% 低于下限 {equity_min_pct*100:.0f}%，"
+                            f"但 {reduce_pid} 触发 {sig}。未找到替代，需人工审核。"
+                        ),
+                        "decision_id": did,
+                    })
                     suppressed_pids.add(reduce_pid)
-
     # Priority 4b (M4): per-pool bucket-limit checks. Active only when
     # bucket_limits are defined (the legacy global pass is disabled above).
     # Mirrors Priority 4/5 semantics per pool: max breach suppresses adds,
