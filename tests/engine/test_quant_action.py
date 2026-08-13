@@ -90,3 +90,15 @@ class TestHighConvictionAdd:
         assert r.signal == "add"
         assert r.ratio == pytest.approx(-0.02)
         assert r.position_limit_pct == pytest.approx(10.0)
+
+    def test_take_profit_does_not_trigger_high_conviction_limit(self):
+        engine = QuantActionEngine(
+            {"ma_20": 100.0, "macd": {"hist": 1.0}, "rsi_14": 50.0, "r20": 3.0},
+            {},
+        )
+        r = engine.review_position(
+            position_id="p", price=120.0, cost=100.0, pnl_pct=40.0,
+            one_day_change_pct=0.0, current_weight_pct=1.0, quantity=1.0,
+        )
+        assert r.signal == "take_profit"
+        assert r.position_limit_pct == pytest.approx(10.0)  # 止盈不触发高置信15%,走趋势确认10%

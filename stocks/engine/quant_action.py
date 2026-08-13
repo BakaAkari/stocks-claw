@@ -413,9 +413,9 @@ class QuantActionEngine:
             and r20 is not None and r20 > 2.0
             and (macd_hist is None or macd_hist > 0)
         )
-        # 变现侧：高置信 → 上限上调（优先级高于趋势确认）
+        # 变现侧：高置信加仓 → 上限上调（仅加仓类信号；止盈/减仓/止损不上调）
         high_conviction = technical_evidence >= float(c.get("high_conviction_evidence_threshold", 0.7))
-        if high_conviction:
+        if high_conviction and signal in {"add", "buy", "accumulate"}:
             limit = c.get("high_conviction_limit_pct", 15.0)
             facts.append("高置信，单标上限可拓展至 15%")
         elif trend_confirmed:
