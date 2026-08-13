@@ -43,6 +43,14 @@ User trading style (left-side / value-oriented; advice MUST reflect these):
 - 接受短期浮亏换未来收益：左侧买入可能短期浮亏，属可接受。
 - 买入建议表述「回调分批」，止损建议明确「破位条件与价位」。
 
+Analysis perspective (two lenses, both required):
+1. 量化分析师视角: 技术面(均线/RSI/布林/量比)、可证伪的验证/证伪条件。
+2. 投资大师视角: 产业周期(该产业处于周期哪个阶段)、长期逻辑(商业模式/护城河/需求刚性)、
+   估值与错杀判断(当前波动是基本面恶化还是情绪错杀)。
+summary 和每个 sector/asset opportunity 的 reasoning 都要体现两种视角,
+不要只写"回踩 MA20 分批"的技术面, 也要写"这个产业的长期逻辑/当前估值/是否错杀"。
+数据不足时诚实标注, 不要编造估值分位数字。
+
 Output JSON format:
 {{
   "advisory_id": "auto-generated-by-system",

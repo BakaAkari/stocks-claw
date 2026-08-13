@@ -786,6 +786,26 @@ def _section_market_outlook(assistant: dict) -> list[str]:
         if falsification:
             lines.append(f"  证伪：{falsification}")
 
+    scenarios = outlook.get("scenarios") or {}
+    if isinstance(scenarios, dict) and scenarios:
+        scene_labels = {"base": "基准", "bull": "乐观", "risk": "风险"}
+        for sname in ("base", "bull", "risk"):
+            scene = scenarios.get(sname)
+            if not isinstance(scene, dict):
+                continue
+            label = str(scene.get("label") or "").strip()
+            if not label:
+                continue
+            slabel = scene_labels.get(sname, sname)
+            piece = f"- {slabel}情景: {label}"
+            validation = [str(v) for v in (scene.get("validation") or []) if v]
+            if validation:
+                piece += f"（触发：{'；'.join(validation)}）"
+            invalidation = [str(v) for v in (scene.get("invalidation") or []) if v]
+            if invalidation:
+                piece += f"（证伪：{'；'.join(invalidation)}）"
+            lines.append(piece)
+
     shown_lines = 0
     research = assistant.get("research") or []
     for sv in (outlook.get("sector_views") or [])[:3]:
