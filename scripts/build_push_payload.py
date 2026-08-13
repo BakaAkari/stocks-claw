@@ -525,8 +525,13 @@ def _render_trading_payload(payload: dict) -> str:
         lines.append("当前无输出内容")
         return "\n".join(lines)
 
-    for section in sections:
-        lines.append("")
+    for i, section in enumerate(sections):
+        if i > 0:
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        else:
+            lines.append("")
         lines.extend(section)
 
     return "\n".join(lines)
@@ -557,8 +562,22 @@ def _rationale_text(rationale: str) -> str:
 
 
 
+_SECTION_EMOJI = {
+    "本窗口变化": "🔄",
+    "走势研判": "📊",
+    "产业情报": "🗞️",
+    "可执行动作": "✅",
+    "提前布局": "🎯",
+    "禁止与延后": "⛔",
+    "组合与检查点": "💰",
+    "明日计划": "📅",
+}
+
+
 def _section_heading(title: str) -> str:
-    return f"**{title}**"
+    emoji = _SECTION_EMOJI.get(title, "")
+    # emoji 放 ** 外, 保持 "**标题**" 精确匹配(校验器靠它定位 section)
+    return f"{emoji} **{title}**" if emoji else f"**{title}**"
 
 
 def _window_delta_human_changes(window_delta: dict) -> list[str]:

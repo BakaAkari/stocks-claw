@@ -218,7 +218,7 @@ def test_renderer_preserves_signal_classification_and_never_invents_totals():
     assert "**组合与检查点**" in text
     assert "manual_review" not in text
     assert "approved_actions" not in text
-    assert "---" not in text
+    assert "---" in text  # section 之间用 --- 分隔线分割
 
 
 def test_renderer_reads_canonical_cash_keys_not_legacy_immediate_settling():
