@@ -43,15 +43,18 @@ def _by_symbol(result: dict) -> dict:
 
 
 class TestSignalRules:
-    def test_uptrend_not_hot_is_accumulate(self):
-        # 带回撤的净上升趋势(+1.0/-0.6 交替):强度有效且 RSI 不过热
-        prices = [100.0]
-        for i in range(39):
-            prices.append(prices[-1] + (1.0 if i % 2 == 0 else -0.6))
+    def test_pullback_to_ma20_is_accumulate(self):
+        # 左侧越跌越布局：先涨建立多头排列(MA20>MA60)，再回踩到 MA20 附近
+        # (price/MA20 约 0.977，趋势未破，RSI 中性) → accumulate_candidate
+        prices = [100 + i * 1.0 for i in range(60)]  # 100 -> 159
+        base = prices[-1]  # 159
+        step = (base - 152) / 19  # 回踩到 152
+        prices = prices[:-1] + [base - step * i for i in range(20)]
         result = _run({"us:AAA": prices}, {"us:AAA": _inst("AAA")})
         item = _by_symbol(result)["us:AAA"]
         assert item["signal"] == "accumulate_candidate"
-        assert any("MA20" in reason for reason in item["reasons"])
+        assert any("回踩" in reason for reason in item["reasons"])
+        assert any("趋势" in reason for reason in item["reasons"])
 
     def test_hot_uptrend_is_wait_for_pullback(self):
         # 长期缓涨后近段加速拉升 → RSI/布林位置过热

@@ -233,19 +233,18 @@ def _signal_for_item(
         reasons.append(f"近5根K线累计 {r5:+.2f}% 不再加速，跌势放缓")
         return "left_bottom_candidate", reasons
 
-    # 1b. 轮动领先者早醒：强势回调但未走坏，给排名靠前的轮动标的一个
-    # 避免被 wait_for_pullback 过早过滤的通道。
+    # 1b. 轮动领先者回调布局：轮动排名靠前 + 回踩 MA20 附近 + 中长期趋势未破
     if (
         is_leader
         and ma20 is not None
-        and price > ma20
-        and r20 is not None
-        and r20 >= t['pullback_r20']
-        and (macd_hist is None or macd_hist >= 0)
+        and ma60 is not None
+        and ma20 > ma60
+        and 0.97 <= price / ma20 <= 1.03
+        and (r5 is None or r5 > t['knife_r5'])
         and (rsi is None or rsi < t['pullback_rsi'])
     ):
-        reasons.append(f"轮动排名前段且趋势未破：现价 {price:.2f} > MA20 {ma20:.2f}")
-        reasons.append(f"近20根 {r20:+.2f}%，MACD 未走坏")
+        reasons.append(f"轮动排名前段且回踩 MA20 {ma20:.2f} 附近，趋势未破")
+        reasons.append(f"MA20 仍在 MA60 {ma60:.2f} 上方（回调非反转）")
         if rsi is not None:
             reasons.append(f"RSI {rsi:.1f} 未超买")
         return "accumulate_candidate", reasons
@@ -309,21 +308,19 @@ def _signal_for_item(
         reasons.append(f"短期涨幅过高（≥{t['accumulate_r20_max']}%），即使RSI未超买也应等回调确认")
         return "wait_for_pullback", reasons
 
-    # 4. 分批布局：趋势向上、动能配合、未过热
+    # 4. 分批布局（左侧越跌越布局）：回踩 MA20 附近 + 中长期趋势未破 + 动能未恶化
     if (
         ma20 is not None
-        and price > ma20
-        and r20 is not None
-        and r20 >= t['accumulate_r20']
+        and ma60 is not None
+        and ma20 > ma60
+        and 0.97 <= price / ma20 <= 1.03
         and rsi is not None
         and t['accumulate_rsi_low'] <= rsi < t['accumulate_rsi_high']
-        and (macd_hist is None or macd_hist > 0 or (r5 is not None and r5 > 0))
+        and (r5 is None or r5 > t['knife_r5'])
     ):
-        reasons.append(f"现价 {price:.2f} 站上 MA20 {ma20:.2f}")
-        reasons.append(
-            f"近20根K线累计 {r20:+.2f}%（≥{t['accumulate_r20']}%）"
-        )
-        reasons.append(f"RSI {rsi:.1f} 中性偏强，未过热")
+        reasons.append(f"现价 {price:.2f} 回踩 MA20 {ma20:.2f} 附近（偏离 {(price/ma20-1)*100:+.1f}%）")
+        reasons.append(f"MA20 {ma20:.2f} 仍在 MA60 {ma60:.2f} 上方，趋势结构未破（回调非反转）")
+        reasons.append(f"RSI {rsi:.1f} 中性，动能未恶化")
         if macd_hist is not None and macd_hist > 0:
             reasons.append(f"MACD 柱 {macd_hist:.3f} 为正")
         return "accumulate_candidate", reasons
