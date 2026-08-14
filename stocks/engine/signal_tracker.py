@@ -78,6 +78,9 @@ class SignalTracker:
     # 导致 GLD/symbol buy 同一持久状态反复刷屏(一个月 100+ 条),使 24h 结算失真。
     # 不同方向(如 buy -> reduce)仍会保留,不误删合法信号翻转。
     DEDUP_WINDOW_SECONDS = 6 * 3600
+    # 精度修复: 最小价格波动阈值。A股 ETF 日波动常 <1%, <0.3% 的"方向"判定接近噪声,
+    # 标记为 below_min_change, 不计入胜率样本, 避免噪声污染自评精度。
+    MIN_PRICE_CHANGE = 0.003
 
     def _recent_keys(self) -> set[tuple[str, str]]:
         """Return (symbol, direction) seen within the dedup window."""
@@ -142,15 +145,41 @@ class SignalTracker:
             pass
         return results
 
+    # 各窗口的最大有效结算延迟(小时)。超出说明是补跑/补结算, exit 价已不是
+    # 信号窗口内的价格, 判定无意义 -> 标记 stale_window, 不进胜率样本。
+    # 24h: 窗口24h + cron 6h粒度×4 + 余量 = 48h 内有效; 1w: 7d + 余量 = 10d 内有效。
+    MAX_SETTLE_LAG_HOURS = {"24h": 48, "1w": 10 * 24}
+
     def settle(self, signal: TrackedSignal, window: str, price: float, now: Optional[datetime] = None) -> TrackedSignal:
-        """Settle a signal against a current price."""
+        """Settle a signal against a current price.
+
+        精度修复(2026-08-14): 只有满足 ①entry 有价 ②exit 有价 ③|涨跌幅|>=MIN_PRICE_CHANGE
+        ④结算延迟未超窗(并非补跑) 的结算才算"有效方向判定"并进入胜率样本。无效记录
+        写 invalid_reason + correct=None, 保留审计但不污染胜率分母。
+        """
+        invalid_reason = None
+        correct = self._is_correct(signal.direction, signal.generation_price, price)
+        # 结算延迟(now - generated_at), 超窗则判定无效(补跑价无窗口意义)
+        if now is not None and signal.generated_at is not None:
+            lag_h = (now - signal.generated_at).total_seconds() / 3600.0
+            if lag_h > self.MAX_SETTLE_LAG_HOURS.get(window, 48):
+                invalid_reason = "stale_window"
+        if signal.generation_price is None or signal.generation_price == 0:
+            invalid_reason = "missing_entry_price"
+        elif price is None or price == 0:
+            invalid_reason = "missing_exit_price"
+        elif invalid_reason is None:
+            change = abs(price / signal.generation_price - 1)
+            if change < self.MIN_PRICE_CHANGE:
+                invalid_reason = "below_min_change"  # 波动太小, 方向判定接近噪声
+
         if window == "24h":
             signal.price_24h = price
-            signal.correct_24h = self._is_correct(signal.direction, signal.generation_price, price)
+            signal.correct_24h = correct
             signal.settled_24h = True
         elif window == "1w":
             signal.price_1w = price
-            signal.correct_1w = self._is_correct(signal.direction, signal.generation_price, price)
+            signal.correct_1w = correct
             signal.settled_1w = True
 
         settlement = {
@@ -160,7 +189,10 @@ class SignalTracker:
             "generation_price": signal.generation_price,
             "settlement_price": price,
             "direction": signal.direction,
-            "correct": self._is_correct(signal.direction, signal.generation_price, price),
+            "correct": correct,
+            "invalid": invalid_reason,
+            "abs_pct_change": round(abs(price / signal.generation_price - 1) * 100, 4)
+            if signal.generation_price else None,
         }
         try:
             with open(self.settlements_file, "a", encoding="utf-8") as f:
@@ -171,11 +203,15 @@ class SignalTracker:
         return signal
 
     def performance(self) -> dict:
-        """Compute aggregate performance across all settled signals."""
+        """Compute aggregate performance across all settled signals.
+
+        精度修复(2026-08-14): 胜率分母只统计"有效方向判定"(invalid 为空且 correct 非 None),
+        不再把 entry 缺失/波动过小的记录混入分母, 避免系统性压低或虚抬胜率。
+        """
         total = 0
         wins_24h = 0
         wins_1w = 0
-
+        invalid_count = 0
 
         if not self.settlements_file.exists():
             return {"total": 0, "win_rate_24h": None, "win_rate_1w": None}
@@ -191,25 +227,37 @@ class SignalTracker:
                     except json.JSONDecodeError:
                         continue
                     total += 1
-                    if s.get("correct"):
+                    if s.get("invalid"):
+                        invalid_count += 1
+                        continue  # 无效判定, 不进胜率样本
+                    if s.get("correct") is not None:
                         if s["window"] == "24h":
-                            wins_24h += 1
+                            wins_24h += 1 if s.get("correct") else 0
                         elif s["window"] == "1w":
-                            wins_1w += 1
+                            wins_1w += 1 if s.get("correct") else 0
         except OSError:
             pass
 
-        settled_24h = sum(1 for _ in self._iter_settlements("24h"))
-        settled_1w = sum(1 for _ in self._iter_settlements("1w"))
+        valid_24h = sum(
+            1 for s in self._iter_settlements("24h")
+            if not s.get("invalid") and s.get("correct") is not None
+        )
+        valid_1w = sum(
+            1 for s in self._iter_settlements("1w")
+            if not s.get("invalid") and s.get("correct") is not None
+        )
 
         return {
             "total_settlements": total,
-            "settled_24h": settled_24h,
-            "settled_1w": settled_1w,
+            "valid_24h": valid_24h,
+            "valid_1w": valid_1w,
+            "invalid_count": invalid_count,
+            "settled_24h": valid_24h,
+            "settled_1w": valid_1w,
             "wins_24h": wins_24h,
             "wins_1w": wins_1w,
-            "win_rate_24h": round(wins_24h / settled_24h, 3) if settled_24h > 0 else None,
-            "win_rate_1w": round(wins_1w / settled_1w, 3) if settled_1w > 0 else None,
+            "win_rate_24h": round(wins_24h / valid_24h, 3) if valid_24h > 0 else None,
+            "win_rate_1w": round(wins_1w / valid_1w, 3) if valid_1w > 0 else None,
         }
 
     def performance_context(self) -> str:

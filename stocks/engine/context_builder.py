@@ -527,6 +527,9 @@ class ContextBuilder:
                             continue
                         src = s.get("source") or sig_source.get(s.get("signal_id"), "?")
                         key = (src, s.get("direction"), s.get("window"))
+                        # 精度修复: 跳过无效结算(超窗/缺价/波动过小), 与 performance 口径一致
+                        if s.get("invalid"):
+                            continue
                         if s.get("correct") is not None:
                             cells[key].append(bool(s.get("correct")))
                             total += 1

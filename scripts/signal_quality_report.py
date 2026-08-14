@@ -48,18 +48,25 @@ def _pct(ok: int, tot: int) -> str:
 
 def build_report() -> str:
     signals = _load_jsonl(TRACKER_DIR / "signals.jsonl")
-    settlements = _load_jsonl(TRACKER_DIR / "settlements.jsonl")
+    all_settlements = _load_jsonl(TRACKER_DIR / "settlements.jsonl")
+    # 精度修复(2026-08-14): 过滤无效结算(超窗/entry缺失/波动<0.3%噪声), 与
+    # SignalTracker.performance 口径一致, 避免补跑历史污染胜率。
+    all_settlements = [s for s in all_settlements if not s.get("invalid")]
+    settlements = all_settlements
     # settlements 记录不带 source, 从 signals join(signal_id 一致)
     sig_source = {s.get("signal_id"): s.get("source", "?") for s in signals}
     for s in settlements:
         s["source"] = s.get("source") or sig_source.get(s.get("signal_id"), "?")
+
+    total_raw = len(_load_jsonl(TRACKER_DIR / "settlements.jsonl"))
+    dropped = total_raw - len(settlements)
 
     out: list[str] = []
     out.append("# 信号质量报告")
     out.append("")
     out.append(f"*生成时间 {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
     out.append("")
-    out.append(f"追踪信号总数: {len(signals)} ｜ 已结算: {len(settlements)}")
+    out.append(f"追踪信号总数: {len(signals)} ｜ 已结算: {len(settlements)}（已滤除 {dropped} 条无效记录：超窗/缺价/波动过小）")
     out.append("")
     out.append("> 说明: 结算窗口 24h = 信号后1个交易日价格方向, 1w = 5个交易日。")
     out.append("> 胜率低于 50% 说明该信号类别方向性差, 高于 55% 才有参考价值。")
