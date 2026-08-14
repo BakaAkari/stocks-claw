@@ -178,13 +178,27 @@ def _signal_reference_by_position(artifact: dict) -> dict[str, dict]:
     否则报告只说"等待人工确认",用户看不到系统其实已经算出了答案。
     """
     out: dict[str, dict] = {}
+    # 单一真值源(2026-08-14): action_cards 是裁决前的"原始信号卡"(ratio 可能是
+    # 裁决前的原始比例, 如 AAPL 0.5); portfolio_decision.approved_actions 是
+    # 裁决后的最终比例(final_ratio, 如 AAPL 0.4, 已按最小交易单位调整)。
+    # 报告引用必须用最终比例(action_cards 只有未裁决 ratio 时才有意义), 否则
+    # 同一笔减仓会出现"参考区 50% / 指令卡 40%"的矛盾。先建 approved 的最终映射。
+    approved_final = {}
+    for a in ((artifact.get("portfolio_decision") or {}).get("approved_actions") or []):
+        pid = str(a.get("position_id") or "")
+        fr = a.get("final_ratio")
+        if pid and isinstance(fr, (int, float)) and not isinstance(fr, bool):
+            approved_final[pid] = fr
     for c in (artifact.get("action_cards") or []):
         if not isinstance(c, dict):
             continue
         pid = str(c.get("position_id") or "")
         if not pid:
             continue
-        ratio = c.get("final_ratio")
+        # 优先用裁决后的 final_ratio; 若该 pid 有获批动作, 其 final_ratio 才是真值。
+        ratio = approved_final.get(pid)
+        if ratio is None:
+            ratio = c.get("final_ratio")
         if ratio is None:
             ratio = c.get("ratio")
         ratio_pct = None

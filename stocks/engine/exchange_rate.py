@@ -53,6 +53,22 @@ def _fetch_usd_cny_rate() -> Optional[float]:
 
     网络异常时返回 None，由调用方决定是否使用缓存或默认值。
     """
+    rates = _fetch_usd_base_rates()
+    if not rates:
+        return None
+    cny_rate = rates.get("CNY")
+    if cny_rate:
+        logger.info("获取 USD/CNY 汇率: %.4f", cny_rate)
+        _save_cache(cny_rate)
+        return float(cny_rate)
+    return None
+
+
+def _fetch_usd_base_rates() -> Optional[dict]:
+    """从免费 API 获取以 USD 为基准的全量汇率表 {币种: 相对USD汇率}。
+
+    网络异常返回 None。
+    """
     try:
         req = urllib.request.Request(
             _DEFAULT_RATE_API,
@@ -60,15 +76,14 @@ def _fetch_usd_cny_rate() -> Optional[float]:
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        rates = data.get("rates", {})
-        cny_rate = rates.get("CNY")
-        if cny_rate:
-            logger.info("获取 USD/CNY 汇率: %.4f", cny_rate)
-            _save_cache(cny_rate)
-            return float(cny_rate)
+        rates = data.get("rates") or {}
+        if not rates:
+            logger.warning("API 返回空汇率表")
+            return None
+        return rates
     except Exception as exc:
-        logger.warning("获取汇率失败: %s", exc)
-    return None
+        logger.warning("获取汇率表失败: %s", exc)
+        return None
 
 
 def _load_cache() -> Optional[tuple[float, float]]:
@@ -183,5 +198,36 @@ def convert_to_cny(amount: float, currency: str) -> ConversionResult:
             else "ok"
         )
         return ConversionResult(amount * result.rate, result.rate, result.source, status)
+    # 其它币种(如 HKD): 用 USD 基准汇率表推导交叉汇率 X→CNY = CNY/USD ÷ X/USD。
+    # 修复 2026-08-14: IBKR HKD 现金此前因 unsupported_currency 导致整份报告降级。
+    cross = _convert_via_usd_cross(amount, currency)
+    if cross is not None:
+        rate, source, status = cross
+        return ConversionResult(amount * rate, rate, source, status)
     logger.error("不支持币种 '%s' 的自动换算；该资产不计入 CNY 合计", currency)
     return ConversionResult(None, None, "unsupported_currency", "failed")
+
+
+def _convert_via_usd_cross(amount: float, currency: str):
+    """用 USD 基准汇率表推导 currency→CNY 交叉汇率。
+
+    返回 (rate, source, status) 或 None。source 反映汇率新鲜度：
+    live_api 实时 / stale_cross 使用过期缓存 / None 不可得。
+    """
+    rates = _fetch_usd_base_rates()
+    cny = rates.get("CNY") if rates else None
+    target = rates.get(currency) if rates else None
+    source = "live_api"
+    if cny is None or target is None:
+        # 实时失败: 尝试过期缓存里的 CNY 与汇率表(若无独立表则退化为缓存 USD/CNY
+        # 和一个保守的 HKD 钉住关系——HKD 对 USD 是联系汇率制度, 1 USD ≈ 7.8 HKD)。
+        cached = _load_cache()
+        if cached:
+            cny_usd, _ = cached
+            if currency == "HKD":
+                # 联系汇率: HKD 钉住 7.75-7.85 区间, 取 7.8; HKD→CNY = (USD→CNY)/(USD→HKD)
+                hkd_usd = 7.8
+                return (cny_usd / hkd_usd, "stale_cross", "degraded")
+        return None
+    rate = float(cny) / float(target)
+    return (rate, source, "ok")

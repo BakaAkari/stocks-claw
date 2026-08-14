@@ -6,7 +6,8 @@ module creates stable Chinese labels for the user-facing report contract.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, time
+import zoneinfo
 from typing import Any
 
 _SENTINEL = object()
@@ -689,6 +690,33 @@ def _market_is_primary(market: str, primary_market: str) -> bool:
     return False
 
 
+def _market_session_hint(market: str, now=None) -> str:
+    """Return an execution-timing note for an instrument market at the given wall
+    time, so cross-market / closed-market approved actions are honestly labeled
+    (execute now vs wait for next open). a/cn=A股上海, us=美股纽约, crypto=7x24,
+    empty/other=场外资产(无交易所时段, 不标注)."""
+    if market not in {"a", "cn", "us"}:
+        return ""
+    tz = zoneinfo.ZoneInfo("Asia/Shanghai" if market in {"a", "cn"} else "America/New_York")
+    now = now or datetime.now(tz)
+    local = now.astimezone(tz)
+    if local.isoweekday() >= 6:
+        return "A股周末休市，周一开盘后执行" if market in {"a", "cn"} else "美股周末休市，周一开盘后执行"
+    cur = local.time()
+    if market in {"a", "cn"}:
+        if (time(9, 30) <= cur <= time(11, 30)) or (time(13, 0) <= cur <= time(15, 0)):
+            return ""
+        if cur < time(9, 30):
+            return "A股尚未开盘（09:30 开盘），开盘后执行"
+        return "A股已收盘，明日开盘后执行"
+    else:
+        if time(9, 30) <= cur <= time(16, 0):
+            return ""
+        if cur < time(9, 30):
+            return "美股尚未开盘（09:30 开盘），开盘后执行"
+        return "美股已收盘，下一交易日开盘后执行"
+
+
 def _sort_approved_by_primary_market(actions: list[dict], by_id: dict, primary_market: str) -> list[dict]:
     """主市场动作优先（stable sort，同市场保持裁决器原序）。"""
     if not primary_market or not actions:
@@ -734,6 +762,17 @@ def _is_executable(raw: dict, item: dict, by_market: dict) -> bool:
     if qty is not None and not (isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty > 0):
         return False
     market = _instrument_market(item.get("instrument_key", ""))
+    if not market:
+        # 场外资产(支付宝基金/银行理财/保险/现金): instrument_key 为空, 没有交易所
+        # 实时行情, 不能再 fail-closed 死于 _market_quote_stale("")=True —— 那会把
+        # 估值新鲜(fund_nav/stale=False)的场外止盈错误判为不可执行, 塞进 suppressed。
+        # 改用该资产自身的估值新鲜度: evidence.price_freshness 或 valuation.stale。
+        ev = item.get("evidence") or {}
+        val = item.get("valuation") or {}
+        pf = str(ev.get("price_freshness") or "")
+        if pf in {"stale", "old"} or val.get("stale"):
+            return False
+        return True
     return not _market_quote_stale(market, by_market)
 
 
@@ -1195,6 +1234,11 @@ def build_user_view(
                     "executable_quantity": raw.get("executable_quantity"),
                     "estimated_amount_cny": None if quote_stale else raw.get("estimated_amount_cny"),
                     "amount_blocked_reason": "行情数据过时，金额待数据恢复后确认" if quote_stale else None,
+                    "executable": False,
+                    "deferred_reason": _deferred_action_text(raw, item, by_market),
+                    "market_session_note": _market_session_hint(
+                        _instrument_market(item.get("instrument_key", ""))
+                    ),
                 })
             continue
         label = _display_for_position(item)
@@ -1224,6 +1268,11 @@ def build_user_view(
             "next_checkpoint": str(raw.get("next_checkpoint") or "下一交易窗口复核"),
             "platform": platform,
             "operation_channel": op_hint,
+            # 跨市场/休市执行时点标注: A股盘后窗口里的美股减仓/止盈, 如实告知
+            # 该市场当前是否开市, 避免 Kari 误以为现在就能执行。
+            "market_session_note": _market_session_hint(
+                _instrument_market(item.get("instrument_key", ""))
+            ),
         })
 
     # P0-3 fix: approved_cards=all_approved[:3] 把超名额但可执行的获批卖出动作
@@ -1245,6 +1294,10 @@ def build_user_view(
         already = {r.get("display_label") for r in suppressed_reference}
         if label in already:
             continue
+        # 超过展示名额的获批卖出: 用 _is_executable 区分"可执行但超名额"与
+        # "被门禁暂缓(review_required/min_unit/数据过时)"。可执行的是 approved 待执行,
+        # 不可执行的必须给具体暂缓原因, 不能笼统标"超额可执行"。
+        is_exec = _is_executable(raw, item, by_market)
         market = _instrument_market(item.get("instrument_key", ""))
         quote_stale = _market_quote_stale(market, by_market)
         suppressed_reference.append({
@@ -1254,6 +1307,11 @@ def build_user_view(
             "executable_quantity": raw.get("executable_quantity"),
             "estimated_amount_cny": None if quote_stale else raw.get("estimated_amount_cny"),
             "amount_blocked_reason": "行情数据过时，金额待数据恢复后确认" if quote_stale else None,
+            "executable": is_exec,
+            "deferred_reason": None if is_exec else _deferred_action_text(raw, item, by_market),
+            "market_session_note": _market_session_hint(
+                _instrument_market(item.get("instrument_key", ""))
+            ),
         })
 
     no_action_reasons = list(deferred_reasons)

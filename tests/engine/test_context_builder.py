@@ -341,12 +341,12 @@ class TestBasicBuild:
     ):
         portfolio_scaffold, market_scaffold = mock_scaffolds
         builder = ContextBuilder(mock_fetcher, portfolio_scaffold, market_scaffold)
-        hkd_asset = FinancialAsset(
-            name="港币现金",
+        unknown_asset = FinancialAsset(
+            name="未知币种现金",
             platform="银行",
             amount=1000,
             asset_type="cash",
-            currency="HKD",
+            currency="ZZZ",
             amount_cny=None,
             conversion_status="failed",
             conversion_source="unsupported_currency",
@@ -354,7 +354,7 @@ class TestBasicBuild:
         )
 
         context = await builder.build(
-            assets=[hkd_asset],
+            assets=[unknown_asset],
             constraints={},
             profile={},
             instruments=[],

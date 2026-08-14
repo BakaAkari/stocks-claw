@@ -2462,6 +2462,11 @@ def format_run_markdown(run: dict) -> str:
             decision_reason = action.get("decision_reason")
             if decision_reason:
                 lines.append(f"  - 依据: {decision_reason}")
+            # 跨市场/休市执行时点: 例如 A股盘后窗口推的美股减仓, 美股可能尚未开盘,
+            # 如实告知"何时能执行", 避免把"过期/休市"动作当成"现在就能执行"。
+            session_note = action.get("market_session_note")
+            if session_note:
+                lines.append(f"  - 执行时点: {session_note}")
             platform = action.get("platform")
             channel = action.get("operation_channel")
             if platform:
@@ -2487,10 +2492,22 @@ def format_run_markdown(run: dict) -> str:
         amount = ref.get("estimated_amount_cny")
         amount_txt = f"，金额 {float(amount):,.0f} 元" if amount is not None else ""
         note = f"（{ref.get('amount_blocked_reason')}）" if ref.get("amount_blocked_reason") else ""
-        lines.append(
-            f"- **{ref.get('signal_type', '动作')}｜{ref.get('display_label', '未命名持仓')}**"
-            f"{ratio_txt}{amount_txt}{note}（暂缓，待人工核实）"
-        )
+        # 2026-08-14: 区分"已获批可执行但超展示名额"与"被门禁暂缓"——两者措辞不同,
+        # 把可执行卖出标成"暂缓待人工核实"会让 Kari 误以为不用执行, 掩盖真实动作。
+        if ref.get("executable"):
+            reason = ref.get("deferred_reason") or ""
+            s_note = ref.get("market_session_note") or ""
+            s_note_txt = f"；{s_note}" if s_note else ""
+            lines.append(
+                f"- **{ref.get('signal_type', '动作')}｜{ref.get('display_label', '未命名持仓')}**"
+                f"{ratio_txt}{amount_txt}{note}（已获批可执行，超出展示名额待核对{s_note_txt}）"
+            )
+        else:
+            reason = ref.get("deferred_reason") or ""
+            lines.append(
+                f"- **{ref.get('signal_type', '动作')}｜{ref.get('display_label', '未命名持仓')}**"
+                f"{ratio_txt}{amount_txt}{note}（暂缓：{reason or '待人工核实'}）"
+            )
 
     lines.extend(["", "**私人投资助理**", "", "**为什么这样安排**"])
     for reason in (assistant.get("why") or ["当前决策以组合裁决结果为准"])[0:5]:
