@@ -2535,6 +2535,20 @@ def format_run_markdown(run: dict) -> str:
         lines.extend(["", "**数据说明**"])
         for note in data_notes:
             lines.append(f"- {note}")
+    # P0-5 fix: 反馈闭环回流——把 signal_tracker 真实结算胜率轻量呈现给用户,
+    # 让 Kari 知道系统在自我跟踪"这类信号历史表现"(诚实标注样本量,不编造)。
+    _fb = (run.get("rule_scorecard") or {}).get("feedback") or {}
+    _fb_eng = (_fb.get("by_source_direction_window") or {}).get("engine_action/buy/24h")
+    if _fb and _fb.get("total_settled"):
+        if data_notes:
+            pass
+        else:
+            lines.extend(["", "**数据说明**"])
+        _fbtxt = ""
+        if _fb_eng and _fb_eng.get("total"):
+            _fbtxt = f"；引擎买入信号24h胜率 {_fb_eng.get('ok')}/{_fb_eng.get('total')}={_fb_eng.get('win_rate',0)*100:.0f}%"
+        lines.append(f"- 反馈闭环: 已跟踪 _fb_total 条历史信号结算{_fbtxt}（用于持续校准，不构成单一信号依据）".replace(
+            "_fb_total", str(_fb.get("total_settled"))))
 
     lines.extend(["", "**仅供观察**"])
     research = assistant.get("research") or []

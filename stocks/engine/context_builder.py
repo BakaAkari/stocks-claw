@@ -472,12 +472,76 @@ class ContextBuilder:
         frames: dict[str, pd.DataFrame],
         action_signals: dict,
     ) -> dict:
-        """用历史数据回测 action signal 规则，计算记分卡。"""
+        """用历史数据回测 action signal 规则，计算记分卡。
+
+        P0-5 fix: 原来的回测仅对"当前信号"取其后未来5日价格, 但生成时点未来数据
+        尚未发生 -> 永远返回 status=no_data, 记分卡从不产生任何反馈。现在叠加从
+        signal_tracker 读取的"真实已结算胜率"(按信源×方向×窗口), 让反馈闭环真正
+        回流: 结算器修好后股票信号开始积累真实结算, scorecard 便能看到真实胜率。
+        """
+        from collections import defaultdict
         from stocks.engine.quant_action import backtest_action_signals
+        from stocks.engine.signal_tracker import SignalTracker
 
         items = action_signals.get("items", []) or []
         result = backtest_action_signals(frames, items)
+
+        # ── 真实反馈: 读 signal_tracker 已结算胜率(按 source×direction×window) ──
+        repo_root = Path(__file__).resolve().parents[2]
+        tracker = SignalTracker(repo_root / ".local" / "signal_tracker")
+        feedback = self._signal_feedback(tracker)
+
+        result["feedback"] = feedback
+        # status 不再无条件写 no_data: 若有真实结算反馈则升级为 partial/ok
+        if feedback.get("total_settled", 0) > 0 and result.get("status") == "no_data":
+            result["status"] = "feedback"
+        elif feedback.get("total_settled", 0) > 0:
+            result["status"] = "hybrid"
         return result
+
+    @staticmethod
+    def _signal_feedback(tracker) -> dict:
+        """从 signal_tracker 结算记录汇总真实胜率, 按 source×direction×window。"""
+        from collections import defaultdict
+        sig_source: dict[str, str] = {}
+        try:
+            if tracker.signals_file.exists():
+                with open(tracker.signals_file, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            d = __import__("json").loads(line)
+                        except Exception:
+                            continue
+                        sig_source[d.get("signal_id")] = d.get("source", "?")
+        except OSError:
+            sig_source = {}
+        cells: dict[tuple, list[bool]] = defaultdict(list)
+        total = 0
+        try:
+            if tracker.settlements_file.exists():
+                with open(tracker.settlements_file, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            s = __import__("json").loads(line)
+                        except Exception:
+                            continue
+                        src = s.get("source") or sig_source.get(s.get("signal_id"), "?")
+                        key = (src, s.get("direction"), s.get("window"))
+                        if s.get("correct") is not None:
+                            cells[key].append(bool(s.get("correct")))
+                            total += 1
+        except OSError:
+            pass
+        buckets = {}
+        for (src, direction, window), corrects in cells.items():
+            if not corrects:
+                continue
+            buckets[f"{src}/{direction}/{window}"] = {
+                "ok": sum(1 for c in corrects if c),
+                "total": len(corrects),
+                "win_rate": round(sum(1 for c in corrects if c) / len(corrects), 4),
+            }
+        return {"total_settled": total, "by_source_direction_window": buckets}
 
     def _get_fetcher_degradation_log(self) -> list[dict]:
         """读取 DataFetcher 降级日志，兼容测试中的轻量 mock。"""
