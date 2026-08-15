@@ -501,9 +501,27 @@ class ContextBuilder:
 
     @staticmethod
     def _signal_feedback(tracker) -> dict:
-        """从 signal_tracker 结算记录汇总真实胜率, 按 source×direction×window。"""
+        """从 signal_tracker 结算记录汇总真实胜率, 按 source×direction×window。
+
+        P0-5 精度净化 + 2026-08-15 样本质量标注:
+        除 ok/total/win_rate 外, 每个格子额外计算 sample_quality, 标注该胜率
+        是否达到"可作信任依据"的最低标准。对抗性校验发现: 结算器修复后短期
+        内积累的样本(如 2 天数百条)看似量大, 实则被少数标的与单日主导,
+        对左侧交易者还存在"24h 上涨率"与"分批左侧加仓"的方向错配。因此用
+        四个维度标注可信度——样本数、时间跨度、单日集中度、标的多——防止
+        把噪声胜率当成信号源的信任依据。冷启动/样本不足时 trustable=False。
+        """
         from collections import defaultdict
-        sig_source: dict[str, str] = {}
+
+        MIN_TRUST_SAMPLE = 50
+        MIN_TRUST_DAY_SPAN = 5
+        MAX_DAY_SHARE = 0.6
+        MIN_TRUST_SYMBOLS = 3
+
+        # 1) 读 signals: signal_id -> {source, generated_at_day, symbol}
+        sig_source = {}
+        sig_day = {}
+        sig_symbol = {}
         try:
             if tracker.signals_file.exists():
                 with open(tracker.signals_file, encoding="utf-8") as f:
@@ -512,10 +530,15 @@ class ContextBuilder:
                             d = __import__("json").loads(line)
                         except Exception:
                             continue
-                        sig_source[d.get("signal_id")] = d.get("source", "?")
+                        sid = d.get("signal_id")
+                        sig_source[sid] = d.get("source", "?")
+                        sig_day[sid] = str(d.get("generated_at") or "")[:10]
+                        sig_symbol[sid] = d.get("symbol", "?")
         except OSError:
-            sig_source = {}
-        cells: dict[tuple, list[bool]] = defaultdict(list)
+            pass
+
+        # 2) 汇总每个 (src, direction, window) 的结算, 收集质量元数据
+        cells = defaultdict(list)
         total = 0
         try:
             if tracker.settlements_file.exists():
@@ -525,26 +548,85 @@ class ContextBuilder:
                             s = __import__("json").loads(line)
                         except Exception:
                             continue
+                        if s.get("invalid") or s.get("correct") is None:
+                            continue
                         src = s.get("source") or sig_source.get(s.get("signal_id"), "?")
                         key = (src, s.get("direction"), s.get("window"))
-                        # 精度修复: 跳过无效结算(超窗/缺价/波动过小), 与 performance 口径一致
-                        if s.get("invalid"):
-                            continue
-                        if s.get("correct") is not None:
-                            cells[key].append(bool(s.get("correct")))
-                            total += 1
+                        cells[key].append({
+                            "correct": bool(s.get("correct")),
+                            "day": sig_day.get(s.get("signal_id"), ""),
+                            "symbol": sig_symbol.get(s.get("signal_id"), ""),
+                        })
+                        total += 1
         except OSError:
             pass
+
+        # 3) 组装 bucket + 样本质量标注
         buckets = {}
-        for (src, direction, window), corrects in cells.items():
-            if not corrects:
+        for (src, direction, window), recs in cells.items():
+            if not recs:
                 continue
+            ok = sum(1 for r in recs if r["correct"])
+            win_rate = round(ok / len(recs), 4)
+            quality = ContextBuilder._assess_sample_quality(
+                recs,
+                min_sample=MIN_TRUST_SAMPLE,
+                min_day_span=MIN_TRUST_DAY_SPAN,
+                max_day_share=MAX_DAY_SHARE,
+                min_symbols=MIN_TRUST_SYMBOLS,
+            )
             buckets[f"{src}/{direction}/{window}"] = {
-                "ok": sum(1 for c in corrects if c),
-                "total": len(corrects),
-                "win_rate": round(sum(1 for c in corrects if c) / len(corrects), 4),
+                "ok": ok, "total": len(recs), "win_rate": win_rate,
+                "sample_quality": quality,
             }
         return {"total_settled": total, "by_source_direction_window": buckets}
+
+    @staticmethod
+    def _assess_sample_quality(recs, min_sample=50, min_day_span=5,
+                               max_day_share=0.6, min_symbols=3) -> dict:
+        """评估一组结算样本的统计可信度, 避免把噪声胜率当成信任依据。
+
+        返回 sample_quality dict:
+          - sample_count / day_span / max_day_share / distinct_symbols: 原始指标
+          - trustable: 是否达到最低可信标准
+          - issues:    不满足的具体原因列表
+          - note:      面向渲染的诚实中文说明
+        """
+        n = len(recs)
+        days = {}
+        symbols = set()
+        for r in recs:
+            day = r.get("day") or ""
+            if day:
+                days[day] = days.get(day, 0) + 1
+            if r.get("symbol"):
+                symbols.add(r.get("symbol"))
+        day_span = len(days)
+        max_share = (max(days.values()) / n) if days and n else 0.0
+        distinct_symbols = len(symbols)
+
+        issues = []
+        if n < min_sample:
+            issues.append(f"样本不足({n}<{min_sample})")
+        if day_span < min_day_span:
+            issues.append(f"时间跨度短({day_span}天<{min_day_span}天,可能被单日行情主导)")
+        if max_share > max_day_share:
+            issues.append(f"单日集中度高(单日最大占{max_share:.0%})")
+        if distinct_symbols < min_symbols:
+            issues.append(f"标的过于集中({distinct_symbols}只<{min_symbols}只)")
+
+        trustable = not issues
+        if trustable:
+            note = "样本分布达标,可作为该信号来源的参考依据(仍需结合方向与持有期解读)"
+        else:
+            note = "；".join(issues) + "，当前胜率不足以单独作为信任/降权依据"
+        return {
+            "sample_count": n, "day_span": day_span,
+            "max_day_share": round(max_share, 4),
+            "distinct_symbols": distinct_symbols,
+            "trustable": trustable, "issues": issues, "note": note,
+        }
+
 
     def _get_fetcher_degradation_log(self) -> list[dict]:
         """读取 DataFetcher 降级日志，兼容测试中的轻量 mock。"""

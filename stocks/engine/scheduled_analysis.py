@@ -2554,6 +2554,10 @@ def format_run_markdown(run: dict) -> str:
             lines.append(f"- {note}")
     # P0-5 fix: 反馈闭环回流——把 signal_tracker 真实结算胜率轻量呈现给用户,
     # 让 Kari 知道系统在自我跟踪"这类信号历史表现"(诚实标注样本量,不编造)。
+    # 2026-08-15: 叠加样本质量标注——对抗性校验发现, 结算器修复后短期内积累的
+    # 样本看似量大, 实则被少数标的与单日行情主导, 对左侧交易者还存在"24h上涨率"
+    # 与"分批左侧加仓"的方向错配。因此当样本未达到可信标准(trustable=False)时,
+    # 必须诚实声明"当前胜率尚不足以作为信任/降权依据", 而非把它当成定论。
     _fb = (run.get("rule_scorecard") or {}).get("feedback") or {}
     _fb_eng = (_fb.get("by_source_direction_window") or {}).get("engine_action/buy/24h")
     if _fb and _fb.get("total_settled"):
@@ -2562,10 +2566,15 @@ def format_run_markdown(run: dict) -> str:
         else:
             lines.extend(["", "**数据说明**"])
         _fbtxt = ""
+        _quality_note = ""
         if _fb_eng and _fb_eng.get("total"):
             _fbtxt = f"；引擎买入信号24h胜率 {_fb_eng.get('ok')}/{_fb_eng.get('total')}={_fb_eng.get('win_rate',0)*100:.0f}%"
+            _sq = (_fb_eng.get("sample_quality") or {})
+            if not _sq.get("trustable"):
+                # 样本不足或单日主导: 明确这不是可信任的胜率, 避免误导左侧决策
+                _quality_note = f"。该胜率{_sq.get('note') or '样本质量不足'}"
         lines.append(f"- 反馈闭环: 已跟踪 _fb_total 条历史信号结算{_fbtxt}（用于持续校准，不构成单一信号依据）".replace(
-            "_fb_total", str(_fb.get("total_settled"))))
+            "_fb_total", str(_fb.get("total_settled"))) + _quality_note)
 
     lines.extend(["", "**仅供观察**"])
     research = assistant.get("research") or []
