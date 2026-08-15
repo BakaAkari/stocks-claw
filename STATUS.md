@@ -8,15 +8,20 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-15 (twenty-third update) — **报告简洁化 v0.4(渲染纪律)**。
-> 按 Kari 澄清"报告是给人看的决策简报, 非系统数据导出": output_structure 加
-> render_discipline 4 条——只收决策结论/禁罗列 MA·RSI·shadow统计等、多空对抗
-> 只给结论+证伪/验证一句话、同一动作不重复展开、观察候选按语义分组。指令卡
-> 列全部可执行动作+overflow 一行概括。对抗验证推翻"按字段分三层"("技术层"
-> 实为对抗依据), 改用"论断 vs 罗列"。全量 1428 passed / 7 skipped。
-> HEAD 75c5a17, 工作树 clean。
-> 前次: scorecard 样本质量标注 + 自评闭环暂缓(1c7e93a)。
-> Next: 分批档位表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面。
+> Last updated: 2026-08-15 (twenty-fourth update) — **硬编码文案识别根治 + A股财报日历**。
+> 彻底消除"报告靠中文字符串反推结构化分类"的脆弱性: build_push_payload.
+> _conflict_type 原用"数据/过时/锁定/开放期/资金"等中文关键词给 no_action_
+> reason 分类→决定决策分支, 措辞一改即分类失效→报告建议错。现 presentation.
+> build_user_view 新增 no_action_reason_types(由 execution_status/quote_stale/
+> alternative/signal/tilt 结构化字段派生, 与 no_action_reasons 一一对应写入
+> action card), _no_action_conflict_details/_conflict_decision_branch 优先读它,
+> 取不到才 fallback 文本分类(兼容存量)。新增 AkShareEarningsProvider(akshare/
+> cninfo 查 A股财报披露, 精确白名单+黑名单过滤, ETF/非上市静默跳过, 惰性依赖
+> 缺失自动降级), 装配+requirements. 全量 1434 passed / 7 skipped。
+> HEAD 570c1d2, 工作树 clean。
+> 前次: 报告简洁化 v0.4(75c5a17) / scorecard 样本质量标注+自评闭环暂缓(1c7e93a)。
+> Next: 分批档位表挂到持仓动作区(含义待 Kari 确认) / 双引擎信息面专项(方案已
+> 验证 lark-cli 推送通路, 待落地文档)。
 
 > Last updated: 2026-08-13 (twentieth update) — **左侧交易辅助系统改造**。
 > 按 Kari 目标(改成左侧交易者可用)落地一整轮: 左侧位置卡(布林位置/RSI/量比)
@@ -30,9 +35,49 @@ none of them record phase/completion status — that lives here only.
 > 全量 1414 passed / 4 预存失败 / 7 skipped; compileall/diff-check clean;
 > ruff 本环境未装(不可用)。
 > HEAD 96c2f5a, tag v2.12-left-side-advisor, 工作树 clean。
-> Next: 危机暂停加仓 vs 左侧逆向(危机时允许左侧超跌标的试仓) / 分批档位
-> 表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面专项。
+> (上一正式块的 Next: 危机暂停加仓 vs 左侧逆向——已于 2026-08-13 v2.13 解决。
+> 分批档位表/双引擎信息面见顶部最新块。)
 
+
+## 2026-08-15 硬编码文案识别根治 + A股财报日历（akshare）
+
+**Full pytest 1434 passed, 0 failed, 7 skipped。**（较前 +6：5 AkShare provider + 1 结构化类型回归）
+
+### 1. 硬编码文案识别脆弱性 —— 根治
+**Kari 质疑"是不是全靠硬编码识别, 文案一变就全失效?"** → 对抗核查确认属实:
+build_push_payload.`_conflict_type` 用中文字符串关键词（"数据"/"过时"/"锁定"/"开放期"/"资金"）
+给 no_action_reason 文案反推分类 → 决定报告的决策分支建议。措辞一改 → 分类错 → 报告建议错。
+
+**根因**: 文案生成(`_deferred_action_text`)已是"结构化 execution_status → 文本"的正确方向,
+但下游 `_conflict_type` 反着来"文本 → 分类"。
+
+**修复**:
+- presentation.build_user_view 新增 `no_action_reason_types`, 由结构化字段
+  (execution_status/quote_stale/alternative_position_id/signal/tilt) 派生,
+  与 no_action_reasons 严格一一对应写入 action card。
+- build_push_payload `_no_action_conflict_details`/`_conflict_decision_branch`
+  优先读 card.no_action_reason_types, 取不到才 fallback 到 _conflict_type(兼容存量 artifact)。
+- 回归测试 test_no_action_conflict_details_prefers_structured_type 锁定结构化优先。
+
+### 2. 我新引入的 AkShare provider 同类问题 —— 一并修
+过滤从"宽泛'报告/业绩'子串"改为"精确财报白名单 + 明确非财报黑名单排除",
+避免误收理事会/分红/选举等非财报公告。
+
+### 3. A股财报日历（新增 AkShareEarningsProvider）
+- akshare 1.18.91 装入（阿里镜像源，pypi 超时）；requirements.txt 加 akshare>=1.18。
+- provider 只查 market=="a" 且 6 位数字代码；`stock_zh_a_disclosure_report_cninfo`
+  拉取披露, 过滤财报类 → earnings 事件；ETF/非上市(KeyError)静默跳过不污染 last_errors；
+  缓存同 Finnhub 模式。实测平安银行返回 3 个财报事件。
+- 装配 __init__ + config_loader calendar.earnings.akshare(默认 enabled)。
+- 5 mock 测试（过滤/只查A股/KeyError跳过/缓存/akshare缺失降级）。
+
+### 待确认
+- 分批档位表挂到持仓动作区：含义仍有歧义（技术位支撑档位 vs 加仓比例 ladder），
+  代码已有部分字段(ma_20/bollinger_lower/ma_60 透传给 research 候选)但呈现未做，需 Kari 拍板。
+- 双引擎信息面：范围大（人民币侧 A股估值分位 + 美元侧估值锚/QDII溢价 + 中文财经源 + A股情绪），
+  已验证 lark-cli 可推送飞书云文档，待落地初版方案文档。
+
+---
 
 ## 2026-08-15 报告简洁化 v0.4（渲染纪律）
 
