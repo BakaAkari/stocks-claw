@@ -5,6 +5,7 @@ module creates stable Chinese labels for the user-facing report contract.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import datetime, time
 import zoneinfo
@@ -388,15 +389,21 @@ def _tomorrow_plan(
         pid = str(action.get("position_id") or "")
         item = by_id.get(pid, {})
         label = _display_for_position(item) or pid
-        desc = str(action.get("action_description") or "")[:80]
         ratio = action.get("final_ratio") if action.get("final_ratio") is not None else action.get("ratio")
-        amount_hint = ""
-        if isinstance(ratio, (int, float)) and ratio > 0:
-            amount_hint = f"（按 {ratio*100:.0f}% 比例）"
+        # TASK-011(2026-08-15): 明日计划不得复用 action_description 内嵌的、执行前
+        # 的旧百分比(adjusted_to_step 会把 final_ratio 从 30% 修到 28%)。否则出现
+        # "减仓 30%(按 28% 比例)"自相矛盾(指令卡已用 final_ratio,明日计划却不一致)。
+        # 这里把 action_description 里的"减仓 N%"统一替换为 final_ratio,其他百分比
+        # (如止盈阈值 40%)保留,百分比单一来源 = final_ratio。
+        desc = str(action.get("action_description") or "")[:120]
+        if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and ratio > 0:
+            desc = re.sub(r"(减仓\s*)(\d+)(\s*%)", lambda m: f"{m.group(1)}{ratio*100:.0f}{m.group(3)}", desc)
+            suffix = "（已按最小交易单位调整）" if str(action.get("execution_status")) == "adjusted_to_step" else ""
+            desc = f"{desc}{suffix}"
         # P5-1: 与指令卡同 gate。可执行 → high;被 gate(行情过时等) → medium 复核
         if _is_executable(action, item, by_market):
             plan.append({
-                "action": f"{label}：{desc}{amount_hint}",
+                "action": f"{label}：{desc}",
                 # 用户面不暴露内部 position_id,用公开 code/名称
                 "position": public_instrument_code(item.get("instrument_key", ""), "") or label,
                 "priority": "high",

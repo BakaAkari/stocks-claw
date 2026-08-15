@@ -465,3 +465,34 @@ def test_setup_section_lists_overflow_candidate_names():
     assert "另有 2 个候选" in joined
     assert "候选3ETF" in joined
     assert "候选4ETF" in joined
+
+
+
+def test_tomorrow_plan_uses_final_ratio_not_stale_action_description():
+    """TASK-011(2026-08-15): 明日计划不得出现'减仓 30%(按 28% 比例)'自相矛盾。
+    action_description 内嵌执行前旧百分比(30%), final_ratio=28%(adjusted_to_step),
+    修复后明日计划百分比单一来源 = final_ratio。"""
+    # action_description 带旧百分比 30%, final_ratio=0.28125 (adjusted_to_step)
+    plan = _tomorrow_plan(
+        {"approved_actions": [{
+            "position_id": "us_xle", "signal": "take_profit",
+            "action_description": "止盈触发 — 建议减仓 30%",
+            "ratio": 0.3, "final_ratio": 0.28125, "original_ratio": 0.3,
+            "execution_status": "adjusted_to_step", "executable_quantity": 9,
+        }]},
+        [], {
+            "us_xle": {
+                "position_id": "us_xle", "display_name": "XLE",
+                "instrument_key": "us:XLE",
+                "classification": {"exposure_tags": ["能源"]},
+            }
+        },
+        by_market=_fresh_by_market(),
+        data_notes=[], risk_state={}, structured_outlook=None,
+    )
+    action_text = plan[0]["action"]
+    # 不再同时出现"减仓 30%"与"按 28% 比例"
+    assert "减仓 30%" not in action_text, action_text
+    assert "30%（按" not in action_text, action_text
+    # 百分比单一来源 final_ratio 28%
+    assert "减仓 28%" in action_text, action_text
