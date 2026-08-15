@@ -1494,6 +1494,9 @@ def build_user_view(
             "bollinger_lower": candidate.get("bollinger_lower"),
             # P1(左侧): 现价,用于过滤"价格下方的支撑位"(价格上方是阻力,不是左侧接的档位)。
             "price": candidate.get("price"),
+            # P1(左侧): 左侧分批接货比例(可配置,来自 computed_profile.left_batch_plan_ratios),
+            # 供渲染层按支撑档位标注"各档接货比例"。
+            "batch_ratios": candidate.get("batch_ratios"),
         })
         if len(research) >= 8:
             break

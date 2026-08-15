@@ -1011,11 +1011,15 @@ def _left_position_line(item: dict) -> str | None:
 
 
 def _left_batch_plan(item: dict) -> str | None:
-    """分批支撑位: 价格下方的技术支撑(MA20/MA60/布林下轨),从近到远排序。
+    """分批支撑位: 价格下方的技术支撑(MA20/MA60/布林下轨),从近到远排序,并标注各档接货比例。
 
     只保留价格下方的支撑位(价格上方的是阻力,不是左侧分批接的档位),按价位
-    从高到低排序(最近的支撑在前)。只给技术价位,不替用户定资金比例。
-    价格 round(2) 存储,渲染 {:.2f} 对齐(数字门禁)。
+    从高到低排序(最近的支撑在前)。各档接货比例来自可配置的 batch_ratios
+    (默认 [0.40, 0.35, 0.25], 近档→远档递减), 按实际档位数对齐:
+    - 档位数==len(ratios): 一一对应(近档用 ratios[0]...);
+    - 档位数 < len(ratios): 只取前 N 档比例并归一化(防止比例和≠100%);
+    - 档位数 > len(ratios): ratios 循环复用(超出档沿用最深档比例)。
+    价格 round(2) 存储, 渲染 {:.2f} 对齐(数字门禁)。
     """
     price = item.get("price")
     if price is None:
@@ -1041,7 +1045,22 @@ def _left_batch_plan(item: dict) -> str | None:
     if not supports:
         return None
     supports.sort(key=lambda x: -x[0])  # 从高到低: 最近的支撑在前
-    steps = [f"{name}({v:.2f})" for v, name in supports]
+    # 各档接货比例(近档→远档, 默认递减), 与动态档位对齐。
+    ratios = item.get("batch_ratios") or [0.40, 0.35, 0.25]
+    if not isinstance(ratios, (list, tuple)) or not ratios:
+        ratios = [0.40, 0.35, 0.25]
+    ratios = [float(x) if isinstance(x, (int, float)) else 0.0 for x in ratios]
+    n_sup = len(supports)
+    if n_sup <= len(ratios):
+        per = ratios[:n_sup]  # 取前 N 档
+    else:
+        # 档位数超过可配置比例: ratios 循环复用(超出沿用最远档比例)
+        per = [ratios[i % len(ratios)] for i in range(n_sup)]
+    total = sum(per) or 1.0
+    steps = []
+    for (v, name), r in zip(supports, per):
+        pct = r / total * 100
+        steps.append(f"{name}({v:.2f})接{pct:.0f}%")
     return "分批支撑: " + " / ".join(steps) + "（技术位，非买卖指令）"
 
 

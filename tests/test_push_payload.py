@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from scripts.build_push_payload import (
+    _left_batch_plan,
     _no_action_conflict_details,
     build_push_payload,
     render_push_payload,
@@ -984,3 +985,55 @@ def test_no_action_conflict_details_prefers_structured_type():
     # 4) typed 覆盖中文反推: 即使文本命中"锁定"关键词, typed 为准
     d4 = _no_action_conflict_details("某标的：锁定无法交易", typed="数据问题")
     assert d4["type"] == "数据问题"
+
+
+
+def test_left_batch_plan_with_configured_ratios():
+    """分批支撑位档位表 + 各档接货比例(近档→远档递减, 可配置)。"""
+    # 3 档支撑 + 3 档默认比例: 近档(MA20)40% / 中档(布林下轨)35% / 远档(MA60)25%
+    item = {
+        "price": 1.30,
+        "ma_20": 1.23,
+        "ma_60": 1.05,
+        "bollinger_lower": 1.18,
+        "batch_ratios": [0.40, 0.35, 0.25],
+    }
+    text = _left_batch_plan(item)
+    assert text is not None
+    assert "MA20(1.23)接40%" in text
+    assert "布林下轨(1.18)接35%" in text
+    assert "MA60(1.05)接25%" in text
+    # 近档在前(从高到低)
+    assert text.index("MA20") < text.index("布林下轨") < text.index("MA60")
+
+
+def test_left_batch_plan_fewer_tiers_normalizes_ratios():
+    """支撑档位 < 配置比例数时, 取前 N 档并归一化(比例和=100%)。"""
+    # 只有 2 档支撑(MA20/布林下轨), 配置 3 档 → 取 [0.40,0.35] 归一化 → 53% / 47%
+    item = {
+        "price": 1.30,
+        "ma_20": 1.23,
+        "ma_60": None,
+        "bollinger_lower": 1.18,
+        "batch_ratios": [0.40, 0.35, 0.25],
+    }
+    text = _left_batch_plan(item)
+    assert text is not None
+    assert "MA20(1.23)接53%" in text
+    assert "布林下轨(1.18)接47%" in text
+
+
+def test_left_batch_plan_only_price_above_supports_returns_none():
+    """所有技术位都在价格上方(是阻力)或缺失 -> 无左侧接货档位, 返回 None。"""
+    item = {"price": 1.00, "ma_20": 1.05, "ma_60": 1.10, "bollinger_lower": 1.08}
+    assert _left_batch_plan(item) is None
+    item2 = {"price": 1.00}  # 无任何技术位
+    assert _left_batch_plan(item2) is None
+
+
+def test_left_batch_plan_default_ratios_when_missing():
+    """batch_ratios 缺失时用默认 [0.40,0.35,0.25]。"""
+    item = {"price": 1.30, "ma_20": 1.23, "ma_60": 1.05, "bollinger_lower": 1.18}
+    text = _left_batch_plan(item)
+    assert text is not None
+    assert "MA20(1.23)接40%" in text

@@ -2191,6 +2191,18 @@ def _build_research_candidates(
 
     by_market = ((data_quality or {}).get("quotes") or {}).get("by_market") or {}
 
+    # 左侧分批接货比例(支撑位档位表): 从 computed_profile 个性化参数读取。
+    _batch_ratios: list[float] = [0.40, 0.35, 0.25]
+    try:
+        from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
+        from pathlib import Path as _P
+        _merged = merge_with_defaults(load_computed(_P(__file__).resolve().parent.parent.parent / ".local" / "computed_profile.json"))
+        _br = _merged.get("left_batch_plan_ratios")
+        if isinstance(_br, (list, tuple)) and _br:
+            _batch_ratios = [float(x) for x in _br if isinstance(x, (int, float))]
+    except Exception:
+        pass
+
     candidates = []
     for item in (action_signals.get("items") or []):
         signal = item.get("signal", "")
@@ -2227,6 +2239,8 @@ def _build_research_candidates(
             # layer. Used by the freshness gate below; also surfaced so the
             # render layer can annotate staleness per candidate.
             "as_of": item.get("as_of"),
+            # 左侧分批接货比例(支撑位档位表), 渲染层按实际档位对齐。
+            "batch_ratios": _batch_ratios,
         }
         if suspend:
             candidate["reassess_after"] = f"风险解除后再评估（当前状态: {risk_level}）"

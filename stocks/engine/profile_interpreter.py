@@ -33,6 +33,8 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "left_add_min_rsi": 40.0,
     # ── 个性化扩展参数 ──
     "ma20_pullback_add_ratios": [0.02],
+    # 左侧分批接货比例(支撑位档位表): [近档, 中档, 远档] 下探递减, 之和=1。
+    "left_batch_plan_ratios": [0.40, 0.35, 0.25],
     "chase_enabled": False,
     "trend_break_extra_deviation_pct": 0.0,
     "max_single_position_pct": 15.0,
@@ -71,6 +73,7 @@ INTERPRETER_SYSTEM_PROMPT = """你是一位资深量化交易策略师，专门�
 | left_add_max_rsi | 左侧加仓RSI上限 | 65.0 | 更高=强趋势中也可加 |
 | left_add_min_rsi | 左侧加仓RSI下限 | 40.0 | 更低=只深回调时加 |
 | ma20_pullback_add_ratios | 分批加仓比例（按 MA20 偏离选档）[首档,二档,...] | [0.02] | 更多档=更分散 |
+| left_batch_plan_ratios | 左侧支撑位分批接货比例（[近档,中档,远档]，和=1） | [0.40,0.35,0.25] | 近档更多=越跌越买更激进 |
 | chase_enabled | 是否允许追高 | false | true=允许突破追入 |
 | trend_break_extra_deviation_pct | MA20 触发需额外偏离百分点 | 0.0 | 更大=要求更深偏离才触发 |
 
