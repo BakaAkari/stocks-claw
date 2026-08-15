@@ -262,6 +262,20 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
   分组的 from/to)。
 - `mandatory_blocks`：兼容字段，供历史 Markdown/内部审计使用；交易窗口 v5 Agent 不得读取。
 - `context_digest`：情报 session 和内部审计上下文；交易窗口 v5 Agent 不得读取。
+- `rule_scorecard`：动作信号规则回测记分卡。含 `feedback`，`feedback.by_source_direction_window`
+  按 `{source}/{direction}/{window}` 分组，每格给 `ok` / `total` / `win_rate` / `sample_quality`。
+  `sample_quality` 用四个维度标注该胜率是否可作信任依据（2026-08-15 对抗性校验后引入，
+  避免把结算器修复后短期内由少数标的与单日行情主导的噪声胜率当定论）：
+  - `sample_count`：结算样本数
+  - `day_span`：跨越交易日数(避免单日主导)
+  - `max_day_share`：单日最大样本占比
+  - `distinct_symbols`：去重标的多(避免标的过于集中)
+  - `trustable`：`sample_count≥50` 且 `day_span≥5` 且 `max_day_share≤0.6` 且
+    `distinct_symbols≥3` 时 True
+  - `issues`：不满足的具体原因列表
+  - `note`：面向渲染的诚实中文说明(例如"当前胜率不足以单独作为信任/降权依据")
+  `sample_quality` 是"测量可信度"标注，不参与信号加权/门控；报告在 `trustable=False` 时
+  明确声明胜率不足以作依据，而非降权。待真实样本跨越足够市场状态后再考虑闭环。
 - 所有会话（含情报和交易窗口）均要求 `agent_task.task_version == 5`；存储层和推送守门均拒绝 v4。
 - `write_policy`：固定声明后台运行不得写长期金融记忆，写入必须用户确认
 - `notification`：推荐推送策略，通知层只发消息不写金融记忆
