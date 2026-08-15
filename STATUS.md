@@ -8,20 +8,17 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-15 (twenty-fourth update) — **硬编码文案识别根治 + A股财报日历**。
-> 彻底消除"报告靠中文字符串反推结构化分类"的脆弱性: build_push_payload.
-> _conflict_type 原用"数据/过时/锁定/开放期/资金"等中文关键词给 no_action_
-> reason 分类→决定决策分支, 措辞一改即分类失效→报告建议错。现 presentation.
-> build_user_view 新增 no_action_reason_types(由 execution_status/quote_stale/
-> alternative/signal/tilt 结构化字段派生, 与 no_action_reasons 一一对应写入
-> action card), _no_action_conflict_details/_conflict_decision_branch 优先读它,
-> 取不到才 fallback 文本分类(兼容存量)。新增 AkShareEarningsProvider(akshare/
-> cninfo 查 A股财报披露, 精确白名单+黑名单过滤, ETF/非上市静默跳过, 惰性依赖
-> 缺失自动降级), 装配+requirements. 全量 1434 passed / 7 skipped。
-> HEAD 570c1d2, 工作树 clean。
-> 前次: 报告简洁化 v0.4(75c5a17) / scorecard 样本质量标注+自评闭环暂缓(1c7e93a)。
-> Next: 分批档位表挂到持仓动作区(含义待 Kari 确认) / 双引擎信息面专项(方案已
-> 验证 lark-cli 推送通路, 待落地文档)。
+> Last updated: 2026-08-15 (twenty-fifth update) — **分批支撑位档位表 + 各档接货比例可配置**。
+> 对超跌/左侧候选挂上支撑位档位表(现价下方 MA20/MA60/布林下轨, 过滤价格上方
+> 阻力), 并新增可配置 left_batch_plan_ratios(默认[0.40,0.35,0.25], 近档→远档
+> 递减, 和=1) 标注各档接货比例, profile_interpreter 可个性化、LLM 可调。
+> 渲染"分批支撑: MA20(x)接40% / 布林下轨(y)接35% / MA60(z)接25%(技术位,非指令)"。
+> 档位数<=比例则取前N归一化, >则循环复用。全量 1438 passed / 7 skipped。
+> HEAD fb7337b, 工作树 clean。
+> 前次: 硬编码文案识别根治+A股财报日历(570c1d2) / 报告简洁化 v0.4(75c5a17) /
+> scorecard 样本质量标注+自评闭环暂缓(1c7e93a)。
+> Next: 双引擎信息面专项(人民币侧A股估值分位 + 美元侧估值锚/QDII溢价 + 中文
+> 财经源 + A股情绪, 方案待落地飞书云文档, lark-cli 通路已验证)。
 
 > Last updated: 2026-08-13 (twentieth update) — **左侧交易辅助系统改造**。
 > 按 Kari 目标(改成左侧交易者可用)落地一整轮: 左侧位置卡(布林位置/RSI/量比)
