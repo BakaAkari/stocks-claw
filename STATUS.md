@@ -8,17 +8,19 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-15 (twenty-fifth update) — **分批支撑位档位表 + 各档接货比例可配置**。
-> 对超跌/左侧候选挂上支撑位档位表(现价下方 MA20/MA60/布林下轨, 过滤价格上方
-> 阻力), 并新增可配置 left_batch_plan_ratios(默认[0.40,0.35,0.25], 近档→远档
-> 递减, 和=1) 标注各档接货比例, profile_interpreter 可个性化、LLM 可调。
-> 渲染"分批支撑: MA20(x)接40% / 布林下轨(y)接35% / MA60(z)接25%(技术位,非指令)"。
-> 档位数<=比例则取前N归一化, >则循环复用。全量 1438 passed / 7 skipped。
-> HEAD fb7337b, 工作树 clean。
-> 前次: 硬编码文案识别根治+A股财报日历(570c1d2) / 报告简洁化 v0.4(75c5a17) /
-> scorecard 样本质量标注+自评闭环暂缓(1c7e93a)。
-> Next: 双引擎信息面专项(人民币侧A股估值分位 + 美元侧估值锚/QDII溢价 + 中文
-> 财经源 + A股情绪, 方案待落地飞书云文档, lark-cli 通路已验证)。
+> Last updated: 2026-08-15 (twenty-sixth update) — **全链路对抗性审查 + P1/P2 实质修复**。
+> 从最新报告结果出发回溯全链路做对抗性审查(用户+开发者双视角, 见
+> docs/reviews/full-chain-adversarial-review-20260815.md)。关键: 严格区分
+> 旧 artifact(f6c082d/e5dd5b5 修复前)与当前 HEAD——旧报告的 ratio 文本脱节/
+> HKD降级等已修(均有测试锁定)。
+> P1: 单币种不支持换算由 blocked 降为 degraded(该资产不计入总资产+诚实标注),
+> 不再整份阻断。P2: 分批档位表合并同价位档位(MA60/布林下轨重合只列一档)。
+> P0(schema v1 user_view 空)经核验为误报——artifacts 均有完整 user_view,
+> build_push_payload 缺失即 raise 是正确的 fail-fast, 保留。
+> 全量 1441 passed / 7 skipped。
+> HEAD 5aabd30, 工作树 clean。
+> 前次: 分批支撑位档位表+可配置比例(fb7337b) / 硬编码根治+A股财报(570c1d2)。
+> Next: 双引擎信息面专项(方案 v0.1 已推送飞书云文档, 待 Kari 评审范围)。
 
 > Last updated: 2026-08-13 (twentieth update) — **左侧交易辅助系统改造**。
 > 按 Kari 目标(改成左侧交易者可用)落地一整轮: 左侧位置卡(布林位置/RSI/量比)
