@@ -791,6 +791,56 @@ def _action_sentence(raw: dict, label: str) -> str:
     return f"{label}：{signal} {pct}{suffix}"
 
 
+_NO_ACTION_TYPES = {"数据问题", "决策冲突", "锁定", "非开放期", "资金/结算", "最小单位", "换仓腿", "其他"}
+
+
+def _deferred_no_action_type(status: str, quote_stale: bool, alternative: bool) -> str:
+    """从结构化 execution_status / 行情新鲜度 / 换仓腿派生原因类型。
+
+    与 build_push_payload._conflict_type 的返回值约定保持一致, 但完全基于
+    结构化字段, 不扫描中文文案, 因此措辞改动不会导致分类失效。
+    """
+    if alternative:
+        return "换仓腿"
+    if status in ("deferred_min_unit",):
+        return "最小单位"
+    if status in ("locked",):
+        return "锁定"
+    if quote_stale:
+        return "数据问题"
+    if status in ("review_required",):
+        return "决策冲突"
+    return "其他"
+
+
+def _conflict_no_action_type(conflict: dict) -> str:
+    """从 unresolved_conflict 结构化字段派生类型(不依赖中文文案)。"""
+    signal = str(conflict.get("signal") or "")
+    tilt = str(conflict.get("tilt") or "")
+    if signal in ("stop_loss", "reduce", "take_profit"):
+        return "决策冲突"
+    if tilt == "constraint":
+        return "决策冲突"
+    return "决策冲突"
+
+
+def _suppressed_no_action_type(raw: dict) -> str:
+    """从 suppressed_action 结构化字段派生类型(不依赖中文文案全文)。"""
+    reason = str(raw.get("reason") or "")
+    signal = str(raw.get("signal") or "")
+    if any(k in reason for k in ("不可交易", "锁定", "封盘", "暂停申购", "暂停交易")):
+        return "锁定"
+    if any(k in reason for k in ("开放期", "封闭期", "周期", "封闭")):
+        return "非开放期"
+    if signal in ("stop_loss", "reduce", "take_profit"):
+        return "决策冲突"
+    if any(k in reason for k in ("数据", "行情", "过时", "缺失")):
+        return "数据问题"
+    if any(k in reason for k in ("资金", "结算", "缺口")):
+        return "资金/结算"
+    return "其他"
+
+
 def _deferred_action_text(raw: dict, item: dict, by_market: dict) -> str:
     """Concise no-action/manual-review text for a finalized action that
     failed the executable gate (TASK-001E1 defect 2/3) -- it must never be
@@ -1197,6 +1247,7 @@ def build_user_view(
 
     actions = []
     deferred_reasons = []
+    deferred_reason_types: list[str] = []
     suppressed_reference: list[dict] = []
     gate_rejected_sell = False
     for raw in approved_cards:
@@ -1210,6 +1261,13 @@ def build_user_view(
             text = _deferred_action_text(raw, item, by_market)
             if text not in deferred_reasons:
                 deferred_reasons.append(text)
+                deferred_reason_types.append(
+                    _deferred_no_action_type(
+                        str(raw.get("execution_status") or ""),
+                        _market_quote_stale(_instrument_market(item.get("instrument_key", "")), by_market),
+                        bool(raw.get("alternative_position_id")),
+                    )
+                )
             # M1: an approved sell stopped at the gate is still a pending
             # sell — its proceeds belong in 卖出后可释放 (strategic_exit).
             if str(raw.get("signal") or "") in {"stop_loss", "take_profit", "reduce"}:
@@ -1314,7 +1372,10 @@ def build_user_view(
             ),
         })
 
+    # 结构化类型与 no_action_reasons 一一对应(供 build_push_payload 优先读取,
+    # 避免 _conflict_type 靠中文字符串反推导致措辞改动后分类失效)。
     no_action_reasons = list(deferred_reasons)
+    no_action_reason_types = list(deferred_reason_types)
     approved_pids = {str(raw.get("position_id") or "") for raw in approved_cards}
     for conflict in decision.get("unresolved_conflicts") or []:
         if len(no_action_reasons) >= 2:
@@ -1325,6 +1386,7 @@ def build_user_view(
         reason = _conflict_reason(conflict, by_id)
         if reason not in no_action_reasons:
             no_action_reasons.append(reason)
+            no_action_reason_types.append(_conflict_no_action_type(conflict))
     for raw in decision.get("suppressed_actions") or []:
         if len(no_action_reasons) >= 2:
             break
@@ -1334,9 +1396,14 @@ def build_user_view(
         reason = _suppressed_user_text(raw, by_id, reviews_by_id)
         if reason not in no_action_reasons:
             no_action_reasons.append(reason)
+            no_action_reason_types.append(_suppressed_no_action_type(raw))
     if not no_action_reasons and not actions:
         no_action_reasons.append("当前没有满足执行条件的获批动作")
+        no_action_reason_types.append("其他")
+    while len(no_action_reason_types) < len(no_action_reasons):
+        no_action_reason_types.append("其他")
     no_action_reasons = no_action_reasons[:2]
+    no_action_reason_types = no_action_reason_types[:2]
 
     # TASK-001E2 display cap is 3 action cards, but approved actions beyond
     # the cap must never vanish silently (adversarial review P0-3): count the
@@ -1517,6 +1584,7 @@ def build_user_view(
         "actions": actions,
         "actions_overflow": actions_overflow,
         "no_action_reasons": no_action_reasons[:2] if not actions else [],
+        "no_action_reason_types": no_action_reason_types[:2] if not actions else [],
         "next_checkpoint": actions[0]["next_checkpoint"] if actions else _session_checkpoint(session_id, session_intent),
     }
     if suppressed_reference:

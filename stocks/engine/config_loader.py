@@ -57,7 +57,12 @@ DEFAULT_ENGINE_CONFIG = {
     "calendar": {
         "enabled": True,
         "lookahead_days": 14,
-        "earnings": {"enabled": True},
+        "earnings": {
+            "enabled": True,
+            # A股财报日历: 由 AkShareEarningsProvider 提供(akshare 惰性依赖,
+            # 缺失时该 provider 自动降级, 不阻断 Finnhub/静态 provider)。
+            "akshare": {"enabled": True},
+        },
     },
     "filings": {
         "enabled": True,

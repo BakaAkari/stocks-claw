@@ -127,7 +127,10 @@ class TestLoadEngineConfig:
         assert config["calendar"] == {
             "enabled": True,
             "lookahead_days": 14,
-            "earnings": {"enabled": True},
+            "earnings": {
+                "enabled": True,
+                "akshare": {"enabled": True},
+            },
         }
         assert config["filings"]["enabled"] is True
         assert config["filings"]["sec"]["enabled"] is True

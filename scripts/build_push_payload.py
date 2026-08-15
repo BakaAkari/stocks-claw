@@ -1210,9 +1210,9 @@ def _conflict_type(reason: str) -> str:
     return "其他"
 
 
-def _conflict_decision_branch(reason: str) -> str:
+def _conflict_decision_branch(reason: str, typed: str | None = None) -> str:
     """Return a default branch for manual review conflicts."""
-    t = _conflict_type(reason)
+    t = typed if typed else _conflict_type(reason)
     if t == "数据问题":
         return "默认：等待数据恢复后重新评估"
     if t == "决策冲突":
@@ -1226,8 +1226,12 @@ def _conflict_decision_branch(reason: str) -> str:
     return "默认：维持现状"
 
 
-def _no_action_conflict_details(reason: str) -> dict[str, Any]:
-    """Parse a no_action_reason into structured conflict details for display."""
+def _no_action_conflict_details(reason: str, typed: str | None = None) -> dict[str, Any]:
+    """Parse a no_action_reason into structured conflict details for display.
+
+    typed: card.no_action_reason_types 传入的结构化类型(由 presentation 从
+    execution_status 派生), 优先使用避免靠中文字符串反推; 取不到才 fallback。
+    """
     text = str(reason or "")
     # Extract instrument label and code from the leading 'label(code): ...' form.
     label = text
@@ -1238,12 +1242,13 @@ def _no_action_conflict_details(reason: str) -> dict[str, Any]:
     if m:
         label = m.group(1).strip()
         code = m.group(2).strip()
+    type_val = typed if typed else _conflict_type(text)
     return {
-        "type": _conflict_type(text),
+        "type": type_val,
         "label": label,
         "code": code,
         "reason": text,
-        "branch": _conflict_decision_branch(text),
+        "branch": _conflict_decision_branch(text, type_val),
     }
 
 
@@ -1364,6 +1369,7 @@ def _section_executable_actions(
     if not actions:
         # 无 approved actions；若为 manual_review，把冲突理由摆出来带参考值和默认分支。
         no_action_reasons = card.get("no_action_reasons") or []
+        no_action_reason_types = card.get("no_action_reason_types") or []
         if status_raw == "manual_review" and no_action_reasons:
             lines.append(f"- 状态: {status_label or '等待人工确认'}")
             lines.append("- 以下冲突需你判断:")
@@ -1372,8 +1378,9 @@ def _section_executable_actions(
                 if isinstance(ref, dict)
             ]
             matched: set[int] = set()
-            for reason in no_action_reasons[:3]:
-                detail = _no_action_conflict_details(reason)
+            for i, reason in enumerate(no_action_reasons[:3]):
+                _typed = no_action_reason_types[i] if i < len(no_action_reason_types) else None
+                detail = _no_action_conflict_details(reason, _typed)
                 if detail["label"] and detail["code"]:
                     lines.append(f"  · **{detail['label']}（{detail['code']}）** [{detail['type']}] {detail['reason'].split('：', 1)[-1] if '：' in detail['reason'] else detail['reason']}")
                 else:

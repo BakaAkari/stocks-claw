@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from scripts.build_push_payload import (
+    _no_action_conflict_details,
     build_push_payload,
     render_push_payload,
     validate_payload_text,
@@ -958,3 +959,28 @@ def test_blocked_section_keeps_reasons_beyond_section3_cap():
     # 前 3 条已被 §3 展示,§5 不应重复(去重生效)
     assert "沪深300ETF（510300）：方向冲突，需人工确认" not in blocked
     assert validate_payload_text(payload, text) == []
+
+
+
+def test_no_action_conflict_details_prefers_structured_type():
+    """结构化 type(来自 card.no_action_reason_types)优先于中文文本反推。
+
+    回归锁定: 文案措辞变化不应导致决策分支分类失效; typed 传入时直接采用,
+    只有取不到 typed 才 fallback 到 _conflict_type 文本分类。
+    """
+    # 1) typed 传入时, 即使文本不含任何中文关键词也用结构化 type
+    d = _no_action_conflict_details("X标的：machine generated opaque reason", typed="数据问题")
+    assert d["type"] == "数据问题"
+    assert "等待数据恢复" in d["branch"]
+
+    # 2) 文案措辞变化但 typed 仍是结构化稳定值 (旧法纯反推会因措辞漂移失效)
+    d2 = _no_action_conflict_details("某标的：数据时效不足无法估值", typed="数据问题")
+    assert d2["type"] == "数据问题"
+
+    # 3) fallback: 无 typed 时保持文本分类(向后兼容)
+    d3 = _no_action_conflict_details("某标的：行情数据过时或缺失，暂缓执行")
+    assert d3["type"] == "数据问题"
+
+    # 4) typed 覆盖中文反推: 即使文本命中"锁定"关键词, typed 为准
+    d4 = _no_action_conflict_details("某标的：锁定无法交易", typed="数据问题")
+    assert d4["type"] == "数据问题"

@@ -46,6 +46,7 @@ from stocks.engine.config_loader import load_engine_config
 from stocks.engine.context_builder import ContextBuilder, _dedupe_instruments
 from stocks.engine.economic_event_watcher import EconomicEventWatcher
 from stocks.engine.event_calendar import (
+    AkShareEarningsProvider,
     EventCalendar,
     FinnhubEarningsCalendarProvider,
     StaticEventCalendarProvider,
@@ -295,6 +296,13 @@ class StocksEngine:
                             if isinstance(finnhub_client, FinnhubQuoteProvider)
                             else None
                         ),
+                    )
+                )
+            akshare_cfg = earnings_cfg.get("akshare", {})
+            if akshare_cfg.get("enabled", True):
+                calendar_providers.append(
+                    AkShareEarningsProvider(
+                        cache_dir=self._local_data_dir / "event_cache",
                     )
                 )
             if calendar_providers:
