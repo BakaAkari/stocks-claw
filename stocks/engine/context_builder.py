@@ -1144,11 +1144,15 @@ class ContextBuilder:
                     ),
                 })
             if "supported_fx" in missing:
+                # P1(2026-08-15): 单个资产币种不支持换算 -> degraded(该资产不计入
+                # CNY 合计, 报告中诚实标注), 而非 blocked 阻断整份报告。此前一个
+                # 不支持币种(如历史 HKD)会让整份资产完整性判定为 blocked -> 报告
+                # 整体降级, 合理资产也被连带阻断。诚实优先: 透明标缺口, 不整份失败。
                 issues.append({
                     "position_id": item["position_id"],
-                    "severity": "blocked",
+                    "severity": "degraded",
                     "capability": "cny_valuation",
-                    "message": f"{item['display_name']} 币种 {item['currency']} 暂不支持自动换算",
+                    "message": f"{item['display_name']} 币种 {item['currency']} 暂不支持自动换算，该资产价值未计入总资产",
                 })
         return {
             "issue_count": len(issues),

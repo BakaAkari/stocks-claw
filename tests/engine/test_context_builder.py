@@ -1699,3 +1699,23 @@ def test_public_cluster_articles_limit_5_independent():
     # Ensure limit works independently from other tests
     result2 = ContextBuilder._public_cluster_articles(articles, limit=3)
     assert len(result2) == 3
+
+
+
+def test_asset_boundaries_unsupported_fx_is_degraded_not_blocked():
+    """P1(2026-08-15): 单个资产币种不支持 -> degraded(该资产不计入总资产, 诚实标注),
+    而非 blocked 阻断整份报告。"""
+    from stocks.engine.context_builder import ContextBuilder
+
+    builder = ContextBuilder(None, None, None)
+    items = [{
+        "position_id": "ibkr_gbp_cash",
+        "display_name": "IBKR GBP 现金",
+        "currency": "GBP",
+        "missing_fields": ["supported_fx"],
+    }]
+    result = builder._build_asset_data_boundaries(items)
+    fx_issues = [i for i in result["issues"] if i.get("capability") == "cny_valuation"]
+    assert fx_issues, "应有 cny_valuation issue"
+    assert fx_issues[0]["severity"] == "degraded", f"应为 degraded, 实为 {fx_issues[0]['severity']}"
+    assert "未计入总资产" in fx_issues[0]["message"]

@@ -1045,12 +1045,22 @@ def _left_batch_plan(item: dict) -> str | None:
     if not supports:
         return None
     supports.sort(key=lambda x: -x[0])  # 从高到低: 最近的支撑在前
-    # 各档接货比例(近档→远档, 默认递减), 与动态档位对齐。
+    # P2(2026-08-15): 合并同价位档位——MA60 与布林下轨等可能指向同一价格,
+    # 若不做合并, 用户会把"两档分散"误读为"同一价位的两次接货"。
+    merged: list[tuple[float, str]] = []
+    for v, name in supports:
+        key = round(v, 2)
+        if merged and round(merged[-1][0], 2) == key:
+            prev_v, prev_name = merged[-1]
+            merged[-1] = (prev_v, f"{prev_name}/{name}")
+        else:
+            merged.append((v, name))
+    # 各档接货比例(近档→远档, 默认递减), 与合并后的档位对齐。
     ratios = item.get("batch_ratios") or [0.40, 0.35, 0.25]
     if not isinstance(ratios, (list, tuple)) or not ratios:
         ratios = [0.40, 0.35, 0.25]
     ratios = [float(x) if isinstance(x, (int, float)) else 0.0 for x in ratios]
-    n_sup = len(supports)
+    n_sup = len(merged)
     if n_sup <= len(ratios):
         per = ratios[:n_sup]  # 取前 N 档
     else:
@@ -1058,7 +1068,7 @@ def _left_batch_plan(item: dict) -> str | None:
         per = [ratios[i % len(ratios)] for i in range(n_sup)]
     total = sum(per) or 1.0
     steps = []
-    for (v, name), r in zip(supports, per):
+    for (v, name), r in zip(merged, per):
         pct = r / total * 100
         steps.append(f"{name}({v:.2f})接{pct:.0f}%")
     return "分批支撑: " + " / ".join(steps) + "（技术位，非买卖指令）"

@@ -1037,3 +1037,35 @@ def test_left_batch_plan_default_ratios_when_missing():
     text = _left_batch_plan(item)
     assert text is not None
     assert "MA20(1.23)接40%" in text
+
+
+def test_left_batch_plan_merges_same_price_tiers():
+    """同价位档位(MA60 与布林下轨重合)合并为一档, 比例按合并后档位对齐。"""
+    # MA60 与 布林下轨 都是 0.66 (round 2) -> 合并成一档, 3档变2档
+    # 配置 3 档比例 [0.40,0.35,0.25], 合并后有 2 档 -> 取 [0.40,0.35] 归一化 -> 53%/47%
+    item = {
+        "price": 1.30,
+        "ma_20": 1.23,
+        "ma_60": 0.66,
+        "bollinger_lower": 0.66,
+        "batch_ratios": [0.40, 0.35, 0.25],
+    }
+    text = _left_batch_plan(item)
+    assert text is not None
+    # 合并后的档位: MA20(1.23) + MA60/布林下轨(0.66)
+    assert "MA20(1.23)接53%" in text
+    assert "MA60/布林下轨(0.66)接47%" in text
+    assert text.count("接") == 2  # 只有 2 个档位, 不是 3 个
+
+
+def test_left_batch_plan_does_not_merge_distinct_prices():
+    """不同价格的档位不合并。"""
+    item = {
+        "price": 1.30,
+        "ma_20": 1.23,
+        "ma_60": 1.05,
+        "bollinger_lower": 1.18,
+        "batch_ratios": [0.40, 0.35, 0.25],
+    }
+    text = _left_batch_plan(item)
+    assert text.count("接") == 3
