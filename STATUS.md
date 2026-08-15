@@ -8,14 +8,15 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-13 (twenty-first update) — **危机左侧试仓(激进方案)**。
-> 按 Kari 决策(路线B激进): 危机时左侧超跌标的允许少量试仓,不做一刀切暂停。
-> 三重门: 超跌(left_bottom 已有) + 趋势未破(新增 MA20>MA60 多头排列) +
-> 产业有逻辑(新增 产业关键词→情报主题映射,left_bottom 带出关联情报)。
-> 危机豁免: suspend 时 left_bottom 降为"危机试仓 1% 严格止损",setup_tag
-> 保留"左侧超跌"。全量 1416 passed / 0 failed / 7 skipped。
-> HEAD 05cfa08, 工作树 clean。
-> 前次: 左侧交易辅助系统改造(v2.12) + 迭代残留清理(32d9ad6)。
+> Last updated: 2026-08-15 (twenty-second update) — **scorecard 样本质量标注 + 自评闭环暂缓**。
+> 对抗性校验推翻"自评胜率闭环"方案: 结算器修复后 2 天数百条样本被少数标
+> 的与单日行情主导(engine_action/buy/24h 单日占92%), 且 24h上涨率与 Kari
+> 左侧分批方向错配。改为 scorecard 每格标注 sample_quality(样本≥50/跨≥5日/
+> 单日≤60%/标的多≥3 才 trustable), 报告诚实声明"不足以作依据", 不降权。
+> 另: 交易建议一致性修复(动作可见性/AAPL比例真值源/跨市场执行时点/HKD汇率)。
+> 全量 1424 passed / 0 failed / 7 skipped。
+> HEAD 0918a3a, 工作树 clean。
+> 前次: 交易建议一致性修复(a02cf32)。
 > Next: 分批档位表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面。
 
 > Last updated: 2026-08-13 (twentieth update) — **左侧交易辅助系统改造**。
@@ -33,6 +34,46 @@ none of them record phase/completion status — that lives here only.
 > Next: 危机暂停加仓 vs 左侧逆向(危机时允许左侧超跌标的试仓) / 分批档位
 > 表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面专项。
 
+
+## 2026-08-15 scorecard 样本质量标注 + 自评闭环暂缓
+
+**Full pytest 1424 passed, 0 failed, 7 skipped。**
+
+**背景**: Kari 曾要求"自评胜率精度越高越好", 一度计划做"自评胜率闭环"(用
+scorecard 胜率反哺决策加权/降权)。实现前 Kari 要求先对抗性校验、用真实/测试
+数值推演方案, 推演推翻了闭环设计。
+
+**对抗性校验结论(为什么暂缓闭环)**:
+- 样本"假大": `engine_action/buy/24h` 看似 176/609 条, 实际仅跨 2 天
+  (2026-08-12~13), 且 8/13 一天占 563 条——是同一批信号被去重/结算刷出来的,
+  非独立样本,"样本≥50 门槛"因此失效。
+- 胜率不稳定: 8/12=41% vs 8/13=33%(两天差 8pct), 是被单日行情主导的噪声。
+- 方向错配: 24h 上涨率评判买入信号, 与 Kari 左侧分批+长期持有策略冲突;
+  若注入"买入信号 24h 胜率仅31%, 谨慎", 会在 Kari 回调加仓时泼冷水。
+
+→ 现在不闭环。改为 scorecard 每格标注样本质量, 诚实呈现"何时不足以作依据"。
+
+**实现**:
+- `context_builder._signal_feedback`: 每格新增 `sample_quality`
+  (sample_count/day_span/max_day_share/distinct_symbols/trustable/issues/note),
+  样本≥50 + 跨≥5日 + 单日≤60% + 标的多≥3 才 `trustable=True`。`_assess_sample_quality`
+  作为类内 `@staticmethod`(先误写成模块级函数破坏类结构, 已定位根因修复)。
+- `scheduled_analysis` 报告: `trustable=False` 时明确声明"当前胜率不足以单独
+  作为信任/降权依据", 不降权。
+- 测试: `tests/engine/test_sample_quality.py` 3 个单测。
+- 文档: `stocks/DATA_MODEL.md` 补 rule_scorecard.sample_quality; skill reference
+  `scorecard-sample-quality-adversarial-20260815.md`(重新闭环前必读) + SKILL.md 索引。
+
+**决策影响**: `rule_scorecard` 只是"测量层/诚实呈现", 不参与信号加权/门控。
+待真实样本跨越足够市场状态(≥数周/多种行情 + 独立信号去重 + 方向与持有期匹配)
+后再考虑闭环。
+
+**同类修复(本轮一并提交)**: 交易建议一致性——动作可见性(场外基金止盈不再被
+fail-closed 拒绝)、AAPL 比例单真值源(0.5→0.4)、跨市场执行时点标注(HKD汇率支持)。
+
+**验证**: 全量 1424 passed / 7 skipped; 真实 `_signal_feedback` 运行时确认全部
+格子 trustable=False 并诚实标注; 渲染逻辑两场景(有/无 sample_quality)正确。
+HEAD 0918a3a, 工作树 clean。
 
 ## 2026-08-13 危机左侧试仓（激进方案 v2.13）
 
