@@ -8,15 +8,14 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-15 (twenty-second update) — **scorecard 样本质量标注 + 自评闭环暂缓**。
-> 对抗性校验推翻"自评胜率闭环"方案: 结算器修复后 2 天数百条样本被少数标
-> 的与单日行情主导(engine_action/buy/24h 单日占92%), 且 24h上涨率与 Kari
-> 左侧分批方向错配。改为 scorecard 每格标注 sample_quality(样本≥50/跨≥5日/
-> 单日≤60%/标的多≥3 才 trustable), 报告诚实声明"不足以作依据", 不降权。
-> 另: 交易建议一致性修复(动作可见性/AAPL比例真值源/跨市场执行时点/HKD汇率)。
-> 全量 1424 passed / 0 failed / 7 skipped。
-> HEAD 0918a3a, 工作树 clean。
-> 前次: 交易建议一致性修复(a02cf32)。
+> Last updated: 2026-08-15 (twenty-third update) — **报告简洁化 v0.4(渲染纪律)**。
+> 按 Kari 澄清"报告是给人看的决策简报, 非系统数据导出": output_structure 加
+> render_discipline 4 条——只收决策结论/禁罗列 MA·RSI·shadow统计等、多空对抗
+> 只给结论+证伪/验证一句话、同一动作不重复展开、观察候选按语义分组。指令卡
+> 列全部可执行动作+overflow 一行概括。对抗验证推翻"按字段分三层"("技术层"
+> 实为对抗依据), 改用"论断 vs 罗列"。全量 1428 passed / 7 skipped。
+> HEAD 75c5a17, 工作树 clean。
+> 前次: scorecard 样本质量标注 + 自评闭环暂缓(1c7e93a)。
 > Next: 分批档位表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面。
 
 > Last updated: 2026-08-13 (twentieth update) — **左侧交易辅助系统改造**。
@@ -34,6 +33,40 @@ none of them record phase/completion status — that lives here only.
 > Next: 危机暂停加仓 vs 左侧逆向(危机时允许左侧超跌标的试仓) / 分批档位
 > 表挂到持仓动作区 / A股财报日历(akshare) / 双引擎信息面专项。
 
+
+## 2026-08-15 报告简洁化 v0.4（渲染纪律）
+
+**Full pytest 1428 passed, 0 failed, 7 skipped。**（含新增 4 个渲染纪律测试）
+
+**背景**: Kari 澄清报告定位——"很多技术性的内容确实可以省略；报告需要保持精简，
+告诉我有效的决策建议和一些 LLM 多角色对抗分析内容就够了；很多数据和技术性内容是
+供应系统做分析、给 LLM 看的"。有疑问他直接问, 不必在报告里塞足数据。
+
+**设计要求(对抗验证 v0.3→v0.4)**:
+- v0.3 用"三层按字段切"(决策层/技术数据层/噪音层), 被对抗验证推翻:
+  全量扫描发现"技术层"大量就是对抗分析/决策依据本身(如 outlook 证伪条件
+  "放量跌破MA20则证伪"、research 止损纪律"跌破MA20/MACD柱转负"), 整层删会误伤。
+- 改用 **"论断 vs 罗列"**: 区分标准不是字段名, 而是"这句话是否指向一个操作/判断"。
+  论断(支撑决策, 保留)vs 罗列(纯状态, 砍)。简洁化的本质是把罗列改写为论断,
+  只保留支撑论断的最少证据。
+
+**实现**:
+- `scheduled_analysis.build_agent_task.output_structure`: 新增 `render_discipline` 4 条
+  纪律——①只输出决策结论, 不罗列 MA/RSI/布林/evidence/source_refs/shadow_account
+  统计；②多空对抗只给结论+证伪/验证一句话, 不展开两栏；③同一动作不在"为什么"
+  与"明日计划"重复展开；④观察候选按语义分组(同类候选:A/B/C)。
+- 交易指令卡 section: 明确列全部可执行动作 + actions_overflow 一行概括, 不截断。
+- 私人投资助理 section: 按决策顺序——多空结论→证伪/验证→为什么→不做→资金→
+  风险→观察候选(≤3组)→下一检查点。
+- `final_analysis_instructions`: 声明"报告是给人看的决策简报, 不是系统数据导出"。
+- 测试: `tests/engine/test_render_discipline.py` 4 个回归测试。
+
+**验证**: 全量 1428 passed; build_agent_task 确认 render_discipline 4 条进入
+agent_task 产物; output_structure 仍恰好两段(兼容既有测试)。
+
+**决策要点**: 不重构 user_view schema(高风险、破坏消费端), 用渲染纪律引导 LLM
+最终呈现。user_view 数据完整保留, 技术层供系统分析 + Kari 深挖, 不进报告正文。
+HEAD 75c5a17, 工作树 clean。
 
 ## 2026-08-15 scorecard 样本质量标注 + 自评闭环暂缓
 
