@@ -1936,6 +1936,23 @@ def validate_payload_text(payload: dict, text: str) -> list[str]:
         research = ((payload.get("user_view") or {}).get("assistant_brief") or {}).get("research") or []
         for i in range(len(research) + 1):
             allowed.add(round(float(i), 4))
+        # TASK-012(2026-08-17): 分批支撑档位表的"各档接货比例"是渲染时由
+        # 引导函数 _left_batch_plan 动态归一化(pct = r/total*100 取整)算出的,
+        # 非引擎留存数值, 因此不在默认数字白名单里。若不授权, 任何含
+        # "分批支撑: MA20(x)接53%..."的报告都会被数字门禁判为 unauthorized
+        # number 而拦截推送(今天上午 cn_post_open 即因此未推送到 traders 群)。
+        # 这里直接对每个 research 候选调用 _left_batch_plan(与渲染同一函数),
+        # 把它实际会输出的所有数字加入白名单——与渲染完全一致, 不重复实现
+        # 归一化/合并同价位逻辑, 避免校验器与渲染器漂移。
+        for r in research:
+            rendered = _left_batch_plan(r)
+            if not rendered:
+                continue
+            for m in _NUMBER.finditer(rendered):
+                try:
+                    allowed.add(round(float(m.group().rstrip("%")), 4))
+                except ValueError:
+                    pass
 
     numeric_text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", deterministic_text)
     safe_spans = _safe_numeric_spans(numeric_text)

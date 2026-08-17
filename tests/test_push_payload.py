@@ -1069,3 +1069,29 @@ def test_left_batch_plan_does_not_merge_distinct_prices():
     }
     text = _left_batch_plan(item)
     assert text.count("接") == 3
+
+
+def test_validate_allows_batch_plan_percentages():
+    """TASK-012(2026-08-17): 分批支撑档位表的动态百分比(接53%/47%)必须通过
+    数字门禁, 否则含左侧分批支撑的报告被 unauthorized number 拦截无法推送
+    (今天上午 cn_post_open 即因此未推到 traders 群)。修复后 validate_payload_text
+    对含分批支撑百分比的渲染不再报 unauthorized number。"""
+    from scripts.build_push_payload import _left_batch_plan
+    # 构造一个会渲染"分批支撑: MA20(x)接53%..."的 payload(带 batch_ratios + 技术位)
+    art = _artifact()
+    # 往 research 里塞一个带左侧技术位的候选
+    pres = art.setdefault("portfolio_decision", {}).setdefault("user_view", {}).setdefault("assistant_brief", {}).setdefault("research", [])
+    pres.append({
+        "display_label": "食品饮料ETF（516900）", "action_hint": "",
+        "reassess_after": "", "category": "", "pool": "", "setup_tag": "趋势布局",
+        "reasons": [], "score": 0.32, "sizing_hint": "",
+        "price_position": 52, "rsi_14": 54, "volume_ratio": 1.1,
+        "ma_20": 0.51, "ma_60": 0.49, "bollinger_lower": 0.49,
+        "price": 0.51, "batch_ratios": [0.40, 0.35, 0.25],
+    })
+    payload = build_push_payload(art, now="2026-07-17T15:27:00+08:00")
+    text = render_push_payload(payload)
+    assert "分批支撑" in text and "接53%" in text or "接100%" in text
+    errors = validate_payload_text(payload, text)
+    unauth = [e for e in errors if e.startswith("unauthorized number")]
+    assert unauth == [], f"分批支撑百分比不应被拒: {unauth}"
