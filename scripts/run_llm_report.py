@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""LLM-first report renderer for stocks-claw push, with deterministic fallback.
+"""LLM-first report renderer for stocks-claw push.
 
 Reads an artifact, renders the user-facing report via LLM (the agent_task prompt
 is consumed exactly as designed: output_structure + render_discipline + persona +
 must_not_do), validates the LLM output against the same fail-closed gates the
-deterministic renderer uses, and falls back to the deterministic renderer if the
-LLM call fails, times out, or produces output that fails validation.
+deterministic renderer uses.
 
-Usage:  run_llm_report.py --session cn_after_close [--now ISO] [--artifact-root DIR]
-
-TASK-013 (2026-08-17): 切回 LLM 渲染, 让 agent_task 里的 render_discipline /
+TASK-013 (2026-08-17): 切回 LLM 渲染, 让 agent_task 的 render_discipline /
 output_structure(简洁化/论断 vs 罗列)真正生效——此前这些规则落在 LLM prompt 层
 但推送一直走确定性 run_push_report.py, 从未消费 agent_task, 故报告格式未变。
-Kari 拍板: 接受 LLM 延迟/不稳定导致推送失败, 失败降级为当前确定性渲染。
+
+TASK-014 (2026-08-17, Kari 拍板 B 方案): LLM 失败不再静默降级推送数据报告。
+- LLM 渲染失败自动重试, 最多 _LLM_MAX_ATTEMPTS 次(含首次)。
+- 全部失败 -> 标 fail, 非 0 退出码(3), stdout 保持空, 不推送数据;
+  失败原因落盘 .local/llm_render_errors/<session>.log。
+- Kari 手动重发: --force-llm(跳过 age 门禁, 仅 LLM 渲染)。
+- --no-llm 保留为显式手动兜底(强制确定性渲染, troubleshoot 用)。
+
+Usage:  run_llm_report.py --session cn_after_close [--now ISO]
+        [--artifact-root DIR] [--force-llm|--no-llm]
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -130,44 +137,40 @@ def _render_llm(artifact: dict) -> str:
     return text
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--session", required=True)
-    parser.add_argument("--artifact-root", default=".local/scheduled_runs/latest")
-    parser.add_argument("--payload-root", default=".local/push_payloads/latest")
-    parser.add_argument("--now")
-    parser.add_argument("--no-llm", action="store_true", help="强制只用确定性渲染(troubleshoot)")
-    args = parser.parse_args()
+_LLM_MAX_ATTEMPTS = 3
+_LLM_RETRY_BACKOFF_SECONDS = 2
+_FAILURE_LOG_DIR = Path(".local/llm_render_errors")
 
-    now = args.now or datetime.now().astimezone().isoformat()
-    artifact_path = Path(args.artifact_root) / f"{args.session}.json"
-    payload_path = Path(args.payload_root) / f"{args.session}.json"
 
+def _log_llm_failure(session: str, attempt: int, exc: Exception) -> None:
+    """落盘 LLM 渲染失败(每次重试一行), 供排查非静默降级。
+
+    日志写失败不反杀主流程(记录失败不能阻断 fail 标记)。
+    """
     try:
-        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-        payload = build_push_payload(artifact, now=now)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        print(f"INVALID: {exc}", file=sys.stderr)
-        return 2
+        d = Path(_FAILURE_LOG_DIR)
+        d.mkdir(parents=True, exist_ok=True)
+        with (d / f"{session}.log").open("a", encoding="utf-8") as fh:
+            fh.write(
+                f"{datetime.now().astimezone().isoformat()} attempt={attempt} "
+                f"exc={type(exc).__name__}: {exc}\n"
+            )
+    except OSError:
+        pass
 
-    # ---- LLM 优先 ----
-    if not args.no_llm:
-        try:
-            llm_text = _render_llm(artifact)
-            # LLM 输出也要过 fail-closed 校验(内部token泄漏 + 动作比例一致)
-            truth_errors = validate_push_truth(payload)
-            text_errors = _validate_llm_text(payload, llm_text)
-            if truth_errors or text_errors:
-                raise ValueError("; ".join(text_errors or truth_errors))
-            if llm_text == "[SILENT]":
-                print("[SILENT]", file=sys.stderr)
-                return 0
-            print(llm_text)
-            return 0
-        except Exception as exc:  # noqa: BLE001 - 任何 LLM 失败都降级
-            print(f"LLM render failed, falling back to deterministic: {exc}", file=sys.stderr)
 
-    # ---- 确定性兜底 ----
+def _attempt_llm_render(artifact: dict, payload: dict) -> str:
+    """单次 LLM 渲染: 调用 + fail-closed 校验, 任一失败抛异常。"""
+    llm_text = _render_llm(artifact)
+    truth_errors = validate_push_truth(payload)
+    text_errors = _validate_llm_text(payload, llm_text)
+    if truth_errors or text_errors:
+        raise ValueError("; ".join(text_errors or truth_errors))
+    return llm_text
+
+
+def _render_deterministic(payload: dict, payload_path: Path) -> int:
+    """显式手动兜底(--no-llm): 确定性渲染 + 落盘 payload。"""
     try:
         truth_errors = validate_push_truth(payload)
         if truth_errors:
@@ -192,6 +195,62 @@ def main() -> int:
     print(text)
     return 0
 
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--session", required=True)
+    parser.add_argument("--artifact-root", default=".local/scheduled_runs/latest")
+    parser.add_argument("--payload-root", default=".local/push_payloads/latest")
+    parser.add_argument("--now")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="显式手动兜底: 强制只用确定性渲染(troubleshoot)")
+    parser.add_argument("--force-llm", action="store_true",
+                        help="手动重发: 跳过 age 门禁, 仅 LLM 渲染(失败标 fail 非0退出)")
+    args = parser.parse_args()
+
+    now = args.now or datetime.now().astimezone().isoformat()
+    artifact_path = Path(args.artifact_root) / f"{args.session}.json"
+    payload_path = Path(args.payload_root) / f"{args.session}.json"
+
+    # force-llm(手动重发) 跳过 age 上限; 常规/--no-llm 保持 45min 门禁
+    max_age = None if args.force_llm else 45
+    try:
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        payload = build_push_payload(artifact, now=now, max_age_min=max_age)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"INVALID: {exc}", file=sys.stderr)
+        return 2
+
+    if args.no_llm:
+        return _render_deterministic(payload, payload_path)
+
+    # ---- LLM 优先: 失败自动重试, 最多 _LLM_MAX_ATTEMPTS 次 ----
+    last_exc: Exception | None = None
+    for attempt in range(1, _LLM_MAX_ATTEMPTS + 1):
+        try:
+            llm_text = _attempt_llm_render(artifact, payload)
+        except Exception as exc:  # noqa: BLE001 - 任何失败都计数重试
+            last_exc = exc
+            _log_llm_failure(args.session, attempt, exc)
+            print(f"LLM render attempt {attempt}/{_LLM_MAX_ATTEMPTS} failed: {exc}",
+                  file=sys.stderr)
+            if attempt < _LLM_MAX_ATTEMPTS:
+                time.sleep(_LLM_RETRY_BACKOFF_SECONDS)
+            continue
+        if llm_text == "[SILENT]":
+            print("[SILENT]", file=sys.stderr)
+            return 0
+        print(llm_text)
+        return 0
+
+    # ---- 全部失败: 标 fail, 不推送数据报告, 由 Kari 手动重发 ----
+    print(
+        f"LLM render FAILED after {_LLM_MAX_ATTEMPTS} attempts "
+        f"({type(last_exc).__name__}: {last_exc}); no report pushed. "
+        f"manual re-send: run_llm_report.py --session {args.session} --force-llm",
+        file=sys.stderr,
+    )
+    return 3
 
 if __name__ == "__main__":
     raise SystemExit(main())

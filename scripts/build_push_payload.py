@@ -93,7 +93,16 @@ def _has_content(view: dict) -> bool:
     return bool(card.get("actions") or card.get("status") == "manual_review")
 
 
-def build_push_payload(artifact: dict, *, now: str) -> dict:
+def build_push_payload(artifact: dict, *, now: str, max_age_min: float | None = 45) -> dict:
+    """Build the sanitized push payload.
+
+    ``max_age_min`` bounds how stale an artifact may be before it is rejected
+    (default 45 min, as before). Pass ``max_age_min=None`` to skip the upper
+    stale bound -- used ONLY by an explicit manual re-send (``--force-llm``),
+    where the user deliberately re-renders an older artifact. The lower bound
+    (rejecting near-future timestamps, ``age < -1``) is always kept as a
+    sanity check against clock skew / bad inputs.
+    """
     session = str(artifact.get("session") or "")
     if session not in _SESSION_LABELS:
         raise ValueError(f"unsupported session: {session}")
@@ -103,7 +112,7 @@ def build_push_payload(artifact: dict, *, now: str) -> dict:
     generated = _parse_dt(artifact.get("generated_at") or "")
     current = _parse_dt(now)
     age = (current.astimezone(generated.tzinfo) - generated).total_seconds() / 60
-    if age < -1 or age > 45:
+    if age < -1 or (max_age_min is not None and age > max_age_min):
         raise ValueError(f"artifact age {age:.1f} minutes outside allowed range")
     if is_intel:
         summary = artifact.get("session_summary") or {}
