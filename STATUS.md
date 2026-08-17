@@ -8,19 +8,25 @@ none of them record phase/completion status — that lives here only.
 > stable and its focused tests pass. Overwrite the stale sections below;
 > don't append a history log here (decision history belongs in `PLAN.md`).
 >
-> Last updated: 2026-08-15 (twenty-sixth update) — **全链路对抗性审查 + P1/P2 实质修复**。
-> 从最新报告结果出发回溯全链路做对抗性审查(用户+开发者双视角, 见
-> docs/reviews/full-chain-adversarial-review-20260815.md)。关键: 严格区分
-> 旧 artifact(f6c082d/e5dd5b5 修复前)与当前 HEAD——旧报告的 ratio 文本脱节/
-> HKD降级等已修(均有测试锁定)。
-> P1: 单币种不支持换算由 blocked 降为 degraded(该资产不计入总资产+诚实标注),
-> 不再整份阻断。P2: 分批档位表合并同价位档位(MA60/布林下轨重合只列一档)。
-> P0(schema v1 user_view 空)经核验为误报——artifacts 均有完整 user_view,
-> build_push_payload 缺失即 raise 是正确的 fail-fast, 保留。
-> 全量 1441 passed / 7 skipped。
-> HEAD 5aabd30, 工作树 clean。
-> 前次: 分批支撑位档位表+可配置比例(fb7337b) / 硬编码根治+A股财报(570c1d2)。
-> Next: 双引擎信息面专项(方案 v0.1 已推送飞书云文档, 待 Kari 评审范围)。
+> Last updated: 2026-08-17 (twenty-seventh update) — **LLM 渲染迁改(TASK-013) + 数字门禁/比例修复**。
+> 切回 LLM 渲染: render_discipline/简洁化此前做在 agent_task(prompt)层但推送
+> 一直走确定性 run_push_report.py, 从未消费 agent_task, 故报告格式未变(Kari 指出)。
+> 新增 scripts/run_llm_report.py(LLM 优先 + 确定性兜底):
+> - 读 agent_task 指令 + portfolio_decision.user_view 数据拼 prompt, 调 NAS 本地
+>   vllm(DeepSeek-V4-Flash @172.16.248.60:8000)。
+> - LLM 专属门禁 _validate_llm_text: 内部 token 泄漏 + 每个可执行动作最终比例必须
+>   出现(防漏动作); 数字门禁放宽(基于同一 user_view, outlook 已验证)。
+> - 任何 LLM 失败 -> 降级确定性 render_push_payload。5 个 push cron 已切换。
+> - 实测 cn_post_open: LLM 版 ~1100 字(旧确定性 4000+字), 论断vs罗列/候选分组/
+>   跨市场标注全部生效。全量 1447 passed / 7 skipped。
+> TASK-012: 数字门禁授权分批支撑档位表动态百分比(否则含'分批支撑...接53%'报告
+> 被 unauthorized number 拦截, 今天上午 cn_post_open 推送因此失败, 已手动补发)。
+> TASK-011: 明日计划 action 百分比单一来源 = final_ratio(修'减仓30%(按28%)'矛盾)。
+> 注: github push 自 8-17 上午起 TLS 中断(透明代理对 github TLS 处理问题), 本地
+> 领先 origin 2 个提交(c228e85/370b8f4, 均未 push, 工作树 clean 安全); 网络恢复
+> 后需 push。未重建 proxy/Clash(属基础设施, 未经授权不动)。
+> CN 报告全列(含 IBKR 美股动作)——Kari 拍板维持现状, 不按主市场过滤。
+> Next: 双引擎信息面专项(方案 v0.1 在飞书云文档, 待评审)。
 
 > Last updated: 2026-08-13 (twentieth update) — **左侧交易辅助系统改造**。
 > 按 Kari 目标(改成左侧交易者可用)落地一整轮: 左侧位置卡(布林位置/RSI/量比)
