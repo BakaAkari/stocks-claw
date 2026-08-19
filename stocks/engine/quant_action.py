@@ -141,6 +141,12 @@ _DEFAULT_QUANT_CONFIG: dict = {
     "left_add_min_rsi": 40.0,
     "ma20_pullback_add_ratios": [0.02],
     "trend_break_extra_deviation_pct": 0.0,
+    # ── 左侧状态画像(deep oversold)降级: 趋势跌破 + 深跌超卖 → 降级为持有观察 ──
+    # 防止右侧趋势信号在左侧建仓区误杀(2026-08-18 APP 案例: RSI 25 / 回撤 -49% 仍被建议清仓)
+    "left_state_degrade_enabled": True,
+    "left_state_rsi_max": 35.0,          # RSI < 此值 = 超卖
+    "left_state_drawdown_max": -40.0,    # 60日回撤 < 此值 = 深跌
+    "left_state_bollinger_lower": True,  # 布林下半区也算
     # ── 变现侧：高置信加仓（高胜率要重仓变现，不能永远轻仓）──
     "high_conviction_evidence_threshold": 0.7,
     "high_conviction_add_ratio": 0.05,
@@ -233,6 +239,61 @@ class QuantActionEngine:
         cfg = _DEFAULT_QUANT_CONFIG if not config else {**_DEFAULT_QUANT_CONFIG, **config}
         self._c = cfg
 
+    def _left_state_profile(self, price: Optional[float] = None) -> dict:
+        """左侧状态画像：检测标的是否处于深跌超卖区（左侧建仓区）。
+
+        返回 {triggered: bool, matched: list[str], facts: list[str]}。
+        用于在右侧趋势信号（跌破 MA20 减仓）触发时降级，防止在左侧建仓区误杀。
+
+        可用指标：rsi_14 / ma_60 / bollinger / price_position（0-100 位置）。
+        回撤深度用 price 相对 MA60 偏离近似（indicators 无 drawdown_pct）。
+        """
+        c = self._c
+        if not c.get("left_state_degrade_enabled", True):
+            return {"triggered": False, "matched": [], "facts": []}
+
+        matched: list[str] = []
+        facts: list[str] = []
+        ind = self.indicators or {}
+
+        # 1. RSI 超卖
+        rsi = ind.get("rsi_14")
+        rsi_max = float(c.get("left_state_rsi_max", 35.0))
+        if rsi is not None and rsi < rsi_max:
+            matched.append("rsi_oversold")
+            facts.append(f"RSI {rsi:.1f} 超卖(<{rsi_max:.0f})")
+
+        # 2. 深跌：price 远低于 MA60（回撤近似）
+        ma60 = ind.get("ma_60")
+        dd_max = float(c.get("left_state_drawdown_max", -40.0))
+        if price is not None and ma60 is not None:
+            dev60 = price / ma60 - 1.0
+            if dev60 < dd_max / 100.0:
+                matched.append("deep_drawdown")
+                facts.append(f"现价低于 MA60 {abs(dev60)*100:.1f}%（近似深跌）")
+
+        # 3. 布林带下半区
+        if c.get("left_state_bollinger_lower", True):
+            bb = ind.get("bollinger") or {}
+            mid = bb.get("middle")
+            low = bb.get("lower")
+            pos = ind.get("price_position")
+            # 优先用 price_position（0-100）；否则用价格 vs 中轨
+            in_lower = False
+            if pos is not None:
+                in_lower = 0 < pos < 50
+            elif price is not None and mid is not None and low is not None:
+                in_lower = price < mid and price > low
+            if in_lower:
+                matched.append("bollinger_lower")
+                facts.append(f"价格位于布林带下半区(position {pos:.0f})")
+
+        return {
+            "triggered": len(matched) >= 2,
+            "matched": matched,
+            "facts": facts,
+        }
+
     def review_position(
         self, *, position_id: str, price: Optional[float], cost: Optional[float],
         pnl_pct: Optional[float], one_day_change_pct: Optional[float],
@@ -271,6 +332,8 @@ class QuantActionEngine:
             facts.append(f"浮亏 {pnl_pct:.2f}% 触发警示阈值 {c['warning_loss_pct']}%")
 
         # 4. 趋势跌破 — 阶梯减仓（trend_break_extra_deviation_pct 收紧触发阈值）
+        #    左侧状态画像降级：若标的处于深跌超卖区（RSI<35 / 回撤<-40% / 布林下半区 ≥2 项），
+        #    趋势跌破不直接减仓，降级为持有观察，防止右侧信号在左侧建仓区误杀。
         if isinstance(price, (int, float)) and ma20 is not None:
             extra_dev = c.get("trend_break_extra_deviation_pct", 0.0)
             # extra_dev 是额外偏离百分点，直接缩小 cutoff
@@ -278,8 +341,24 @@ class QuantActionEngine:
             adjusted_cutoff = max(adjusted_cutoff, 0.910)  # 不低于 0.91
             trigger_price = ma20 * adjusted_cutoff
             if price < trigger_price and (macd_hist is None or macd_hist < 0):
-                ratio = 0.25
                 deviation = (ma20 - price) / ma20
+
+                # ── 左侧状态画像检查 ──
+                left_profile = self._left_state_profile(price=price)
+                if left_profile["triggered"]:
+                    facts_override = [
+                        f"趋势跌破 MA20（偏离 {deviation:.1%}），但左侧状态画像命中 "
+                        f"{len(left_profile['matched'])} 项：{'、'.join(left_profile['facts'])}",
+                        "深跌超卖区暂缓减仓，左侧分批建仓策略下以持有观察为主；"
+                        "若继续跌破布林下轨或放量破位，再人工复核止损",
+                    ]
+                    return self._build(position_id, "hold",
+                        f"趋势跌破但深跌超卖（{len(left_profile['matched'])}/3 左侧特征），暂缓减仓",
+                        0.0, facts_override,
+                        None, [], current_weight_pct, price, quantity,
+                        technical_evidence=0.0)
+
+                ratio = 0.25
                 for threshold, ladder_ratio in reversed(c["trend_break_ladder"]):
                     if price / ma20 < threshold:
                         ratio = ladder_ratio
