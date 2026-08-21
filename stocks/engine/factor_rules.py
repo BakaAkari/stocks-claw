@@ -202,6 +202,12 @@ class IntelConflictRule(FactorRule):
         matched_symbols = [m.matched_symbol for m in significant[:2]]
         sym_str = ", ".join(matched_symbols)
 
+        if current_signal == "stop_loss":
+            # 硬止损不可被情报冲突覆盖（P0-2）
+            return FactorVote(self.name, current_signal, 1.0,
+                              facts=["硬止损信号优先级最高，忽略情报冲突"],
+                              priority=self.priority)
+
         if max_urgency == "critical":
             return FactorVote("intel_conflict", "hold", 0.0, signal_override="hold",
                               action_text=f"暂停：技术面与情报面反向（{sym_str}），等待确认",
@@ -237,10 +243,14 @@ def collect_votes(position, *, current_signal, current_ratio, **ctx) -> list[Fac
 
 def adjudicate(current_signal, current_action, current_ratio, votes):
     """按优先级裁决。"""
+    # P0-1 fix: quant_action 用负 ratio 表示加仓（add_size），钳制前必须先归一化。
+    # 下游 adjudicator 消费 abs(action.ratio)，不依赖负号语义。
+    if current_ratio < 0:
+        current_ratio = abs(current_ratio)
     signal, action, ratio = current_signal, current_action, current_ratio
     facts, conflicts = [], []
     for v in votes:
-        if v.signal_override and signal not in ("hold", "wait"):
+        if v.signal_override and signal not in ("hold", "wait", "stop_loss"):
             signal = v.signal_override
             if v.action_text:
                 action = v.action_text
