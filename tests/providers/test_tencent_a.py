@@ -104,10 +104,14 @@ def test_build_symbol_uses_full_format_without_s_prefix(provider):
     assert provider._prefix(Instrument("000002", "万科", "a")) == "sz"
 
 
-async def test_network_timeout_returns_none(provider):
+async def test_network_timeout_raises_provider_error(provider):
+    """网络超时必须抛 ProviderError，让 fetchers 降级链触发重试/备用源（P0 修复）。"""
+    import pytest
+    from stocks.errors import ProviderNetworkError
     instrument = Instrument("000300", "沪深300", "a", "sh_index")
     with patch("urllib.request.urlopen", side_effect=TimeoutError("连接超时")):
-        assert await provider.fetch(instrument) is None
+        with pytest.raises(ProviderNetworkError):
+            await provider.fetch(instrument)
 
 
 async def test_empty_response_returns_none(provider):

@@ -9,6 +9,7 @@ from typing import Optional
 
 from stocks.domain.models import Instrument, Quote
 from stocks.engine.config_loader import provider_base_url
+from stocks.errors import ProviderNetworkError
 from stocks.providers.base import QuoteProvider
 
 # Provider 端点：env (STOCKS_PROVIDER_EASTMONEY_A_BASE_URL) > engine.yaml > 代码默认
@@ -59,8 +60,13 @@ class EastmoneyAQuoteProvider(QuoteProvider):
             if not text.strip():
                 return None
             return json.loads(text)
-        except Exception:
-            return None
+        except Exception as exc:
+            # P0-fix: 同 tencent_a —— 吞异常会让降级链失效且日志撒谎。
+            raise ProviderNetworkError(
+                f"eastmoney_a 行情请求失败: {exc}",
+                source=self.name,
+                detail=str(exc),
+            ) from exc
 
     def _row_to_quote(self, row: dict, instrument: Instrument) -> Quote:
         """将东方财富返回行转换为 Quote。"""

@@ -7,6 +7,7 @@ from typing import Optional
 
 from stocks.domain.models import Instrument, Quote
 from stocks.engine.config_loader import provider_base_url
+from stocks.errors import ProviderNetworkError
 from stocks.providers.base import QuoteProvider
 
 # Provider 端点：env (STOCKS_PROVIDER_TENCENT_A_BASE_URL) > engine.yaml > 代码默认
@@ -57,8 +58,15 @@ class TencentAQuoteProvider(QuoteProvider):
                 data = resp.read()
             text = data.decode("gbk", errors="replace")
             return text.strip() or None
-        except Exception:
-            return None
+        except Exception as exc:
+            # P0-fix: 吞异常返回 None 会让 fetchers 降级链完全不触发（A股故障=0行情+0重试+日志记 success）。
+            # 抛出后由 fetchers._call_provider 分类为 ProviderNetworkError/ProviderDataError，
+            # 降级链据此重试/切备用 Provider，DegradationRecord 如实记录失败。
+            raise ProviderNetworkError(
+                f"tencent_a 行情请求失败: {exc}",
+                source=self.name,
+                detail=str(exc),
+            ) from exc
 
     def _parse_line(
         self,
