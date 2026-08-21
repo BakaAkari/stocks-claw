@@ -107,31 +107,12 @@ class HistoryCache:
         else:
             ts = datetime.now(timezone.utc)
 
-        # Normalize prev_close against the previous trading day's close to avoid
-        # anomalies when provider-provided prev_close differs from the actual
-        # historical close (e.g. data source hand-off, stale fields).
+        # prev_close 保留 provider 原值，不再静默改写。
+        # 此前逻辑（>5% 偏差时用历史第 2 新 bar 覆盖）会在除权除息/隔夜大跳空时
+        # 丢弃真实前收价且无任何标记，属于数据治理制造数据错误。
+        # prev_close 与历史 close 的一致性由 data_quality_gate 的
+        # prev_close_mismatch 检测（>10% 阈值）负责标记，不在此处改写。
         prev_close = quote.prev_close
-        last_stored = self._memory.get(key)
-        if (
-            prev_close is not None
-            and last_stored is not None
-            and not last_stored.empty
-            and len(last_stored) >= 2
-        ):
-            # Use the second-to-last bar as the previous day's close.
-            prior_close = float(last_stored.iloc[-2]["price"])
-            if prior_close > 0 and abs(prev_close - prior_close) / prior_close > 0.05:
-                prev_close = prior_close
-        elif (
-            prev_close is not None
-            and last_stored is not None
-            and not last_stored.empty
-            and len(last_stored) == 1
-        ):
-            # Fallback for single-bar history: compare against the only stored close.
-            last_close = float(last_stored.iloc[-1]["price"])
-            if last_close > 0 and abs(prev_close - last_close) / last_close > 0.05:
-                prev_close = last_close
 
         row = {
             "timestamp": ts,
