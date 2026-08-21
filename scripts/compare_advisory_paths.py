@@ -42,7 +42,22 @@ def _load_production_user_view(decision_id: str, artifact_path: str) -> dict[str
 
 
 def _extract_actions(artifact: dict[str, Any]) -> list[str]:
+    """从生产 artifact 提取动作列表。
+
+    修复前只读顶层 "actions"/"action_cards"/"recommendations"——生产 artifact
+    的动作实际嵌套在 portfolio_decision.approved_actions（键 signal+position_id），
+    导致 prod_actions 恒为空列表，所有 shadow 动作都判为 "new"，对比失效。
+    """
     actions: list[str] = []
+    # 生产真实位置：portfolio_decision.approved_actions / suppressed_actions
+    portfolio_decision = artifact.get("portfolio_decision") or {}
+    for key in ("approved_actions", "suppressed_actions"):
+        for item in portfolio_decision.get(key, []) or []:
+            if isinstance(item, dict):
+                signal = item.get("signal", "unknown")
+                target = item.get("position_id", item.get("instrument_key", "unknown"))
+                actions.append(f"{signal}:{target}")
+    # 兼容旧格式：顶层键
     for key in ("actions", "action_cards", "recommendations"):
         for item in artifact.get(key, []):
             if isinstance(item, dict):

@@ -200,7 +200,67 @@ class SignalTracker:
         except OSError as exc:
             logger.warning(f"SignalTracker: failed to write settlement: {exc}")
 
+        # 写回 signals 文件的 settled 标记，消除重复结算。
+        # 修复前 settle 只追加 settlements 文件，signals 行的 settled_24h/settled_1w
+        # 从未更新——unsettled() 每 6h cron 会把同一信号重复 settle，
+        # settlements 文件重复行直接污染胜率样本分母。
+        self._mark_settled_in_signals_file(signal, window)
+
         return signal
+
+    def _mark_settled_in_signals_file(self, signal: TrackedSignal, window: str) -> None:
+        """Rewrite signals file with the settled flag updated for this signal_id.
+
+        JSONL 无就地更新，读全量→改目标行→原子替换。信号文件量级小
+        （每日新增个位数行），全量重写代价可忽略。
+        """
+        import os
+        import tempfile
+        field_settled = f"settled_{window}"
+        try:
+            if not self.signals_file.exists():
+                return
+            lines = self.signals_file.read_text(encoding="utf-8").splitlines()
+            changed = False
+            out_lines = []
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    out_lines.append(line)
+                    continue
+                try:
+                    data = json.loads(stripped)
+                except json.JSONDecodeError:
+                    out_lines.append(line)
+                    continue
+                if data.get("signal_id") == signal.signal_id and not data.get(field_settled):
+                    data[field_settled] = True
+                    if window == "24h":
+                        data["price_24h"] = signal.price_24h
+                        data["correct_24h"] = signal.correct_24h
+                    elif window == "1w":
+                        data["price_1w"] = signal.price_1w
+                        data["correct_1w"] = signal.correct_1w
+                    out_lines.append(json.dumps(data, ensure_ascii=False))
+                    changed = True
+                else:
+                    out_lines.append(line)
+            if not changed:
+                return
+            fd, tmp = tempfile.mkstemp(
+                prefix=".signals.", suffix=".tmp", dir=self.signals_file.parent
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write("\n".join(out_lines) + "\n")
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, self.signals_file)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+        except OSError as exc:
+            logger.warning(f"SignalTracker: failed to mark settled in signals file: {exc}")
 
     def performance(self) -> dict:
         """Compute aggregate performance across all settled signals.

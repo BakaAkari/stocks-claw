@@ -8,6 +8,7 @@ Hypothesis Tracker — 研究目标/论点笔记本
 
 from __future__ import annotations
 
+import fcntl
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -44,6 +45,10 @@ class HypothesisStore:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._index_path = self._dir / "index.json"
 
+    @property
+    def _lock_path(self) -> Path:
+        return self._dir / "index.json.lock"
+
     def _load_index(self) -> dict[str, dict]:
         if self._index_path.exists():
             try:
@@ -55,6 +60,24 @@ class HypothesisStore:
     def _save_index(self, index: dict) -> None:
         self._index_path.write_text(json.dumps(index, indent=2, ensure_ascii=False))
 
+    def _locked_update(self, mutator):
+        """读-改-写整体在 fcntl 排他锁内完成，防并发丢更新。
+
+        修复前 create/update_status/add_evidence 各自 _load→改→_save，
+        两个进程并发时后写覆盖先写，evidence_links 丢失。
+        锁模式与 risk_state.RiskStateStore 一致（fcntl.flock LOCK_EX）。
+        """
+        self._lock_path.touch(exist_ok=True)
+        with open(self._lock_path, "r+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                index = self._load_index()
+                result = mutator(index)
+                self._save_index(index)
+                return result
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
     def create(self, statement: str, *, tags: list[str] | None = None) -> Hypothesis:
         h = Hypothesis(
             id=uuid4().hex[:12],
@@ -64,15 +87,15 @@ class HypothesisStore:
             status="open",
             tags=tags or [],
         )
-        index = self._load_index()
-        index[h.id] = {
-            "statement": h.statement, "created_at": h.created_at,
-            "updated_at": h.updated_at, "status": h.status,
-            "evidence_links": h.evidence_links, "tags": h.tags,
-            "resolution_note": h.resolution_note,
-        }
-        self._save_index(index)
-        return h
+        def _mutate(index):
+            index[h.id] = {
+                "statement": h.statement, "created_at": h.created_at,
+                "updated_at": h.updated_at, "status": h.status,
+                "evidence_links": h.evidence_links, "tags": h.tags,
+                "resolution_note": h.resolution_note,
+            }
+            return h
+        return self._locked_update(_mutate)
 
     def list_all(self, status: str | None = None) -> list[Hypothesis]:
         index = self._load_index()
@@ -92,31 +115,31 @@ class HypothesisStore:
     def update_status(self, hypothesis_id: str, new_status: str, note: str = "") -> Hypothesis | None:
         if new_status not in STATUSES:
             raise ValueError(f"Invalid status: {new_status}")
-        index = self._load_index()
-        if hypothesis_id not in index:
-            return None
-        d = index[hypothesis_id]
-        d["status"] = new_status
-        d["updated_at"] = datetime.now(timezone.utc).isoformat()
-        if note:
-            d["resolution_note"] = note
-        self._save_index(index)
-        return Hypothesis(
-            id=hypothesis_id, statement=d["statement"],
-            created_at=d["created_at"], updated_at=d["updated_at"],
-            status=d["status"], evidence_links=d.get("evidence_links", []),
-            tags=d.get("tags", []), resolution_note=d.get("resolution_note", ""),
-        )
+        def _mutate(index):
+            if hypothesis_id not in index:
+                return None
+            d = index[hypothesis_id]
+            d["status"] = new_status
+            d["updated_at"] = datetime.now(timezone.utc).isoformat()
+            if note:
+                d["resolution_note"] = note
+            return Hypothesis(
+                id=hypothesis_id, statement=d["statement"],
+                created_at=d["created_at"], updated_at=d["updated_at"],
+                status=d["status"], evidence_links=d.get("evidence_links", []),
+                tags=d.get("tags", []), resolution_note=d.get("resolution_note", ""),
+            )
+        return self._locked_update(_mutate)
 
     def add_evidence(self, hypothesis_id: str, run_id: str) -> None:
-        index = self._load_index()
-        if hypothesis_id not in index:
-            return
-        links = index[hypothesis_id].setdefault("evidence_links", [])
-        if run_id not in links:
-            links.append(run_id)
-            index[hypothesis_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
-        self._save_index(index)
+        def _mutate(index):
+            if hypothesis_id not in index:
+                return
+            links = index[hypothesis_id].setdefault("evidence_links", [])
+            if run_id not in links:
+                links.append(run_id)
+                index[hypothesis_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._locked_update(_mutate)
 
 
 def auto_check_hypotheses(
