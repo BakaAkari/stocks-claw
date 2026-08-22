@@ -44,85 +44,46 @@ ACTION_SIGNALS_SCHEMA_VERSION = 1
 # values below are overridden at runtime (see compute_action_signals).
 #
 # To add a new market regime or asset class, change YAML — not this block.
-_QUANT_ACTION_THRESHOLDS = {
-    "knife_r5": -3.0,                    # 5 根 K 线跌幅超过该值视为加速下跌
-    "knife_rsi": 38.0,
-    "reduce_r20": -5.0,                  # 20 根 K 线跌幅超过该值视为趋势转弱
-    "pullback_r20": 5.0,                 # 趋势强劲阈值
-    "pullback_rsi": 65.0,
-    "pullback_position": 85.0,           # 布林带位置百分比
-    "accumulate_r20": 2.0,               # 排除仅略高于 0 的横盘噪声
-    "accumulate_rsi_low": 40.0,
-    "accumulate_rsi_high": 65.0,
-    "accumulate_r20_max": 15.0,          # 短期涨幅过高，即使 RSI 未超买也应等回调
-    "left_bottom_rsi_max": 40.0,         # 左侧抄底：超卖或接近超卖
-    "left_bottom_price_position_max": 25.0,  # 价格位置底部区
-    "left_bottom_r20_max": -10.0,        # 近20根跌幅超过10%
-    "left_bottom_r5_floor": -5.0,        # 近5根跌幅不再加速
-    "left_bottom_pullback_cooldown": 0.02,   # 价格低于MA20不超过2%
-}
+def _load_quant_defaults() -> tuple[dict, dict]:
+    """信号阈值与轮动权重：权威来源 engine.yaml quant_action.thresholds /
+    rank_weights。缺失键 = 部署事故（配置文件随 repo 分发），fail-closed。
 
-# 横截面排序权重
-_RANK_WEIGHTS = {
-    "r20": 0.40,         # 中期趋势强度
-    "rsi_zone": 0.30,    # RSI 区间得分
-    "price_pos": 0.20,   # 布林带位置惩罚
-    "volume": 0.10,      # 量比加成
-}
-
-# Backwards-compatible module-level names (deprecated; prefer the dicts above
-# or the runtime config from engine.yaml).
-_KNIFE_R5 = _QUANT_ACTION_THRESHOLDS["knife_r5"]
-_KNIFE_RSI = _QUANT_ACTION_THRESHOLDS["knife_rsi"]
-_REDUCE_R20 = _QUANT_ACTION_THRESHOLDS["reduce_r20"]
-_PULLBACK_R20 = _QUANT_ACTION_THRESHOLDS["pullback_r20"]
-_PULLBACK_RSI = _QUANT_ACTION_THRESHOLDS["pullback_rsi"]
-_PULLBACK_POSITION = _QUANT_ACTION_THRESHOLDS["pullback_position"]
-_ACCUMULATE_R20 = _QUANT_ACTION_THRESHOLDS["accumulate_r20"]
-_ACCUMULATE_RSI_LOW = _QUANT_ACTION_THRESHOLDS["accumulate_rsi_low"]
-_ACCUMULATE_RSI_HIGH = _QUANT_ACTION_THRESHOLDS["accumulate_rsi_high"]
-_ACCUMULATE_R20_MAX = _QUANT_ACTION_THRESHOLDS["accumulate_r20_max"]
-_LEFT_BOTTOM_RSI_MAX = _QUANT_ACTION_THRESHOLDS["left_bottom_rsi_max"]
-_LEFT_BOTTOM_PRICE_POSITION_MAX = _QUANT_ACTION_THRESHOLDS["left_bottom_price_position_max"]
-_LEFT_BOTTOM_R20_MAX = _QUANT_ACTION_THRESHOLDS["left_bottom_r20_max"]
-_LEFT_BOTTOM_R5_FLOOR = _QUANT_ACTION_THRESHOLDS["left_bottom_r5_floor"]
-_LEFT_BOTTOM_PULLBACK_COOLDOWN = _QUANT_ACTION_THRESHOLDS["left_bottom_pullback_cooldown"]
-
-_RANK_WEIGHT_R20 = _RANK_WEIGHTS["r20"]
-_RANK_WEIGHT_RSI_ZONE = _RANK_WEIGHTS["rsi_zone"]
-_RANK_WEIGHT_PRICE_POS = _RANK_WEIGHTS["price_pos"]
-_RANK_WEIGHT_VOLUME = _RANK_WEIGHTS["volume"]
-
-_SIGNAL_ACTION_HINTS = {
-    "accumulate_candidate": "趋势完好且回踩确认，可建仓/加仓；分批布局优先于一次性重仓",
-    "left_bottom_candidate": "深跌超卖且跌势放缓，左侧轻仓试仓，跌破前低或 RSI 持续恶化则止损",
-    "wait_for_pullback": "趋势完好但短线过热，等回踩确认再进，不追",
-    "reduce_risk": "趋势与动能同步转弱，优先降低该标的暴露",
-    "avoid_catching_falling_knife": "下跌未止，任何补仓等收盘重新站回短均线再说",
-    "rotation_candidate": "相对强弱领先，若与组合缺口匹配可作为轮入候选",
-    "neutral_hold": "无明确方向信号，维持现状，等待新信号",
-    "no_data": "历史或指标不足，本轮不给方向",
-}
-
-# 占位：candidate-level risk sizing and stop-loss rules are emitted by the
-# research pipeline; research candidates are never executable actions, so these
-# are displayed as sizing/stop conditions for human reference only.
-_RESEARCH_SIZING_HINTS = {
-    "left_bottom_candidate": "轻仓试仓（建议占组合不超过1-3%）；止损：跌破触发前低或20日低点继续下移",
-    "accumulate_candidate": "趋势回踩建仓机会（首仓建议占组合2-4%，确认企稳后可加至5-8%）；止损：跌破MA20且MACD柱转负，或跌破建仓日低点",
-    "rotation_candidate": "仅在组合有对应缺口时轮入（建议占组合不超过1-3%）；止损：轮动排名掉出前3或趋势破MA20",
-    "wait_for_pullback": "等回踩MA5/MA10附近观察，不追高；未触发不建仓",
-    "reduce_risk": "优先降低暴露，减仓后观察是否止跌",
-    "avoid_catching_falling_knife": "禁止抄底，等待站回短均线或RSI脱离超卖区",
-    "neutral_hold": "维持现有仓位，不主动调仓",
-    "no_data": "无数据支持，不形成任何观点",
-}
+    模块级 lazy 缓存，避免每次信号计算都读盘。
+    """
+    global _CACHED_DEFAULTS
+    if _CACHED_DEFAULTS is not None:
+        return _CACHED_DEFAULTS
+    from stocks.engine.config_loader import load_engine_config
+    qa = (load_engine_config() or {}).get("quant_action") or {}
+    thresholds = qa.get("thresholds")
+    rank_weights = qa.get("rank_weights")
+    if not isinstance(thresholds, dict) or not thresholds:
+        raise RuntimeError("engine.yaml quant_action.thresholds 缺失或为空")
+    if not isinstance(rank_weights, dict) or not rank_weights:
+        raise RuntimeError("engine.yaml quant_action.rank_weights 缺失或为空")
+    _CACHED_DEFAULTS = (dict(thresholds), dict(rank_weights))
+    return _CACHED_DEFAULTS
 
 
-_RESEARCH_CONFLICT_HINTS = {
-    "suspend_accumulation": "当前风险状态暂停加仓，风险解除后再评估",
-    "risk_high": "当前风险状态为{level}，需先观察风险触发条件是否缓解",
-}
+_CACHED_DEFAULTS: tuple[dict, dict] | None = None
+
+def _load_signal_text() -> dict:
+    """信号文案表：权威来源 engine.yaml quant_action.signal_text。
+    缺失 = 部署事故（配置随 repo 分发），fail-closed。lazy 缓存。"""
+    global _CACHED_SIGNAL_TEXT
+    if _CACHED_SIGNAL_TEXT is not None:
+        return _CACHED_SIGNAL_TEXT
+    from stocks.engine.config_loader import load_engine_config
+    st = ((load_engine_config() or {}).get("quant_action") or {}).get("signal_text")
+    if not isinstance(st, dict) or not all(
+        k in st for k in ("action_hints", "sizing_hints", "conflict_hints")
+    ):
+        raise RuntimeError("engine.yaml quant_action.signal_text 缺失或缺键")
+    _CACHED_SIGNAL_TEXT = dict(st)
+    return _CACHED_SIGNAL_TEXT
+
+
+_CACHED_SIGNAL_TEXT: dict | None = None
 
 
 def _research_sizing_hint(signal: str, risk_level: str, suspend: bool) -> str:
@@ -139,7 +100,7 @@ def _research_sizing_hint(signal: str, risk_level: str, suspend: bool) -> str:
     - Non-accumulation signals (wait_for_pullback, reduce_risk, ...) carry no
       build phrasing and keep their full observation guidance plus a pause note.
     """
-    base = _RESEARCH_SIZING_HINTS.get(str(signal or ""), "仅供参考，不形成交易动作")
+    base = _load_signal_text()["sizing_hints"].get(str(signal or ""), "仅供参考，不形成交易动作")
     if suspend:
         # 激进方案(2026-08-13): 危机时左侧超跌(left_bottom)不暂停,降为"危机
         # 试仓 1%"。三重门: 超跌+趋势未破已由 left_bottom 条件保证(含 ma60
@@ -213,7 +174,8 @@ def _signal_for_item(
     Thresholds default to the module-level constants but can be overridden via
     engine.yaml quant_action.thresholds for per-market or per-regime tuning.
     """
-    t = {**_QUANT_ACTION_THRESHOLDS, **(thresholds or {})}
+    _defaults, _ = _load_quant_defaults()
+    t = {**_defaults, **(thresholds or {})}
     if data_points < 15 or price is None:
         return "no_data", [f"历史仅 {data_points} bars，不足以判级"]
 
@@ -339,7 +301,7 @@ def _signal_for_item(
     return "neutral_hold", ["未命中任何方向性规则"]
 
 
-def _rank_signals(items: list[dict]) -> list[dict]:
+def _rank_signals(items: list[dict], rank_weights: Optional[dict[str, float]] = None) -> list[dict]:
     """对 accumulate_candidate 和 rotation_candidate 信号做横截面排序。
 
     综合得分 = r20 强度 × 0.40 + RSI 区间得分 × 0.30
@@ -398,11 +360,13 @@ def _rank_signals(items: list[dict]) -> list[dict]:
         # r20 归一化：假设 ±20% 为极端值范围
         r20_norm = max(-1.0, min(r20 / 20.0, 1.0))
 
+        _, _default_weights = _load_quant_defaults()
+        w = {**_default_weights, **(rank_weights or {})}
         score = (
-            r20_norm * _RANK_WEIGHT_R20
-            + rsi_score * _RANK_WEIGHT_RSI_ZONE
-            + pos_penalty * _RANK_WEIGHT_PRICE_POS
-            + vol_bonus * _RANK_WEIGHT_VOLUME
+            r20_norm * w["r20"]
+            + rsi_score * w["rsi_zone"]
+            + pos_penalty * w["price_pos"]
+            + vol_bonus * w["volume"]
         )
 
         item["_score"] = round(score, 4)
@@ -516,7 +480,8 @@ def compute_action_signals(
                 price = None
 
         macd = indicators.get("macd") or {}
-        t = {**_QUANT_ACTION_THRESHOLDS, **thresholds}
+        _defaults, _ = _load_quant_defaults()
+        t = {**_defaults, **thresholds}
         signal, reasons = _signal_for_item(
             price=price,
             ma5=indicators.get("ma_5"),
@@ -558,7 +523,7 @@ def compute_action_signals(
             "universe": "scan" if key in scan_keys else "watchlist",
             "signal": signal,
             "reasons": reasons,
-            "action_hint": _SIGNAL_ACTION_HINTS[signal],
+            "action_hint": _load_signal_text()["action_hints"][signal],
             "as_of": rotation_item.get("as_of"),
             # P0-1: 保留现价供 signal_tracker 记录 generation_price(反馈闭环)。
             # 优先 rotation_item 的现价;rotation items 通常不带绝对价格,
@@ -599,7 +564,7 @@ def compute_action_signals(
         status = "ok"
 
     # 横截面排序
-    items = _rank_signals(items)
+    items = _rank_signals(items, rank_weights=rank_weights)
 
     # 清理内部字段，不暴露给下游
     for item in items:

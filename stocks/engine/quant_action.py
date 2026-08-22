@@ -96,75 +96,67 @@ _TAG_TO_BUCKET: dict[str, str] = dict(
     }
 )
 
-# ── 产品类型路由规则 ──
-_PRODUCT_TYPE_RULES: dict[str, dict] = {
-    # ── 全执行：场内证券 ──
-    "exchange_traded_fund": {"mode": "full"},
-    "stock": {"mode": "full"},
-    "short_treasury_etf": {"mode": "full"},
-    # ── 高门槛执行：场外基金（T+2，更高止盈/止损阈值，单次操作）──
-    "qdii_fund": {"mode": "fund",
-                  "context": "场外 QDII，申赎 T+2，以收盘净值为准。止盈阈值 40%，止损阈值 -20%"},
-    "feeder_fund": {"mode": "fund",
-                    "context": "场外联接基金，申赎 T+2，以收盘净值为准。止盈阈值 40%，止损阈值 -20%"},
-    "mixed_fund": {"mode": "fund",
-                   "context": "主动管理混合基金，高浮盈后需关注基金经理风格漂移。止盈阈值 40%"},
-    "fixed_income_plus_fund": {"mode": "fund",
-                               "context": "固收+产品，波动率低。技术信号仅供参考，以资产配置逻辑为准"},
-    # ── 价差产品：贵金属（正常阈值，但有买卖价差）──
-    "precious_metal_account": {"mode": "precious",
-                               "context": "积存金/贵金属账户，买卖有价差，短线操作成本高"},
-    # ── 只读：银行理财 ──
-    "bank_wealth_management": {"mode": "info_only",
-                              "context": "银行理财，有开放期限制，非开放期不可操作"},
-    # ── 跳过：现金等价物 ──
-    "money_market_fund": {"mode": "skip"},
-    "cash": {"mode": "skip"},
-    "cash_equivalent": {"mode": "skip"},
-    "insurance_policy": {"mode": "skip"},
-}
+# ── 产品类型路由规则：权威来源 engine.yaml quant_action.product_type_rules ──
+def _load_product_type_rules() -> dict:
+    """产品类型路由表：mode/context 全是业务值，权威在 engine.yaml。
+    缺失 = 部署事故（配置随 repo 分发），fail-closed。lazy 缓存。"""
+    global _CACHED_PRODUCT_RULES
+    if _CACHED_PRODUCT_RULES is not None:
+        return _CACHED_PRODUCT_RULES
+    from stocks.engine.config_loader import load_engine_config
+    rules = ((load_engine_config() or {}).get("quant_action") or {}).get("product_type_rules")
+    if not isinstance(rules, dict) or not rules:
+        raise RuntimeError("engine.yaml quant_action.product_type_rules 缺失或为空")
+    _CACHED_PRODUCT_RULES = dict(rules)
+    return _CACHED_PRODUCT_RULES
+
+
+_CACHED_PRODUCT_RULES: dict | None = None
 
 # ── 默认配置（与 config_loader.py 同步）──
-_DEFAULT_QUANT_CONFIG: dict = {
-    "stop_loss_pct": -12.0,
-    "mid_stop_pct": -10.0,
-    "mid_stop_ratio": 0.3,
-    "warning_loss_pct": -8.0,
-    "take_profit_levels": [(10.0, 0.25), (20.0, 0.25), (30.0, 0.50)],
-    "profit_pullback_pct": -2.0,
-    "profit_pullback_min_pnl": 3.0,
-    "trend_ma20_break_cutoff": 0.995,
-    "trend_break_ladder": [(0.995, 0.25), (0.980, 0.50), (0.950, 0.75), (0.850, 1.0)],
-    "default_position_limit_pct": 5.0,
-    "trend_confirmed_limit_pct": 10.0,
-    "left_add_max_rsi": 65.0,
-    "left_add_min_rsi": 40.0,
-    "ma20_pullback_add_ratios": [0.02],
-    "trend_break_extra_deviation_pct": 0.0,
-    # ── 左侧状态画像(deep oversold)降级: 趋势跌破 + 深跌超卖 → 降级为持有观察 ──
-    # 防止右侧趋势信号在左侧建仓区误杀(2026-08-18 APP 案例: RSI 25 / 回撤 -49% 仍被建议清仓)
-    "left_state_degrade_enabled": True,
-    "left_state_rsi_max": 35.0,          # RSI < 此值 = 超卖
-    "left_state_drawdown_max": -40.0,    # 60日回撤 < 此值 = 深跌
-    "left_state_bollinger_lower": True,  # 布林下半区也算
-    # ── 变现侧：高置信加仓（高胜率要重仓变现，不能永远轻仓）──
-    "high_conviction_evidence_threshold": 0.7,
-    "high_conviction_add_ratio": 0.05,
-    "high_conviction_limit_pct": 15.0,
-}
+_QUANT_REQUIRED_KEYS = (
+    "stop_loss_pct", "mid_stop_pct", "mid_stop_ratio", "warning_loss_pct",
+    "take_profit_levels", "profit_pullback_pct", "profit_pullback_min_pnl",
+    "trend_ma20_break_cutoff", "trend_break_ladder", "default_position_limit_pct",
+    "trend_confirmed_limit_pct", "left_add_max_rsi", "left_add_min_rsi",
+    "ma20_pullback_add_ratios", "trend_break_extra_deviation_pct",
+    "left_state_degrade_enabled", "left_state_rsi_max", "left_state_drawdown_max",
+    "left_state_bollinger_lower", "high_conviction_evidence_threshold",
+    "high_conviction_add_ratio", "high_conviction_limit_pct",
+)
 
-# swing（短线）持仓的阈值覆盖：更快止损、更快锁利、不做左侧布局降级。
-# 短线仓位哲学 = 来去都快，趋势破就是破，不等深跌企稳。
-# 这是兜底默认值；权威配置在 engine.yaml quant_action.swing_overrides，
-# 调阈值改 YAML 不改这里。config 中的 swing_overrides 键整体覆盖本表。
-_DEFAULT_SWING_OVERRIDES: dict = {
-    "stop_loss_pct": -8.0,            # long: -12 → swing: -8
-    "mid_stop_pct": -6.0,             # long: -10 → swing: -6
-    "warning_loss_pct": -4.0,         # long: -8  → swing: -4
-    "profit_pullback_pct": -1.5,      # long: -2  → swing: -1.5（更快锁利）
-    "profit_pullback_min_pnl": 2.0,   # long: 3   → swing: 2（更低浮盈门槛）
-    "left_state_degrade_enabled": False,  # 短线不做左侧布局，趋势破就是破
-}
+
+def _load_quant_config_defaults() -> dict:
+    """持仓管理阈值（long 基准表）：权威来源 engine.yaml quant_action.defaults。
+    缺失键 = 部署事故（配置随 repo 分发），fail-closed。lazy 缓存避免重复读盘。
+    """
+    global _CACHED_QUANT_DEFAULTS
+    if _CACHED_QUANT_DEFAULTS is not None:
+        return _CACHED_QUANT_DEFAULTS
+    from stocks.engine.config_loader import load_engine_config
+    qa = (load_engine_config() or {}).get("quant_action") or {}
+    defaults = qa.get("defaults")
+    if not isinstance(defaults, dict) or not defaults:
+        raise RuntimeError("engine.yaml quant_action.defaults 缺失或为空")
+    missing = [k for k in _QUANT_REQUIRED_KEYS if k not in defaults]
+    if missing:
+        raise RuntimeError(f"engine.yaml quant_action.defaults 缺键: {missing}")
+    d = dict(defaults)
+    # swing_overrides 同属基准表一部分：config=None 直调（测试/脚本）也需要它
+    swing = qa.get("swing_overrides")
+    if isinstance(swing, dict) and swing:
+        d["swing_overrides"] = dict(swing)
+    # yaml 的 list[list] 转代码消费的 list[tuple] 结构
+    d["take_profit_levels"] = [tuple(x) for x in d["take_profit_levels"]]
+    d["trend_break_ladder"] = [tuple(x) for x in d["trend_break_ladder"]]
+    _CACHED_QUANT_DEFAULTS = d
+    return _CACHED_QUANT_DEFAULTS
+
+
+_CACHED_QUANT_DEFAULTS: dict | None = None
+
+# swing 覆盖表无代码兜底：权威唯一来源 engine.yaml quant_action.swing_overrides。
+# 缺失时 review_position 对 swing 持仓 fail-closed 抛错（配置随 repo 分发，缺失=部署事故）。
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +241,10 @@ class QuantActionEngine:
                 + ", ".join(sorted(deprecated))
                 + "；请先迁移 computed_profile"
             )
-        cfg = _DEFAULT_QUANT_CONFIG if not config else {**_DEFAULT_QUANT_CONFIG, **config}
+        _defaults = _load_quant_config_defaults()
+        cfg = _defaults if not config else {**_defaults, **{k: v for k, v in config.items() if k != "swing_overrides"}}
+        if config and isinstance(config.get("swing_overrides"), dict):
+            cfg["swing_overrides"] = config["swing_overrides"]
         self._c = cfg
 
     def _left_state_profile(self, price: Optional[float] = None) -> dict:
@@ -325,7 +320,7 @@ class QuantActionEngine:
         if horizon == "swing":
             overrides = self._c.get("swing_overrides")
             if not isinstance(overrides, dict) or not overrides:
-                overrides = _DEFAULT_SWING_OVERRIDES
+                raise RuntimeError("engine.yaml quant_action.swing_overrides 缺失或为空")
             c = {**self._c, **overrides}
             facts.append(
                 f"短线持仓：阈值收紧（止损{overrides.get('stop_loss_pct', -8)}%/"
@@ -835,7 +830,7 @@ def finalize_decision(
         )
 
     # ── 1. 产品路由：skip / info_only 提前退出 ──
-    rule = _PRODUCT_TYPE_RULES.get(product_type, {"mode": "full"})
+    rule = _load_product_type_rules().get(product_type, {"mode": "full"})
     mode = rule["mode"]
     if mode == "skip":
         return FinalDecision(

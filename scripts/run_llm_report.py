@@ -45,9 +45,28 @@ from build_push_payload import (  # noqa: E402
     validate_push_truth,
 )
 
-_LLM_BASE_URL = "http://172.16.248.60:8000/v1"  # NAS 本地 vllm(DeepSeek-V4-Flash)
-_LLM_MODEL = "DeepSeek-V4-Flash"
-_LLM_TIMEOUT = 180
+def _load_render_cfg() -> dict:
+    """报告渲染 LLM 配置：权威来源 engine.yaml llm.report_render。
+
+    缺失键即部署事故（配置文件随 repo 分发），fail-closed 抛错而不是
+    用代码内裸默认——配置化纪律（2026-08-22 Kari 指令）。
+    """
+    from stocks.engine.config_loader import load_engine_config
+    cfg = ((load_engine_config() or {}).get("llm") or {}).get("report_render") or {}
+    required = ("base_url", "model", "timeout_seconds", "max_attempts")
+    missing = [k for k in required if k not in cfg]
+    if missing:
+        raise RuntimeError(
+            f"engine.yaml llm.report_render 缺少必需键: {missing}"
+        )
+    return cfg
+
+_RENDER_CFG = _load_render_cfg()
+_LLM_BASE_URL = str(_RENDER_CFG["base_url"])
+_LLM_MODEL = str(_RENDER_CFG["model"])
+_LLM_TIMEOUT = int(_RENDER_CFG["timeout_seconds"])
+_LLM_MAX_ATTEMPTS = int(_RENDER_CFG["max_attempts"])
+_LLM_API_KEY = str(_RENDER_CFG.get("api_key", "EMPTY"))
 
 
 def _strip_llm_wrapping(text: str) -> str:
@@ -71,31 +90,30 @@ def _strip_llm_wrapping(text: str) -> str:
     return t
 
 
+def _load_prompt_template() -> str:
+    """报告 prompt 模板：权威来源 stocks/config/templates/report_prompt.txt。
+    缺失 = 部署事故（模板随 repo 分发），fail-closed。"""
+    from pathlib import Path
+    tpl = Path(__file__).resolve().parent.parent / "stocks" / "config" / "templates" / "report_prompt.txt"
+    if not tpl.exists():
+        raise RuntimeError(f"prompt 模板缺失: {tpl}")
+    return tpl.read_text(encoding="utf-8")
+
+
 def _build_llm_prompt(artifact: dict) -> str:
-    """把 artifact 里的 agent_task(指令) + user_view(数据) 拼成给 LLM 的提示词。"""
+    """把 artifact 里的 agent_task(指令) + user_view(数据) 填入模板。"""
     agent_task = artifact.get("agent_task") or {}
     pd = artifact.get("portfolio_decision") or {}
     view = pd.get("user_view") or {}
 
-    header = (
-        "你是用户的私人投资分析师。请严格按下面的「报告契约」,用给定的「用户视图数据」"
-        "生成一份面向用户的飞书报告(Markdown)。\n"
-        "要求: 只输出报告正文本身,不要任何解释、不要代码块围栏、不要 JSON 包装。\n"
-        "语言: 简体中文。\n\n"
+    return _load_prompt_template().format(
+        agent_task_json=json.dumps(agent_task, ensure_ascii=False, indent=1),
+        user_view_json=json.dumps(
+            {"instruction_card": view.get("instruction_card"), "assistant_brief": view.get("assistant_brief")},
+            ensure_ascii=False,
+            indent=1,
+        ),
     )
-    task_block = "===== 报告契约(agent_task) =====\n" + json.dumps(agent_task, ensure_ascii=False, indent=1)
-    data_block = "\n\n===== 用户视图数据(唯一权威数据源, 所有数字/标的/比例从这里取) =====\n" + json.dumps(
-        {"instruction_card": view.get("instruction_card"), "assistant_brief": view.get("assistant_brief")},
-        ensure_ascii=False,
-        indent=1,
-    )
-    tail = (
-        "\n\n===== 输出纪律 =====\n"
-        "- 只从上面的用户视图数据取数字和结论,禁止自行计算或编造。\n"
-        "- 交易指令卡必须在最上方,私人投资助理紧接其后。\n"
-        "- 保持简洁: 论断为主,不逐条罗列 MA/RSI/布林等技术数值。\n"
-    )
-    return header + task_block + data_block + tail
 
 
 def _validate_llm_text(payload: dict, text: str) -> list[str]:
@@ -129,7 +147,7 @@ def _validate_llm_text(payload: dict, text: str) -> list[str]:
 def _render_llm(artifact: dict) -> str:
     from stocks.providers.openai_client import LLMClient
 
-    client = LLMClient(model=_LLM_MODEL, api_key="EMPTY", base_url=_LLM_BASE_URL, timeout=_LLM_TIMEOUT)
+    client = LLMClient(model=_LLM_MODEL, api_key=_LLM_API_KEY, base_url=_LLM_BASE_URL, timeout=_LLM_TIMEOUT)
     raw = client.complete(_build_llm_prompt(artifact))
     text = _strip_llm_wrapping(raw)
     if not text or text.upper() != "[SILENT]" and len(text) < 10:
@@ -137,7 +155,7 @@ def _render_llm(artifact: dict) -> str:
     return text
 
 
-_LLM_MAX_ATTEMPTS = 3
+# _LLM_MAX_ATTEMPTS 由 engine.yaml llm.report_render.max_attempts 提供（上方加载）
 _LLM_RETRY_BACKOFF_SECONDS = 2
 _FAILURE_LOG_DIR = Path(".local/llm_render_errors")
 

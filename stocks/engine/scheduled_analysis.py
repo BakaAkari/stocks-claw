@@ -1099,14 +1099,32 @@ def _merge_profile_config(base_config):
     return merged
 
 
+def _vix_levels() -> dict:
+    """VIX 风险分层阈值：权威来源 engine.yaml quant_action.vix_levels。
+    缺失 = 部署事故（配置随 repo 分发），fail-closed。"""
+    global _CACHED_VIX_LEVELS
+    if _CACHED_VIX_LEVELS is not None:
+        return _CACHED_VIX_LEVELS
+    from stocks.engine.config_loader import load_engine_config
+    lv = ((load_engine_config() or {}).get("quant_action") or {}).get("vix_levels")
+    if not isinstance(lv, dict) or not all(k in lv for k in ("hedge", "reduce", "watch")):
+        raise RuntimeError("engine.yaml quant_action.vix_levels 缺失或缺键")
+    _CACHED_VIX_LEVELS = dict(lv)
+    return _CACHED_VIX_LEVELS
+
+
+_CACHED_VIX_LEVELS: dict | None = None
+
+
 def _risk_evidence_keys(*, vix, clusters: list[dict]) -> list[str]:
     keys: list[str] = []
     if isinstance(vix, (int, float)):
-        if vix > 35:
+        lv = _vix_levels()
+        if vix > lv["hedge"]:
             keys.append("macro:vix_hedge")
-        elif vix > 25:
+        elif vix > lv["reduce"]:
             keys.append("macro:vix_reduce")
-        elif vix > 20:
+        elif vix > lv["watch"]:
             keys.append("macro:vix_watch")
     for index, cluster in enumerate(clusters):
         if cluster.get("urgency") not in {"critical", "high"}:
@@ -1933,9 +1951,10 @@ def _risk_appetite_from_macro(macro: dict) -> str:
     vix = macro.get("vix")
     if vix is None:
         return "unknown"
-    if vix > 25:
+    lv = _vix_levels()
+    if vix > lv["reduce"]:
         return "risk_off"
-    if vix < 15:
+    if vix < lv["risk_on_below"]:
         return "risk_on"
     return "neutral"
 
@@ -2841,17 +2860,10 @@ def _build_action_cards(
         classification = item.get("classification") or {}
         product_type = classification.get("product_type", "")
         account_type = (item.get("account") or {}).get("type", "")
-        # 路由推导（与 _PRODUCT_TYPE_RULES 同步）
-        # full / fund / precious / info_only / skip
-        _routing_map = {
-            "qdii_fund": "fund", "feeder_fund": "fund",
-            "mixed_fund": "fund", "fixed_income_plus_fund": "fund",
-            "precious_metal_account": "precious",
-            "bank_wealth_management": "info_only",
-            "money_market_fund": "skip", "cash": "skip", "cash_equivalent": "skip",
-            "insurance_policy": "skip",
-        }
-        routing = _routing_map.get(product_type, "")
+        # 路由推导：直接消费 engine.yaml quant_action.product_type_rules 的
+        # mode 字段，单一权威（2026-08-22 配置化后消除此处的同步副本）。
+        from stocks.engine.quant_action import _load_product_type_rules
+        routing = (_load_product_type_rules().get(product_type) or {}).get("mode", "")
         if not routing:
             # ── 回退：product_type 未标注时，从 account_id 推导 ──
             aid = (item.get("account") or {}).get("account_id", "") or account_type or ""

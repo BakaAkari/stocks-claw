@@ -98,6 +98,13 @@ llm:
   # 强制走 .secret 文件(openai-key.md / openai-base-url.md)避免 env 覆盖。
   api_key_env: STOCKS_LLM_UNUSED_API_KEY
   base_url_env: STOCKS_LLM_UNUSED_BASE_URL
+  # 报告渲染 LLM（scripts/run_llm_report.py 消费）
+  report_render:
+    base_url: "http://172.16.248.60:8000/v1"   # NAS 本地 vllm
+    model: "DeepSeek-V4-Flash"
+    api_key: "EMPTY"
+    timeout_seconds: 180
+    max_attempts: 3            # 渲染失败自动重试次数（含首次）
   # 中长期研判综合器
   outlook:
     enabled: true
@@ -163,17 +170,126 @@ execution_rules:
   redemption_rule_map: {}
 
 quant_action:
-  # 短线(swing)持仓的阈值覆盖表。资产文件中 horizon=swing 的持仓
-  # 在 review_position 时用此表覆盖 long 默认值。
-  # 短线哲学 = 来去都快：更快止损、更快锁利、不做左侧布局降级。
-  # 未配置时回退到 quant_action.py 内置默认（与下表相同）。
+  # ── 持仓管理阈值（long 基准表，权威在此。代码无副本）──
+  defaults:
+    stop_loss_pct: -12.0           # 硬止损线（长期持仓容忍度）
+    mid_stop_pct: -10.0            # 中间减仓线
+    mid_stop_ratio: 0.3            # 中间减仓比例
+    warning_loss_pct: -8.0         # 浮亏警告线（加仓上限）
+    take_profit_levels: [[10.0, 0.25], [20.0, 0.25], [30.0, 0.50]]  # 止盈阶梯
+    profit_pullback_pct: -2.0      # 高浮盈单日回撤锁利线
+    profit_pullback_min_pnl: 3.0   # 锁利最低浮盈门槛
+    trend_ma20_break_cutoff: 0.995 # 跌破 MA20 判定系数
+    trend_break_ladder: [[0.995, 0.25], [0.980, 0.50], [0.950, 0.75], [0.850, 1.0]]
+    default_position_limit_pct: 5.0
+    trend_confirmed_limit_pct: 10.0
+    left_add_max_rsi: 65.0         # 左侧加仓 RSI 上限
+    left_add_min_rsi: 40.0         # 左侧加仓 RSI 下限
+    ma20_pullback_add_ratios: [0.02]
+    trend_break_extra_deviation_pct: 0.0
+    # 左侧状态画像降级：趋势跌破+深跌超卖 → 降级为持有观察
+    left_state_degrade_enabled: true
+    left_state_rsi_max: 35.0
+    left_state_drawdown_max: -40.0
+    left_state_bollinger_lower: true
+    # 高置信加仓（高胜率重仓变现）
+    high_conviction_evidence_threshold: 0.7
+    high_conviction_add_ratio: 0.05
+    high_conviction_limit_pct: 15.0
+
+  # ── 短线(swing)持仓覆盖表（horizon=swing 时覆盖 defaults）──
   swing_overrides:
-    stop_loss_pct: -8.0            # long 默认 -12
-    mid_stop_pct: -6.0             # long 默认 -10
-    warning_loss_pct: -4.0         # long 默认 -8
-    profit_pullback_pct: -1.5      # long 默认 -2（更快锁利）
-    profit_pullback_min_pnl: 2.0   # long 默认 3（更低浮盈门槛）
-    left_state_degrade_enabled: false  # 短线不做左侧布局，趋势破就是破
+    stop_loss_pct: -8.0
+    mid_stop_pct: -6.0
+    warning_loss_pct: -4.0
+    profit_pullback_pct: -1.5
+    profit_pullback_min_pnl: 2.0
+    left_state_degrade_enabled: false
+
+  # ── 研究信号阈值表（action_signals._signal_for_item 消费）──
+  thresholds:
+    knife_r5: -3.0                 # 5根K线跌幅视为加速下跌
+    knife_rsi: 38.0
+    reduce_r20: -5.0               # 20根跌幅视为趋势转弱
+    pullback_r20: 5.0              # 趋势强劲阈值
+    pullback_rsi: 65.0
+    pullback_position: 85.0        # 布林位置百分比
+    accumulate_r20: 2.0
+    accumulate_rsi_low: 40.0
+    accumulate_rsi_high: 65.0
+    accumulate_r20_max: 15.0       # 短期涨幅过高应等回调
+    left_bottom_rsi_max: 40.0
+    left_bottom_price_position_max: 25.0
+    left_bottom_r20_max: -10.0
+    left_bottom_r5_floor: -5.0
+    left_bottom_pullback_cooldown: 0.02
+
+  # ── 轮动横截面排序权重 ──
+  rank_weights:
+    r20: 0.40
+    rsi_zone: 0.30
+    price_pos: 0.20
+    volume: 0.10
+
+  # ── 信号文案表（action_signals 消费：action_hint / sizing_hint / conflict_hint）──
+  signal_text:
+    action_hints:
+      accumulate_candidate: "趋势完好且回踩确认，可建仓/加仓；分批布局优先于一次性重仓"
+      left_bottom_candidate: "深跌超卖且跌势放缓，左侧轻仓试仓，跌破前低或 RSI 持续恶化则止损"
+      wait_for_pullback: "趋势完好但短线过热，等回踩确认再进，不追"
+      reduce_risk: "趋势与动能同步转弱，优先降低该标的暴露"
+      avoid_catching_falling_knife: "下跌未止，任何补仓等收盘重新站回短均线再说"
+      rotation_candidate: "相对强弱领先，若与组合缺口匹配可作为轮入候选"
+      neutral_hold: "无明确方向信号，维持现状，等待新信号"
+      no_data: "历史或指标不足，本轮不给方向"
+    sizing_hints:
+      left_bottom_candidate: "轻仓试仓（建议占组合不超过1-3%）；止损：跌破触发前低或20日低点继续下移"
+      accumulate_candidate: "趋势回踩建仓机会（首仓建议占组合2-4%，确认企稳后可加至5-8%）；止损：跌破MA20且MACD柱转负，或跌破建仓日低点"
+      rotation_candidate: "仅在组合有对应缺口时轮入（建议占组合不超过1-3%）；止损：轮动排名掉出前3或趋势破MA20"
+      wait_for_pullback: "等回踩MA5/MA10附近观察，不追高；未触发不建仓"
+      reduce_risk: "优先降低暴露，减仓后观察是否止跌"
+      avoid_catching_falling_knife: "禁止抄底，等待站回短均线或RSI脱离超卖区"
+      neutral_hold: "维持现有仓位，不主动调仓"
+      no_data: "无数据支持，不形成任何观点"
+    conflict_hints:
+      suspend_accumulation: "当前风险状态暂停加仓，风险解除后再评估"
+      risk_high: "当前风险状态为{level}，需先观察风险触发条件是否缓解"
+
+  # ── 产品类型路由规则（quant_action 路由消费）──
+  # mode: full=全执行 / fund=高门槛(T+2) / precious=价差产品 / info_only=只读 / skip=跳过
+  product_type_rules:
+    exchange_traded_fund: {mode: full}
+    stock: {mode: full}
+    short_treasury_etf: {mode: full}
+    qdii_fund:
+      mode: fund
+      context: "场外 QDII，申赎 T+2，以收盘净值为准。止盈阈值 40%，止损阈值 -20%"
+    feeder_fund:
+      mode: fund
+      context: "场外联接基金，申赎 T+2，以收盘净值为准。止盈阈值 40%，止损阈值 -20%"
+    mixed_fund:
+      mode: fund
+      context: "主动管理混合基金，高浮盈后需关注基金经理风格漂移。止盈阈值 40%"
+    fixed_income_plus_fund:
+      mode: fund
+      context: "固收+产品，波动率低。技术信号仅供参考，以资产配置逻辑为准"
+    precious_metal_account:
+      mode: precious
+      context: "积存金/贵金属账户，买卖有价差，短线操作成本高"
+    bank_wealth_management:
+      mode: info_only
+      context: "银行理财，有开放期限制，非开放期不可操作"
+    money_market_fund: {mode: skip}
+    cash: {mode: skip}
+    cash_equivalent: {mode: skip}
+    insurance_policy: {mode: skip}
+
+  # ── VIX 风险分层（_risk_evidence_keys / _market_regime 消费）──
+  vix_levels:
+    hedge: 35.0                    # VIX > 此值 → 对冲级风险证据
+    reduce: 25.0                   # VIX > 此值 → 减层级 / risk_off
+    watch: 20.0                    # VIX > 此值 → 观察级
+    risk_on_below: 15.0            # VIX < 此值 → risk_on
 
 risk_state:
   critical_ttl_minutes: 360
