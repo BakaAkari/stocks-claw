@@ -334,7 +334,7 @@ class QuantActionEngine:
 
         # 1. 硬止损
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= c["stop_loss_pct"]:
-            technical_evidence = 0.90
+            technical_evidence = float(c.get("technical_evidence", {}).get("trend_break", 0.90))
             return self._build(position_id, "stop_loss", "止损清仓", 1.0,
                 [f"浮亏 {pnl_pct:.2f}% 已超过硬止损 {c['stop_loss_pct']}%"],
                 round(cost * (1 + c["stop_loss_pct"] / 100), 4) if cost else None,
@@ -342,7 +342,7 @@ class QuantActionEngine:
 
         # 2. 中间减仓
         if isinstance(pnl_pct, (int, float)) and pnl_pct <= c["mid_stop_pct"]:
-            technical_evidence = 0.75
+            technical_evidence = float(c.get("technical_evidence", {}).get("take_profit", 0.75))
             return self._build(position_id, "reduce",
                 f"浮亏超出中间阈值 {c['mid_stop_pct']}%，减仓 {int(c['mid_stop_ratio']*100)}%",
                 c["mid_stop_ratio"],
@@ -381,7 +381,7 @@ class QuantActionEngine:
                         None, [], current_weight_pct, price, quantity,
                         technical_evidence=0.0)
 
-                ratio = 0.25
+                ratio = float(c.get("trend_break_reduce_ratio", 0.25))
                 for threshold, ladder_ratio in reversed(c["trend_break_ladder"]):
                     if price / ma20 < threshold:
                         ratio = ladder_ratio
@@ -414,7 +414,7 @@ class QuantActionEngine:
             if target_prices:
                 triggered = [(lv, rv) for lv, rv in c["take_profit_levels"] if pnl_pct >= lv]
                 if triggered:
-                    total_reduce = min(sum(r for _, r in triggered), 0.75)
+                    total_reduce = min(sum(r for _, r in triggered), float(c.get("max_total_reduce_ratio", 0.75)))
                     max_level = triggered[-1][0]
                     evidence_from_pnl = min(1.0, pnl_pct / 50.0)
                     technical_evidence = round(evidence_from_pnl, 2)
@@ -429,7 +429,7 @@ class QuantActionEngine:
                 and one_day_change_pct <= c["profit_pullback_pct"]
                 and isinstance(pnl_pct, (int, float))
                 and pnl_pct >= c["profit_pullback_min_pnl"]):
-            technical_evidence = 0.55
+            technical_evidence = float(c.get("technical_evidence", {}).get("pullback_add", 0.55))
             return self._build(position_id, "reduce",
                 f"单日回撤 {one_day_change_pct:.2f}%，减仓 25% 锁定浮盈", 0.25,
                 [f"单日下跌 {one_day_change_pct:.2f}%，浮盈 {pnl_pct:.2f}%"],
@@ -438,7 +438,8 @@ class QuantActionEngine:
         # 7. 回踩加仓（MA20 偏离驱动档位 + 仓位上限门）
         if isinstance(price, (int, float)) and ma20 is not None and cost is not None:
             rsi = self.indicators.get("rsi_14")
-            near_ma20 = 0.97 <= price / ma20 <= 1.03
+            _band = c.get("near_ma20_band") or [0.97, 1.03]
+            near_ma20 = float(_band[0]) <= price / ma20 <= float(_band[1])
             rsi_ok = rsi is None or (c["left_add_min_rsi"] <= rsi <= c["left_add_max_rsi"])
             macd_ok = macd_hist is None or macd_hist >= 0
             # 回踩偏离度 → 技术面确定性（与 _build 高置信判定同源）
@@ -646,7 +647,7 @@ def _compute_confidence(
     - ≥0.40 → medium
     - <0.40 → low（弱信号 或 数据陈旧）
     """
-    recency_map = {"fresh": 1.0, "stale": 0.75, "delayed": 0.5, "error": 0.3}
+    recency_map = _load_quant_config_defaults().get("recency_weights") or {"fresh": 1.0, "stale": 0.75, "delayed": 0.5, "error": 0.3}
     recency_factor = recency_map.get(data_freshness, 0.7)
     score = technical_evidence * recency_factor
 

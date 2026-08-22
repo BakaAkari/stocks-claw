@@ -1083,19 +1083,23 @@ def _recount_signals(items: list[dict]) -> dict:
 
 
 def _merge_profile_config(base_config):
-    """将 computed_profile.json 的参数合并到引擎配置中。
+    """合并引擎配置。权威顺序（2026-08-22 配置化整改后）：
 
-    computed_profile（个性化参数）优先级最高，覆盖 engine.yaml 默认值。
+    engine.yaml quant_action.defaults = 唯一权威基准（生产真实值）。
+    computed_profile.json 仅保留画像专属键（left_batch_plan_ratios/
+    chase_enabled/max_single_position_pct 等引擎不消费的键），
+    与 yaml 重复的 quant 键已于 2026-08-22 从数据文件中清除。
+    yaml 覆盖 computed 的同名键——yaml 是最终权威。
     """
     from pathlib import Path as _Path
     local = _Path(__file__).resolve().parent.parent.parent / ".local"
     computed = load_computed(local / "computed_profile.json")
     if not computed:
         return base_config or {}
-    # computed 覆盖 base_config，保证个性化参数不被默认值冲掉
     merged = merge_with_defaults(computed)
     if base_config:
-        return {**base_config, **merged}
+        # yaml(base_config) 覆盖 computed(merged)：单一权威在 engine.yaml
+        return {**merged, **base_config}
     return merged
 
 

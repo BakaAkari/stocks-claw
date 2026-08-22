@@ -170,23 +170,25 @@ execution_rules:
   redemption_rule_map: {}
 
 quant_action:
-  # ── 持仓管理阈值（long 基准表，权威在此。代码无副本）──
+  # ── 持仓管理阈值（long 基准表，唯一权威。代码与 computed_profile 均无副本）──
+  # 以下值为当前生产真实生效值（2026-08-22 从 computed_profile 提级为基准，
+  # 源自 Kari 左侧画像：容忍更深回撤、更早止盈、更勤回踩加仓）。
   defaults:
-    stop_loss_pct: -12.0           # 硬止损线（长期持仓容忍度）
-    mid_stop_pct: -10.0            # 中间减仓线
+    stop_loss_pct: -18.0           # 硬止损线（左侧容忍深回撤）
+    mid_stop_pct: -14.0            # 中间减仓线
     mid_stop_ratio: 0.3            # 中间减仓比例
-    warning_loss_pct: -8.0         # 浮亏警告线（加仓上限）
-    take_profit_levels: [[10.0, 0.25], [20.0, 0.25], [30.0, 0.50]]  # 止盈阶梯
-    profit_pullback_pct: -2.0      # 高浮盈单日回撤锁利线
-    profit_pullback_min_pnl: 3.0   # 锁利最低浮盈门槛
-    trend_ma20_break_cutoff: 0.995 # 跌破 MA20 判定系数
-    trend_break_ladder: [[0.995, 0.25], [0.980, 0.50], [0.950, 0.75], [0.850, 1.0]]
+    warning_loss_pct: -10.0        # 浮亏警告线（加仓上限）
+    take_profit_levels: [[8.0, 0.3], [20.0, 0.3], [35.0, 0.4]]  # 止盈阶梯（左侧见好就收）
+    profit_pullback_pct: -2.5      # 高浮盈单日回撤锁利线
+    profit_pullback_min_pnl: 5.0   # 锁利最低浮盈门槛
+    trend_ma20_break_cutoff: 0.99  # 跌破 MA20 判定系数
+    trend_break_ladder: [[0.99, 0.3], [0.97, 0.5], [0.94, 0.75], [0.88, 1.0]]
     default_position_limit_pct: 5.0
     trend_confirmed_limit_pct: 10.0
-    left_add_max_rsi: 65.0         # 左侧加仓 RSI 上限
+    left_add_max_rsi: 60.0         # 左侧加仓 RSI 上限
     left_add_min_rsi: 40.0         # 左侧加仓 RSI 下限
-    ma20_pullback_add_ratios: [0.02]
-    trend_break_extra_deviation_pct: 0.0
+    ma20_pullback_add_ratios: [0.03, 0.05, 0.08]  # 回踩 MA20 分批加仓阶梯
+    trend_break_extra_deviation_pct: 1.0
     # 左侧状态画像降级：趋势跌破+深跌超卖 → 降级为持有观察
     left_state_degrade_enabled: true
     left_state_rsi_max: 35.0
@@ -196,6 +198,15 @@ quant_action:
     high_conviction_evidence_threshold: 0.7
     high_conviction_add_ratio: 0.05
     high_conviction_limit_pct: 15.0
+    # 引擎内部打分/邻域常量（2026-08-22 从代码提级）
+    technical_evidence:
+      trend_break: 0.90            # 趋势破位信号置信度
+      take_profit: 0.75            # 止盈信号置信度
+      pullback_add: 0.55           # 回踩加仓信号置信度
+    near_ma20_band: [0.97, 1.03]   # MA20 邻域判定（回踩±3%）
+    trend_break_reduce_ratio: 0.25 # 单档破位减仓比例
+    max_total_reduce_ratio: 0.75   # 多档破位累计减仓上限
+    recency_weights: {fresh: 1.0, stale: 0.75, delayed: 0.5, error: 0.3}
 
   # ── 短线(swing)持仓覆盖表（horizon=swing 时覆盖 defaults）──
   swing_overrides:
@@ -284,6 +295,56 @@ quant_action:
     cash_equivalent: {mode: skip}
     insurance_policy: {mode: skip}
 
+  # ── 组合裁决常量（portfolio_adjudicator 消费）──
+  adjudication:
+    min_add_amount_cny: 800.0      # 单次加仓最小金额（低于此不建议操作）
+    safety_buffer_ratio: 0.05      # 安全垫目标 = 组合总值 × 此比例
+
+  # ── 情报代理/主题暴露映射（2026-08-22 从 config_loader 内置提级，唯一权威）──
+  intel_signal_proxy:
+    USO: XLE
+    GLD: NEM
+    NEM: NEM
+    GOLD: NEM
+    QQQ: QQQ
+    SPY: SPY
+    ITA: ITA
+    NVDA: NVDA
+    XLE: XLE
+    KWEB: '512480'
+    FXI: '510300'
+    ASHR: '510300'
+    GDX: NEM
+    SLV: NEM
+    GC=F: '518880'
+    XAU: '518880'
+    GC: '518880'
+    518880: '518880'
+    TLT: SGOV
+    SHY: SGOV
+    SGOV: SGOV
+    IWM: '512890'
+  theme_to_exposure:
+    geopolitics: [energy, defense, gold, oil_gas, aerospace, mining, military, commodity]
+    monetary_policy: [gold, fixed_income, us_rates, cash_like, money_market, bank_wmp, credit_plus, us_equity,
+  qdii, commodity]
+    macro_data: [a_share, broad_index, blue_chip, us_equity, qdii]
+    china_policy: [a_share, broad_index, blue_chip, dividend_low_vol, high_dividend, active_equity,
+  star_board, utilities, power, consumer, liquor, chemical, cyclical, military]
+    earnings: [tech, ai, semiconductor, nasdaq100, us_equity, qdii, consumer_tech, consumer, liquor]
+    energy: [energy, oil_gas, chemical, cyclical]
+    technology: [tech, ai, semiconductor, nasdaq100, us_equity, qdii, consumer_tech, star_board]
+    semiconductor: [semiconductor, ai, tech, star_board]
+    new_energy: [energy, power, utilities, chemical, oil_gas]
+    consumer: [consumer, liquor, consumer_tech]
+    healthcare: [healthcare, bio]
+    financials: [financials]
+    real_estate: [real_estate]
+    defense: [defense, aerospace, military]
+    utilities: [utilities, power]
+    crypto: [crypto]
+    general: []
+
   # ── VIX 风险分层（_risk_evidence_keys / _market_regime 消费）──
   vix_levels:
     hedge: 35.0                    # VIX > 此值 → 对冲级风险证据
@@ -303,3 +364,114 @@ logging:
   level: INFO
   # 脱敏：隐藏日志中的金额和 API Key
   desensitize: true
+
+intelligence:
+  # ── 符号→资产类别 / 已知符号表（2026-08-22 从 config_loader 内置提级，唯一权威）──
+  symbol_to_asset:
+    SPY: equity
+    QQQ: equity
+    NVDA: equity
+    IWM: equity
+    XLE: oil
+    USO: oil
+    GLD: gold
+    NEM: gold
+    IAU: gold
+    TLT: bond
+    SGOV: bond
+    SHY: bond
+    UUP: dxy
+    KWEB: china_assets
+    FXI: china_assets
+    ASHR: china_assets
+  known_symbols:
+    - SPY
+    - QQQ
+    - IWM
+    - DIA
+    - VTI
+    - VOO
+    - IVV
+    - VWO
+    - EFA
+    - GLD
+    - SLV
+    - GDX
+    - NEM
+    - XAU
+    - USO
+    - XLE
+    - XOM
+    - CVX
+    - OIH
+    - TLT
+    - IEF
+    - SHY
+    - AGG
+    - LQD
+    - HYG
+    - BND
+    - SGOV
+    - EEM
+    - FXI
+    - KWEB
+    - ASHR
+    - MCHI
+    - NVDA
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - META
+    - TSLA
+    - AVGO
+    - AMD
+    - INTC
+    - QCOM
+    - MU
+    - ARM
+    - SMCI
+    - JPM
+    - GS
+    - BAC
+    - WFC
+    - C
+    - MS
+    - BLK
+    - V
+    - MA
+    - XLV
+    - XBI
+    - XLP
+    - XLY
+    - XLF
+    - XLI
+    - XLK
+    - XLU
+    - XLB
+    - ITA
+    - NOC
+    - LMT
+    - RTX
+    - PPA
+    - SOXX
+    - SMH
+    - SOXL
+    - SOXS
+    - BTC
+    - ETH
+    - BTCUSDT
+    - ETHUSDT
+    - VIX
+    - VIXY
+    - UVXY
+    - VXX
+    - SVXY
+    - GC
+    - CL
+    - NG
+    - SI
+    - HG
+    - ZC
+    - ZS
+    - ZW

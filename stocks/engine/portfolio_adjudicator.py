@@ -62,9 +62,13 @@ _REDUCE_SIGNALS = frozenset({"reduce", "stop_loss", "take_profit"})
 _ADD_SIGNALS = frozenset({"add"})
 
 # Minimum CNY amount for an add action to be executable.  Kept as a named
-# constant so the threshold is tunable in one place (see _MIN_ADD_AMOUNT_CNY
+# constant so the threshold is tunable in one place (see _min_add_amount_cny()
 # usage in build_capital_allocation_with_suppression).
-_MIN_ADD_AMOUNT_CNY = 800.0
+def _min_add_amount_cny() -> float:
+    """最小加仓金额：权威来源 engine.yaml quant_action.adjudication。"""
+    from stocks.engine.config_loader import load_engine_config
+    adj = ((load_engine_config() or {}).get("quant_action") or {}).get("adjudication") or {}
+    return float(adj.get("min_add_amount_cny", 800.0))
 
 # settlement_rule tokens safe to surface verbatim as human-facing settlement_timing;
 # non-executable tokens (periodic_open, locked, review_required) fall back to the
@@ -386,7 +390,9 @@ def build_cash_schedule(
             schedule.strategic_exit_value_cny += residual_value
             schedule.strategic_exit_position_ids.append(pid)
 
-    safety_target = total_value * 0.05
+    from stocks.engine.config_loader import load_engine_config as _lec
+    _adj = ((_lec() or {}).get("quant_action") or {}).get("adjudication") or {}
+    safety_target = total_value * float(_adj.get("safety_buffer_ratio", 0.05))
     applied_safety = min(schedule.immediate_cash_cny, safety_target)
     schedule.safety_buffer_cny = applied_safety
     schedule.immediate_cash_cny -= applied_safety
@@ -408,7 +414,7 @@ def build_capital_allocation_with_suppression(
     from stocks.engine.scheduled_analysis import _build_capital_allocation
 
     min_add = float(
-        (context_config or {}).get("min_add_amount_cny", _MIN_ADD_AMOUNT_CNY)
+        (context_config or {}).get("min_add_amount_cny", _min_add_amount_cny())
     )
 
     suppressed = []

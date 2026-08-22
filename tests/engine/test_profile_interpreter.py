@@ -6,7 +6,8 @@ import pytest
 
 from stocks.engine.profile_interpreter import (
     DEFAULT_PARAMS,
-    INTERPRETER_SYSTEM_PROMPT,
+    _load_default_params,
+    interpreter_system_prompt,
     load_computed,
     merge_with_defaults,
     save_computed,
@@ -61,11 +62,17 @@ def _make_new_v2(overrides=None):
 
 
 class TestParameterContract:
-    def test_default_extra_deviation_is_zero(self):
-        assert DEFAULT_PARAMS["trend_break_extra_deviation_pct"] == 0.0
-
-    def test_default_pullback_ratios_are_single_two_pct_tier(self):
-        assert DEFAULT_PARAMS["ma20_pullback_add_ratios"] == [0.02]
+    def test_default_params_match_engine_yaml(self):
+        """2026-08-22 配置化整改后：DEFAULT_PARAMS 的唯一权威是
+        engine.yaml quant_action.defaults，此处断言与 yaml 一致而非硬编码值。"""
+        from stocks.engine.config_loader import load_engine_config
+        yaml_defaults = ((load_engine_config() or {}).get("quant_action") or {})["defaults"]
+        for key in ("stop_loss_pct", "trend_break_extra_deviation_pct",
+                    "ma20_pullback_add_ratios", "take_profit_levels"):
+            assert DEFAULT_PARAMS[key] == yaml_defaults[key], (
+                f"DEFAULT_PARAMS[{key}] 与 engine.yaml 不一致: "
+                f"{DEFAULT_PARAMS[key]} != {yaml_defaults[key]}"
+            )
 
 
 class TestProfileInterpreterCRUD:
@@ -88,11 +95,11 @@ class TestProfileInterpreterCRUD:
     def test_merge_with_defaults_overrides(self):
         merged = merge_with_defaults({"params": {"trend_break_extra_deviation_pct": 1.0}})
         assert merged["trend_break_extra_deviation_pct"] == 1.0
-        assert merged["stop_loss_pct"] == -12.0
+        assert merged["stop_loss_pct"] == _load_default_params()["stop_loss_pct"]
 
     def test_merge_with_defaults_none(self):
         merged = merge_with_defaults(None)
-        assert merged == DEFAULT_PARAMS
+        assert merged == _load_default_params()
 
     def test_validate_rejects_unmigrated_old_params(self):
         computed = _make_old_v1()
@@ -116,10 +123,10 @@ class TestProfileInterpreterCRUD:
         assert "ma20_pullback_add_ratios" in DEFAULT_PARAMS
 
     def test_prompt_new_trend_name_mentioned(self):
-        assert "trend_break_extra_deviation_pct" in INTERPRETER_SYSTEM_PROMPT
+        assert "trend_break_extra_deviation_pct" in interpreter_system_prompt()
 
     def test_prompt_new_add_name_mentioned(self):
-        assert "ma20_pullback_add_ratios" in INTERPRETER_SYSTEM_PROMPT
+        assert "ma20_pullback_add_ratios" in interpreter_system_prompt()
 
 
 # ===================================================================
@@ -339,21 +346,23 @@ class TestDEFAULTConsistency:
         assert "add_ladder" not in DEFAULT_PARAMS
 
     def test_new_params_default_values(self):
-        assert DEFAULT_PARAMS["trend_break_extra_deviation_pct"] == 0.0
-        assert DEFAULT_PARAMS["ma20_pullback_add_ratios"] == [0.02]
+        """2026-08-22 起权威值在 engine.yaml，不再硬编码断言旧默认。"""
+        yaml_vals = _load_default_params()
+        assert DEFAULT_PARAMS["trend_break_extra_deviation_pct"] == yaml_vals["trend_break_extra_deviation_pct"]
+        assert DEFAULT_PARAMS["ma20_pullback_add_ratios"] == yaml_vals["ma20_pullback_add_ratios"]
 
 
 class TestPromptNoLongerMentionsOldNames:
     """The interpreter prompt must use new names."""
 
     def test_prompt_uses_new_trend_name(self):
-        assert "trend_break_extra_deviation_pct" in INTERPRETER_SYSTEM_PROMPT
+        assert "trend_break_extra_deviation_pct" in interpreter_system_prompt()
 
     def test_prompt_no_longer_mentions_old_confirm_days(self):
-        assert "trend_confirm_days" not in INTERPRETER_SYSTEM_PROMPT
+        assert "trend_confirm_days" not in interpreter_system_prompt()
 
     def test_prompt_uses_new_add_name(self):
-        assert "ma20_pullback_add_ratios" in INTERPRETER_SYSTEM_PROMPT
+        assert "ma20_pullback_add_ratios" in interpreter_system_prompt()
 
     def test_prompt_no_longer_mentions_old_add_ladder(self):
-        assert "add_ladder" not in INTERPRETER_SYSTEM_PROMPT
+        assert "add_ladder" not in interpreter_system_prompt()

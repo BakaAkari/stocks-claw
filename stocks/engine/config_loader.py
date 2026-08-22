@@ -189,165 +189,17 @@ DEFAULT_ENGINE_CONFIG = {
         "redemption_rule_map": {},
     },
     "quant_action": {
-        "stop_loss_pct": -12.0,
-        "mid_stop_pct": -10.0,
-        "mid_stop_ratio": 0.3,
-        "warning_loss_pct": -8.0,
-        "take_profit_levels": [[10.0, 0.25], [20.0, 0.25], [30.0, 0.50]],
-        "profit_pullback_pct": -2.0,
-        "profit_pullback_min_pnl": 3.0,
-        "trend_ma20_break_cutoff": 0.995,
-        "trend_break_ladder": [[0.995, 0.25], [0.980, 0.50], [0.950, 0.75], [0.850, 1.0]],
-        "default_position_limit_pct": 5.0,
-        "trend_confirmed_limit_pct": 10.0,
-        "left_add_max_rsi": 65.0,
-        "left_add_min_rsi": 40.0,
-        # 变现侧：高置信加仓
-        "high_conviction_evidence_threshold": 0.7,
-        "high_conviction_add_ratio": 0.05,
-        "high_conviction_limit_pct": 15.0,
-        # Signal thresholds used by action_signals.py; add per-market overrides here.
-        "thresholds": {
-            "knife_r5": -3.0,
-            "knife_rsi": 38.0,
-            "reduce_r20": -5.0,
-            "pullback_r20": 5.0,
-            "pullback_rsi": 65.0,
-            "pullback_position": 85.0,
-            "accumulate_r20": 2.0,
-            "accumulate_rsi_low": 40.0,
-            "accumulate_rsi_high": 65.0,
-            "accumulate_r20_max": 15.0,
-            "left_bottom_rsi_max": 40.0,
-            "left_bottom_price_position_max": 25.0,
-            "left_bottom_r20_max": -10.0,
-            "left_bottom_r5_floor": -5.0,
-            "left_bottom_pullback_cooldown": 0.02,
-        },
-        "rank_weights": {
-            "r20": 0.40,
-            "rsi_zone": 0.30,
-            "price_pos": 0.20,
-            "volume": 0.10,
-        },
+        # 2026-08-22 配置化整改：平铺阈值/defaults/thresholds/rank_weights
+        # 全部删除——唯一权威在 engine.yaml quant_action.defaults/.thresholds/
+        # .rank_weights。此处保留平铺键会导致 load_engine_config deep-merge 后
+        # 旧值(-12)与 yaml 嵌套值(-18)并存，_merge_profile_config 再合并时
+        # 平铺旧值会盖住 yaml 权威（已实测验证的回归路径）。
         # Intelligence signal symbol → position proxy mapping. Used by quant_action
         # and intelligence_analyzer to associate external signals (e.g. QQQ, GLD)
         # with the user's actual positions. Add/modify mappings here without code changes.
-        "intel_signal_proxy": {
-            # 2026-08-13 修正: 旧表含过时代码(alipay_gf_nasdaq/alipay_info/
-            # ccb_gold/a_510300/a_512890),与当前持仓 instrument_key(us:QQQ/
-            # a:510300 等)不匹配,proxy 匹配永远失败。value 为持仓 symbol
-            # (不含 market: 前缀),匹配 inst_key.endswith(":symbol")。
-            "USO": "XLE",
-            "GLD": "NEM",
-            "NEM": "NEM",
-            "GOLD": "NEM",
-            "QQQ": "QQQ",
-            "SPY": "SPY",
-            "ITA": "ITA",
-            "NVDA": "NVDA",
-            "XLE": "XLE",
-            "KWEB": "512480",
-            "FXI": "510300",
-            "ASHR": "510300",
-            "GDX": "NEM",
-            "SLV": "NEM",
-            "GC=F": "518880",
-            "XAU": "518880",
-            "GC": "518880",
-            "518880": "518880",
-            "TLT": "SGOV",
-            "SHY": "SGOV",
-            "SGOV": "SGOV",
-            "IWM": "512890",
-            # BTCUSDT 删除: Kari 无加密货币持仓,旧映射 alipay_info 无意义。
-        },
-        # Event theme → exposure bucket tags mapping. Used by finalize_decision to map
-        # macro events to portfolio exposure buckets.
-        "theme_to_exposure": {
-            # 2026-08-13 扩展: 与 LLM prompt 的 17 主题对齐,加入产业细分主题
-            # (semiconductor/new_energy/consumer/defense/utilities 等),让"消费白酒"
-            # "半导体库存""军工订单"等产业细分情报能关联到对应持仓(旧表只有
-            # 宏观大类,粒度太粗)。标签均来自持仓 classification.exposure_tags。
-            "geopolitics": ["energy", "defense", "gold", "oil_gas", "aerospace", "mining", "military", "commodity"],
-            "monetary_policy": ["gold", "fixed_income", "us_rates", "cash_like", "money_market", "bank_wmp", "credit_plus", "us_equity", "qdii", "commodity"],
-            "macro_data": ["a_share", "broad_index", "blue_chip", "us_equity", "qdii"],
-            "china_policy": ["a_share", "broad_index", "blue_chip", "dividend_low_vol", "high_dividend", "active_equity", "star_board", "utilities", "power", "consumer", "liquor", "chemical", "cyclical", "military"],
-            "earnings": ["tech", "ai", "semiconductor", "nasdaq100", "us_equity", "qdii", "consumer_tech", "consumer", "liquor"],
-            "energy": ["energy", "oil_gas", "chemical", "cyclical"],
-            "technology": ["tech", "ai", "semiconductor", "nasdaq100", "us_equity", "qdii", "consumer_tech", "star_board"],
-            "semiconductor": ["semiconductor", "ai", "tech", "star_board"],
-            "new_energy": ["energy", "power", "utilities", "chemical", "oil_gas"],
-            "consumer": ["consumer", "liquor", "consumer_tech"],
-            "healthcare": ["healthcare", "bio"],
-            "financials": ["financials"],
-            "real_estate": ["real_estate"],
-            "defense": ["defense", "aerospace", "military"],
-            "utilities": ["utilities", "power"],
-            "crypto": ["crypto"],
-            "general": [],
-        },
-        # Exposure bucket tag → constraint category mapping. Kept here as a single
-        # source of truth for exposure aggregation.
-        "tag_to_bucket": {
-            "gold": "黄金", "mining": "黄金",
-            "a_share": "权益", "us_equity": "权益", "tech": "权益",
-            "nasdaq100": "权益", "qdii": "权益", "semiconductor": "权益",
-            "star_board": "权益", "blue_chip": "权益", "dividend_low_vol": "权益",
-            "high_dividend": "权益", "active_equity": "权益",
-            "energy": "权益", "oil_gas": "权益", "defense": "权益",
-            "aerospace": "权益", "ai": "权益",
-            "fixed_income": "固收", "credit_plus": "固收", "us_rates": "固收",
-            "bank_wmp": "固收", "short_treasury": "固收",
-            "cash_like": "现金", "money_market": "现金",
-        },
-    },
-    "intelligence": {
-        # Theme → market/asset mapping for the keyword-rules analyzer.
-        "theme_markets": {
-            "geopolitics": ["equity", "oil", "gold", "dxy"],
-            "monetary_policy": ["equity", "bond", "dxy", "gold"],
-            "macro_data": ["equity", "bond", "dxy", "gold"],
-            "china_policy": ["equity", "china_assets"],
-            "earnings": ["equity", "tech"],
-            "energy": ["oil", "equity", "energy"],
-            "technology": ["equity", "tech"],
-            "semiconductor": ["equity", "tech"],
-            "new_energy": ["equity", "energy", "tech"],
-            "consumer": ["equity"],
-            "healthcare": ["equity"],
-            "financials": ["equity"],
-            "real_estate": ["equity", "bond"],
-            "defense": ["equity", "gold"],
-            "utilities": ["equity", "energy"],
-            "crypto": ["crypto", "equity"],
-        },
-        # Symbol → asset class mapping for market impact scoring.
-        "symbol_to_asset": {
-            "SPY": "equity", "QQQ": "equity", "NVDA": "equity", "IWM": "equity",
-            "XLE": "oil", "USO": "oil",
-            "GLD": "gold", "NEM": "gold", "IAU": "gold",
-            "TLT": "bond", "SGOV": "bond", "SHY": "bond",
-            "UUP": "dxy",
-            "KWEB": "china_assets", "FXI": "china_assets", "ASHR": "china_assets",
-        },
-        # Known valid ticker/ETF symbols accepted by the keyword-rules analyzer.
-        "known_symbols": [
-            "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "IVV", "VWO", "EFA",
-            "GLD", "SLV", "GDX", "NEM", "XAU",
-            "USO", "XLE", "XOM", "CVX", "OIH",
-            "TLT", "IEF", "SHY", "AGG", "LQD", "HYG", "BND", "SGOV",
-            "EEM", "FXI", "KWEB", "ASHR", "MCHI",
-            "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "AVGO",
-            "AMD", "INTC", "QCOM", "MU", "ARM", "SMCI",
-            "JPM", "GS", "BAC", "WFC", "C", "MS", "BLK", "V", "MA",
-            "XLV", "XBI", "XLP", "XLY", "XLF", "XLI", "XLK", "XLU", "XLB",
-            "ITA", "NOC", "LMT", "RTX", "PPA",
-            "SOXX", "SMH", "SOXL", "SOXS",
-            "BTC", "ETH", "BTCUSDT", "ETHUSDT",
-            "VIX", "VIXY", "UVXY", "VXX", "SVXY",
-            "GC", "CL", "NG", "SI", "HG", "ZC", "ZS", "ZW",
-        ],
+        # 2026-08-22 配置化整改：intel_signal_proxy/theme_to_exposure/
+        # symbol_to_asset/known_symbols 四张业务映射表已提级至 engine.yaml
+        # （quant_action 段与 intelligence 段），此处不再保留副本。
         # Theme keywords for the keyword-rules analyzer (English, lower-case matching).
         "theme_keywords": {
             "geopolitics": ["war", "conflict", "tension", "sanction", "iran", "israel", "ukraine", "russia", "taiwan", "military", "strike", "drone", "attack"],

@@ -1,0 +1,16 @@
+根据以下用户偏好，输出个性化引擎参数。
+
+## 用户偏好
+{preferences}
+
+## 风险承受
+{risk_tolerance}
+
+## 投资期限
+{investment_horizon}
+
+## 约束条件
+{constraints}
+
+## 当前基准参数
+{defaults_json}

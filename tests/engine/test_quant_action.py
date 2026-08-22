@@ -18,12 +18,17 @@ def _review(config: dict, *, price: float, ma20: float = 100.0):
 
 
 class TestTrendBreakExtraDeviation:
+    # 参数语义测试：显式控制 cutoff/extra，不依赖 engine.yaml 当前值
+    # （yaml 权威值 2026-08-22 起为 cutoff 0.99 + extra 1.0）
+    _CUTOFF = {"trend_ma20_break_cutoff": 0.995}
+
     def test_default_cutoff_triggers_below_995(self):
-        assert _review({}, price=99.4).signal == "reduce"
+        assert _review({**self._CUTOFF, "trend_break_extra_deviation_pct": 0.0}, price=99.4).signal == "reduce"
 
     def test_extra_one_pct_requires_price_below_985(self):
-        assert _review({"trend_break_extra_deviation_pct": 1.0}, price=99.0).signal == "hold"
-        assert _review({"trend_break_extra_deviation_pct": 1.0}, price=98.4).signal == "reduce"
+        cfg = {**self._CUTOFF, "trend_break_extra_deviation_pct": 1.0}
+        assert _review(cfg, price=99.0).signal == "hold"
+        assert _review(cfg, price=98.4).signal == "reduce"
 
     def test_old_three_day_behavior_equals_new_one_pct(self):
         old_cutoff = 0.995 - (3 - 1) * 0.005
@@ -31,7 +36,10 @@ class TestTrendBreakExtraDeviation:
         assert old_cutoff == pytest.approx(new_cutoff)
 
     def test_fact_never_claims_consecutive_days(self):
-        review = _review({"trend_break_extra_deviation_pct": 1.0}, price=98.4)
+        review = _review(
+            {"trend_ma20_break_cutoff": 0.995, "trend_break_extra_deviation_pct": 1.0},
+            price=98.4,
+        )
         text = " ".join(review.facts)
         assert "额外偏离 1.0%" in text
         assert "连续" not in text
@@ -66,7 +74,8 @@ class TestHighConvictionAdd:
     def review(price: float, r20: float = 3.0):
         engine = QuantActionEngine(
             {"ma_20": 100.0, "macd": {"hist": 1.0}, "rsi_14": 50.0, "r20": r20},
-            {},
+            # 显式档位：参数语义测试不依赖 engine.yaml 当前值
+            {"ma20_pullback_add_ratios": [0.02, 0.03, 0.05]},
         )
         return engine.review_position(
             position_id="p", price=price, cost=100.0, pnl_pct=0.0,

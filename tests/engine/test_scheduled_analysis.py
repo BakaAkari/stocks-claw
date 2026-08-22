@@ -324,10 +324,12 @@ def _tradable_position(
 
 
 def test_action_cards_apply_freshness_per_position_in_mixed_market_portfolio():
+    # freshness 逻辑测试：显式 mid_stop=-10 使 pnl -10.5 触发 reduce，
+    # 不依赖 engine.yaml 当前阈值（2026-08-22 起 yaml 权威值为 -14）
     cards = _build_action_cards([
         _tradable_position("cn_current", "a:512480", freshness="current"),
         _tradable_position("us_previous_close", "us:ITA", freshness="previous_close"),
-    ])
+    ], quant_config={"mid_stop_pct": -10.0})
 
     by_id = {card["position_id"]: card for card in cards}
     assert by_id["cn_current"]["signal"] == "reduce"
@@ -393,7 +395,13 @@ def test_action_card_blocks_anomalous_technical_action_but_keeps_raw_result():
         "indicators": {"ma_20": 100.0, "macd": {"hist": -0.1}},
     })
 
-    card = _build_action_cards([position])[0]
+    # anomaly 拦截逻辑测试：显式传阶梯使 price/ma20=0.97 命中 0.5 档，
+    # 不依赖 engine.yaml 当前权威值（2026-08-22 起 ladder 首档边界为 0.99）
+    card = _build_action_cards([position], quant_config={
+        "trend_ma20_break_cutoff": 0.995,
+        "trend_break_ladder": [(0.995, 0.25), (0.98, 0.5), (0.95, 0.75), (0.85, 1.0)],
+        "trend_break_extra_deviation_pct": 0.0,
+    })[0]
 
     assert card["signal"] == "hold"
     assert card["ratio"] == 0.0
