@@ -347,13 +347,6 @@
     "pool": "rates"
   },
   {
-    "code": "NVDA",
-    "name": "英伟达",
-    "market": "us",
-    "category": "us_ai_chain",
-    "pool": "ai_chain"
-  },
-  {
     "code": "AMD",
     "name": "AMD",
     "market": "us",

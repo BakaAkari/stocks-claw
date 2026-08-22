@@ -162,6 +162,19 @@ execution_rules:
       quantity_step: 0.01
   redemption_rule_map: {}
 
+quant_action:
+  # 短线(swing)持仓的阈值覆盖表。资产文件中 horizon=swing 的持仓
+  # 在 review_position 时用此表覆盖 long 默认值。
+  # 短线哲学 = 来去都快：更快止损、更快锁利、不做左侧布局降级。
+  # 未配置时回退到 quant_action.py 内置默认（与下表相同）。
+  swing_overrides:
+    stop_loss_pct: -8.0            # long 默认 -12
+    mid_stop_pct: -6.0             # long 默认 -10
+    warning_loss_pct: -4.0         # long 默认 -8
+    profit_pullback_pct: -1.5      # long 默认 -2（更快锁利）
+    profit_pullback_min_pnl: 2.0   # long 默认 3（更低浮盈门槛）
+    left_state_degrade_enabled: false  # 短线不做左侧布局，趋势破就是破
+
 risk_state:
   critical_ttl_minutes: 360
   hedge_independent_evidence: 2

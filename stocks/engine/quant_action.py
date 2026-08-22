@@ -155,7 +155,9 @@ _DEFAULT_QUANT_CONFIG: dict = {
 
 # swing（短线）持仓的阈值覆盖：更快止损、更快锁利、不做左侧布局降级。
 # 短线仓位哲学 = 来去都快，趋势破就是破，不等深跌企稳。
-_SWING_OVERRIDES: dict = {
+# 这是兜底默认值；权威配置在 engine.yaml quant_action.swing_overrides，
+# 调阈值改 YAML 不改这里。config 中的 swing_overrides 键整体覆盖本表。
+_DEFAULT_SWING_OVERRIDES: dict = {
     "stop_loss_pct": -8.0,            # long: -12 → swing: -8
     "mid_stop_pct": -6.0,             # long: -10 → swing: -6
     "warning_loss_pct": -4.0,         # long: -8  → swing: -4
@@ -318,10 +320,18 @@ class QuantActionEngine:
         target_prices: list[float] = []
 
         # horizon 分层：swing 持仓用更敏感的止盈止损阈值，且不做左侧降级。
-        # long（默认）行为与历史完全一致。
+        # long（默认）行为与历史完全一致。覆盖表优先取 config 的
+        # swing_overrides（engine.yaml），缺省用内置默认。
         if horizon == "swing":
-            c = {**self._c, **_SWING_OVERRIDES}
-            facts.append("短线持仓：阈值收紧（止损-8%/中间-6%/锁利-1.5%），不做左侧降级")
+            overrides = self._c.get("swing_overrides")
+            if not isinstance(overrides, dict) or not overrides:
+                overrides = _DEFAULT_SWING_OVERRIDES
+            c = {**self._c, **overrides}
+            facts.append(
+                f"短线持仓：阈值收紧（止损{overrides.get('stop_loss_pct', -8)}%/"
+                f"中间{overrides.get('mid_stop_pct', -6)}%/"
+                f"锁利{overrides.get('profit_pullback_pct', -1.5)}%），不做左侧降级"
+            )
         else:
             c = self._c
         ma20 = self.indicators.get("ma_20")
