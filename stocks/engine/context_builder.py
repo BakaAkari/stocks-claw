@@ -864,6 +864,7 @@ class ContextBuilder:
         return {
             "position_id": position.position_id,
             "account_id": position.account_id,
+            "horizon": position.horizon,
             # 账户元数据（来自资产文件 accounts 段，权威来源）：供下游
             # 行动卡解析 institution_type / platform_display，避免回退到
             # 账户 ID 硬编码映射表。

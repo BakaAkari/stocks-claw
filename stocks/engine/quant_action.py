@@ -153,6 +153,17 @@ _DEFAULT_QUANT_CONFIG: dict = {
     "high_conviction_limit_pct": 15.0,
 }
 
+# swing（短线）持仓的阈值覆盖：更快止损、更快锁利、不做左侧布局降级。
+# 短线仓位哲学 = 来去都快，趋势破就是破，不等深跌企稳。
+_SWING_OVERRIDES: dict = {
+    "stop_loss_pct": -8.0,            # long: -12 → swing: -8
+    "mid_stop_pct": -6.0,             # long: -10 → swing: -6
+    "warning_loss_pct": -4.0,         # long: -8  → swing: -4
+    "profit_pullback_pct": -1.5,      # long: -2  → swing: -1.5（更快锁利）
+    "profit_pullback_min_pnl": 2.0,   # long: 3   → swing: 2（更低浮盈门槛）
+    "left_state_degrade_enabled": False,  # 短线不做左侧布局，趋势破就是破
+}
+
 
 # ---------------------------------------------------------------------------
 # 数据类
@@ -298,6 +309,7 @@ class QuantActionEngine:
         self, *, position_id: str, price: Optional[float], cost: Optional[float],
         pnl_pct: Optional[float], one_day_change_pct: Optional[float],
         current_weight_pct: Optional[float], quantity: Optional[float],
+        horizon: str = "long",
     ) -> QuantReview:
         """纯技术面 review — 不改 ratio 之外的任何上下文。"""
         facts: list[str] = []
@@ -305,7 +317,13 @@ class QuantActionEngine:
         stop_price = None
         target_prices: list[float] = []
 
-        c = self._c
+        # horizon 分层：swing 持仓用更敏感的止盈止损阈值，且不做左侧降级。
+        # long（默认）行为与历史完全一致。
+        if horizon == "swing":
+            c = {**self._c, **_SWING_OVERRIDES}
+            facts.append("短线持仓：阈值收紧（止损-8%/中间-6%/锁利-1.5%），不做左侧降级")
+        else:
+            c = self._c
         ma20 = self.indicators.get("ma_20")
         macd_hist = (self.indicators.get("macd") or {}).get("hist")
 

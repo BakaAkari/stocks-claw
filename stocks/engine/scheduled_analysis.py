@@ -2815,6 +2815,7 @@ def _build_action_cards(
             one_day_change_pct=item.get("one_day_change_pct"),
             current_weight_pct=item.get("portfolio_weight"),
             quantity=(item.get("holding") or {}).get("quantity") if item.get("holding") else None,
+            horizon=str(item.get("horizon") or "long"),
         )
 
         # ── 逐持仓 freshness（从 evidence 取，不再使用全局单一值）──

@@ -661,6 +661,9 @@ class Position:
     instrument: Optional[dict] = None
     holding: Optional[Holding] = None
     role: Optional[str] = None
+    # 持有周期：long（默认，趋势持有容忍回撤）/ swing（短线，快进快出敏感止盈止损）
+    # 缺省 None 按 long 处理，行为与历史一致。由决策层 quant_action 消费。
+    horizon: Optional[str] = None
     reported_performance: Optional[ReportedPerformance] = None
     data_completeness: dict = field(default_factory=dict)
     confirmed: bool = True
@@ -775,6 +778,7 @@ class Position:
             valuation_input=ValuationInput.from_dict(data.get("valuation_input", {})),
             liquidity=Liquidity.from_dict(data.get("liquidity")),
             role=data.get("role"),
+            horizon=data.get("horizon"),
             reported_performance=ReportedPerformance.from_dict(data.get("reported_performance")),
             confirmed=data.get("confirmed", True),
             notes=data.get("notes"),
