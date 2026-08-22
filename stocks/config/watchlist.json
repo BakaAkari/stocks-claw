@@ -70,5 +70,11 @@
     "name": "以太坊",
     "market": "crypto",
     "category": "crypto"
+  },
+  {
+    "code": "NVDA",
+    "name": "英伟达",
+    "market": "us",
+    "category": "tech"
   }
 ]
