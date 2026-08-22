@@ -32,6 +32,11 @@ def _load_default_params() -> dict:
     defaults = qa.get("defaults")
     if not isinstance(defaults, dict) or not defaults:
         raise RuntimeError("engine.yaml quant_action.defaults 缺失或为空")
+    # 与 quant_action._load_quant_config_defaults 同强度：缺核心键即炸
+    from stocks.engine.quant_action import _QUANT_REQUIRED_KEYS
+    missing = [k for k in _QUANT_REQUIRED_KEYS if k not in defaults]
+    if missing:
+        raise RuntimeError(f"engine.yaml quant_action.defaults 缺键: {missing}")
     d = {k: v for k, v in defaults.items() if k != "swing_overrides"}
     # 画像专属参数（引擎不消费，仅 computed_profile 持有）
     d.setdefault("left_batch_plan_ratios", [0.40, 0.35, 0.25])
