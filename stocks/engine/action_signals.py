@@ -94,7 +94,7 @@ _RANK_WEIGHT_PRICE_POS = _RANK_WEIGHTS["price_pos"]
 _RANK_WEIGHT_VOLUME = _RANK_WEIGHTS["volume"]
 
 _SIGNAL_ACTION_HINTS = {
-    "accumulate_candidate": "趋势与动能配合，可分批布局；回踩短均线附近优先于追高",
+    "accumulate_candidate": "趋势完好且回踩确认，可建仓/加仓；分批布局优先于一次性重仓",
     "left_bottom_candidate": "深跌超卖且跌势放缓，左侧轻仓试仓，跌破前低或 RSI 持续恶化则止损",
     "wait_for_pullback": "趋势完好但短线过热，等回踩确认再进，不追",
     "reduce_risk": "趋势与动能同步转弱，优先降低该标的暴露",
@@ -109,7 +109,7 @@ _SIGNAL_ACTION_HINTS = {
 # are displayed as sizing/stop conditions for human reference only.
 _RESEARCH_SIZING_HINTS = {
     "left_bottom_candidate": "轻仓试仓（建议占组合不超过1-3%）；止损：跌破触发前低或20日低点继续下移",
-    "accumulate_candidate": "回踩确认后分批布局（建议单批占组合不超过2-4%）；止损：跌破MA20且MACD柱转负",
+    "accumulate_candidate": "趋势回踩建仓机会（首仓建议占组合2-4%，确认企稳后可加至5-8%）；止损：跌破MA20且MACD柱转负，或跌破建仓日低点",
     "rotation_candidate": "仅在组合有对应缺口时轮入（建议占组合不超过1-3%）；止损：轮动排名掉出前3或趋势破MA20",
     "wait_for_pullback": "等回踩MA5/MA10附近观察，不追高；未触发不建仓",
     "reduce_risk": "优先降低暴露，减仓后观察是否止跌",
