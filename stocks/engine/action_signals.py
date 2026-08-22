@@ -164,8 +164,19 @@ def _research_sizing_hint(signal: str, risk_level: str, suspend: bool) -> str:
         # "不追高" are negations of an observe stance, not accumulation), so
         # they keep their full guidance instead of being flattened to the pause
         # text.
-        _POSITIVE_BUILD = ("布局", "试仓", "轮入", "分批", "轻仓")
-        if head and any(k in head for k in _POSITIVE_BUILD):
+        _POSITIVE_BUILD = ("布局", "试仓", "轮入", "分批", "轻仓", "建仓")
+        # "建仓"需排除否定语境（"不建仓"/"未建仓"是观望表述，非加仓指令）
+        _NEGATED_BUILD = ("不建仓", "未建仓")
+        def _has_positive_build(text: str) -> bool:
+            if not text:
+                return False
+            if any(k in text for k in _POSITIVE_BUILD if k != "建仓"):
+                return True
+            probe = text
+            for neg in _NEGATED_BUILD:
+                probe = probe.replace(neg, "")
+            return "建仓" in probe
+        if head and _has_positive_build(head):
             build = "暂停加仓，风险解除后再评估"
         else:
             build = head
