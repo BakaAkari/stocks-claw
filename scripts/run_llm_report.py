@@ -106,13 +106,17 @@ def _build_llm_prompt(artifact: dict) -> str:
     pd = artifact.get("portfolio_decision") or {}
     view = pd.get("user_view") or {}
 
+    cd = artifact.get("context_digest") or {}
+    data_view = {
+        "instruction_card": view.get("instruction_card"),
+        "assistant_brief": view.get("assistant_brief"),
+    }
+    if cd:
+        data_view["context_digest"] = cd
+
     return _load_prompt_template().format(
         agent_task_json=json.dumps(agent_task, ensure_ascii=False, indent=1),
-        user_view_json=json.dumps(
-            {"instruction_card": view.get("instruction_card"), "assistant_brief": view.get("assistant_brief")},
-            ensure_ascii=False,
-            indent=1,
-        ),
+        user_view_json=json.dumps(data_view, ensure_ascii=False, indent=1),
     )
 
 
