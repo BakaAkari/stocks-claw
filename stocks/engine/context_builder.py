@@ -687,12 +687,21 @@ class ContextBuilder:
             )
             items.append(item)
 
-        total_cny = sum(item.get("market_value_cny") or 0.0 for item in items)
+        # 2026-08-24: portfolio_weight 从全资产改为按账户计算。
+        # 原因：全资产口径下，余额宝/纳指/黄金等非交易资产稀释了 A 股持仓权重，
+        # 导致科创50(1.5% vs 3.7%)等标的的仓位被低估 2.5 倍，
+        # 影响 quant_action 的 weight_ok 加仓判断和 risk_to_stop 止损风险评估。
+        account_totals: dict[str, float] = {}
+        for item in items:
+            acc = item.get("account_id") or "unknown"
+            account_totals[acc] = account_totals.get(acc, 0.0) + (item.get("market_value_cny") or 0.0)
         for item in items:
             value_cny = item.get("market_value_cny")
+            acc = item.get("account_id") or "unknown"
+            acc_total = account_totals.get(acc, 0.0)
             item["portfolio_weight"] = (
-                round(value_cny / total_cny, 6)
-                if total_cny > 0 and value_cny is not None
+                round(value_cny / acc_total, 6)
+                if acc_total > 0 and value_cny is not None
                 else None
             )
         return items
