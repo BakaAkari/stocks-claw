@@ -930,8 +930,13 @@ class ScheduledAnalysisRunner:
 
         fred_cache_dir = repo_root / ".local" / "macro_cache"
         usage_dir = repo_root / ".local" / "usage"
+        # 2026-08-23: keywords 从 engine.yaml intelligence.harvest_keywords 读取，
+        # 不再用代码内 DEFAULT_KEYWORDS 硬编码。
+        intel_cfg = (self.engine._config.get("intelligence") or {}) if hasattr(self.engine, "_config") else {}
+        harvest_keywords = intel_cfg.get("harvest_keywords") or None
         harvester = IntelligenceHarvester(
             finnhub_client=finnhub_client,
+            keywords=harvest_keywords,
             max_items_per_source=10,
             fred_cache_dir=fred_cache_dir,
         )

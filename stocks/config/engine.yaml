@@ -366,6 +366,32 @@ logging:
   desensitize: true
 
 intelligence:
+  # ── 情报巡逻搜索关键词（2026-08-23 从 intelligence_harvester.py 硬编码提级）──
+  harvest_keywords:
+    # GNews API（前 4 个，100 req/day 限额内）:
+    - "Federal Reserve interest rate policy"
+    - "CPI inflation PPI economic data"
+    - "crude oil price supply OPEC"
+    - "gold price safe haven"
+    # Google RSS（不限量）:
+    - "VIX volatility stock market fear"
+    - "US Treasury yield bond market"
+    - "ECB BOJ central bank monetary policy"
+    - "US Dollar Index DXY currency forex"
+    - "Bitcoin BTC cryptocurrency"
+    - "China stock market economy stimulus"
+    - "tariffs trade war sanctions geopolitics"
+    - "copper industrial metals commodity"
+    - "NVIDIA AI semiconductor chip tech"
+    - "defense aerospace military spending"
+    - "credit spread high yield corporate bond"
+    - "stock market sell-off correction crash"
+    # ── 新增覆盖 ──
+    - "SEC crypto regulation ETF approval"
+    - "China CSRC PBOC State Council policy"
+    - "Iran Middle East oil supply disruption"
+    - "AI layoffs tech earnings guidance"
+    - "Japan yen carry trade BOJ intervention"
   # ── 符号→资产类别 / 已知符号表（2026-08-22 从 config_loader 内置提级，唯一权威）──
   symbol_to_asset:
     SPY: equity

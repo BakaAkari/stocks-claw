@@ -12,6 +12,7 @@
       "type": "rss",
       "url": "https://www.chinanews.com.cn/rss/finance.xml",
       "language": "zh",
+      "category": "cn_macro",
       "enabled": true
     },
     {
@@ -19,6 +20,7 @@
       "type": "rss",
       "url": "https://news.google.com/rss/search?q=%E8%B4%A2%E7%BB%8F%20OR%20A%E8%82%A1%20OR%20%E9%87%91%E8%9E%8D&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
       "language": "zh",
+      "category": "cn_macro",
       "enabled": true
     },
     {
@@ -26,13 +28,114 @@
       "type": "rss",
       "url": "https://finance.yahoo.com/news/rssindex",
       "language": "en",
+      "category": "us_macro",
       "enabled": true
+    },
+    {
+      "name": "Fed Press Releases",
+      "type": "rss",
+      "url": "https://www.federalreserve.gov/feeds/press_all.xml",
+      "language": "en",
+      "category": "central_bank",
+      "enabled": true,
+      "note": "美联储官方声明/演讲/议息，比媒体快30-60分钟"
+    },
+    {
+      "name": "证监会发布",
+      "type": "rss",
+      "url": "http://www.csrc.gov.cn/pub/newsite/zjhxwfb/xwfbh/index.xml",
+      "language": "zh",
+      "category": "cn_policy",
+      "enabled": true,
+      "note": "证监会官方发布会实录/政策原文"
+    },
+    {
+      "name": "EIA Today in Energy",
+      "type": "rss",
+      "url": "https://www.eia.gov/rss/todayinenergy.xml",
+      "language": "en",
+      "category": "commodity",
+      "enabled": true,
+      "note": "EIA 原油库存/产量/分析，油市基本面"
+    },
+    {
+      "name": "Oilprice.com",
+      "type": "rss",
+      "url": "https://oilprice.com/rss/main",
+      "language": "en",
+      "category": "commodity",
+      "enabled": true,
+      "note": "OPEC/油价/能源地缘"
+    },
+    {
+      "name": "Al Jazeera",
+      "type": "rss",
+      "url": "https://www.aljazeera.com/xml/rss/all.xml",
+      "language": "en",
+      "category": "geopolitics",
+      "enabled": true,
+      "note": "中东/地缘冲突，油价和避险情绪"
+    },
+    {
+      "name": "SCMP",
+      "type": "rss",
+      "url": "https://www.scmp.com/rss/91/feed",
+      "language": "en",
+      "category": "geopolitics",
+      "enabled": true,
+      "note": "南华早报，中国/亚太地缘与政策"
+    },
+    {
+      "name": "Google News Reuters宏观",
+      "type": "rss",
+      "url": "https://news.google.com/rss/search?q=site:reuters.com+economy+OR+fed+OR+oil+OR+treasury&hl=en-US&gl=US&ceid=US:en",
+      "language": "en",
+      "category": "us_macro",
+      "enabled": true,
+      "note": "Reuters 直连 403，用 Google News 定向替代"
+    },
+    {
+      "name": "Google News 英文宏观",
+      "type": "rss",
+      "url": "https://news.google.com/rss/search?q=federal+reserve+OR+ECB+OR+OPEC+OR+treasury+yield+OR+sanctions&hl=en-US&gl=US&ceid=US:en",
+      "language": "en",
+      "category": "us_macro",
+      "enabled": true,
+      "note": "央行/债券/制裁宏观面"
+    },
+    {
+      "name": "Google News 加密",
+      "type": "rss",
+      "url": "https://news.google.com/rss/search?q=bitcoin+OR+ethereum+OR+crypto+regulation+OR+SEC+crypto&hl=en-US&gl=US&ceid=US:en",
+      "language": "en",
+      "category": "crypto",
+      "enabled": true,
+      "note": "CoinDesk 直连失败，用 Google News 定向替代"
+    },
+    {
+      "name": "Google News 中国政策",
+      "type": "rss",
+      "url": "https://news.google.com/rss/search?q=%E8%AF%81%E7%9B%91%E4%BC%9A+OR+%E5%A4%AE%E8%A1%8C+OR+%E5%9B%BD%E5%8A%A1%E9%99%A2+%E6%94%BF%E7%AD%96+OR+%E8%B4%A2%E6%94%BF%E9%83%A8&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+      "language": "zh",
+      "category": "cn_policy",
+      "enabled": true,
+      "note": "证监会/央行/国务院/财政部政策面"
+    },
+    {
+      "name": "Google News 地缘冲突",
+      "type": "rss",
+      "url": "https://news.google.com/rss/search?q=iran+sanctions+OR+ukraine+war+OR+taiwan+strait+OR+middle+east+oil+OR+trade+war&hl=en-US&gl=US&ceid=US:en",
+      "language": "en",
+      "category": "geopolitics",
+      "enabled": true,
+      "note": "伊朗/俄乌/台海/中东/贸易战"
     },
     {
       "name": "36kr",
       "type": "rss",
       "url": "https://www.36kr.com/feed",
       "language": "zh",
+      "category": "tech",
       "enabled": false,
       "note": "科技创业媒体，仅作为可选补充源"
     }
