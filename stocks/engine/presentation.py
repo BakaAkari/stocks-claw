@@ -1212,6 +1212,39 @@ _project_outlook = project_outlook_for_display
 _project_outlook_delta = project_outlook_delta_for_display
 
 
+_EVENT_TYPE_LABELS = {
+    "central_bank": "央行决议",
+    "macro_release": "宏观数据发布",
+    "earnings": "财报",
+    "other": "其他",
+}
+
+
+def format_upcoming_events(upcoming_events: list[dict] | None) -> list[dict]:
+    """未来事件表 — 确定性投影(事件名/日期/倒计时/类别), 与 instruction_card
+    同级契约: 事件是否出现在报告由数据决定, 不取决于 LLM 是否碰巧提及。"""
+    out: list[dict] = []
+    for ev in (upcoming_events or [])[:8]:
+        if not isinstance(ev, dict):
+            continue
+        days = ev.get("days_until")
+        out.append({
+            "name": str(ev.get("name") or "未命名事件"),
+            "date": str(ev.get("date") or ""),
+            "days_until": days,
+            "countdown": (
+                "今天" if days == 0 else "明天" if days == 1
+                else f"{days}天后" if isinstance(days, int) else ""
+            ),
+            "event_type": str(ev.get("event_type") or "other"),
+            "event_type_label": _EVENT_TYPE_LABELS.get(
+                str(ev.get("event_type") or "other"), "其他"),
+            "market": str(ev.get("market") or ""),
+            "note": str(ev.get("note") or ""),
+        })
+    return out
+
+
 def build_user_view(
     portfolio_decision: dict,
     position_valuations: list[dict],
@@ -1226,6 +1259,7 @@ def build_user_view(
     structured_outlook: dict | None = None,
     outlook_delta: dict | None = None,
     window_delta: dict | None = None,
+    upcoming_events: list[dict] | None = None,
 ) -> dict:
     """Build the deterministic trade-card and assistant presentation contract."""
     decision = portfolio_decision or {}
@@ -1583,6 +1617,8 @@ def build_user_view(
         ),
         "data_notes": data_notes,
         "research": research,
+        # 未来事件表: 确定性投影, 报告契约固定携带(数据决定有无, 不靠 LLM 记得)
+        "upcoming_events": format_upcoming_events(upcoming_events),
         "outlook": _project_outlook(structured_outlook) if structured_outlook is not None else _no_value,
         "outlook_delta": _project_outlook_delta(outlook_delta) if outlook_delta is not None else _no_value,
     }

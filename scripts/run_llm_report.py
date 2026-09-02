@@ -176,7 +176,7 @@ def _project_context_digest(cd: dict) -> dict:
     # 其余内容键原样传递(clusters/signals 为 LLM 必需的核心叙事内容)。
     # cluster_id / cluster summary 里的 [region_tag] 是内部 token 命名空间
     # (macro_data_0001 / [us_iran] 均命中 _FORBIDDEN), 进入 prompt 前剥离。
-    for key in ("market_state_summary", "clusters", "signals", "intelligence_digest"):
+    for key in ("market_state_summary", "clusters", "signals", "intelligence_digest", "upcoming_events"):
         if key not in cd:
             continue
         val = cd[key]

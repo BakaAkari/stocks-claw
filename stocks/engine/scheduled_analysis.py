@@ -794,6 +794,7 @@ class ScheduledAnalysisRunner:
             primary_market=occurrence.session.primary_market,
             structured_outlook=structured_outlook_for_view,
             outlook_delta=outlook_delta_for_view,
+            upcoming_events=context_dict.get("upcoming_events") or [],
         )
 
         paths = self.store.save(run)
@@ -1006,6 +1007,20 @@ class ScheduledAnalysisRunner:
             tracker.record_batch(tracked)
         store.archive_and_purge(now=now)
 
+        # 未来事件日历: 与交易 session 同一数据源(EventCalendar),
+        # 情报巡逻声称监控 CPI/FOMC/NFP, 事件表必须确定性存在,
+        # 不能靠 LLM 从新闻碰巧捡到或凭空声称"72小时内无重大发布"。
+        upcoming_events: list = []
+        if getattr(self.engine, "event_calendar", None) is not None:
+            try:
+                upcoming_events, _calendar_quality = await self.engine.event_calendar.fetch(
+                    now=now,
+                    watchlist=[],
+                )
+                upcoming_events = [e.to_dict() if hasattr(e, "to_dict") else e for e in upcoming_events]
+            except Exception:
+                logger.exception("Event calendar fetch failed for intelligence run")
+
         run = build_intelligence_run(
             harvest_result.to_dict(),
             analysis_result.to_dict(),
@@ -1013,6 +1028,7 @@ class ScheduledAnalysisRunner:
             generated_at=now,
             config=self.config,
             engine_config=self.engine._config,
+            upcoming_events=upcoming_events,
         )
         paths = self.store.save(run)
         return {
@@ -1509,6 +1525,7 @@ def build_scheduled_run(
             structured_outlook=structured_outlook,
             outlook_delta=outlook_delta,
             window_delta=window_delta.to_dict() if hasattr(window_delta, "to_dict") else None,
+            upcoming_events=context.get("upcoming_events") or [],
         )
     notification = _notification(
         session=session, priority=priority, now=generated_at,
@@ -1656,22 +1673,6 @@ def build_mandatory_blocks(
             lines.append("- 暂停加仓: 是")
         if ra.get("cash_target_pct") is not None:
             lines.append(f"- 现金目标: {ra['cash_target_pct']*100:.0f}%")
-        # 72h 内重大事件警告
-        if upcoming_events:
-            now_utc = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
-            urgent = []
-            for ev in upcoming_events[:3]:
-                timestamp = ev.get("timestamp")
-                if timestamp:
-                    try:
-                        ev_time = __import__('datetime').datetime.fromisoformat(timestamp)
-                        hours_left = (ev_time - now_utc).total_seconds() / 3600
-                        if 0 < hours_left <= 72:
-                            urgent.append(f"{ev.get('title', '?')}（{hours_left:.0f}小时后）")
-                    except Exception:
-                        pass
-            if urgent:
-                lines.append(f"- 临近事件: {', '.join(urgent)} — 当前交易逻辑可能被单日逆转")
         blocks["risk_boundary"] = "\n".join(lines)
 
     # ── 约束偏离段 ──
@@ -1702,6 +1703,7 @@ def build_intelligence_run(
     generated_at: datetime,
     config: dict,
     engine_config: Optional[dict] = None,
+    upcoming_events: Optional[list] = None,
 ) -> dict:
     """Build a ScheduledAnalysisRun artifact for global_intelligence_watch."""
     session = occurrence.session
@@ -1839,6 +1841,8 @@ def build_intelligence_run(
             "signals": signals[:10],
             "macro": macro,
             "quotes": quotes,
+            # 未来事件表: 与交易 session 同源的 EventCalendar 输出
+            "upcoming_events": upcoming_events or [],
             # agent_task 引用 intelligence_digest.top_clusters / top_signals
             "intelligence_digest": {
                 "top_clusters": clusters[:8],

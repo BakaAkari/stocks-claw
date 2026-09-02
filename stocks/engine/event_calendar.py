@@ -486,16 +486,29 @@ class AkShareEarningsProvider:
 
 
 class EventCalendar:
-    """组合事件日历 — 窗口过滤、days_until 计算、watchlist 敏感标的匹配。"""
+    """组合事件日历 — 窗口过滤、days_until 计算、watchlist 敏感标的匹配。
+
+    分窗 lookahead: 央行决议/宏观数据发布是长预期管理事件(FOMC 点阵图
+    会议市场提前数周定价), 需要长窗; 财报只影响个股短期波动, 短窗即可。
+    窗口长度来自 engine.yaml calendar.*_lookahead_days, 不硬编码业务值。
+    """
 
     def __init__(
         self,
         providers: list[EventProvider],
         *,
         lookahead_days: int = 14,
+        macro_lookahead_days: Optional[int] = None,
+        earnings_lookahead_days: Optional[int] = None,
     ):
         self._providers = providers
         self.lookahead_days = max(1, int(lookahead_days))
+        self.macro_lookahead_days = (
+            max(1, int(macro_lookahead_days)) if macro_lookahead_days else self.lookahead_days
+        )
+        self.earnings_lookahead_days = (
+            max(1, int(earnings_lookahead_days)) if earnings_lookahead_days else self.lookahead_days
+        )
 
     async def fetch(
         self,
@@ -528,9 +541,12 @@ class EventCalendar:
         current_utc = current.astimezone(timezone.utc)
         today = current.date()
         utc_today = current_utc.date()
-        # 查询窗口向 UTC 日期前扩一天，避免本地已跨日但未来 UTC 时点仍落在前一日。
+        # 查询窗口取分窗最大值(向 UTC 日期前扩一天，避免本地已跨日但未来
+        # UTC 时点仍落在前一日); 过滤在下方按事件类型分别执行。
         start = min(today, utc_today) - timedelta(days=1)
-        end = max(today, utc_today) + timedelta(days=self.lookahead_days)
+        end = max(today, utc_today) + timedelta(
+            days=max(self.macro_lookahead_days, self.earnings_lookahead_days)
+        )
 
         events: list[UpcomingEvent] = []
         errors: dict[str, str] = {}
@@ -556,6 +572,15 @@ class EventCalendar:
         expired_count = 0
         for event in events:
             event_date = _parse_date(event.date)
+            # 分窗过滤: 财报用短窗, 央行/宏观发布用长窗
+            if event_date is not None:
+                per_type_window = (
+                    self.earnings_lookahead_days
+                    if event.event_type == "earnings"
+                    else self.macro_lookahead_days
+                )
+                if (event_date - today).days > per_type_window:
+                    continue
             scheduled_at = _parse_scheduled_at(event)
             if scheduled_at is not None:
                 if scheduled_at <= current_utc:

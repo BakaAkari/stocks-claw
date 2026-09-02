@@ -252,3 +252,18 @@ def test_build_llm_prompt_strips_source_refs():
     assert "macro:us_10y_yield" not in prompt
     # 正文内容保留
     assert "mixed" in prompt
+
+
+def test_projection_passthrough_keeps_upcoming_events():
+    """事件表必须穿透投影层进入 prompt(用户可读中文, 无内部 token)。"""
+    cd = {
+        "upcoming_events": [
+            {"date": "2026-09-16", "name": "FOMC 利率决议（9/15-16 会议，含点阵图）",
+             "event_type": "central_bank", "days_until": 14, "market": "us",
+             "note": "含经济预测摘要与点阵图"},
+        ],
+    }
+    proj = _rlr._project_context_digest(cd)
+    blob = _json.dumps(proj, ensure_ascii=False)
+    assert "FOMC" in blob
+    assert not _rlr._FORBIDDEN.search(blob)

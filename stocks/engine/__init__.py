@@ -309,6 +309,8 @@ class StocksEngine:
                 self.event_calendar = EventCalendar(
                     calendar_providers,
                     lookahead_days=calendar_cfg.get("lookahead_days", 14),
+                    macro_lookahead_days=calendar_cfg.get("macro_lookahead_days"),
+                    earnings_lookahead_days=calendar_cfg.get("earnings_lookahead_days"),
                 )
                 self._event_watcher = EconomicEventWatcher(
                     self.event_calendar,

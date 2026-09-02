@@ -71,6 +71,11 @@ calendar:
   # 启用官方宏观日程与 watchlist 美股财报日历
   enabled: true
   lookahead_days: 14
+  # 分窗 lookahead: 央行决议/宏观数据发布是长预期管理事件
+  # (FOMC 点阵图会议市场提前数周定价), 需要长窗才能提前出现在报告;
+  # 财报只影响个股短期波动, 短窗即可。不设则回退 lookahead_days。
+  macro_lookahead_days: 45
+  earnings_lookahead_days: 14
   earnings:
     enabled: true
 
