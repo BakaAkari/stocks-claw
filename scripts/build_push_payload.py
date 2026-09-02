@@ -24,7 +24,10 @@ _SESSION_LABELS = {
 _PRIMARY = frozenset({"cn_post_open", "cn_after_close", "us_post_open", "us_after_close", "global_intelligence_watch"})
 _WATCH = frozenset()
 _FORBIDDEN = re.compile(
-    r"\b(?:manual_review|approved_actions|suppressed_actions|unresolved_conflicts|position_id|decision_id|research_only|review_required)\b|(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
+    # 词边界必须双侧: 缺左侧 \b 会把 data_quality/data_reference 等正常英文
+    # 单词的子串(a_quality/a_reference)误判为账户代号——data_reference 是
+    # agent_task 给 LLM 的合法指令文本, 不是内部 token 泄漏。
+    r"\b(?:manual_review|approved_actions|suppressed_actions|unresolved_conflicts|position_id|decision_id|research_only|review_required)\b|\b(?:a|us|ccb|alipay)_[A-Za-z0-9_]+"
 )
 _DIRECTION_LABELS = {
     "supportive": "\u504f\u6709\u5229",

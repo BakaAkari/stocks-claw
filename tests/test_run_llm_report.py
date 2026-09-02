@@ -181,3 +181,52 @@ def test_main_no_llm_renders_deterministic(monkeypatch, tmp_path, capsys):
     assert "本窗口变化" in out.out
     payload = tmp_path / "payload" / "cn_after_close.json"
     assert payload.exists()
+
+
+def test_project_context_digest_strips_internal_tokens():
+    """投影层边界: prompt 里不得出现任何 _FORBIDDEN 内部 token。
+
+    防回归: 2026-09-02 daily_intel 锁死——LLM 照抄 context_digest 里的
+    us_2y_yield / cluster_id(macro_data_0001) / [us_iran] 触发门禁,
+    同 prompt 重试必然同败。
+    """
+    cd = {
+        "macro": {
+            "vix": 14.92, "us_10y_yield": 4.75, "us_2y_yield": None,
+            "dxy": 118.7, "usd_cny": 6.72, "crude_oil": 83.9, "gold": 4368.0,
+            "official_stats": {"cpi_yoy": 3.54, "us_unemployment": 4.1, "fed_funds_rate": 3.63},
+            "field_sources": {"official_stats.cpi_yoy": {"as_of": "2026-07-01"}},
+            "errors": {},
+        },
+        "quotes": {"SPY": {"instrument": {"name": "SPDR S&P 500 ETF"}, "price": 761.78, "pct_change": -0.69}},
+        "market_impact": {"equity": {"direction": "negative"}, "china_assets": {"direction": "neutral"}},
+        "clusters": [{"cluster_id": "geopolitics_0002", "theme": "geopolitics",
+                      "summary": "[us_iran] 美伊爆发新冲突，油价跳涨4%"}],
+        "intelligence_digest": {
+            "top_clusters": [{"cluster_id": "macro_data_0001", "summary": "[bond_yields] 全球债券收益率飙升"}],
+            "top_signals": [{"symbol": "QQQ", "source_article_ids": ["a_0001", "us_0002"], "rationale": "利率上行"}],
+        },
+    }
+    proj = _rlr._project_context_digest(cd)
+    blob = _json.dumps(proj, ensure_ascii=False)
+    assert not _rlr._FORBIDDEN.search(blob), f"投影后仍含内部 token: {_rlr._FORBIDDEN.findall(blob)}"
+    # 业务内容不丢: 中文标签映射 + null 死字段消失
+    assert "美债10年期收益率(%)" in blob
+    assert "恐慌指数" in blob
+    assert "us_2y_yield" not in blob
+    assert "中国资产" in blob
+    # cluster_id / [region_tag] / source_article_ids 已剥离
+    assert "cluster_id" not in blob
+    assert "[us_iran]" not in blob and "[bond_yields]" not in blob
+    assert "source_article_ids" not in blob
+    # 叙事正文保留
+    assert "美伊爆发新冲突" in blob
+    assert "全球债券收益率飙升" in blob
+
+
+def test_forbidden_regex_keeps_word_boundary():
+    """_FORBIDDEN 必须双侧词边界: 拦独立账户代号, 放行 data_quality 类正常单词。"""
+    for tok in ("us_2y_yield", "a_0001", "us_iran", "manual_review", "position_id"):
+        assert _rlr._FORBIDDEN.search(tok), f"应拦截: {tok}"
+    for word in ("data_quality.macro", "data_reference", "不得忽略 data_quality"):
+        assert not _rlr._FORBIDDEN.search(word), f"不应误伤: {word}"

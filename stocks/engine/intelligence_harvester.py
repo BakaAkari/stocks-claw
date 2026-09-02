@@ -393,7 +393,6 @@ class IntelligenceHarvester:
         return {
             "vix": snapshot.vix,
             "us_10y_yield": snapshot.us_10y_yield,
-            "us_2y_yield": None,  # FRED free CSV does not include 2y; design accepts None
             "dxy": snapshot.dxy,
             "usd_cny": snapshot.usd_cny,
             "crude_oil": snapshot.crude_oil,

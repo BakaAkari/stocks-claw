@@ -100,6 +100,118 @@ def _load_prompt_template() -> str:
     return tpl.read_text(encoding="utf-8")
 
 
+# 内部 schema → 用户可读投影。结构性边界: snake_case 字段名/null 死字段/
+# field_sources 元数据不进入 prompt——LLM 只应看到面向用户的表述, 避免照抄
+# 内部 token(如 us_2y_yield)触发 _FORBIDDEN 门禁(该正则同时覆盖账户代号与
+# 宏观字段命名空间, 一旦触发重试同 prompt 必锁死)。
+_MACRO_LABELS = {
+    "vix": "恐慌指数",
+    "us_10y_yield": "美债10年期收益率(%)",
+    "dxy": "美元指数",
+    "usd_cny": "美元/人民币汇率",
+    "crude_oil": "原油价格(美元/桶)",
+    "gold": "黄金价格(美元/盎司)",
+}
+_OFFICIAL_STATS_LABELS = {
+    "cpi_yoy": "美国CPI同比(%)",
+    "us_unemployment": "美国失业率(%)",
+    "fed_funds_rate": "联邦基金利率(%)",
+}
+
+
+def _project_context_digest(cd: dict) -> dict:
+    """把内部 context_digest 投影为用户可读的中文标签视图, 再喂给 LLM。"""
+    if not isinstance(cd, dict):
+        return cd
+    out: dict = {}
+    macro = cd.get("macro") or {}
+    if isinstance(macro, dict) and macro:
+        m: dict = {}
+        for key, label in _MACRO_LABELS.items():
+            val = macro.get(key)
+            if val is not None:
+                m[label] = val
+        stats = macro.get("official_stats") or {}
+        fs = macro.get("field_sources") or {}
+        official: dict = {}
+        for key, label in _OFFICIAL_STATS_LABELS.items():
+            val = stats.get(key)
+            if val is None:
+                continue
+            as_of = (fs.get(f"official_stats.{key}") or {}).get("as_of")
+            official[label] = f"{val}(截至{as_of})" if as_of else val
+        if official:
+            m["官方统计"] = official
+        if m:
+            out["宏观数据"] = m
+    # market_impact 的键是资产类别代号(equity/bond/china_assets/...), 同属
+    # _FORBIDDEN 命名空间(a_/us_ 前缀正则), 映射为中文键后传给 LLM。
+    impact = cd.get("market_impact") or {}
+    if isinstance(impact, dict) and impact:
+        label_map = {
+            "equity": "股票", "bond": "债券", "gold": "黄金", "oil": "原油",
+            "usd": "美元", "china_assets": "中国资产", "crypto": "加密货币",
+        }
+        projected_impact = {label_map.get(k, k): v for k, v in impact.items()}
+        out["市场影响"] = projected_impact
+    quotes = cd.get("quotes") or {}
+    if isinstance(quotes, dict) and quotes:
+        q: dict = {}
+        for symbol, quote in quotes.items():
+            if not isinstance(quote, dict):
+                continue
+            price = quote.get("price")
+            pct = quote.get("pct_change")
+            if price is None and pct is None:
+                continue
+            name = ((quote.get("instrument") or {}).get("name")) or symbol
+            entry: dict = {}
+            if price is not None:
+                entry["最新价"] = price
+            if pct is not None:
+                entry["涨跌幅(%)"] = pct
+            q[f"{symbol}({name})"] = entry
+        if q:
+            out["跨市场行情"] = q
+    # 其余内容键原样传递(clusters/signals 为 LLM 必需的核心叙事内容)。
+    # cluster_id / cluster summary 里的 [region_tag] 是内部 token 命名空间
+    # (macro_data_0001 / [us_iran] 均命中 _FORBIDDEN), 进入 prompt 前剥离。
+    for key in ("market_state_summary", "clusters", "signals", "intelligence_digest"):
+        if key not in cd:
+            continue
+        val = cd[key]
+        if key == "clusters" and isinstance(val, list):
+            val = [_project_cluster(c) for c in val if isinstance(c, dict)]
+        elif key == "intelligence_digest" and isinstance(val, dict):
+            # top_clusters 与 clusters 同形, 同样剥 cluster_id 和 [region_tag];
+            # top_signals 的 source_article_ids 是内部溯源 ID, 一并剥离。
+            val = dict(val)
+            if isinstance(val.get("top_clusters"), list):
+                val["top_clusters"] = [
+                    _project_cluster(c) for c in val["top_clusters"] if isinstance(c, dict)
+                ]
+            if isinstance(val.get("top_signals"), list):
+                val["top_signals"] = [
+                    {k: v for k, v in s.items() if k != "source_article_ids"}
+                    for s in val["top_signals"] if isinstance(s, dict)
+                ]
+        out[key] = val
+    return out
+
+
+_CLUSTER_ID_TAG_RE = re.compile(r"\[[a-z]{2,6}_[A-Za-z0-9_]+\]")
+
+
+def _project_cluster(cluster: dict) -> dict:
+    """剥掉 cluster 的内部 token: cluster_id 换成序号无关的 theme 键,
+    summary 里的 [us_iran] 类区域标签直接删除(正文已含中文表述)。"""
+    out = {k: v for k, v in cluster.items() if k != "cluster_id"}
+    summary = out.get("summary")
+    if isinstance(summary, str):
+        out["summary"] = _CLUSTER_ID_TAG_RE.sub("", summary).strip()
+    return out
+
+
 def _build_llm_prompt(artifact: dict) -> str:
     """把 artifact 里的 agent_task(指令) + user_view(数据) 填入模板。"""
     agent_task = artifact.get("agent_task") or {}
@@ -112,7 +224,7 @@ def _build_llm_prompt(artifact: dict) -> str:
         "assistant_brief": view.get("assistant_brief"),
     }
     if cd:
-        data_view["context_digest"] = cd
+        data_view["context_digest"] = _project_context_digest(cd)
 
     return _load_prompt_template().format(
         agent_task_json=json.dumps(agent_task, ensure_ascii=False, indent=1),
