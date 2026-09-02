@@ -212,6 +212,20 @@ def _project_cluster(cluster: dict) -> dict:
     return out
 
 
+def _strip_source_refs(node):
+    """递归剥掉 source_refs 溯源引用(如 macro:us_10y_yield)。
+
+    溯源 ID 对 LLM 写作无意义, 但含内部 token(macro:us_10y_yield 命中
+    _FORBIDDEN 的 us_ 前缀正则), LLM 照抄进正文即触发门禁锁死。
+    不修改原对象, 返回清理后的副本。
+    """
+    if isinstance(node, dict):
+        return {k: _strip_source_refs(v) for k, v in node.items() if k != "source_refs"}
+    if isinstance(node, list):
+        return [_strip_source_refs(v) for v in node]
+    return node
+
+
 def _build_llm_prompt(artifact: dict) -> str:
     """把 artifact 里的 agent_task(指令) + user_view(数据) 填入模板。"""
     agent_task = artifact.get("agent_task") or {}
@@ -220,8 +234,8 @@ def _build_llm_prompt(artifact: dict) -> str:
 
     cd = artifact.get("context_digest") or {}
     data_view = {
-        "instruction_card": view.get("instruction_card"),
-        "assistant_brief": view.get("assistant_brief"),
+        "instruction_card": _strip_source_refs(view.get("instruction_card")),
+        "assistant_brief": _strip_source_refs(view.get("assistant_brief")),
     }
     if cd:
         data_view["context_digest"] = _project_context_digest(cd)

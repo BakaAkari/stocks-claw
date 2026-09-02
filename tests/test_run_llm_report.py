@@ -230,3 +230,25 @@ def test_forbidden_regex_keeps_word_boundary():
         assert _rlr._FORBIDDEN.search(tok), f"应拦截: {tok}"
     for word in ("data_quality.macro", "data_reference", "不得忽略 data_quality"):
         assert not _rlr._FORBIDDEN.search(word), f"不应误伤: {word}"
+
+
+def test_build_llm_prompt_strips_source_refs():
+    """source_refs 溯源引用(macro:us_10y_yield)不得进入 prompt。
+
+    防回归: user_view.assistant_brief.outlook.source_refs 含
+    macro:us_10y_yield, 命中 _FORBIDDEN 的 us_ 前缀正则, LLM 照抄即锁死。
+    """
+    artifact = _artifact()
+    brief = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+    brief["outlook"] = {
+        "conclusion": "mixed",
+        "source_refs": [
+            {"source": "macro:us_10y_yield", "id": "macro:us_10y_yield"},
+            {"source": "intel:top_clusters", "id": "intel:top_clusters"},
+        ],
+    }
+    prompt = _rlr._build_llm_prompt(artifact)
+    assert "source_refs" not in prompt
+    assert "macro:us_10y_yield" not in prompt
+    # 正文内容保留
+    assert "mixed" in prompt
