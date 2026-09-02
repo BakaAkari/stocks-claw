@@ -988,10 +988,18 @@ class ScheduledAnalysisRunner:
             for sig in analysis_result.signals:
                 price = None
                 quotes_dict = harvest_result.quotes or {}
-                if sig.symbol in quotes_dict:
-                    q = quotes_dict[sig.symbol]
-                    if isinstance(q, dict):
+                # 信号 symbol 带市场前缀(us:QQQ / a:518880), quotes 字典键是裸 code
+                # (QQQ / 518880)——P0-5 修了结算侧 _split_symbol, 生成侧 entry 记录
+                # 漏改, 导致所有股票信号 generation_price=None, 结算全部
+                # missing_entry_price 无效(近期 daily ~50 条, 有效率仅 ~40%)。
+                lookup_keys = [sig.symbol]
+                if ":" in sig.symbol:
+                    lookup_keys.append(sig.symbol.split(":", 1)[1])
+                for key in lookup_keys:
+                    q = quotes_dict.get(key)
+                    if isinstance(q, dict) and q.get("price") is not None:
                         price = q.get("price")
+                        break
                 tracked.append(TrackedSignal(
                     signal_id=f"{now.strftime('%Y%m%dT%H%M%S')}_{sig.symbol}_{sig.direction}",
                     generated_at=now,
