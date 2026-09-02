@@ -396,22 +396,9 @@ class IntelligenceAnalyzer:
                     )
                 )
 
-        # Bitcoin
-        btc_quote = quotes.get("BTCUSDT", {})
-        btc_change = btc_quote.get("pct_change") if isinstance(btc_quote, dict) else None
-        if btc_change is not None and abs(btc_change) > 3.0:
-            direction = "buy" if btc_change > 0 else "sell"
-            signals.append(
-                self._signal(
-                    "BTCUSDT",
-                    "Bitcoin",
-                    direction,
-                    f"Bitcoin moving {btc_change:+.2f}%",
-                    "Price reverses the move intraday",
-                    "Crypto is volatile and can gap against macro moves",
-                    urgency="medium",
-                )
-            )
+        # Bitcoin 动量规则已移除(2026-09-02): "跌>3%→sell" 在 8 月上升趋势中
+        # 持续逆势, 结算 149 样本 0% 胜率(去重后 14 独立样本仍 0%)。
+        # 跨日多样本支撑的唯一确定性失败源, 裁剪。
 
         # Theme-driven watchlist signals
         for cluster in clusters:

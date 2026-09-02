@@ -74,20 +74,26 @@ class SignalTracker:
         self.signals_file = self.dir / "signals.jsonl"
         self.settlements_file = self.dir / "settlements.jsonl"
 
-    # P2-5 fix: 语义去重窗口。同一标的同一方向信号在窗口内仅记一次,避免每小时生成
-    # 导致 GLD/symbol buy 同一持久状态反复刷屏(一个月 100+ 条),使 24h 结算失真。
-    # 不同方向(如 buy -> reduce)仍会保留,不误删合法信号翻转。
-    DEDUP_WINDOW_SECONDS = 6 * 3600
+    # P2-5 fix(2026-09-02 强化): 语义去重——同一标的同一方向的信号在整个持仓期
+    # 只记一次。此前 6h 窗口只能拦住日内刷屏, 跨日/跨周重复触发的同一方向信号
+    # 仍是同一市场判断的 N 次自我复制(8-20 单日 21 条 512400 buy), 统计样本
+    # 虚假膨胀, 分层胜率被污染。方向翻转(buy->sell)才是新的独立判断, 重新记录。
+    # DEDUP_WINDOW_SECONDS 保留仅为向后兼容, 语义已被方向存续去重取代。
     # 精度修复: 最小价格波动阈值。A股 ETF 日波动常 <1%, <0.3% 的"方向"判定接近噪声,
     # 标记为 below_min_change, 不计入胜率样本, 避免噪声污染自评精度。
     MIN_PRICE_CHANGE = 0.003
 
     def _recent_keys(self) -> set[tuple[str, str]]:
-        """Return (symbol, direction) seen within the dedup window."""
+        """Return (symbol, direction) whose latest recorded direction is unchanged.
+
+        方向存续去重: 取每个 symbol 最近一条记录的方向; 新信号方向与之相同
+        则视为同一判断的延续(不重复记录), 方向翻转才构成新信号。
+        """
         recent: set[tuple[str, str]] = set()
         if not self.signals_file.exists():
             return recent
         try:
+            latest_by_symbol: dict[str, tuple[datetime, str]] = {}
             with open(self.signals_file, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -102,8 +108,13 @@ class SignalTracker:
                         dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
                     except (ValueError, TypeError):
                         continue
-                    if (datetime.now(timezone.utc) - dt).total_seconds() <= self.DEDUP_WINDOW_SECONDS:
-                        recent.add((str(d.get("symbol") or ""), str(d.get("direction") or "")))
+                    sym = str(d.get("symbol") or "")
+                    dirn = str(d.get("direction") or "")
+                    prev = latest_by_symbol.get(sym)
+                    if prev is None or dt >= prev[0]:
+                        latest_by_symbol[sym] = (dt, dirn)
+            for sym, (_dt, dirn) in latest_by_symbol.items():
+                recent.add((sym, dirn))
         except OSError:
             pass
         return recent
