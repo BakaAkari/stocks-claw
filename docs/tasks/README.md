@@ -21,8 +21,8 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-**EVAL-01 信号评价基础设施重构（IN PROGRESS：E0 已验收，E1 未开始）**（`docs/tasks/TASK-EVAL-01-signal-evaluation-foundation.md`）。
-已封存旧账本、暂停9个相关任务、隔离生产旧胜率反馈，完成盘点及质量报告；全量测试1456 passed / 7 skipped。旧的 C1、情报裁决器、左侧交易辅助改造属于历史工作，当前运行状态以 `STATUS.md` 页首为准。
+**EVAL-01 信号评价基础设施重构（IN PROGRESS：E0、E1、E2 已验收，E3 未开始）**（`docs/tasks/TASK-EVAL-01-signal-evaluation-foundation.md`）。
+E0 完成停机/封存/盘点；E1 完成生成侧标的身份与价格 lineage；E2 完成 SQLite 唯一评价任务、租约、单次结果和进程恢复。当前全量测试 1486 passed / 7 skipped；旧结算脚本尚未迁移。下一步 E3 为目标时点观测与交易日历，系统继续暂停。
 
 **当前硬边界**：冻结现有胜率的策略反馈用途；不把旧 `settlements.jsonl` 当作策略真值；先建立唯一评价契约、幂等账本、目标时间与价格 lineage，再进入代码实施。
 详见 `docs/analysis/signal-evaluation-architecture-review-2026-10-15.md`。

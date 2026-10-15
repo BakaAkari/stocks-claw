@@ -1,20 +1,30 @@
 # STATUS.md
 
-## 当前状态：EVAL-01 / E0 已验收，E1 未开始
+## 当前状态：EVAL-01 / E0、E1、E2 已完成，E3 未开始
 
 交易助手维持维护停机：9 个相关 Hermes cron 已暂停，不恢复生成、结算或推送。
-E0 已完成旧账本封存、生产旧胜率反馈隔离、调用面盘点和质量报告。
-`ContextBuilder._build_rule_scorecard` 不再读取旧 tracker，返回 `disabled_legacy_ledger`。
-这不是新评价系统上线；策略参数未改，原始账本未清洗，旧胜率不得用于策略判断。
 
-验收：生产模块旧反馈读取抛错探针通过；引擎测试 41 passed；全量 1456 passed / 7 skipped / 0 failed。
-三项新闻源断言失败已在 E0 前模块基线复现，根因为测试依赖实际 RSS 配置；已通过独立测试源隔离修复，未修改生产新闻配置。
+### 已完成
 
-证据目录：`/opt/data/workspace/stocks-claw-e0/20261015T114321/`。
-包含 manifest、任务暂停前配置/ID、账本快照、代码盘点、质量报告、原文件、测试日志。
-封存只读副本，不对原件施加只读权限；暂停自动任务不阻止手工脚本调用。
-已有用户修改保留；未 Commit/Push。NAS 代码差异仍需后续回流正式源码。
-下一阶段为 E1 canonical identity / entry snapshot，尚未实施。
+- **E0 冻结与盘点**：旧账本封存、生产旧胜率反馈隔离、signal producer / settlement / report consumer 盘点完成。旧 tracker 不再注入生产 scorecard，返回 `disabled_legacy_ledger`。
+- **E1 生成侧数据可靠性**：两条信号生成路径统一保存 `market:code`、entry price、source、as_of、stale 和不可评价原因；旧记录只读兼容，不补造历史 lineage。真实 A 股、 美股、加密行情入口均完成独立验证；测试写入污染已隔离并恢复原账本。
+- **E2 唯一评价任务基础**：新增 SQLite `EvaluationLedger` / `evaluation_runner`，以 `(signal_id, policy_id, target_at)` 唯一约束实现幂等 schedule、租约 claim、单次 finish、失败 release 和进程中断恢复。尚未接管旧结算脚本。
+
+### 验收证据
+
+- E0 证据：`/opt/data/workspace/stocks-claw-e0/20261015T114321/`
+- E1 证据：`docs/tasks/EVAL-01-E1-ACCEPTANCE.md`、`/opt/data/workspace/stocks-claw-e1-remediation/`
+- E2 证据：`docs/tasks/EVAL-01-E2-ACCEPTANCE.md`
+- E2 提交：`38892ae`，已推送并回读确认远端 `master` 一致。
+- 当前生产全量测试：**1486 passed / 7 skipped / 0 failed**。
+
+### 当前边界
+
+E2 只完成唯一任务和可靠写入基础，不代表旧 `scripts/signal_settlement.py` 已迁移；该脚本仍按 cron 当前价格结算，不能恢复使用。历史 JSONL 未迁移、未补价、未重算，旧胜率仍不得用于策略反馈。
+
+**下一步：E3 目标时点观测与交易日历。** 先定义目标窗口、observed_at、价格来源和 unavailable/expired 语义，再接入 E2；不先恢复旧结算脚本。
+
+已有用户修改保留；未包含在本轮提交：`scripts/run_llm_report.py`、`stocks/config/engine.yaml` 及其备份文件。系统继续停机。
 
 ## 历史状态材料（以下不代表当前运行状态）
 
