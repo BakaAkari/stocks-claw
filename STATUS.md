@@ -1,6 +1,8 @@
 # STATUS.md
 
-## 当前状态：EVAL-01 / E0、E1、E2 已完成，E3 未开始
+## 当前状态：EVAL-01 / E3 开发完成，E4 未开始
+
+E3：交易所日历、自然小时/交易会话窗口、历史目标观测和手动CLI已接通E2账本。三市场真实价格烟测首次落盘3条，重复运行0新增。全量1502 passed / 7 skipped。验收及限制见 `docs/tasks/EVAL-01-E3-ACCEPTANCE.md`。长期99%观测覆盖尚无运行证据；不等于系统可以恢复或策略已经可信。
 
 交易助手维持维护停机：9 个相关 Hermes cron 已暂停，不恢复生成、结算或推送。
 
@@ -16,13 +18,13 @@
 - E1 证据：`docs/tasks/EVAL-01-E1-ACCEPTANCE.md`、`/opt/data/workspace/stocks-claw-e1-remediation/`
 - E2 证据：`docs/tasks/EVAL-01-E2-ACCEPTANCE.md`
 - E2 提交：`38892ae`，已推送并回读确认远端 `master` 一致。
-- 当前生产全量测试：**1486 passed / 7 skipped / 0 failed**。
+- 当前生产全量测试：**1502 passed / 7 skipped / 0 failed**。
 
 ### 当前边界
 
 E2 只完成唯一任务和可靠写入基础，不代表旧 `scripts/signal_settlement.py` 已迁移；该脚本仍按 cron 当前价格结算，不能恢复使用。历史 JSONL 未迁移、未补价、未重算，旧胜率仍不得用于策略反馈。
 
-**下一步：E3 目标时点观测与交易日历。** 先定义目标窗口、observed_at、价格来源和 unavailable/expired 语义，再接入 E2；不先恢复旧结算脚本。
+**下一步：E4 Result/Metrics 重建。** E3窗口须显式配置；股票自然时间窗口无分钟历史源时返回unavailable，不偷换成日收盘价。
 
 已有用户修改保留；未包含在本轮提交：`scripts/run_llm_report.py`、`stocks/config/engine.yaml` 及其备份文件。系统继续停机。
 
