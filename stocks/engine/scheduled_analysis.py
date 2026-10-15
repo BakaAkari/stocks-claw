@@ -986,20 +986,9 @@ class ScheduledAnalysisRunner:
             macro_ctx = harvest_result.macro or {}
             tracked = []
             for sig in analysis_result.signals:
-                price = None
-                quotes_dict = harvest_result.quotes or {}
-                # 信号 symbol 带市场前缀(us:QQQ / a:518880), quotes 字典键是裸 code
-                # (QQQ / 518880)——P0-5 修了结算侧 _split_symbol, 生成侧 entry 记录
-                # 漏改, 导致所有股票信号 generation_price=None, 结算全部
-                # missing_entry_price 无效(近期 daily ~50 条, 有效率仅 ~40%)。
-                lookup_keys = [sig.symbol]
-                if ":" in sig.symbol:
-                    lookup_keys.append(sig.symbol.split(":", 1)[1])
-                for key in lookup_keys:
-                    q = quotes_dict.get(key)
-                    if isinstance(q, dict) and q.get("price") is not None:
-                        price = q.get("price")
-                        break
+                from stocks.engine.entry_snapshot import select_entry
+                entry = select_entry(sig.symbol, harvest_result.quotes)
+                price = entry['price']
                 tracked.append(TrackedSignal(
                     signal_id=f"{now.strftime('%Y%m%dT%H%M%S')}_{sig.symbol}_{sig.direction}",
                     generated_at=now,
@@ -1007,6 +996,9 @@ class ScheduledAnalysisRunner:
                     direction=sig.direction,
                     rationale=sig.rationale,
                     generation_price=price,
+                    entry_snapshot=entry,
+                    scoring_status=entry['scoring_status'],
+                    scoring_reason=entry['reason'],
                     confidence=sig.confidence,
                     source=analysis_result.metadata.get("analysis_mode", "unknown"),
                     urgency=sig.urgency,
@@ -1429,6 +1421,7 @@ def build_scheduled_run(
     _track_engine_action_signals(
         research_candidates,
         generated_at_iso,
+        quotes=context.get("quotes") or {},
     )
     data_boundaries = {
         "data_quality": context_quality,
@@ -2120,6 +2113,7 @@ def _track_engine_action_signals(
     candidates: list[dict],
     generated_at: str,
     repo_root: Path | None = None,
+    quotes: dict | None = None,
 ) -> None:
     """P0-1: 把引擎 research 候选(accumulate/left_bottom/wait_for_pullback 等)
     记录到 SignalTracker,让 A股/美股动作信号开始积累结算胜率。
@@ -2163,9 +2157,10 @@ def _track_engine_action_signals(
             symbol = str(c.get("symbol") or "")
             if not symbol:
                 continue
-            price = c.get("price")
-            if price is None:
-                continue
+            from stocks.engine.entry_snapshot import select_entry
+            entry = select_entry(symbol, quotes, c.get('market'))
+            symbol = entry['instrument_id'] or symbol
+            price = entry['price']
             tracked.append(TrackedSignal(
                 signal_id=(
                     f"{now.strftime('%Y%m%dT%H%M%S')}_{symbol.replace(':', '_')}_{direction}"
@@ -2174,7 +2169,10 @@ def _track_engine_action_signals(
                 symbol=symbol,
                 direction=direction,
                 rationale=str(c.get("action_hint") or "")[:200],
-                generation_price=float(price),
+                generation_price=price,
+                entry_snapshot=entry,
+                scoring_status=entry['scoring_status'],
+                scoring_reason=entry['reason'],
                 confidence=float(c.get("score") or 0) if c.get("score") is not None else None,
                 source="engine_action",
                 urgency="medium",

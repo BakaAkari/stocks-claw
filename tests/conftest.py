@@ -16,6 +16,23 @@ from stocks.engine.scaffolds import MarketScaffold, PortfolioScaffold
 
 # ------------------------------------------------------------------
 # 通用 fixtures
+
+@pytest.fixture(autouse=True)
+def isolate_default_signal_ledger(tmp_path, monkeypatch):
+    """Real tracker behavior, but default repository ledger never receives tests."""
+    from pathlib import Path
+    from stocks.engine.signal_tracker import SignalTracker
+    original = SignalTracker.__init__
+    production = Path(__file__).resolve().parents[1] / '.local' / 'signal_tracker'
+
+    def isolated_init(self, tracker_dir):
+        path = Path(tracker_dir).resolve()
+        if path == production.resolve():
+            path = tmp_path / 'default_signal_tracker'
+        original(self, path)
+
+    monkeypatch.setattr(SignalTracker, '__init__', isolated_init)
+
 # ------------------------------------------------------------------
 
 

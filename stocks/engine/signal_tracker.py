@@ -36,6 +36,11 @@ class TrackedSignal:
     urgency: str
     regime: dict = field(default_factory=dict)
 
+    # Missing on legacy rows: never reconstruct provenance from today's quotes.
+    entry_snapshot: Optional[dict] = None
+    scoring_status: str = "unscorable"
+    scoring_reason: Optional[str] = "legacy_missing_snapshot"
+
     # Settlement
     price_24h: Optional[float] = None
     price_1w: Optional[float] = None
@@ -56,6 +61,9 @@ class TrackedSignal:
             "source": self.source,
             "urgency": self.urgency,
             "regime": self.regime,
+            "entry_snapshot": self.entry_snapshot,
+            "scoring_status": self.scoring_status,
+            "scoring_reason": self.scoring_reason,
             "price_24h": self.price_24h,
             "price_1w": self.price_1w,
             "correct_24h": self.correct_24h,
@@ -150,7 +158,9 @@ class SignalTracker:
                         data = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if not data.get(field_settled, False):
+                    if (not data.get(field_settled, False)
+                            and data.get("scoring_status") == "scorable"
+                            and (data.get("entry_snapshot") or {}).get("scoring_status") == "scorable"):
                         results.append(self._from_dict(data))
         except OSError:
             pass
@@ -372,6 +382,9 @@ class SignalTracker:
             source=data.get("source", ""),
             urgency=data.get("urgency", "medium"),
             regime=data.get("regime", {}),
+            entry_snapshot=data.get("entry_snapshot"),
+            scoring_status=data.get("scoring_status", "unscorable"),
+            scoring_reason=data.get("scoring_reason", "legacy_missing_snapshot"),
             price_24h=data.get("price_24h"),
             price_1w=data.get("price_1w"),
             correct_24h=data.get("correct_24h"),

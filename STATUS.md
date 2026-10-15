@@ -1,5 +1,25 @@
 # STATUS.md
 
+## 当前状态：EVAL-01 / E0 已验收，E1 未开始
+
+交易助手维持维护停机：9 个相关 Hermes cron 已暂停，不恢复生成、结算或推送。
+E0 已完成旧账本封存、生产旧胜率反馈隔离、调用面盘点和质量报告。
+`ContextBuilder._build_rule_scorecard` 不再读取旧 tracker，返回 `disabled_legacy_ledger`。
+这不是新评价系统上线；策略参数未改，原始账本未清洗，旧胜率不得用于策略判断。
+
+验收：生产模块旧反馈读取抛错探针通过；引擎测试 41 passed；全量 1456 passed / 7 skipped / 0 failed。
+三项新闻源断言失败已在 E0 前模块基线复现，根因为测试依赖实际 RSS 配置；已通过独立测试源隔离修复，未修改生产新闻配置。
+
+证据目录：`/opt/data/workspace/stocks-claw-e0/20261015T114321/`。
+包含 manifest、任务暂停前配置/ID、账本快照、代码盘点、质量报告、原文件、测试日志。
+封存只读副本，不对原件施加只读权限；暂停自动任务不阻止手工脚本调用。
+已有用户修改保留；未 Commit/Push。NAS 代码差异仍需后续回流正式源码。
+下一阶段为 E1 canonical identity / entry snapshot，尚未实施。
+
+## 历史状态材料（以下不代表当前运行状态）
+
+以下内容保留作历史追溯；遇到“运行中”“反馈完成”等表述，以本页当前状态和 EVAL-01 验收记录为准。
+
 The **only** source of current dynamic project state. `ROADMAP.md`,
 `ARCHITECTURE.md`, and `stocks/DATA_MODEL.md` describe direction and shape;
 none of them record phase/completion status — that lives here only.

@@ -61,7 +61,24 @@ MINIMAL_CONFIG = {
 
 
 @pytest.fixture
-def minimal_engine(tmp_path):
+def isolated_news_sources(monkeypatch):
+    """Use three explicit test feeds instead of the live RSS configuration."""
+    original = StocksEngine._load_json
+    sources = {"sources": [
+        {"type": "rss", "name": f"test-{i}", "url": f"https://example.invalid/{i}"}
+        for i in range(3)
+    ]}
+
+    def load_json(self, filename, *args, **kwargs):
+        if filename == "news_sources.json":
+            return deepcopy(sources)
+        return original(self, filename, *args, **kwargs)
+
+    monkeypatch.setattr(StocksEngine, "_load_json", load_json)
+
+
+@pytest.fixture
+def minimal_engine(tmp_path, isolated_news_sources):
     """返回使用最小配置初始化的 StocksEngine，并清空已加载的真实数据"""
     config = deepcopy(MINIMAL_CONFIG)
     config["paths"]["local_data_dir"] = str(tmp_path / "local")
@@ -575,10 +592,11 @@ class TestHealthCheckNewModules:
         assert "macro_provider_enabled" in health
         assert health["macro_provider_enabled"] is True
 
-    def test_health_check_cache_disabled(self):
+    def test_health_check_cache_disabled(self, tmp_path, isolated_news_sources):
         from copy import deepcopy
         config = deepcopy(MINIMAL_CONFIG)
         config["cache"]["enabled"] = False
+        config["paths"]["local_data_dir"] = str(tmp_path / "local")
         config["macro"]["enabled"] = False
         with patch("stocks.engine.load_engine_config", return_value=config):
             engine = StocksEngine()

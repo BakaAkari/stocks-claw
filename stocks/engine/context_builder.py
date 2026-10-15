@@ -479,17 +479,12 @@ class ContextBuilder:
         signal_tracker 读取的"真实已结算胜率"(按信源×方向×窗口), 让反馈闭环真正
         回流: 结算器修好后股票信号开始积累真实结算, scorecard 便能看到真实胜率。
         """
-        from collections import defaultdict
         from stocks.engine.quant_action import backtest_action_signals
-        from stocks.engine.signal_tracker import SignalTracker
 
         items = action_signals.get("items", []) or []
         result = backtest_action_signals(frames, items)
-
-        # ── 真实反馈: 读 signal_tracker 已结算胜率(按 source×direction×window) ──
-        repo_root = Path(__file__).resolve().parents[2]
-        tracker = SignalTracker(repo_root / ".local" / "signal_tracker")
-        feedback = self._signal_feedback(tracker)
+        # E0: legacy settlements are diagnostic-only, never production feedback.
+        feedback = {"status": "disabled_legacy_ledger", "reason": "duplicate_and_semantic_contamination"}
 
         result["feedback"] = feedback
         # status 不再无条件写 no_data: 若有真实结算反馈则升级为 partial/ok

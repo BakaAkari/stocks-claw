@@ -21,28 +21,11 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-**C1 报告决策支持层补全 done 2026-08-06**（`docs/tasks/TASK-C1-report-decision-support.md`）：
-冲突解读（`_conflict_tilt` tilt/tilt_reason）、研判边界降级（
-`_apply_freshness_downgrade`）、确定性明日计划（`_tomorrow_plan` +
-push "明日计划"节）。全量 1380 passed / 7 skipped / 1 deselected；
-ruff clean。下一步按需求分析 §7：双引擎信息面专项 / 用户中立化清理 / W1。
+**EVAL-01 信号评价基础设施重构（IN PROGRESS：E0 已验收，E1 未开始）**（`docs/tasks/TASK-EVAL-01-signal-evaluation-foundation.md`）。
+已封存旧账本、暂停9个相关任务、隔离生产旧胜率反馈，完成盘点及质量报告；全量测试1456 passed / 7 skipped。旧的 C1、情报裁决器、左侧交易辅助改造属于历史工作，当前运行状态以 `STATUS.md` 页首为准。
 
-**2026-08-12 情报信号裁决器实施**（docs v4.1，`signal_adjudicator.py` 新建）：
-五轮对抗性校验后落地 — 前置清理双层 padding（F3）+ 四道规则（R1 溯源 /
-R2 置信度三档 / R3 TTL / R4 dissent）+ 双路径一致（G3）+ weak 契约（E3）。
-8-11 重放：analyze 纯 LLM 6 信号（无 padding），裁决 passed 2 / weak 4 /
-reject 0。全量 1413 passed / 4 预存失败 / 7 skipped。前日：LLM 路径三断链
-修复（信号 0→真实产出）、估值时效分层（issues 7→2）、freshness 语义
-（置信度 low→medium）。详见 `STATUS.md` §2026-08-12。
-
-**2026-08-13 左侧交易辅助系统改造**（v2.12，`96c2f5a`）：按 Kari 目标
-把系统改成左侧交易者可用。左侧位置卡（布林位置/RSI/量比）+ 分批支撑位
-（MA20/布林下轨/MA60）+ 产业情报板块（信息整理）+ 引擎信号追踪（反馈
-闭环）+ 产业主题扩展（LLM prompt 7→17，signal symbol 优先持仓，修
-affected_symbols 退化）+ 映射表修正（theme_to_exposure/intel_signal_proxy）
-+ LLM 研判修复（flash/temperature 0.2/max_tokens 65536）+ lookback 30→60
-+ signal_quality_report 脚本。全量 1414 passed / 4 预存失败 / 7 skipped。
-详见 `STATUS.md` §2026-08-13。
+**当前硬边界**：冻结现有胜率的策略反馈用途；不把旧 `settlements.jsonl` 当作策略真值；先建立唯一评价契约、幂等账本、目标时间与价格 lineage，再进入代码实施。
+详见 `docs/analysis/signal-evaluation-architecture-review-2026-10-15.md`。
 
 ## Backlog (do not start before the current task closes)
 
