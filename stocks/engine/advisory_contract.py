@@ -6,7 +6,6 @@ silently rewrite an action into a different one.
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
@@ -18,16 +17,16 @@ from stocks.domain.advisory_models import (
     AdvisoryScenario,
     AdvisoryValidationReceipt,
     InvestmentAdvisory,
+    UnifiedAnalysisSnapshot,
 )
+from stocks.engine.evaluation_contract import digest
 
 _SCHEMA_VERSION = "1"
 _VALIDATOR_VERSION = "1"
 
 
 def _content_hash(value: Any) -> str:
-    h = hashlib.sha256()
-    h.update(str(value).encode("utf-8"))
-    return h.hexdigest()[:24]
+    return digest(value)
 
 
 def _iso_utc() -> str:
@@ -111,6 +110,7 @@ def validate_advisory(
     *,
     snapshot_hash: str = "",
     prompt_contract_hash: str = "",
+    snapshot: UnifiedAnalysisSnapshot | None = None,
 ) -> AdvisoryValidationReceipt:
     """Validate advisory structure and feasibility without re-investing."""
     errors: list[str] = []
@@ -137,6 +137,8 @@ def validate_advisory(
 
     for action in advisory.hold_decisions:
         _validate_action(action, errors, warnings)
+        if snapshot is not None and action.action not in {"hold", "watch", "defer", "info_only"}:
+            errors.append("trade_misclassified_as_hold_decision")
     validated_fields.append("hold_decisions")
 
     for scenario in advisory.scenarios:
@@ -151,6 +153,28 @@ def validate_advisory(
         warnings.append("actions present but no next_checkpoints")
     validated_fields.append("next_checkpoints")
 
+    if snapshot is not None:
+        from stocks.engine.unified_snapshot import snapshot_content_hash
+        if advisory.snapshot_id != snapshot.snapshot_id:
+            errors.append("advisory_snapshot_mismatch")
+        if snapshot.snapshot_id != snapshot_content_hash(snapshot):
+            errors.append("snapshot_content_hash_mismatch")
+        known = {f.fact_id for f in snapshot.all_facts()} | {
+            entry.source_id for entry in snapshot.source_registry}
+        action_ids = [a.action_id for a in advisory.all_actions()]
+        if len(action_ids) != len(set(action_ids)):
+            errors.append("duplicate_action_id")
+        for item in (*advisory.all_actions(), *advisory.sector_opportunities,
+                     *advisory.asset_class_opportunities, *advisory.watchlist_candidates,
+                     *advisory.scenarios, *advisory.forecast_candidates):
+            refs = item.evidence_refs
+            if any(not isinstance(ref, str) or ref not in known for ref in refs):
+                errors.append("unknown_evidence_reference")
+        for outlook in (advisory.short_term, advisory.medium_term):
+            if outlook and any(ref not in known for ref in outlook.source_refs):
+                errors.append("unknown_outlook_reference")
+        validated_fields.extend(["snapshot_content_hash", "evidence_references", "action_ids"])
+
     if errors:
         status = "errors"
     elif warnings:
@@ -160,8 +184,8 @@ def validate_advisory(
 
     return AdvisoryValidationReceipt(
         status=status,
-        schema_version=_SCHEMA_VERSION,
-        validator_version=_VALIDATOR_VERSION,
+        schema_version="2" if snapshot is not None else _SCHEMA_VERSION,
+        validator_version="2" if snapshot is not None else _VALIDATOR_VERSION,
         prompt_contract_hash=prompt_contract_hash or _content_hash("prompt_contract_default"),
         snapshot_hash=snapshot_hash or _content_hash(advisory.snapshot_id),
         advisory_content_hash=_content_hash(asdict(advisory)),

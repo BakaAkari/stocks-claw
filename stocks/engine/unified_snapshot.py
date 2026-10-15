@@ -7,7 +7,8 @@ registry, suitable for the LLM investment analyst.
 """
 from __future__ import annotations
 
-import hashlib
+from copy import deepcopy
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -21,6 +22,7 @@ from stocks.engine.advice_feedback import (
     compute_feedback_rollup,
     summarize_record_for_snapshot,
 )
+from stocks.engine.evaluation_contract import digest
 from stocks.logging_utils import get_logger
 
 logger = get_logger("unified_snapshot")
@@ -32,11 +34,11 @@ def _iso_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _stable_hash(*parts: str) -> str:
-    h = hashlib.sha256()
-    for p in parts:
-        h.update(p.encode("utf-8"))
-    return h.hexdigest()[:24]
+def snapshot_content_hash(snapshot: UnifiedAnalysisSnapshot) -> str:
+    """Hash the complete frozen input, excluding only its own content-addressed ID."""
+    value = asdict(snapshot)
+    value.pop("snapshot_id")
+    return digest(value)
 
 
 def _source_id(provider: str, endpoint: str) -> str:
@@ -79,6 +81,12 @@ def _build_source_registry(context: AnalysisContext) -> list[SourceEntry]:
                 if isinstance(info, dict):
                     add_source(provider, "quote", info)
 
+    for items in (context.quotes or {}).values():
+        for quote in items if isinstance(items, list) else []:
+            if isinstance(quote, Quote) and quote.source:
+                add_source(quote.source, "quote", {"as_of": quote.as_of or "",
+                           "freshness": "stale" if quote.stale else "fresh", "status": "observed"})
+
     # News sources
     news_section = dq.get("news", {})
     if isinstance(news_section, dict):
@@ -114,7 +122,7 @@ def _fact(
     return FactRef(
         fact_id=fact_id,
         metric=metric,
-        value=value,
+        value=deepcopy(value),
         unit=unit,
         as_of=as_of,
         source_ref=source_ref,
@@ -126,10 +134,7 @@ def _build_portfolio_facts(
     source_registry: list[SourceEntry],
 ) -> list[FactRef]:
     facts: list[FactRef] = []
-    base_source = next(
-        (s.source_id for s in source_registry if s.endpoint_type == "quote"),
-        "unknown",
-    )
+    base_source = "system:position_valuation"
     for pv in context.position_valuations or []:
         if not isinstance(pv, dict):
             continue
@@ -140,7 +145,8 @@ def _build_portfolio_facts(
             ("market_value_cny", pv.get("market_value_cny"), "cny"),
             ("unrealized_pnl_cny", pv.get("unrealized_pnl_cny"), "cny"),
             ("pnl_pct", pv.get("pnl_pct"), "percent"),
-            ("quantity", pv.get("quantity"), "shares"),
+            ("quantity", (pv.get("holding") or {}).get("quantity", pv.get("quantity")),
+             (pv.get("holding") or {}).get("unit", "unknown")),
         ):
             fact = _fact(
                 f"{position_id}:{metric}",
@@ -174,12 +180,13 @@ def _build_quote_facts(
             if not isinstance(quote, Quote) or quote.instrument is None:
                 continue
             instrument_key = f"{quote.instrument.market}:{quote.instrument.code}"
+            base_source = _source_id(quote.source, "quote") if quote.source else "unknown"
             as_of = str(quote.as_of or context.generated_at or "")
             for metric, value, unit in (
-                ("price", quote.price, "cny"),
+                ("price", quote.price, quote.currency or "unknown"),
                 ("pct_change", quote.pct_change, "percent"),
                 ("volume", quote.volume_lot, "lots"),
-                ("change", quote.change, "cny"),
+                ("change", quote.change, quote.currency or "unknown"),
             ):
                 fact = _fact(
                     f"{instrument_key}:{metric}",
@@ -423,6 +430,8 @@ def build_unified_snapshot(
     trigger: str = "scheduled",
     session: str = "unknown",
     market_scope: str = "cn",
+    execution_rules: dict | None = None,
+    financial_statement_max_age_seconds: int = 86400,
 ) -> UnifiedAnalysisSnapshot:
     """Build a v1 snapshot from the current AnalysisContext.
 
@@ -430,23 +439,24 @@ def build_unified_snapshot(
 clearly
     evidence the LLM analyst may use, with source and freshness.
     """
-    generated_at = _iso_utc()
+    generated_at = str(context.generated_at or _iso_utc())
     source_registry = _build_source_registry(context)
-    snapshot_id = _stable_hash(
-        generated_at,
-        str(context.generated_at),
-        session,
-        market_scope,
-        str(context.schema_version),
-    )
-
-    return UnifiedAnalysisSnapshot(
-        snapshot_id=snapshot_id,
+    mandate = deepcopy(getattr(context, "personal_mandate", None) or {})
+    integrity = deepcopy(getattr(context, "financial_integrity", None) or {})
+    positions = deepcopy(context.position_valuations or [])
+    portfolio_facts = _build_portfolio_facts(context, source_registry)
+    for pv in positions:
+        if isinstance(pv, dict) and pv.get("position_id"):
+            portfolio_facts.append(FactRef(
+                f"position:{pv['position_id']}", "position_snapshot", pv,
+                "record", generated_at, "system:position_valuation"))
+    snapshot = UnifiedAnalysisSnapshot(
+        snapshot_id="",
         generated_at=generated_at,
         trigger=trigger,  # type: ignore[arg-type]
         session=session,
         market_scope=market_scope,  # type: ignore[arg-type]
-        portfolio=tuple(_build_portfolio_facts(context, source_registry)),
+        portfolio=tuple(portfolio_facts),
         profile=tuple(_build_profile_facts(context) + _build_recent_advice_facts(context)),
         quotes=tuple(_build_quote_facts(context, source_registry)),
         history_features=(),
@@ -456,14 +466,28 @@ clearly
         macro=tuple(_build_macro_facts(context, source_registry)),
         upcoming_events=tuple(_build_upcoming_event_facts(context)),
         rotation=tuple(_build_rotation_facts(context)),
-        portfolio_constraints=tuple(),
-        risk_context=tuple(),
+        portfolio_constraints=(FactRef(
+            "constraints:portfolio", "confirmed_constraint_snapshot",
+            deepcopy(mandate.get("constraint_snapshot") or {}), "record",
+            generated_at, "system:personal_mandate"),),
+        risk_context=(FactRef(
+            "finance:integrity", "financial_integrity", integrity, "record",
+            str(integrity.get("as_of") or ""), "system:financial_reconciliation"),),
         candidate_signals=tuple(_build_action_signal_facts(context)),
         data_quality=tuple(_build_data_quality_facts(context)),
         source_registry=tuple(source_registry),
         metadata={
-            "schema_version": _SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": 2,
             "context_schema_version": getattr(context, "schema_version", None),
             "context_generated_at": str(context.generated_at or ""),
+            "personal_mandate": mandate,
+            "financial_integrity": integrity,
+            "position_valuations": positions,
+            "quotes": deepcopy(context.to_dict().get("quotes") or {}),
+            "execution_rules": deepcopy(execution_rules),
+            "validation_policy": {"version": "llm-proposal-gate-v1",
+                                  "financial_statement_max_age_seconds": financial_statement_max_age_seconds},
         },
     )
+
+    return replace(snapshot, snapshot_id=snapshot_content_hash(snapshot))

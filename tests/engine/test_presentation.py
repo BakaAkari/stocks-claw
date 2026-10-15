@@ -11,6 +11,29 @@ from stocks.engine.presentation import (
 from stocks.engine.valuation_freshness import freshness_is_estimate
 
 
+def test_confirmed_account_cash_preserves_unknowns_and_review_card():
+    accounts = {"broker": {"status": "matched", "cash_by_currency": {
+        "USD": {"balance": "125.50", "available_balance": None},
+        "CNY": {"balance": "200", "available_balance": "0"},
+    }}}
+    decision = {
+        "status": "review_required", "approved_actions": [],
+        "suppressed_actions": [{"position_id": "p", "signal": "sell", "reason": "等待确认"}],
+        "unresolved_conflicts": [{"type": "advisory_review_required", "reason": "等待确认"}],
+        "cash_schedule": {"scope": "confirmed_account_cash_only", "status": "matched", "accounts": accounts},
+    }
+    view = build_user_view(decision, [], [], [], {}, session_id="cn_post_open", session_intent="intraday_check")
+    cash = view["assistant_brief"]["cash"]
+    assert cash["accounts"] == accounts
+    assert cash["accounts"] is not accounts
+    assert cash["available_now"]["amount_cny"] is None
+    assert cash["available_now"]["status"] == "unavailable"
+    assert cash["total_assets_cny"] is None
+    assert cash["not_a_portfolio_cash_plan"] is True
+    assert view["instruction_card"]["status"] == "manual_review"
+    assert view["instruction_card"]["status_label"] == "等待人工确认"
+
+
 def test_public_instrument_codes_and_labels_hide_machine_ids():
     assert public_instrument_code("a:516020") == "516020"
     assert public_instrument_code("us:NVDA") == "NVDA"
@@ -943,3 +966,38 @@ def test_build_user_view_pending_sell_flag_only_for_sell_signals():
         session_id="cn_after_close", session_intent="after_close_review",
     )
     assert "pending_sell" not in view["assistant_brief"]["cash"]
+
+
+def test_llm_buy_sell_display_preserves_source_action_and_responsibility_links():
+    lineage = {"decision_id": "decision-hash", "source_advisory_id": "advisory-hash",
+               "source_action_id": "llm-action-1", "validation_receipt_hash": "receipt-hash",
+               "input_hash": "snapshot-hash"}
+    for signal, label in (("buy", "买入"), ("sell", "卖出")):
+        raw = {"position_id": "a_516020", "signal": signal, "final_ratio": .2,
+               "executable_quantity": 200, "execution_status": "full", **lineage}
+        decision = {"status": "approved", "approved_actions": [raw]}
+        view = build_user_view(
+            decision, [_position("a_516020", "化工ETF", "a:516020")], [], [], {},
+            data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+            session_id="cn_post_open", session_intent="intraday_check",
+        )
+        action = view["instruction_card"]["actions"][0]
+        assert action["signal"] == signal
+        assert action["action_label"] == label
+        assert f"{label} 20%" in action["reason_summary"]
+        assert {key: action[key] for key in lineage} == lineage
+        assert raw["signal"] == signal
+
+
+def test_legacy_display_does_not_invent_responsibility_links():
+    decision = {"status": "approved", "approved_actions": [{
+        "position_id": "a_516020", "signal": "reduce", "final_ratio": .2,
+        "executable_quantity": 200, "execution_status": "full",
+    }]}
+    view = build_user_view(
+        decision, [_position("a_516020", "化工ETF", "a:516020")], [], [], {},
+        data_boundaries={"data_quality": {"quotes": {"by_market": {"a": {"freshness": "fresh"}}}}},
+        session_id="cn_post_open", session_intent="intraday_check",
+    )
+    action = view["instruction_card"]["actions"][0]
+    assert not {"decision_id", "source_advisory_id", "source_action_id", "validation_receipt_hash", "input_hash"} & action.keys()

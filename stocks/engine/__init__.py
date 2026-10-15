@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import shutil
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -118,6 +119,10 @@ class StocksEngine:
         llm_analysis_enabled: Optional[bool] = None,
         openai_api_key: Optional[str] = None,
         openai_base_url: Optional[str] = None,
+        *,
+        engine_config: Optional[dict] = None,
+        local_data_dir: Optional[str] = None,
+        secret_dir: Optional[str] = None,
     ):
         """初始化 Engine。
 
@@ -127,9 +132,12 @@ class StocksEngine:
             llm_analysis_enabled: 是否启用 LLM 深度分析（传参优先于配置）。
             openai_api_key: OpenAI 兼容 API Key（传参优先，其次环境变量，其次.secret文件）。
             openai_base_url: OpenAI 兼容 API Base URL（传参优先，其次环境变量，其次.secret文件）。
+            engine_config: 显式完整配置，省略时读取正常运行配置。
+            local_data_dir: 显式金融记忆和派生记录目录。
+            secret_dir: 显式凭据目录，用于独立配置运行环境。
         """
         # 加载 engine.yaml 配置（环境变量 > YAML > 代码默认值）
-        self._config = load_engine_config()
+        self._config = deepcopy(engine_config) if engine_config is not None else load_engine_config()
         logging_cfg = self._config.get("logging", {})
         setup_logging(
             level=logging_cfg.get("level", "INFO"),
@@ -149,9 +157,9 @@ class StocksEngine:
         )
         # 允许 YAML 覆盖 local/secret/intelligence 路径
         local_dir_cfg = self._config["paths"]["local_data_dir"]
-        self._local_data_dir = Path(local_dir_cfg) if local_dir_cfg else LOCAL_DATA_DIR
+        self._local_data_dir = Path(local_data_dir or local_dir_cfg) if (local_data_dir or local_dir_cfg) else LOCAL_DATA_DIR
         secret_dir_cfg = self._config["paths"]["secret_dir"]
-        self._secret_dir = Path(secret_dir_cfg) if secret_dir_cfg else SECRET_DIR
+        self._secret_dir = Path(secret_dir or secret_dir_cfg) if (secret_dir or secret_dir_cfg) else SECRET_DIR
         intelligence_dir_cfg = self._config["paths"].get("intelligence_dir")
         if intelligence_dir_cfg:
             self._config["intelligence_dir"] = intelligence_dir_cfg
@@ -768,6 +776,7 @@ class StocksEngine:
             "investment_horizon",
             "preferences",
             "constraints",
+            "mandate",
         }
         unknown = set(updates) - allowed
         if unknown:
@@ -788,6 +797,12 @@ class StocksEngine:
         ):
             raise ValueError("constraints must be an array or object")
 
+        if "mandate" in updates:
+            from stocks.engine.personal_mandate import validate_mandate_update
+            mandate = dict(self._profile.get("mandate") or {})
+            mandate.update(validate_mandate_update(updates["mandate"]))
+            updates = dict(updates, mandate=mandate)
+
         self._profile.update(updates)
         self._profile["updated_at"] = datetime.now(timezone.utc).isoformat()
         self._local_data_dir.mkdir(parents=True, exist_ok=True)
@@ -802,6 +817,9 @@ class StocksEngine:
         """保存用户确认过的建议摘要。"""
         if not isinstance(payload, dict):
             raise ValueError("Advice payload must be an object")
+        if "source_decision_id" in payload:
+            from stocks.engine.decision_service import save_source_advice
+            return save_source_advice(self, payload)
         allowed = {
             "instruments",
             "direction",
@@ -857,6 +875,18 @@ class StocksEngine:
         """保存用户确认过的执行记录。"""
         if not isinstance(payload, dict):
             raise ValueError("Execution payload must be an object")
+        if payload.get("schema_version") == 3:
+            from stocks.engine.financial_service import save_execution
+            return save_execution(self, payload)
+        if payload.get("schema_version") == 2:
+            from stocks.engine.decision_service import save_linked_execution
+            return save_linked_execution(self, payload)
+        if any(r.get("schema_version") == 2 and r.get("source_snapshot")
+               and r.get("id") == payload.get("advice_id")
+               for r in self.list_advice()) or any(
+                   s.get("schema_version") == 2 and s.get("decision_id") == payload.get("decision_id")
+                   for s in self.decision_attribution()):
+            raise ValueError("linked_recommendation_requires_schema_version_2_fill")
         allowed = {
             "id",
             "advice_id",
@@ -904,21 +934,101 @@ class StocksEngine:
         return self.persistence.find_executions_by_decision_id(decision_id)
 
     def find_executions_by_run_id(self, run_id: str) -> list[dict]:
-        """按 run_id 查找执行记录（decision_id 前缀匹配）。"""
-        return self.persistence.find_executions_by_run_id(run_id)
+        """按冻结来源的精确 run_id 查找执行记录。"""
+        ids = {s["decision_id"] for s in self.decision_attribution()
+               if s.get("source_run_id") == run_id}
+        return [r for r in self.list_executions()
+                if r.get("source_run_id") == run_id or r.get("decision_id") in ids]
+
+    def save_user_decision(self, payload: dict) -> dict:
+        """Save a user-confirmed choice independently of any recorded fills."""
+        from stocks.engine.decision_service import save_user_decision
+        return save_user_decision(self, payload)
+
+    def list_user_decisions(self) -> list[dict]:
+        return self.persistence.list_decisions()
+
+    def personal_mandate(self) -> dict:
+        from stocks.engine.personal_mandate import build_personal_mandate
+
+        def source(name, legacy_kind):
+            local = self._local_data_dir / name
+            fallback = self.config_dir / name
+            return {"kind": "local_confirmed" if local.exists() else
+                    legacy_kind if fallback.exists() else "missing",
+                    "path": str(local if local.exists() else fallback),
+                    "updated_at": self._profile.get("updated_at") if name == "investor_profile.json" else None}
+
+        return build_personal_mandate(
+            self._profile, self._constraints,
+            profile_source=source("investor_profile.json", "legacy_unverified"),
+            constraints_source=source("portfolio_constraints.json", "reference_default"),
+            captured_at=datetime.now(timezone.utc).isoformat())
+
+    def replace_portfolio_constraints(self, constraints: dict) -> dict:
+        """Replace the explicit constraint document through confirmed adapters."""
+        from copy import deepcopy
+
+        from stocks.engine.constraint_model import validate_constraints
+        from stocks.engine.evaluation_contract import canonical_json
+
+        if not isinstance(constraints, dict):
+            raise ValueError("constraints object is required")
+        canonical_json(constraints)  # Reject non-finite values before persistence.
+        validate_constraints(constraints)
+        copied = deepcopy(constraints)
+        self._local_data_dir.mkdir(parents=True, exist_ok=True)
+        self.persistence._atomic_json(self._local_data_dir / "portfolio_constraints.json", copied)
+        self._constraints = copied
+        return deepcopy(copied)
+
+    def save_account_statement(self, payload: dict) -> dict:
+        from stocks.engine.financial_service import save_record
+        return save_record(self, "account_statements", payload)
+
+    def save_cash_movement(self, payload: dict) -> dict:
+        from stocks.engine.financial_service import save_record
+        return save_record(self, "cash_movements", payload)
+
+    def list_account_statements(self) -> dict:
+        from stocks.engine.financial_service import load_records
+        return load_records(self, "account_statements")
+
+    def list_cash_movements(self) -> dict:
+        from stocks.engine.financial_service import load_records
+        return load_records(self, "cash_movements")
+
+    def financial_reconcile(self, opening_id: str, closing_id: str, *, as_of=None) -> dict:
+        from stocks.engine.financial_service import review
+        return review(self, opening_id, closing_id, as_of=as_of)
+
+    def financial_integrity(self, *, as_of=None) -> dict:
+        from stocks.engine.financial_service import integrity
+        return integrity(self, as_of=as_of)
+
+    def decision_review(self, decision_id: str | None = None, *, as_of: str | None = None,
+                        evaluation_database: str | None = None) -> dict:
+        """Read the recommendation, user choices, fills and frozen observations."""
+        from stocks.engine.evaluation_contract import utc
+        if as_of is not None and (not isinstance(as_of, str) or not as_of.strip()):
+            raise ValueError("as_of_must_be_an_aware_iso_timestamp")
+        if decision_id is not None and (not isinstance(decision_id, str) or not decision_id.strip()):
+            raise ValueError("decision_id_must_be_a_nonempty_string")
+        return run_settlement(
+            as_of=utc(as_of) if as_of is not None else datetime.now(timezone.utc),
+            snapshots_dir=str(self._local_data_dir / "decisions"),
+            executions=self.list_executions(), advice_records=self.list_advice(),
+            user_decisions=self.list_user_decisions(), decision_id=decision_id,
+            evaluation_database=evaluation_database or str(self._local_data_dir / "evaluation.sqlite3"),
+        )
 
     def decision_attribution(self) -> list[dict]:
         """返回所有存量决策快照。"""
-        return [s.to_dict() if hasattr(s, "to_dict") else s for s in load_decision_snapshots()]
+        return load_decision_snapshots(snaps_dir=str(self._local_data_dir / "decisions"))
 
     def decision_attribution_settle(self, *, now: str | None = None) -> dict:
-        """结算到期决策快照，返回结构化 JSON。"""
-        as_of = datetime.now(timezone.utc) if now is None else parse_datetime(now)
-        return run_settlement(
-            as_of=as_of,
-            executions=self.list_executions(),
-            repo_root=self._repo_root,
-        )
+        """兼容旧入口，只读返回同一事实复盘，不再推断成交或收益。"""
+        return self.decision_review(as_of=now)
 
     def save_forecast(self, payload: dict) -> dict:
         """保存用户确认过的预测记录。"""
@@ -1313,12 +1423,14 @@ class StocksEngine:
         recent_snapshots: list[dict] = []
         recent_advice: list[dict] = []
         execution_records: list[dict] = []
+        user_decisions: list[dict] = []
         forecast_records: list[dict] = []
         forecast_summary: dict = {}
         if include_history:
             recent_snapshots = self.persistence.load_recent(count=5)
             recent_advice = self.persistence.load_recent_advice(count=3)
             execution_records = self.persistence.list_executions()
+            user_decisions = self.persistence.list_decisions()
             forecast_records = self.persistence.list_forecasts()
             forecast_records, settled_forecasts = await settle_due_forecasts(
                 forecast_records,
@@ -1338,6 +1450,7 @@ class StocksEngine:
             recent_snapshots=recent_snapshots,
             recent_advice=recent_advice,
             execution_records=execution_records,
+            user_decisions=user_decisions,
             watchlist=self._watchlist,
             news=news,
             news_requested=include_news,
@@ -1356,6 +1469,8 @@ class StocksEngine:
 
         # 注入引擎运行时配置，使下游分析管道可直接访问阈值/风控参数
         object.__setattr__(context, 'engine_config', self._config)
+        object.__setattr__(context, 'personal_mandate', self.personal_mandate())
+        object.__setattr__(context, 'financial_integrity', self.financial_integrity())
 
         # 保存最小快照，供下一次上下文进行前后对照。
         self.persistence.save_context(context)
@@ -1363,7 +1478,7 @@ class StocksEngine:
         # 保存完整上下文，供影子 Advisory 流水线读取
         import json as _json
         from pathlib import Path as _Path
-        _ctx_dir = _Path(".local/scheduled_runs/latest")
+        _ctx_dir = _Path(self._local_data_dir) / "scheduled_runs" / "latest"
         _ctx_dir.mkdir(parents=True, exist_ok=True)
         (_ctx_dir / "context.json").write_text(
             _json.dumps(context.to_dict(), ensure_ascii=False, default=str),

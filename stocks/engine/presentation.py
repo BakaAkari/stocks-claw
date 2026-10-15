@@ -6,9 +6,10 @@ module creates stable Chinese labels for the user-facing report contract.
 from __future__ import annotations
 
 import re
-from collections import Counter
-from datetime import datetime, time
 import zoneinfo
+from collections import Counter
+from copy import deepcopy
+from datetime import datetime, time
 from typing import Any
 
 _SENTINEL = object()
@@ -16,7 +17,7 @@ _no_value = _SENTINEL
 
 _SIGNAL_LABELS = {
     "stop_loss": "止损", "take_profit": "止盈", "reduce": "减仓",
-    "add": "加仓", "hold": "持有", "wait": "等待",
+    "add": "加仓", "buy": "买入", "sell": "卖出", "hold": "持有", "wait": "等待",
 }
 
 # P1-13: risk transition is a *relative* direction from the previous window.
@@ -258,6 +259,21 @@ def _cash_view(schedule: dict) -> dict:
     — the six-bucket cash-part rendering explicitly skips it.
     """
     values = schedule or {}
+    if values.get("scope") == "confirmed_account_cash_only":
+        labels = {
+            "available_now": "现在能用", "confirmed_settling": "到账途中",
+            "planned_release": "计划内到期释放", "strategic_exit": "卖出后才能用",
+            "locked": "不能动", "safety_buffer": "预留安全垫（不计入可用）",
+            "unresolved_settlement": "结算方式待确认",
+        }
+        return {
+            "scope": values["scope"], "status": values.get("status", "incomplete"),
+            "accounts": deepcopy(values.get("accounts") or {}),
+            "input_hash": values.get("input_hash"), "not_a_portfolio_cash_plan": True,
+            "total_assets_cny": None, "total_assets_status": "unavailable",
+            **{key: {"label": label, "amount_cny": None, "status": "unavailable"}
+               for key, label in labels.items()},
+        }
     return {
         "available_now": {"label": "现在能用", "amount_cny": round(values.get("available_now", 0.0) or 0.0, 2)},
         "confirmed_settling": {"label": "到账途中", "amount_cny": round(values.get("confirmed_settling", 0.0) or 0.0, 2)},
@@ -1349,6 +1365,10 @@ def build_user_view(
         # and projected here verbatim -- no valuation x ratio recomputation,
         # no freshness re-derivation, no fallback to a display-time default.
         actions.append({
+            **{key: raw[key] for key in (
+                "signal", "decision_id", "source_advisory_id", "source_action_id",
+                "validation_receipt_hash", "input_hash",
+            ) if key in raw},
             "display_label": label,
             "action_label": signal_label(raw.get("signal", "")),
             "ratio": ratio,

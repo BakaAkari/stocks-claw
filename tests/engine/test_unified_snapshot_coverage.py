@@ -199,8 +199,14 @@ class TestUnifiedSnapshotCoverage:
     def test_snapshot_metadata_includes_context_schema(self) -> None:
         context = _minimal_context()
         snapshot = build_unified_snapshot(context)
-        assert snapshot.metadata["schema_version"] == 1
+        assert snapshot.metadata["schema_version"] == 2
         assert snapshot.metadata["context_schema_version"] == 12
+        assert snapshot.metadata["personal_mandate"] == context.personal_mandate
+        assert snapshot.metadata["financial_integrity"] == context.financial_integrity
+        assert snapshot.metadata["position_valuations"] == context.position_valuations
+        assert snapshot.metadata["validation_policy"]["financial_statement_max_age_seconds"] == 86400
+        assert snapshot.risk_context[0].fact_id == "finance:integrity"
+        assert snapshot.portfolio_constraints[0].fact_id == "constraints:portfolio"
 
     def test_omitted_values_do_not_create_empty_facts(self) -> None:
         context = _minimal_context()

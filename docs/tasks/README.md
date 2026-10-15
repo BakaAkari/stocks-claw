@@ -21,11 +21,15 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-**EVAL-01 信号评价基础设施重构（IN PROGRESS：E0、E1、E2 已验收，E3 未开始）**（`docs/tasks/TASK-EVAL-01-signal-evaluation-foundation.md`）。
-E0 完成停机/封存/盘点；E1 完成生成侧标的身份与价格 lineage；E2 完成 SQLite 唯一评价任务、租约、单次结果和进程恢复。当前全量测试 1486 passed / 7 skipped；旧结算脚本尚未迁移。下一步 E3 为目标时点观测与交易日历，系统继续暂停。
+**TRUST-01 个人约束、金融事实核对与 LLM 建议责任链**
+（[任务方案与验收标准](TASK-TRUST-01-financial-reconciliation-advisory-lineage.md)）。
+按用户指定先核对持仓、资金、成交，再贯通 LLM 建议来源；采用
+[金融真实性契约](../contracts/financial-trust-v1.md)，保留 DECISION-01 与 EVAL 基础。
+暂不扩展 E4 胜率指标。当前进度、验证和部署状态只见 [STATUS](../../STATUS.md)。
 
-**当前硬边界**：冻结现有胜率的策略反馈用途；不把旧 `settlements.jsonl` 当作策略真值；先建立唯一评价契约、幂等账本、目标时间与价格 lineage，再进入代码实施。
-详见 `docs/analysis/signal-evaluation-architecture-review-2026-10-15.md`。
+**硬边界**：旧 `settlements.jsonl` 不作策略真值，旧胜率不作反馈，系统恢复另行处理。
+原调查见 `docs/analysis/signal-evaluation-architecture-review-2026-10-15.md`；既往阶段
+验收只证明其中列明的局部能力，不能替代真实纵向闭环验收。
 
 ## Backlog (do not start before the current task closes)
 
@@ -37,7 +41,7 @@ E0 完成停机/封存/盘点；E1 完成生成侧标的身份与价格 lineage�
 - **M3** — Feedback loop *(done 2026-08-01, `83e94ec`)*:
   `TASK-M3-feedback-loop.md`.
 - **W1** — Watchlist productization (M5): user-designated instruments
-  persisted, scanned daily, surfaced in push. *(next; folds in D1 US
+  persisted, scanned daily, surfaced in push. *(historical backlog; folds in D1 US
   quotes freshness verification)*
 - **M4** — Constraint model upgrade (candidate): irreversibility
   (no-buyback), segregated pools, hard caps. See

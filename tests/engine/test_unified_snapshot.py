@@ -74,7 +74,7 @@ class TestUnifiedSnapshotBuilder:
         context = _minimal_context()
         snapshot = build_unified_snapshot(context, trigger="scheduled", session="cn_pre_open")
         assert snapshot.snapshot_id
-        assert len(snapshot.snapshot_id) == 24
+        assert len(snapshot.snapshot_id) == 64
         assert snapshot.session == "cn_pre_open"
         assert snapshot.market_scope == "cn"
 
@@ -161,7 +161,7 @@ class TestUnifiedSnapshotBuilder:
         assert any(f.metric == "quote:a:510300:price" for f in facts)
         price_fact = next(f for f in facts if f.metric == "quote:a:510300:price")
         assert price_fact.value == 4.928
-        assert price_fact.unit == "cny"
+        assert price_fact.unit == "unknown"  # The quote did not supply a currency.
 
     def test_data_quality_becomes_explicit_facts(self) -> None:
         context = _minimal_context()

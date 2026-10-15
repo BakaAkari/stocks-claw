@@ -1,13 +1,32 @@
-from datetime import datetime
-from stocks.engine.evaluation_ledger import EvaluationLedger
-from stocks.engine.evaluation_runner import run_evaluation
-from stocks.engine.observation_calendar import next_observation_target, observation_status
+"""Exercise manual worker/report commands against a producer-created frozen task."""
 
-def test_task_target_uses_explicit_observation_and_result_keeps_times(tmp_path):
-    l=EvaluationLedger(tmp_path/'x.db'); generated=datetime.fromisoformat('2026-10-16T20:00:00+00:00')
-    target=next_observation_target(generated,'a',holidays={'2026-10-19'})
-    key=('s','a-close','2026-10-20T07:00:00+00:00'); assert l.schedule(*key)==key
-    result={'target_at':target.isoformat(),'observed_at':'2026-10-20T07:05:00+00:00','price':10,'status':observation_status(target,datetime.fromisoformat('2026-10-20T07:05:00+00:00'))['status']}
-    token=l.claim(key,target.timestamp()+1);assert token
-    assert l.finish(key,token,result,target.timestamp()+2)
-    assert l.get(key)['result']==result
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import timedelta
+from pathlib import Path
+
+from stocks.engine.evaluation_contract import utc
+from stocks.engine.evaluation_ledger import EvaluationLedger
+from stocks.engine.evaluation_task_sync import schedule_signal
+from stocks.engine.observation_pipeline import collect_observation
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_worker_and_readonly_report_cli_need_no_external_signals(tmp_path, evaluation_signal, evaluation_window, observation_factory):
+    ledger = EvaluationLedger(tmp_path / 'ledger.db')
+    key, _ = schedule_signal(ledger, evaluation_signal, evaluation_window)
+    collect_observation(ledger, key, now=utc(key[2]) + timedelta(minutes=5), provider=observation_factory)
+    worker = subprocess.run([sys.executable, str(ROOT / 'scripts/collect_target_observations.py'),
+                             '--database', ledger.path], check=True, capture_output=True, text=True)
+    assert json.loads(worker.stdout)['worker'] == {'not_claimed': 1}
+    before = hashlib.sha256(Path(ledger.path).read_bytes()).hexdigest()
+    output = tmp_path / 'report.json'
+    subprocess.run([sys.executable, str(ROOT / 'scripts/build_evaluation_report.py'),
+                    '--database', ledger.path, '--output', str(output)], check=True, capture_output=True)
+    report = json.loads(output.read_text())
+    assert len(report['results']) == 1
+    assert report['results'][0]['signal'] == evaluation_signal
+    assert hashlib.sha256(Path(ledger.path).read_bytes()).hexdigest() == before

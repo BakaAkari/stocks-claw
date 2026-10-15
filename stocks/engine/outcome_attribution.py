@@ -1,544 +1,436 @@
-"""Decision Trust T1 — 版本化效果归因与 Shadow Trial。
+"""Immutable recommendations and a read-only review of confirmed user facts.
 
-Provides:
-- DecisionSnapshot: immutable record of a planned/executed portfolio action
-- save_decision_snapshot / load_decision_snapshots: file-based persistence
-  under .local/decisions/
-- settle_decisions: evaluate expired-horizon snapshots against deterministic
-  price history, producing an attribution_summary with per-horizon and
-  per-decision breakdowns, a sample-size gate (<10 = counts only,
-  >=10 = stats with Wilson confidence interval), and separate executed vs
-  shadow (counterfactual) summaries.
+Approval, user decisions, fills, cash movements and later quoted prices remain
+separate. No strategy score, realized profit or portfolio gain is inferred.
 """
 from __future__ import annotations
 
 import json
 import math
-from datetime import date, datetime, timedelta, timezone
+import os
+import sqlite3
+import tempfile
+from collections import Counter, defaultdict
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+
+from stocks.engine.entry_snapshot import canonical_identity, select_entry
+from stocks.engine.evaluation_contract import canonical_json, digest, positive_number, utc
 
 DEFAULT_DECISIONS_DIR = ".local/decisions"
-DEFAULT_COMMISSION_RATE = 0.0003  # 0.03%
-_HORIZONS = frozenset({1, 5, 20})
 
 
-# ── I/O helpers ──────────────────────────────────────────────────────────
+def _decisions_dir(repo_root=None):
+    return Path(repo_root or Path.cwd()) / DEFAULT_DECISIONS_DIR
 
 
-def _decisions_dir(repo_root: Path | None = None) -> Path:
-    root = repo_root or Path.cwd()
-    return root / DEFAULT_DECISIONS_DIR
+def _snapshot_status(snapshot):
+    if snapshot.get("schema_version") != 2:
+        return "legacy_unverified"
+    expected = digest({k: v for k, v in snapshot.items() if k != "source_hash"})
+    return "verified" if snapshot.get("source_hash") == expected else "source_hash_mismatch"
 
 
-def save_decision_snapshot(
-    snapshot: dict,
-    *,
-    repo_root: Path | None = None,
-    snaps_dir: str | None = None,
-) -> Path:
-    """Save one decision snapshot as JSON (idempotent by decision_id)."""
+def save_decision_snapshot(snapshot, *, repo_root=None, snaps_dir=None):
+    """Atomically create one immutable recommendation; identical retries are no-ops."""
+    if snapshot.get("schema_version") != 2:
+        raise ValueError("legacy_snapshot_write_disabled")
+    did = snapshot.get("decision_id")
+    if not isinstance(did, str) or not did.strip():
+        raise ValueError("decision_id_required")
+    if _snapshot_status(snapshot) != "verified":
+        raise ValueError("source_snapshot_hash_mismatch")
     base = Path(snaps_dir) if snaps_dir else _decisions_dir(repo_root)
     base.mkdir(parents=True, exist_ok=True)
-    did = snapshot["decision_id"]
-    horizon = snapshot.get("horizon_days", "")
-    path = base / f"{did}_{horizon}d.json"
-    path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2))
+    path = base / f"recommendation-{digest(did)}.json"
+    encoded = canonical_json(snapshot)
+    fd, temporary = tempfile.mkstemp(prefix=".recommendation-", suffix=".tmp", dir=base)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(encoded + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)  # Publish complete bytes without replacing an existing ID.
+        except FileExistsError:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if canonical_json(existing) != encoded:
+                raise ValueError(f"immutable_recommendation_conflict:{did}") from None
+    finally:
+        Path(temporary).unlink(missing_ok=True)
     return path
 
 
-def load_decision_snapshots(
-    *,
-    repo_root: Path | None = None,
-    snaps_dir: str | None = None,
-) -> list[dict]:
-    """Load all decision snapshots from .local/decisions/."""
+def load_decision_snapshots(*, repo_root=None, snaps_dir=None):
+    """Read both generations without upgrading or rewriting legacy claims."""
     base = Path(snaps_dir) if snaps_dir else _decisions_dir(repo_root)
     if not base.exists():
         return []
-    snaps: list[dict] = []
+    snapshots = []
     for path in sorted(base.glob("*.json")):
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            item = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        snaps.append(data)
-    return snaps
-
-
-# ── Core settlement logic ────────────────────────────────────────────────
-
-
-def _lookup_price(
-    history: dict[str, dict[str, float]],
-    instrument_key: str,
-    target_date: date,
-) -> Optional[float]:
-    """Find the closing price for *instrument_key* on or before *target_date*.
-
-    Searches backward from target_date to find the nearest available trading
-    day's price (the last close before or on the target date).
-    """
-    series = history.get(instrument_key)
-    if not series:
-        return None
-    # Try exact date first, then walk backwards up to 10 days
-    cursor = target_date
-    for _ in range(14):
-        ds = cursor.isoformat()
-        if ds in series:
-            return series[ds]
-        cursor -= timedelta(days=1)
-    return None
-
-
-def _count_trading_days(
-    history: dict[str, dict[str, float]],
-    instrument_key: str,
-    from_date: date,
-    horizon_days: int,
-) -> Optional[date]:
-    """Advance *horizon_days* trading days forward from *from_date*.
-
-    Returns the calendar date of the Nth trading day after (and excluding)
-    from_date, or None if insufficient history.
-    """
-    series = history.get(instrument_key)
-    if not series:
-        return None
-    trading_dates = sorted(series.keys())
-    # Find from_date in the series
-    from_iso = from_date.isoformat()
-    start_idx: Optional[int] = None
-    for i, ds in enumerate(trading_dates):
-        if ds >= from_iso:
-            start_idx = i
-            break
-    if start_idx is None:
-        return None
-    target_idx = start_idx + horizon_days
-    if target_idx >= len(trading_dates):
-        return None
-    target_str = trading_dates[target_idx]
-    return date.fromisoformat(target_str)
-
-
-def _settle_one(
-    snap: dict,
-    history: dict[str, dict[str, float]],
-    executions_by_id: dict[str, dict],
-    as_of: datetime,
-) -> dict:
-    """Settle a single snapshot and return the outcome dict.
-
-    Returns the original snapshot with an added 'outcome' sub-dict and
-    'settled': True when the horizon has expired.
-    """
-    # Already settled
-    if snap.get("settled"):
-        outcome = snap.get("outcome") or {}
-        return {
-            "_snapshot": snap,
-            "decision_id": snap["decision_id"],
-            "position_id": snap["position_id"],
-            "signal": snap["signal"],
-            "horizon_days": snap["horizon_days"],
-            "executed": snap["executed"],
-            "settled": True,
-            "settled_now": False,
-            "outcome_return": outcome.get("outcome_return"),
-            "execution_price_used": outcome.get("execution_price_used"),
-            "commission_paid": outcome.get("commission_paid", 0.0),
-            "exit_price": outcome.get("exit_price"),
-            "win": outcome.get("win"),
-        }
-
-    did = snap["decision_id"]
-    horizon = snap["horizon_days"]
-    instrument_key = snap["position_id"]
-    data_as_of = datetime.fromisoformat(snap["data_as_of"])
-    entry_date = data_as_of.date()
-
-    # Find execution record
-    exec_rec = executions_by_id.get(did)
-
-    # Determine execution price
-    if exec_rec:
-        execution_price = exec_rec.get("price") or snap["execution_price"]
-    else:
-        execution_price = snap["execution_price"]
-
-    if execution_price is None:
-        execution_price = _lookup_price(history, instrument_key, entry_date)
-    if execution_price is None:
-        return {
-            "_snapshot": snap,
-            "decision_id": did,
-            "position_id": instrument_key,
-            "signal": snap["signal"],
-            "horizon_days": horizon,
-            "executed": snap["executed"],
-            "settled": False,
-            "settled_now": False,
-            "error": "missing_execution_price",
-        }
-
-    # Handle settlement timing: execution_price reflects the actual deal price.
-    # T+N means the execution settles N business days later; the true entry for
-    # return calculation is the execution_price.
-    actual_entry = execution_price
-
-    # Determine exit date: horizon trading days from entry_date
-    exit_date = _count_trading_days(history, instrument_key, entry_date, horizon)
-    if exit_date is None:
-        return {
-            "_snapshot": snap,
-            "decision_id": did,
-            "position_id": instrument_key,
-            "signal": snap["signal"],
-            "horizon_days": horizon,
-            "executed": snap["executed"],
-            "settled": False,
-            "settled_now": False,
-            "error": "insufficient_history_for_exit",
-        }
-
-    # Check if horizon has expired (as_of >= exit_date)
-    if as_of.date() < exit_date:
-        return {
-            "_snapshot": snap,
-            "decision_id": did,
-            "position_id": instrument_key,
-            "signal": snap["signal"],
-            "horizon_days": horizon,
-            "executed": snap["executed"],
-            "settled": False,
-            "settled_now": False,
-            "pending_until": exit_date.isoformat(),
-        }
-
-    # Look up exit price
-    exit_price = _lookup_price(history, instrument_key, exit_date)
-    if exit_price is None:
-        return {
-            "_snapshot": snap,
-            "decision_id": did,
-            "position_id": instrument_key,
-            "signal": snap["signal"],
-            "horizon_days": horizon,
-            "executed": snap["executed"],
-            "settled": False,
-            "settled_now": False,
-            "error": "missing_exit_price",
-        }
-
-    # Calculate return
-    commission_rate = snap.get("commission_rate", DEFAULT_COMMISSION_RATE)
-    # For buy (add/accumulate): return = (exit - entry) / entry - 2*commission
-    # For sell (reduce): return = (entry - exit) / entry - 2*commission
-    signal = snap["signal"]
-    if signal in ("add", "accumulate", "buy"):
-        gross_return = (exit_price - actual_entry) / actual_entry
-    elif signal in ("reduce", "stop_loss", "take_profit", "sell"):
-        gross_return = (actual_entry - exit_price) / actual_entry
-    else:
-        # hold/wait - no directional bet
-        gross_return = 0.0
-
-    commission_paid = 2.0 * commission_rate  # buy + sell
-    net_return = gross_return - commission_paid
-    win = net_return > 0
-
-    snap["settled"] = True  # mark in-place for idempotency
-    outcome = {
-        "decision_id": did,
-        "position_id": instrument_key,
-        "signal": signal,
-        "horizon_days": horizon,
-        "executed": snap["executed"],
-        "settled": True,
-        "settled_now": True,
-        "entry_price_planned": snap["entry_price"],
-        "execution_price_used": actual_entry,
-        "exit_price": exit_price,
-        "outcome_return": round(net_return, 6),
-        "commission_paid": round(commission_paid, 6),
-        "win": win,
-        "_snapshot": snap,
-    }
-    return outcome
-
-
-def _wilson_confidence_interval(
-    wins: int, total: int, z: float = 1.96,
-) -> tuple[float, float]:
-    """Wilson score interval for a binomial proportion."""
-    if total == 0:
-        return (0.0, 0.0)
-    p = wins / total
-    denominator = 1 + z * z / total
-    centre = (p + z * z / (2 * total)) / denominator
-    margin = (
-        z
-        * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total)
-        / denominator
-    )
-    return (round(max(0.0, centre - margin), 4), round(min(1.0, centre + margin), 4))
-
-
-def _build_group_summary(outcomes: list[dict]) -> dict:
-    """Build a summary dict for a group of settled outcomes.
-
-    Sample-size gate: <10 → counts/raw only; >=10 → stats + CI.
-    """
-    total = len(outcomes)
-    wins = sum(1 for o in outcomes if o.get("win"))
-    losses = total - wins
-    total_return = sum(o.get("outcome_return", 0.0) for o in outcomes)
-    avg_return = round(total_return / total, 6) if total > 0 else 0.0
-
-    summary: dict = {
-        "count": total,
-        "wins": wins,
-        "losses": losses,
-        "total_return": round(total_return, 6),
-        "avg_return": avg_return,
-    }
-
-    if total < 10:
-        summary["win_rate"] = None
-        summary["confidence_interval"] = None
-        summary["statistical_note"] = "样本不足10只，仅输出计数结果"
-    else:
-        win_rate = round(wins / total, 4)
-        ci = _wilson_confidence_interval(wins, total)
-        summary["win_rate"] = win_rate
-        summary["confidence_interval"] = ci
-        summary["statistical_note"] = ""
-
-    return summary
-
-
-def settle_decisions(
-    as_of: datetime,
-    price_history: dict[str, dict[str, float]],
-    snapshots: list[dict],
-    executions: list[dict],
-) -> dict:
-    """Settle all expired-horizon decision snapshots and produce attribution.
-
-    Parameters
-    ----------
-    as_of : datetime
-        Settlement reference time — snapshots whose horizon exit date is on
-        or before *as_of* are settled.
-    price_history : dict[str, dict[str, float]]
-        Deterministic price series keyed by instrument_key, then date str.
-        e.g. {"a:588000": {"2026-07-01": 100.0, "2026-07-02": 101.0, ...}}
-    snapshots : list[dict]
-        Decision snapshots (from load_decision_snapshots).
-    executions : list[dict]
-        ExecutionRecord dicts (from persistence.list_executions()).
-
-    Returns
-    -------
-    dict with keys:
-        settled_at, total_settled, total_pending, by_horizon, by_decision,
-        summary, _snapshots_updated (the settled snapshots to write back).
-    """
-    executions_by_id: dict[str, dict] = {}
-    for rec in executions:
-        did = rec.get("decision_id", "")
-        if did:
-            executions_by_id[did] = rec
-
-    # Settle each snapshot
-    outcomes: list[dict] = []
-    pending_count = 0
-    by_horizon: dict[str, list[dict]] = {"1d": [], "5d": [], "20d": []}
-    by_decision: dict[str, dict] = {}
-
-    for snap in snapshots:
-        outcome = _settle_one(snap, price_history, executions_by_id, as_of)
-        did = outcome["decision_id"]
-        by_decision[did] = outcome
-
-        if outcome.get("settled") and outcome.get("settled_now"):
-            outcomes.append(outcome)
-            h_key = f'{outcome["horizon_days"]}d'
-            if h_key in by_horizon:
-                by_horizon[h_key].append(outcome)
-        elif not outcome.get("settled"):
-            pending_count += 1
-
-    # Build summary groups
-    executed_outcomes = [o for o in outcomes if o.get("executed")]
-    shadow_outcomes = [o for o in outcomes if not o.get("executed")]
-
-    # Separate executed/shadow by horizon
-    executed_by_horizon: dict[str, list[dict]] = {}
-    shadow_by_horizon: dict[str, list[dict]] = {}
-    for h_key in ("1d", "5d", "20d"):
-        executed_by_horizon[h_key] = [o for o in by_horizon[h_key] if o.get("executed")]
-        shadow_by_horizon[h_key] = [o for o in by_horizon[h_key] if not o.get("executed")]
-
-    # Build snapshots_updated list for writing back
-    snapshots_updated: list[dict] = []
-    for outcome in by_decision.values():
-        if outcome.get("settled_now"):
-            updated = dict(outcome["_snapshot"])
-            updated["settled"] = True
-            updated["outcome"] = {
-                "outcome_return": outcome["outcome_return"],
-                "execution_price_used": outcome["execution_price_used"],
-                "exit_price": outcome["exit_price"],
-                "commission_paid": outcome["commission_paid"],
-                "win": outcome["win"],
-            }
-            updated["settled_at"] = as_of.isoformat()
-            snapshots_updated.append(updated)
-
-    return {
-        "settled_at": as_of.isoformat(),
-        "total_settled": len(outcomes),
-        "total_pending": pending_count,
-        "by_horizon": {
-            h: {
-                "executed": _build_group_summary(executed_by_horizon[h]),
-                "shadow": _build_group_summary(shadow_by_horizon[h]),
-            }
-            for h in ("1d", "5d", "20d")
-        },
-        "by_decision": by_decision,
-        "summary": {
-            "executed": _build_group_summary(executed_outcomes),
-            "shadow": _build_group_summary(shadow_outcomes),
-        },
-        "_snapshots_updated": snapshots_updated,
-    }
-
-
-# ── Integration helpers ──────────────────────────────────────────────────
+        if isinstance(item, dict):
+            snapshots.append(item)
+    return snapshots
 
 
 def save_portfolio_snapshots(
-    portfolio_decision: dict,
-    *,
-    generated_at: str = "",
-    repo_root: Path | None = None,
-    snaps_dir: str | None = None,
-) -> list[Path]:
-    """Save DecisionSnapshots for each approved action in the PortfolioDecision.
-
-    Three snapshots (horizons 1, 5, 20 trading days) are created per action.
-    Shadow snapshots are also created for suppressed actions so counterfactual
-    evaluation can be performed during settlement.
-
-    Returns the list of saved file paths.
-    """
-    from hashlib import sha256 as _sha256
-
-    rule_version = portfolio_decision.get("rule_version", "decision-trust-t1-v1")
-    params_hash = _sha256(json.dumps(portfolio_decision, sort_keys=True).encode()).hexdigest()[:16]
-    data_as_of = generated_at or datetime.now(timezone.utc).isoformat()
-
-    saved: list[Path] = []
-
-    # Approved actions → executed snapshots
-    for action in portfolio_decision.get("approved_actions", []):
-        for horizon in (1, 5, 20):
-            snap = {
-                "decision_id": action["decision_id"],
-                "rule_version": rule_version,
-                "params_hash": params_hash,
-                "data_as_of": data_as_of,
-                "position_id": action["position_id"],
-                "signal": action["signal"],
-                "ratio": action["ratio"],
-                "horizon_days": horizon,
-                "executed": True,
-                "entry_price": 0.0,   # placeholder — caller should fill
-                "execution_price": 0.0,
-                "settlement_timing": action.get("settlement_timing", "T+0"),
-                "commission_rate": DEFAULT_COMMISSION_RATE,
-                "settled": False,
-                "outcome": None,
+    portfolio_decision, *, generated_at="", repo_root=None, snaps_dir=None,
+    run_id="", position_valuations=None, quotes=None, report_view=None, context=None,
+):
+    """Capture each actual proposed action once, without claiming a user execution."""
+    generated = utc(generated_at).isoformat()
+    positions = defaultdict(list)
+    for position in position_valuations or []:
+        if isinstance(position, dict):
+            positions[position.get("position_id")].append(position)
+    saved = []
+    for status, field in (("approved", "approved_actions"), ("suppressed", "suppressed_actions")):
+        for action in portfolio_decision.get(field, []):
+            matches = positions.get(action.get("position_id"), [])
+            position = matches[0] if len(matches) == 1 else None
+            reason = None if position else ("ambiguous_position" if matches else "missing_position")
+            instrument_id = None
+            if position is not None:
+                try:
+                    instrument_id = canonical_identity(position.get("instrument_key"))
+                except ValueError:
+                    reason = "missing_or_invalid_position_instrument"
+            entry = select_entry(instrument_id, quotes or {})
+            snapshot = {
+                "schema_version": 2, "decision_id": action["decision_id"],
+                "source_run_id": run_id, "generated_at": generated,
+                "recommendation_status": status, "action": deepcopy(action),
+                "position": deepcopy(position), "position_id": action.get("position_id"),
+                "instrument_id": instrument_id, "identity_reason": reason,
+                "entry_snapshot": entry, "report_view": deepcopy(report_view),
+                "context": deepcopy(context or {}),
+                "rule_version": portfolio_decision.get("rule_version"),
+                "portfolio_decision_id": portfolio_decision.get("decision_id"),
             }
-            saved.append(save_decision_snapshot(snap, repo_root=repo_root, snaps_dir=snaps_dir))
-
-    # Suppressed actions → shadow (unexecuted) snapshots
-    for action in portfolio_decision.get("suppressed_actions", []):
-        for horizon in (1, 5, 20):
-            snap = {
-                "decision_id": action["decision_id"],
-                "rule_version": rule_version,
-                "params_hash": params_hash,
-                "data_as_of": data_as_of,
-                "position_id": action["position_id"],
-                "signal": action["signal"],
-                "ratio": action["ratio"],
-                "horizon_days": horizon,
-                "executed": False,
-                "entry_price": 0.0,
-                "execution_price": 0.0,
-                "settlement_timing": action.get("settlement_timing", "T+0"),
-                "commission_rate": DEFAULT_COMMISSION_RATE,
-                "settled": False,
-                "outcome": None,
-            }
-            saved.append(save_decision_snapshot(snap, repo_root=repo_root, snaps_dir=snaps_dir))
-
+            snapshot["source_hash"] = digest(snapshot)
+            saved.append(save_decision_snapshot(snapshot, repo_root=repo_root, snaps_dir=snaps_dir))
     return saved
 
 
-# ── Convenience entry point for scheduled / CLI ──────────────────────────
+def _unique(records, kind):
+    """Do not choose an arbitrary winner when two confirmed IDs disagree."""
+    indexed = {}
+    missing = []
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        identity = record.get("id")
+        if not isinstance(identity, str) or not identity:
+            missing.append(deepcopy(record))
+            continue
+        if identity in indexed and canonical_json(indexed[identity]) != canonical_json(record):
+            raise ValueError(f"conflicting_{kind}_id:{identity}")
+        indexed[identity] = record
+    return [deepcopy(indexed[k]) for k in sorted(indexed)] + missing
+
+
+def _visible(record, as_of, *fields):
+    for field in fields:
+        value = record.get(field)
+        if value:
+            try:
+                return utc(value) <= as_of
+            except (ValueError, TypeError):
+                return False
+    return False
+
+
+def _advice_matches(advice, snapshot):
+    source = advice.get("source_snapshot")
+    return (snapshot is not None and advice.get("schema_version") == 2 and isinstance(source, dict)
+            and _snapshot_status(source) == "verified"
+            and source.get("source_hash") == snapshot.get("source_hash")
+            and source.get("decision_id") == snapshot.get("decision_id")
+            and advice.get("source_run_id") == snapshot.get("source_run_id")
+            and any(a.get("decision_id") == snapshot.get("decision_id")
+                    for a in advice.get("actions", []) if isinstance(a, dict)))
+
+
+def _observations(snapshot, frozen_results, as_of, gaps):
+    observations = []
+    if snapshot is None:
+        return observations
+    from stocks.engine.target_observation import validate_observation
+
+    for result in sorted(frozen_results or [], key=lambda r: str(r.get("result_id", ""))):
+        signal = result.get("signal") or {}
+        provenance = signal.get("provenance") or {}
+        if provenance.get("decision_id") != snapshot["decision_id"]:
+            continue
+        if provenance.get("source_snapshot_hash") != snapshot.get("source_hash"):
+            gaps.append("observation_source_snapshot_mismatch")
+            continue
+        if signal.get("symbol") != snapshot.get("instrument_id"):
+            gaps.append("observation_instrument_mismatch")
+            continue
+        obs = result.get("exit") or {}
+        if not _visible(obs, as_of, "retrieved_at"):
+            continue
+        if obs.get("status") == "observed":
+            reason = validate_observation(signal["symbol"], result.get("target"), obs)
+            if reason:
+                gaps.append("invalid_observation_evidence:" + reason)
+                continue
+        observations.append({
+            "result_id": result.get("result_id"), "signal_id": result.get("signal_id"),
+            "policy_id": result.get("policy_id"), "target_at": result.get("target_at"),
+            "status": result.get("status"), "reason": result.get("reason"),
+            "source_snapshot_hash": snapshot["source_hash"], "observation": deepcopy(obs),
+        })
+    return observations
+
+
+def _cashflow(execution, observations):
+    flow = {"execution_id": execution.get("id"), "status": "unavailable", "reason": None,
+            "side": execution.get("side"), "quantity": execution.get("quantity"),
+            "price": execution.get("price"), "currency": execution.get("currency"),
+            "fee_amount": execution.get("fee_amount"), "fee_currency": execution.get("fee_currency"),
+            "gross_cash_flow": None, "cash_flow": None, "price_observations": []}
+    if execution.get("schema_version") not in {2, 3}:
+        return dict(flow, reason="legacy_execution_unverified")
+    if (execution.get("status") != "executed" or execution.get("side") not in ("buy", "sell")
+            or not positive_number(execution.get("quantity"))
+            or not positive_number(execution.get("price"))
+            or not isinstance(execution.get("currency"), str) or not execution["currency"]):
+        return dict(flow, reason="incomplete_execution_facts")
+    notional = execution["quantity"] * execution["price"]
+    if not positive_number(notional):
+        return dict(flow, reason="nonfinite_execution_notional")
+    gross = notional * (-1 if execution["side"] == "buy" else 1)
+    flow.update(gross_cash_flow=gross)
+    fee = execution.get("fee_amount")
+    fee_currency = execution.get("fee_currency")
+    if fee is None:
+        flow["reason"] = "fee_unknown"
+    elif isinstance(fee, bool) or not (fee == 0 or positive_number(fee)):
+        flow["reason"] = "invalid_fee"
+    elif not fee_currency:
+        flow["reason"] = "fee_currency_unknown"
+    elif fee_currency != execution["currency"]:
+        flow["reason"] = "fee_currency_differs"
+    else:
+        cash = gross - fee
+        if math.isfinite(cash):
+            flow.update(status="recorded", cash_flow=cash)
+        else:
+            flow["reason"] = "nonfinite_execution_cashflow"
+    for item in observations:
+        obs = item["observation"]
+        if (obs.get("status") != "observed" or not positive_number(obs.get("price"))
+                or obs.get("currency") != execution["currency"]):
+            continue
+        try:
+            if utc(obs["observed_at"]) <= utc(execution["executed_at"]):
+                continue
+        except (KeyError, ValueError, TypeError):
+            continue
+        change = obs["price"] / execution["price"] - 1
+        if not (-float("inf") < change < float("inf")):
+            continue
+        flow["price_observations"].append({
+            "result_id": item["result_id"], "target_at": item["target_at"],
+            "observed_at": obs["observed_at"], "price": obs["price"],
+            "raw_price_change": change,
+            "semantics": "quoted_price_change_after_fill_not_profit",
+        })
+    return flow
+
+
+def _currency_totals(flows):
+    grouped = defaultdict(list)
+    for flow in flows:
+        if isinstance(flow.get("currency"), str) and flow["currency"]:
+            grouped[flow["currency"]].append(flow)
+    totals = {}
+    for currency, rows in sorted(grouped.items()):
+        gross = sum(f["gross_cash_flow"] for f in rows) if all(f["gross_cash_flow"] is not None for f in rows) else None
+        cash = sum(f["cash_flow"] for f in rows) if all(f["cash_flow"] is not None for f in rows) else None
+        gaps = {f["reason"] for f in rows if f["reason"]}
+        if any(value is not None and not math.isfinite(value) for value in (gross, cash)):
+            gross = cash = None
+            gaps.add("nonfinite_currency_total")
+        totals[currency] = {
+            "scope": "recorded_fills_only",
+            "gross_cash_flow": gross,
+            "cash_flow": cash,
+            "complete": cash is not None,
+            "execution_ids": [f["execution_id"] for f in rows],
+            "gaps": sorted(gaps),
+        }
+    return totals
+
+
+def _event_order(record, event_field):
+    """Order instants, including records carrying different UTC offsets."""
+    earliest = datetime.min.replace(tzinfo=timezone.utc)
+
+    def instant(field):
+        try:
+            return utc(record.get(field))
+        except (ValueError, TypeError):
+            return earliest
+
+    return instant(event_field), instant("recorded_at"), str(record.get("id", ""))
+
+
+def build_decision_review(
+    snapshots, executions, frozen_results, *, as_of,
+    advice_records=None, user_decisions=None, decision_id=None,
+):
+    """Pure projection: user records never mutate recommendations or frozen results."""
+    current = utc(as_of.isoformat() if isinstance(as_of, datetime) else as_of)
+    advice = _unique(advice_records, "advice")
+    decisions = _unique(user_decisions, "user_decision")
+    fills = _unique(executions, "execution")
+    by_snapshot = defaultdict(list)
+    for snapshot in snapshots or []:
+        if isinstance(snapshot, dict) and snapshot.get("decision_id"):
+            by_snapshot[snapshot["decision_id"]].append(snapshot)
+    ids = set(by_snapshot)
+    ids.update(r["decision_id"] for r in decisions + fills if r.get("decision_id"))
+    for record in advice:
+        ids.update(a["decision_id"] for a in record.get("actions", []) if isinstance(a, dict) and a.get("decision_id"))
+    if decision_id is not None:
+        ids = {decision_id}
+    reviewed = {}
+    for did in sorted(ids):
+        raw_snapshots = by_snapshot.get(did, [])
+        valid = [s for s in raw_snapshots if _snapshot_status(s) == "verified"]
+        if len({s["source_hash"] for s in valid}) > 1:
+            raise ValueError(f"conflicting_recommendation_id:{did}")
+        snapshot = deepcopy(valid[0]) if valid else None
+        gaps = []
+        snapshot_status = "verified" if snapshot else "missing"
+        if snapshot is None:
+            if raw_snapshots:
+                snapshot_status = "source_hash_mismatch" if any(s.get("schema_version") == 2 for s in raw_snapshots) else "legacy_unverified"
+            gaps.append(snapshot_status if raw_snapshots else "missing_recommendation_snapshot")
+        elif not _visible(snapshot, current, "generated_at"):
+            continue
+        if snapshot and not snapshot.get("instrument_id"):
+            gaps.append(snapshot.get("identity_reason") or "missing_instrument")
+        related_advice = [a for a in advice if _visible(a, current, "created_at")
+                          and any(item.get("decision_id") == did for item in a.get("actions", [])
+                                  if isinstance(item, dict))]
+        linked_advice = [a for a in related_advice if _advice_matches(a, snapshot)]
+        unlinked_advice = [a for a in related_advice if not _advice_matches(a, snapshot)]
+        if unlinked_advice:
+            gaps.append("advice_source_snapshot_unverified")
+        advice_ids = {a["id"] for a in linked_advice if a.get("id")}
+        if not advice_ids:
+            gaps.append("confirmed_advice_unrecorded")
+        related_decisions = [d for d in decisions if d.get("decision_id") == did
+                            and _visible(d, current, "recorded_at")
+                            and _visible(d, current, "decided_at")]
+        related_decisions.sort(key=lambda d: _event_order(d, "decided_at"))
+        linked_decisions = [d for d in related_decisions if d.get("advice_id") in advice_ids]
+        unlinked_decisions = [d for d in related_decisions if d.get("advice_id") not in advice_ids]
+        if unlinked_decisions:
+            gaps.append("user_decision_advice_link_unverified")
+        if not linked_decisions:
+            gaps.append("user_decision_unrecorded")
+        latest = deepcopy(linked_decisions[-1]) if linked_decisions else None
+        decision_ids = {d.get("id") for d in linked_decisions}
+        related_executions = [r for r in fills if r.get("decision_id") == did
+                              and _visible(r, current, "recorded_at")]
+        related_executions.sort(key=lambda r: _event_order(r, "executed_at"))
+        observations = _observations(snapshot, frozen_results, current, gaps)
+        if not observations:
+            gaps.append("frozen_observation_unavailable")
+        cashflows = []
+        valid_fills = []
+        for execution in related_executions:
+            link_reason = None
+            if snapshot is None:
+                link_reason = "execution_recommendation_unverified"
+            elif execution.get("advice_id") not in advice_ids:
+                link_reason = "execution_advice_link_unverified"
+            elif execution.get("source_run_id") != snapshot.get("source_run_id"):
+                link_reason = "execution_source_run_mismatch"
+            elif execution.get("target") != snapshot.get("instrument_id"):
+                link_reason = "execution_instrument_mismatch"
+            elif not _visible(execution, current, "executed_at"):
+                link_reason = "execution_time_unverified"
+            if link_reason:
+                gaps.append(link_reason)
+                cashflows.append({"execution_id": execution.get("id"), "status": "unavailable",
+                                  "reason": link_reason, "currency": execution.get("currency"),
+                                  "gross_cash_flow": None, "cash_flow": None, "price_observations": []})
+                continue
+            if execution.get("user_decision_id") not in decision_ids:
+                gaps.append("execution_user_decision_unrecorded")
+            flow = _cashflow(execution, observations)
+            cashflows.append(flow)
+            if flow["gross_cash_flow"] is not None:
+                valid_fills.append(execution)
+            if flow["reason"]:
+                gaps.append(flow["reason"])
+        execution_status = "recorded_fills" if valid_fills else "unrecorded"
+        action = (snapshot or {}).get("action", {})
+        proposed = action.get("executable_quantity")
+        expected_side = {"buy": "buy", "sell": "sell", "add": "buy", "reduce": "sell", "stop_loss": "sell", "take_profit": "sell"}.get(action.get("signal"))
+        same_direction = expected_side is not None and all(f["side"] == expected_side for f in valid_fills)
+        if valid_fills and expected_side and not same_direction:
+            gaps.append("execution_direction_mismatch")
+        if valid_fills and positive_number(proposed) and same_direction:
+            quantity = sum(f["quantity"] for f in valid_fills)
+            execution_status = "partial" if quantity < proposed else ("full" if quantity == proposed else "exceeds_recommendation")
+        reviewed[did] = {
+            "decision_id": did, "snapshot": snapshot,
+            "snapshot_status": snapshot_status,
+            "legacy_snapshots": deepcopy([s for s in raw_snapshots if s.get("schema_version") != 2]),
+            "unverified_snapshots": deepcopy([s for s in raw_snapshots if s.get("schema_version") == 2 and _snapshot_status(s) != "verified"]),
+            "recommendation_status": (snapshot or {}).get("recommendation_status", "unknown"),
+            "advice_records": linked_advice, "user_decisions": linked_decisions,
+            "unlinked_advice_records": unlinked_advice,
+            "unlinked_user_decisions": unlinked_decisions,
+            "latest_user_decision": latest, "executions": related_executions,
+            "execution_status": execution_status, "recorded_fill_count": len(valid_fills),
+            "cashflows": cashflows, "cashflow_by_currency": _currency_totals(cashflows),
+            "price_observations": observations, "gaps": sorted(set(gaps)),
+            "realized_pnl": {"status": "unavailable", "reason": "cost_lots_and_inventory_path_not_available"},
+            "portfolio_gain": {"status": "unavailable", "reason": "no_comparable_portfolio_baseline"},
+        }
+    report = {"schema_version": 2, "scope": "decision_fact_review", "as_of": current.isoformat(),
+              "by_decision": reviewed,
+              "summary": {"decisions": len(reviewed),
+                          "execution_statuses": dict(sorted(Counter(r["execution_status"] for r in reviewed.values()).items()))}}
+    report["content_hash"] = digest(report)
+    return report
 
 
 def run_settlement(
-    *,
-    as_of: datetime | None = None,
-    price_history: dict[str, dict[str, float]] | None = None,
-    repo_root: Path | None = None,
-) -> dict:
-    """Load all snapshots + executions, settle them, persist updated snapshots.
+    *, as_of=None, executions=None, repo_root=None, evaluation_database=None,
+    advice_records=None, user_decisions=None, decision_id=None, snapshots_dir=None,
+):
+    """Compatibility entry point: read existing evidence without saving or fetching."""
+    snapshots = load_decision_snapshots(repo_root=repo_root, snaps_dir=snapshots_dir)
+    results = []
+    if evaluation_database is not None and Path(evaluation_database).exists():
+        uri = Path(evaluation_database).resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(uri, uri=True) as db:
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "evaluation_results" in tables:
+                results = [json.loads(r[0]) for r in db.execute("SELECT payload FROM evaluation_results ORDER BY signal_id,policy_id,target_at")]
+    return build_decision_review(
+        snapshots, executions or [], results, as_of=as_of or datetime.now(timezone.utc),
+        advice_records=advice_records, user_decisions=user_decisions, decision_id=decision_id,
+    )
 
-    This is the high-level entry point for cron/CLI usage.
-    """
-    from stocks.engine import StocksEngine
 
-    as_of = as_of or datetime.now(timezone.utc)
-
-    root = repo_root or Path.cwd()
-    snapshots = load_decision_snapshots(repo_root=root)
-
-    if not snapshots:
-        return {
-            "settled_at": as_of.isoformat(),
-            "total_settled": 0,
-            "total_pending": 0,
-            "message": "没有待结算的决策快照",
-        }
-
-    # Load executions from persistence
-    engine = StocksEngine()
-    executions = engine.list_executions()
-
-    # TODO: in production, price_history should be sourced from the engine's
-    # history cache or a provider. For now we require it to be passed in.
-    if price_history is None:
-        return {
-            "settled_at": as_of.isoformat(),
-            "total_settled": 0,
-            "total_pending": len(snapshots),
-            "message": "需要传入 price_history 才能结算",
-        }
-
-    result = settle_decisions(as_of, price_history, snapshots, executions)
-
-    # Persist updated snapshots
-    for updated in result.get("_snapshots_updated", []):
-        save_decision_snapshot(updated, repo_root=root)
-
-    # Strip internal fields from return
-    result.pop("_snapshots_updated", None)
-    return result
+def settle_decisions(as_of, price_history, snapshots, executions):
+    """Legacy API is retained only to expose unverified history, never old scores."""
+    report = build_decision_review(snapshots, executions, [], as_of=as_of)
+    report["legacy_price_history_ignored"] = True
+    report["content_hash"] = digest({k: v for k, v in report.items() if k != "content_hash"})
+    return report

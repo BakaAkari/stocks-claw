@@ -10,14 +10,17 @@ import asyncio
 import json
 import os
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
+from stocks.engine.advisory_lineage import empty_decision
 from stocks.engine.advisory_mainline import build_advisory_outlook
 from stocks.engine.economic_event_watcher import EconomicEventWatcher
+from stocks.engine.evaluation_contract import digest
 from stocks.engine.forecasts import build_forecast_candidates
 from stocks.engine.hypothesis_tracker import (
     HypothesisStore,
@@ -498,6 +501,30 @@ class RunArtifactStore:
         )
 
 
+
+def apply_advisory_authority(run: dict) -> None:
+    """Primary sessions take actions only from the validated LLM proposal.
+
+    Rule candidates remain available as explicitly labelled evidence. Failure
+    or disabling the LLM path never revives previously approved rule actions.
+    """
+    run["rule_evidence"] = {key: deepcopy(run.get(key)) for key in
+                            ("portfolio_decision", "action_cards", "capital_allocation", "cash_schedule")}
+    outlook = run.get("structured_outlook") or {}
+    lineage = deepcopy(outlook.get("advisory_lineage"))
+    run["advisory_lineage"] = lineage
+    run["portfolio_decision"] = deepcopy(
+        lineage.get("portfolio_decision") if isinstance(lineage, dict) else None
+    ) or empty_decision("LLM proposal unavailable; rule candidates are evidence only")
+    run["action_cards"] = deepcopy(run["portfolio_decision"].get("approved_actions") or [])
+    run["cash_schedule"] = deepcopy(run["portfolio_decision"].get("cash_schedule") or {})
+    run["capital_allocation"] = {}
+    run["decision_authority"] = "llm_proposal_with_deterministic_validation"
+    # Avoid two copies with diverging display hashes after final projection.
+    if isinstance(outlook, dict):
+        outlook.pop("advisory_lineage", None)
+
+
 class ScheduledAnalysisRunner:
     """Build scheduled analysis artifacts from an engine AnalysisContext."""
 
@@ -510,14 +537,21 @@ class ScheduledAnalysisRunner:
         event_watcher = None,
         repo_root: Path | None = None,
         outlook_synthesizer = None,
+        advisory_client: Any = "auto",
     ):
         self.engine = engine
         self.config = config
         self.calendar = MarketSessionCalendar(config)
         self.store = RunArtifactStore(artifact_dir)
-        self._repo_root = repo_root or Path(artifact_dir).parent.parent if artifact_dir else None
+        artifact_parent = Path(artifact_dir).parent
+        self._repo_root = repo_root or (
+            artifact_parent.parent if artifact_parent.name == ".local" else artifact_parent)
+        local_data_dir = getattr(engine, "_local_data_dir", None)
+        self._recommendation_dir = (
+            Path(local_data_dir) if local_data_dir else self._repo_root / ".local") / "decisions"
         self.event_watcher: Optional[EconomicEventWatcher] = event_watcher
         self.outlook_synthesizer = outlook_synthesizer
+        self.advisory_client = advisory_client
         self._outlook_delta_state: OutlookDeltaState | None = None
 
     def _get_synthesizer(self) -> OutlookSynthesizer:
@@ -662,6 +696,7 @@ class ScheduledAnalysisRunner:
             config=self.config,
             previous_run=previous_run,
             attach_user_view=False,
+            repo_root=self._repo_root,
         )
 
         # Shadow Account: 保存本期建议快照 + 注入诊断
@@ -679,18 +714,6 @@ class ScheduledAnalysisRunner:
             if shadow:
                 mb = run.setdefault("mandatory_blocks", {})
                 mb["shadow_account"] = shadow
-
-        # Decision Attribution: save snapshots for each approved/suppressed action
-        portfolio_decision = run.get("portfolio_decision") or {}
-        if portfolio_decision.get("approved_actions") and self._repo_root:
-            try:
-                save_portfolio_snapshots(
-                    portfolio_decision,
-                    generated_at=run.get("generated_at", ""),
-                    repo_root=self._repo_root,
-                )
-            except Exception:
-                logger.exception("Failed to save decision snapshots")
 
         # Hypothesis Tracker: 自动关联本期 action_cards 到相关论点
         if action_cards and self._repo_root:
@@ -726,6 +749,7 @@ class ScheduledAnalysisRunner:
                         session_id=session_id,
                         market=occurrence.session.primary_market,
                         config=self.config,
+                        llm_client=self.advisory_client,
                         now=run["generated_at"],
                     )
                     run["structured_outlook"] = outlook
@@ -780,6 +804,9 @@ class ScheduledAnalysisRunner:
             except Exception:
                 logger.exception("Outlook delta failed for %s", session_id)
 
+        if session_id in PRIMARY_OUTLOOK_SESSIONS:
+            apply_advisory_authority(run)
+
         # Single authoritative build of user_view for this run — constructed
         # exactly once, after outlook/delta are known, never mutated after.
         run["portfolio_decision"]["user_view"] = build_user_view(
@@ -797,6 +824,38 @@ class ScheduledAnalysisRunner:
             upcoming_events=context_dict.get("upcoming_events") or [],
         )
 
+        if isinstance(run.get("advisory_lineage"), dict):
+            lineage = run["advisory_lineage"]
+            view = run["portfolio_decision"]["user_view"]
+            lineage["code_version"] = deepcopy(run.get("code_version"))
+            lineage["deterministic_display"] = {
+                "user_view": deepcopy(view), "content_hash": digest(view),
+                "source_advisory_id": lineage.get("source_advisory_id"),
+                "portfolio_decision_id": run["portfolio_decision"].get("decision_id"),
+                "final_llm_report_verified": False,
+            }
+            lineage.pop("content_hash", None)
+            lineage["content_hash"] = digest(lineage)
+
+        # Preserve exactly the recommendation structure produced for this run.
+        # This records a system proposal, never a user choice or a trade.
+        portfolio_decision = run.get("portfolio_decision") or {}
+        if self._repo_root and (portfolio_decision.get("approved_actions")
+                                or portfolio_decision.get("suppressed_actions")):
+            save_portfolio_snapshots(
+                portfolio_decision, generated_at=run["generated_at"],
+                run_id=run["run_id"], repo_root=self._repo_root,
+                snaps_dir=self._recommendation_dir,
+                position_valuations=context_dict.get("position_valuations") or [],
+                quotes=context_dict.get("quotes") or {},
+                report_view=portfolio_decision.get("user_view") or {},
+                context={"risk_state": run.get("risk_state") or {},
+                         "portfolio_constraints": context_dict.get("portfolio_constraints") or {},
+                         "cash_schedule": portfolio_decision.get("cash_schedule") or {},
+                         "advisory_lineage": deepcopy(run.get("advisory_lineage")),
+                         "personal_mandate": context_dict.get("personal_mandate") or {},
+                         "financial_integrity": context_dict.get("financial_integrity") or {}},
+            )
         paths = self.store.save(run)
         return {
             "success": True,
@@ -979,32 +1038,12 @@ class ScheduledAnalysisRunner:
         store.save_clusters(analysis_result.clusters, formed_at=now)
         store.save_signals(analysis_result.signals, generated_at=now)
 
-        # Signal tracking: record signals for backtest
-        if analysis_result.signals:
-            tracker_dir = repo_root / ".local" / "signal_tracker"
-            tracker = SignalTracker(tracker_dir)
-            macro_ctx = harvest_result.macro or {}
-            tracked = []
-            for sig in analysis_result.signals:
-                from stocks.engine.entry_snapshot import select_entry
-                entry = select_entry(sig.symbol, harvest_result.quotes)
-                price = entry['price']
-                tracked.append(TrackedSignal(
-                    signal_id=f"{now.strftime('%Y%m%dT%H%M%S')}_{sig.symbol}_{sig.direction}",
-                    generated_at=now,
-                    symbol=sig.symbol,
-                    direction=sig.direction,
-                    rationale=sig.rationale,
-                    generation_price=price,
-                    entry_snapshot=entry,
-                    scoring_status=entry['scoring_status'],
-                    scoring_reason=entry['reason'],
-                    confidence=sig.confidence,
-                    source=analysis_result.metadata.get("analysis_mode", "unknown"),
-                    urgency=sig.urgency,
-                    regime={"vix": macro_ctx.get("vix"), "mode": analysis_result.metadata.get("analysis_mode", "unknown")},
-                ))
-            tracker.record_batch(tracked)
+        # Preserve producer semantics; the evaluation chain observes prices only.
+        _track_intelligence_signals(
+            analysis_result.signals, now, repo_root=repo_root,
+            quotes=harvest_result.quotes, metadata=analysis_result.metadata,
+            macro=harvest_result.macro,
+        )
         store.archive_and_purge(now=now)
 
         # 未来事件日历: 与交易 session 同一数据源(EventCalendar),
@@ -1103,7 +1142,7 @@ def _recount_signals(items: list[dict]) -> dict:
     return counts
 
 
-def _merge_profile_config(base_config):
+def _merge_profile_config(base_config, *, repo_root=None):
     """合并引擎配置。权威顺序（2026-08-22 配置化整改后）：
 
     engine.yaml quant_action.defaults = 唯一权威基准（生产真实值）。
@@ -1113,7 +1152,7 @@ def _merge_profile_config(base_config):
     yaml 覆盖 computed 的同名键——yaml 是最终权威。
     """
     from pathlib import Path as _Path
-    local = _Path(__file__).resolve().parent.parent.parent / ".local"
+    local = (_Path(repo_root) if repo_root is not None else _Path(__file__).resolve().parent.parent.parent) / ".local"
     computed = load_computed(local / "computed_profile.json")
     if not computed:
         return base_config or {}
@@ -1182,7 +1221,7 @@ def _resolve_risk_state_path(config: dict, *, repo_root: Optional[Path] = None) 
     return path
 
 
-def _persist_risk_state(assessment: dict, *, generated_at: datetime, config: dict) -> dict:
+def _persist_risk_state(assessment: dict, *, generated_at: datetime, config: dict, repo_root: Path | None = None) -> dict:
     from stocks.engine.risk_state import RiskObservation, RiskStateStore
 
     risk_cfg = (config or {}).get("risk_state") or {}
@@ -1194,7 +1233,7 @@ def _persist_risk_state(assessment: dict, *, generated_at: datetime, config: dic
             minutes=int(risk_cfg.get("critical_ttl_minutes", 360))
         ),
     )
-    state_path = _resolve_risk_state_path(config)
+    state_path = _resolve_risk_state_path(config, repo_root=repo_root)
     state = RiskStateStore(path=state_path, config=risk_cfg).update(observation)
     result = state.to_dict()
     result["recommended_actions"] = assessment.get("recommended_actions", [])
@@ -1258,6 +1297,7 @@ def build_scheduled_run(
     attach_user_view: bool = True,
     structured_outlook: Optional[dict] = None,
     outlook_delta: Optional[dict] = None,
+    repo_root: Path | None = None,
 ) -> dict:
     session = occurrence.session
     generated_at_iso = _iso_utc(generated_at)
@@ -1310,7 +1350,7 @@ def build_scheduled_run(
         constraints=context.get("portfolio_constraints"),
         portfolio_mapping=context.get("portfolio_mapping"),
         quant_config=_merge_profile_config(
-            context.get("engine_config", {}).get("quant_action"),
+            context.get("engine_config", {}).get("quant_action"), repo_root=repo_root,
         ),
     )
     portfolio_risk = _build_portfolio_risk_summary(
@@ -1349,7 +1389,7 @@ def build_scheduled_run(
     risk_assessment = _compute_risk_assessment(context)
     risk_state = _persist_risk_state(
         risk_assessment, generated_at=generated_at,
-        config=context.get("engine_config") or config,
+        config=context.get("engine_config") or config, repo_root=repo_root,
     )
     try:
         portfolio_decision = adjudicate_portfolio(
@@ -1421,6 +1461,7 @@ def build_scheduled_run(
     _track_engine_action_signals(
         research_candidates,
         generated_at_iso,
+        repo_root=repo_root,
         quotes=context.get("quotes") or {},
     )
     data_boundaries = {
@@ -1474,7 +1515,7 @@ def build_scheduled_run(
         "action_signals": filtered_action_signals,
         "rule_scorecard": context.get("rule_scorecard", {}),
         "data_quality": context_quality,
-        "agent_task": build_agent_task(session),
+        "agent_task": build_agent_task(session, personal_mandate=context.get("personal_mandate")),
         "write_policy": {
             "may_write_financial_memory": False,
             "requires_user_confirmation": True,
@@ -1997,54 +2038,15 @@ def _signal_to_action_review(signal: dict) -> dict:
     }
 
 
-def _build_persona() -> dict:
-    """从 computed_profile 构建风格化 persona。"""
-    from pathlib import Path as _Path
-    local = _Path(__file__).resolve().parent.parent.parent / ".local"
-    computed = load_computed(local / "computed_profile.json")
-
-    base = {
-        "role": "你是用户的私人投资分析师，不是市场播报员。你了解用户的每一笔持仓、成本和偏好。",
-        "principles": [
-            "用第一人称对用户说话",
-            "决策给选项，不给命令",
-            "没变化就直说——不要为了凑字数编内容",
-            "引用具体数字",
-            "主动提醒风险",
-            "引用上次建议（如果相关）",
-        ],
+def _build_persona(*, personal_mandate=None) -> dict:
+    """Render only supplied, confirmed preferences; never infer a trading style."""
+    mandate = personal_mandate or {}
+    return {
+        "role": "你是用户的私人投资分析师。只使用已提供事实，不假定了解缺失持仓、成本或偏好。",
+        "principles": ["决策给选项，不给命令", "未知信息明确标注", "不从交易规则推断用户风格",
+                       "只解释已验证的建议结构，不新增动作"],
+        "personal_mandate": deepcopy(mandate),
     }
-
-    if computed and computed.get("style_summary"):
-        summary = computed["style_summary"]
-        params = computed.get("params", {})
-        style_rules = [f"用户交易风格: {summary}"]
-
-        # 根据参数生成风格化指令
-        stop = params.get("stop_loss_pct")
-        if stop is not None and stop < -15:
-            style_rules.append(f"用户容忍较大回撤（止损线 {stop}%），不必在小幅浮亏时催促止损")
-        elif stop is not None and stop > -8:
-            style_rules.append(f"用户偏好严格风控（止损线 {stop}%），浮亏接近止损线时主动提醒")
-
-        if not params.get("chase_enabled", False):
-            style_rules.append("用户不追涨——轮动排名靠前但已拉升的标的只做参考，不建议追高买入")
-
-        ladder = params.get("ma20_pullback_add_ratios", [0.02])
-        if len(ladder) > 1 or ladder[0] > 0.03:
-            style_rules.append(f"用户偏好分批建仓（{len(ladder)}档），加仓建议分档给出")
-
-        tp = params.get("take_profit_levels")
-        if tp:
-            max_tp = max(lvl[0] for lvl in tp)
-            if max_tp > 40:
-                style_rules.append("用户偏好让利润奔跑，止盈提醒偏保守、偏延迟")
-            elif max_tp < 20:
-                style_rules.append("用户偏好落袋为安，止盈提醒偏积极")
-
-        base["principles"] = style_rules + base["principles"]
-
-    return base
 
 
 def _blocked_symbols(position_valuations: list[dict]) -> set[str]:
@@ -2109,84 +2111,129 @@ def _indicator_as_of_stale(as_of: object) -> bool:
 
 
 
+def _validate_replay_provenance(entry: dict, generated_at: datetime, provenance: dict) -> None:
+    """A historical entry must never pass through as a live producer event."""
+    is_replay_entry = entry.get("freshness_context") == "historical_replay"
+    is_replay_event = provenance.get("origin") == "historical_replay"
+    if not is_replay_entry and not is_replay_event:
+        return
+    if not is_replay_entry or not is_replay_event:
+        raise ValueError("historical entry requires explicit replay provenance")
+    decision = datetime.fromisoformat(str(provenance.get("decision_as_of")).replace("Z", "+00:00"))
+    created = datetime.fromisoformat(str(provenance.get("replay_created_at")).replace("Z", "+00:00"))
+    observed = datetime.fromisoformat(str(entry.get("observed_at")).replace("Z", "+00:00"))
+    if (decision.tzinfo is None or created.tzinfo is None or observed.tzinfo is None
+            or decision != generated_at or observed != decision):
+        raise ValueError("historical entry must match the declared replay decision time")
+
+
+def _track_intelligence_signals(
+    signals, generated_at: datetime, *, repo_root: Path, quotes: dict,
+    metadata: dict, macro: dict | None = None,
+    provenance: dict | None = None,
+) -> None:
+    """Persist raw intelligence semantics without asserting directional eligibility."""
+    from stocks.engine.entry_snapshot import select_entry
+    from stocks.engine.signal_tracker import signal_event_id
+
+    if not signals:
+        return
+    if generated_at.tzinfo is None:
+        raise ValueError("generated_at timezone required")
+    generated_at = generated_at.astimezone(timezone.utc)
+    tracker = SignalTracker(repo_root / ".local" / "signal_tracker")
+    source = metadata.get("analysis_mode") or "unknown"
+    for sig in signals:
+        entry = select_entry(sig.symbol, quotes)
+        _validate_replay_provenance(entry, generated_at, provenance or {})
+        symbol = entry["instrument_id"] or sig.symbol
+        semantics = sig.direction or "unknown"
+        status = "observation_only" if entry["scoring_status"] == "scorable" else "unscorable"
+        tracker.record(TrackedSignal(
+            signal_id=signal_event_id(f"intelligence:{source}", generated_at, symbol, semantics,
+                                      origin=(provenance or {}).get("origin", "production")),
+            generated_at=generated_at,
+            symbol=symbol,
+            direction=semantics,
+            action_semantics=semantics,
+            signal_type="intelligence_signal",
+            strategy_id=f"intelligence:{source}",
+            strategy_version=metadata.get("strategy_version") or "unknown",
+            forecast_horizon=getattr(sig, "horizon", None),
+            provenance=provenance or {},
+            rationale=sig.rationale,
+            generation_price=entry["price"],
+            entry_snapshot=entry,
+            scoring_status=status,
+            scoring_reason=entry["reason"] or "price_observation_only",
+            confidence=sig.confidence,
+            source=source,
+            urgency=sig.urgency,
+            regime={"vix": (macro or {}).get("vix"), "mode": source},
+        ))
+
+
 def _track_engine_action_signals(
     candidates: list[dict],
     generated_at: str,
     repo_root: Path | None = None,
     quotes: dict | None = None,
+    provenance: dict | None = None,
 ) -> None:
-    """P0-1: 把引擎 research 候选(accumulate/left_bottom/wait_for_pullback 等)
-    记录到 SignalTracker,让 A股/美股动作信号开始积累结算胜率。
+    """Record every research event with its original action, including waiting.
 
-    之前 tracker 只记录 intelligence 的 LLM/fallback 信号(主要是 BTC),
-    引擎给用户的股票动作信号从不进 tracker —— 反馈闭环断在源头。
-    这里补齐: 每个候选 = 一个方向性信号(direction 由信号类型映射),
-    以 symbol 的现价作为 generation_price。
-
-    失败只告警不阻断主流程(与 intelligence 追踪同风格)。
+    These candidates authorize price observations only. Their action labels do
+    not establish a short-term price forecast or an executed transaction.
     """
     if not candidates:
         return
-    from stocks.engine.signal_tracker import SignalTracker, TrackedSignal
+    from stocks.engine.entry_snapshot import select_entry
+    from stocks.engine.signal_tracker import signal_event_id
+
     try:
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
-        try:
-            now = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            pass
+        now = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+        if now.tzinfo is None:
+            raise ValueError("generated_at timezone required")
+        now = now.astimezone(timezone.utc)
         if repo_root is None:
             repo_root = Path(__file__).resolve().parents[2]
         tracker = SignalTracker(repo_root / ".local" / "signal_tracker")
-        # 方向映射: accumulate/rotation/left_bottom/wait_for_pullback = 观察买入意图;
-        # reduce_risk = 减仓意图; 其余跳过或标记 hold。
-        direction_map = {
-            "accumulate_candidate": "buy",
-            "rotation_candidate": "buy",
-            "left_bottom_candidate": "buy",
-            "wait_for_pullback": "buy",
-            "reduce_risk": "sell",
-            "avoid_catching_falling_knife": "hold",
-        }
         tracked: list[TrackedSignal] = []
         for c in candidates:
-            signal = str(c.get("signal") or "")
-            direction = direction_map.get(signal)
-            if direction is None or direction == "hold":
-                continue
+            semantics = str(c.get("signal") or "unknown")
             symbol = str(c.get("symbol") or "")
             if not symbol:
                 continue
-            from stocks.engine.entry_snapshot import select_entry
-            entry = select_entry(symbol, quotes, c.get('market'))
-            symbol = entry['instrument_id'] or symbol
-            price = entry['price']
+            entry = select_entry(symbol, quotes, c.get("market"))
+            _validate_replay_provenance(entry, now, provenance or {})
+            symbol = entry["instrument_id"] or symbol
+            status = "observation_only" if entry["scoring_status"] == "scorable" else "unscorable"
             tracked.append(TrackedSignal(
-                signal_id=(
-                    f"{now.strftime('%Y%m%dT%H%M%S')}_{symbol.replace(':', '_')}_{direction}"
-                ),
+                signal_id=signal_event_id("engine_action", now, symbol, semantics,
+                                          origin=(provenance or {}).get("origin", "production")),
                 generated_at=now,
                 symbol=symbol,
-                direction=direction,
-                rationale=str(c.get("action_hint") or "")[:200],
-                generation_price=price,
+                direction="unknown",
+                signal_type="risk_reduction" if semantics == "reduce_risk" else "research_candidate",
+                action_semantics=semantics,
+                strategy_id="engine_action",
+                strategy_version=c.get("strategy_version") or "unknown",
+                provenance=provenance or {},
+                rationale=str(c.get("action_hint") or ""),
+                generation_price=entry["price"],
                 entry_snapshot=entry,
-                scoring_status=entry['scoring_status'],
-                scoring_reason=entry['reason'],
+                scoring_status=status,
+                scoring_reason=entry["reason"] or "price_observation_only",
                 confidence=float(c.get("score") or 0) if c.get("score") is not None else None,
                 source="engine_action",
                 urgency="medium",
                 regime={"vix": None, "mode": "engine"},
             ))
         if tracked:
-            tracker.record_batch(tracked)
-            get_logger("scheduled_analysis").info(
-                f"tracked {len(tracked)} engine action signals"
-            )
-    except Exception as exc:  # noqa: BLE001 - 追踪失败不影响主流程
-        get_logger("scheduled_analysis").warning(
-            f"track_engine_action_signals failed: {exc}"
-        )
+            recorded = tracker.record_batch(tracked)
+            get_logger("scheduled_analysis").info(f"recorded {recorded} engine observation events")
+    except Exception as exc:  # noqa: BLE001 - event capture failure must not change decisions
+        get_logger("scheduled_analysis").warning(f"track_engine_action_signals failed: {exc}")
 
 
 def _build_research_candidates(
@@ -2232,8 +2279,9 @@ def _build_research_candidates(
     # 左侧分批接货比例(支撑位档位表): 从 computed_profile 个性化参数读取。
     _batch_ratios: list[float] = [0.40, 0.35, 0.25]
     try:
-        from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
         from pathlib import Path as _P
+
+        from stocks.engine.profile_interpreter import load_computed, merge_with_defaults
         _merged = merge_with_defaults(load_computed(_P(__file__).resolve().parent.parent.parent / ".local" / "computed_profile.json"))
         _br = _merged.get("left_batch_plan_ratios")
         if isinstance(_br, (list, tuple)) and _br:
@@ -2355,7 +2403,7 @@ def _build_research_candidates(
     return diverse
 
 
-def build_agent_task(session: ScheduledSession) -> dict:
+def build_agent_task(session: ScheduledSession, *, personal_mandate=None) -> dict:
     """v5 dual-layer report contract: trade card first, assistant second."""
     is_watch = session.intent in {"open_watch", "mid_session_check"}
     is_pre_close = session.intent == "pre_close_decision"
@@ -2420,7 +2468,7 @@ def build_agent_task(session: ScheduledSession) -> dict:
                 "观察候选按动作语义分组：原因相同/相近的标的合并为一行'同类候选：A/B/C'，只保留一组完整原因+完整标的名单，不逐条重复模板话术。",
             ],
         },
-        "persona": _build_persona(),
+        "persona": _build_persona(personal_mandate=personal_mandate),
         "adaptability": {
             "delivery_policy": delivery_policy,
             "card_first": "无论篇幅长短，交易指令卡必须是第一段，私人投资助理必须紧接第二段",

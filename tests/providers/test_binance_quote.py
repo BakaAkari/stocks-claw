@@ -94,3 +94,24 @@ async def test_finnhub_failure_falls_back_to_binance():
     assert record.result == "fallback_success"
     assert record.primary_provider == "finnhub"
     assert record.fallback_provider == "binance"
+
+
+def test_known_price_basis_is_preserved_without_guessing_other_pairs():
+    provider = BinanceQuoteProvider()
+    quote = provider._data_to_quote(BINANCE_TICKER, Instrument('BTCUSDT', '', 'crypto'))
+    payload = quote.to_dict()
+    assert payload['currency'] == 'USDT'
+    assert payload['adjustment'] == 'not_applicable'
+    assert payload['price_basis'] == 'raw_quoted_price'
+    assert payload['price_type'] == 'last_trade'
+    unknown_pair = dict(BINANCE_TICKER, symbol='BTCXYZ')
+    quote = provider._data_to_quote(unknown_pair, Instrument('BTCXYZ', '', 'crypto'))
+    assert quote.currency is None
+    assert 'currency' not in quote.to_dict()
+
+
+@pytest.mark.parametrize('override', [{'closeTime': 0}, {'symbol': 'ETHUSDT'}])
+def test_source_time_and_instrument_must_match(override):
+    provider = BinanceQuoteProvider()
+    with pytest.raises(ProviderDataError):
+        provider._data_to_quote(dict(BINANCE_TICKER, **override), Instrument('BTCUSDT', '', 'crypto'))

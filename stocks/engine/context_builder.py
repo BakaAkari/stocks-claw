@@ -149,6 +149,7 @@ class ContextBuilder:
         history_backfill_report: Optional[list[dict]] = None,
         scan_instruments: Optional[list] = None,
         execution_records: Optional[list[dict]] = None,
+        user_decisions: Optional[list[dict]] = None,
         forecast_summary: Optional[dict] = None,
         asset_schema_version: int = 1,
         asset_load_warning: Optional[str] = None,
@@ -321,6 +322,7 @@ class ContextBuilder:
         reviewed_advice = attach_execution_review(
             reviewed_advice,
             execution_records or [],
+            user_decisions=user_decisions or [],
         )
 
         # 15. 生成 raw_prompt_input（人类可读文本）
@@ -890,6 +892,7 @@ class ContextBuilder:
             "liquidity": position.liquidity.to_dict(),
             "valuation_method": method,
             "quantity": position.holding.quantity if position.holding else None,
+            "holding": position.holding.to_dict() if position.holding else None,
             "price": price,
             "price_source": price_source,
             "as_of": as_of,
@@ -3002,6 +3005,18 @@ class ContextBuilder:
                 if execution.get("note"):
                     line += f" | note: {execution.get('note')}"
                 lines.append(line)
+                for choice in item.get("decision_history", []):
+                    lines.append(
+                        f"   用户决定 {choice.get('decided_at')} | {choice.get('status')}"
+                        f" | {choice.get('note', '')}"
+                    )
+                for fill in item.get("fills", []):
+                    lines.append(
+                        f"   已记录成交 {fill.get('id')} | {fill.get('executed_at')}"
+                        f" | {fill.get('side', fill.get('action'))}"
+                        f" | 数量 {fill.get('quantity', '未知')}"
+                        f" @ {fill.get('price', '未知')} {fill.get('currency', '未知')}"
+                    )
         if not found:
             lines.append(" - 缺失: 上期建议没有结构化 actions，无法按 advice_id + target 对照。")
 

@@ -1,32 +1,61 @@
 # STATUS.md
 
-## 当前状态：EVAL-01 / E3 开发完成，E4 未开始
+## 当前状态：TRUST-01 最小核对与 LLM 责任链完成本地验收，未部署
 
-E3：交易所日历、自然小时/交易会话窗口、历史目标观测和手动CLI已接通E2账本。三市场真实价格烟测首次落盘3条，重复运行0新增。全量1502 passed / 7 skipped。验收及限制见 `docs/tasks/EVAL-01-E3-ACCEPTANCE.md`。长期99%观测覆盖尚无运行证据；不等于系统可以恢复或策略已经可信。
+2026-10-15。当前任务为
+[个人约束、金融事实核对与 LLM 建议责任链](docs/tasks/TASK-TRUST-01-financial-reconciliation-advisory-lineage.md)。
+直接在 `/Users/baka_akari/code/stocks-claw` 修改，HEAD 基线 **b288a96**；保留前轮
+EVAL/DECISION 改动。没有新建代码副本或 worktree。用户已授权将本次与前轮保留的改动提交并推送到
+origin/master；部署、恢复服务仍未执行。当前提交版本以 Git HEAD 为准。
 
-交易助手维持维护停机：9 个相关 Hermes cron 已暂停，不恢复生成、结算或推送。
+### 价值顺序与实现
 
-### 已完成
+方案和验收改为：个人目标与约束前置 → 真实持仓/资金/成交核对 → LLM 建议责任链
+→ 用户决定/实际执行/复盘 → 后续可验证的个人策略研究。暂不扩展 E4 胜率指标。
 
-- **E0 冻结与盘点**：旧账本封存、生产旧胜率反馈隔离、signal producer / settlement / report consumer 盘点完成。旧 tracker 不再注入生产 scorecard，返回 `disabled_legacy_ledger`。
-- **E1 生成侧数据可靠性**：两条信号生成路径统一保存 `market:code`、entry price、source、as_of、stale 和不可评价原因；旧记录只读兼容，不补造历史 lineage。真实 A 股、 美股、加密行情入口均完成独立验证；测试写入污染已隔离并恢复原账本。
-- **E2 唯一评价任务基础**：新增 SQLite `EvaluationLedger` / `evaluation_runner`，以 `(signal_id, policy_id, target_at)` 唯一约束实现幂等 schedule、租约 claim、单次 finish、失败 release 和进程中断恢复。尚未接管旧结算脚本。
+- `profile.mandate` 明确目标、期限、损失能力、现金需求、操作频率与风格；未知不推断。
+  partial 更新保留其他字段，组合约束有正式 confirmed 替换入口。
+- confirmed CLI/MCP 支持独立账户时点记录、schema 3 自主或关联成交、非交易现金腿。
+  十进制核对分别处理账户、币种、单位、交易日/结算日；幂等、冲突和坏记录显式处理。
+- 只读核对报告差异，并比对当前资产记忆；不自动修改持仓/现金。可用余额与账面值
+  分开，过期可用数量不能通过当前建议门禁，重复持仓 ID 不能静默覆盖。
+- 正式上下文保留 holding/unit；个人约束、核对、行情和执行规则进入完整哈希快照。
+  主窗口保留原始 LLM 提案、可获得的提示词/返回、校验与展示来源。规则保留为证据，
+  模型失败不回退成已批准动作；待复核提案与未知现金不伪装成无需操作或零余额。
+- 通过检查的既有 share 持仓卖出/减仓接通来源冻结 → confirmed 建议/用户决定/成交
+  → 只读复盘。数据契约见 [financial-trust-v1](docs/contracts/financial-trust-v1.md)。
 
-### 验收证据
+### 最终验证
 
-- E0 证据：`/opt/data/workspace/stocks-claw-e0/20261015T114321/`
-- E1 证据：`docs/tasks/EVAL-01-E1-ACCEPTANCE.md`、`/opt/data/workspace/stocks-claw-e1-remediation/`
-- E2 证据：`docs/tasks/EVAL-01-E2-ACCEPTANCE.md`
-- E2 提交：`38892ae`，已推送并回读确认远端 `master` 一致。
-- 当前生产全量测试：**1502 passed / 7 skipped / 0 failed**。
+- 全量 pytest：**1812 passed / 7 skipped / 0 failed**；
+  `/tmp/stocks-trust-final-pytest.log`。
+- 所有变更/新增 Python 文件 Ruff 通过；全仓 Ruff 仍有 **45 条既有问题**，未声称全仓
+  清洁。日志 `/tmp/stocks-trust-changed-ruff.txt`、`/tmp/stocks-trust-final-ruff.json`。
+- compileall（stocks/tests/scripts）与 git diff --check 通过。
+- 正式入口纵向烟测结果 **ok**：
+  `.venv/bin/python scripts/smoke_advisory_lineage.py --output-dir /private/tmp/stocks-advisory-lineage-acceptance-20261015`。
+  产物包含 `advisory-smoke-result.json`、`advisory-run.json`、`advisory-review.json`。
+- 样例：两笔历史模拟成交和入金核对到 700 股 / 4548 CNY → 正常 build_context →
+  项目现有执行规则 → 模拟模型卖出 100 股 → 最终卡片与来源快照 → 用户确认决定及
+  schema 3 成交 → full 复盘。849 CNY 为净现金流，**不是利润**。
+- 未确认零写入，重复零新增，复盘只读；最终烟测及单元测试启用真实私密文件 I/O
+  拒绝与外网隔离。这里是临时测试数据目录，执行的代码仍是当前项目。
 
-### 当前边界
+### 明确边界和停点
 
-E2 只完成唯一任务和可靠写入基础，不代表旧 `scripts/signal_settlement.py` 已迁移；该脚本仍按 cron 当前价格结算，不能恢复使用。历史 JSONL 未迁移、未补价、未重算，旧胜率仍不得用于策略反馈。
+烟测账户、成交、行情和模型响应均为模拟：**没有完成 Kari 实际账户核对或在线模型
+验收**。历史一致不证明券商真实性或没有遗漏；个人约束作为上下文不等于适当性证明。
+买入缺费用预算、复杂组合限额缺投影等仍待复核。提示词来源目前只覆盖 complete
+接口参数；完整 HTTP 请求/响应与服务端模型身份未验收。二次 LLM 文字改写和最终
+送达证据仍未闭环。原始价格观察基础保留，未新增胜率、净收益、回撤或自动调参。
 
-**下一步：E4 Result/Metrics 重建。** E3窗口须显式配置；股票自然时间窗口无分钟历史源时返回unavailable，不偷换成日收盘价。
+开发时曾发现派生风险缓存路径遗漏，早期 standalone 烟测可能写过项目
+`.local/risk_state.json`；已修复路径并加入拒绝保护，未擅自恢复未知旧值。
+真实用户确认的金融记忆未写入；没有下单、恢复 cron、推送消息或改动 NAS 服务。Git 提交推送不代表 NAS 已更新部署。
 
-已有用户修改保留；未包含在本轮提交：`scripts/run_llm_report.py`、`stocks/config/engine.yaml` 及其备份文件。系统继续停机。
+按用户要求本轮到此收口。后续真实账户数据导入/核对、在线模型及送达验证由下一项
+明确任务处理，不在本轮自动继续。既有资产自然语言录入的草稿 token 绑定、跨账户
+歧义及跨文件原子性问题记录为独立后续项，不把新事实 API 的验收扩大为旧入口已修复。
 
 ## 历史状态材料（以下不代表当前运行状态）
 

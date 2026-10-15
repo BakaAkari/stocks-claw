@@ -383,7 +383,8 @@ def test_run_artifact_retains_outlook_when_present(tmp_path):
     allowed = {"status", "decision_id", "approved_actions", "suppressed_actions",
                "cancelled_actions", "user_view", "rule_version",
                "post_trade_projection", "cash_schedule", "replacement_chains",
-               "unresolved_conflicts"}
+               "unresolved_conflicts", "author", "source_advisory_id",
+               "input_hash", "validation_receipt_hash"}
     actual = set(decision.keys())
     unknown = actual - allowed
     assert not unknown, f"Unknown portfolio_decision keys: {unknown}"

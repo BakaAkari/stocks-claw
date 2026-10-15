@@ -56,7 +56,7 @@ def _valid_advisory_payload() -> dict:
         "drivers": ["央行公开市场净投放", "成交回暖"],
         "validation": "未来一周成交额维持在万亿以上",
         "falsification": "成交额连续三日萎缩至 8000 亿以下",
-        "source_refs": ["fact:a:000001:close", "src-macro-1"],
+        "source_refs": ["dq:quotes", "dq:quotes"],
     }
     return {
         "market_assessment": "市场处于温和修复阶段，结构性机会占优",
@@ -74,7 +74,7 @@ def _valid_advisory_payload() -> dict:
                 "description": "震荡修复",
                 "trigger": "成交额持续放大",
                 "invalidation": "跌破年线",
-                "evidence_refs": ["src-macro-1"],
+                "evidence_refs": ["dq:quotes"],
                 "confidence": "medium",
             },
             {
@@ -82,7 +82,7 @@ def _valid_advisory_payload() -> dict:
                 "description": "外部冲击",
                 "trigger": "美债利率快速上行",
                 "invalidation": "外部流动性转松",
-                "evidence_refs": ["src-macro-2"],
+                "evidence_refs": ["dq:quotes"],
                 "confidence": "low",
             },
         ],
@@ -94,7 +94,7 @@ def _valid_advisory_payload() -> dict:
                 "size": "info_only",
                 "size_type": "defer",
                 "reasoning": "国产替代订单改善",
-                "evidence_refs": ["src-sector-1"],
+                "evidence_refs": ["dq:quotes"],
             }
         ],
         "asset_class_opportunities": [
@@ -105,7 +105,7 @@ def _valid_advisory_payload() -> dict:
                 "size": "info_only",
                 "size_type": "defer",
                 "reasoning": "避险溢价回落",
-                "evidence_refs": ["src-macro-2"],
+                "evidence_refs": ["dq:quotes"],
             }
         ],
         "forecast_candidates": [
@@ -118,7 +118,7 @@ def _valid_advisory_payload() -> dict:
                 "level": "4200",
                 "deadline": "2026-08-31",
                 "confidence": "low",
-                "evidence_refs": ["fact:a:000001:close"],
+                "evidence_refs": ["dq:quotes"],
             },
             {
                 "forecast_id": "fc2",
@@ -129,7 +129,7 @@ def _valid_advisory_payload() -> dict:
                 "level": "很高",
                 "deadline": "2026-08-31",
                 "confidence": "low",
-                "evidence_refs": ["fact:a:000001:close"],
+                "evidence_refs": ["dq:quotes"],
             },
         ],
         "next_checkpoints": ["下周复查成交额"],
@@ -178,7 +178,7 @@ class TestBuildAdvisoryOutlook:
         assert scenarios["base"]["invalidation"] == ["跌破年线"]
 
         source_ids = [r["id"] for r in outlook["source_refs"]]
-        assert "fact:a:000001:close" in source_ids
+        assert "dq:quotes" in source_ids
         assert len(source_ids) == len(set(source_ids))
 
         assert outlook["sector_views"][0]["sector"] == "半导体"
@@ -190,7 +190,7 @@ class TestBuildAdvisoryOutlook:
         candidates = outlook["forecast_candidates"]
         assert len(candidates) == 1
         assert candidates[0]["level"] == 4200.0
-        assert candidates[0]["source_ref_ids"] == ["fact:a:000001:close"]
+        assert candidates[0]["source_ref_ids"] == ["dq:quotes"]
 
         receipt = outlook["advisory_receipt"]
         assert receipt["status"] in {"ok", "warnings"}
@@ -389,7 +389,7 @@ class TestScheduledAnalysisWiring:
         }
         calls = []
 
-        def fake_mainline(context, *, session_id, market, config=None, now=""):
+        def fake_mainline(context, *, session_id, market, config=None, llm_client="auto", now=""):
             calls.append({"session_id": session_id, "market": market})
             return dict(outlook)
 
@@ -417,7 +417,7 @@ class TestScheduledAnalysisWiring:
         from stocks.engine.scheduled_analysis import ScheduledAnalysisRunner
         from tests.engine.test_scheduled_analysis import FakeEngine, _context, _run
 
-        def fake_mainline(context, *, session_id, market, config=None, now=""):
+        def fake_mainline(context, *, session_id, market, config=None, llm_client="auto", now=""):
             return {
                 "status": "unavailable",
                 "generated_at": NOW,

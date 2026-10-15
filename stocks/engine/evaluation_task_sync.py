@@ -1,52 +1,55 @@
-"""Create normalized evaluation tasks from immutable signal events.
+"""The sole task-definition entry point; no default directional horizons."""
 
-This module schedules work only; it never fetches prices or writes legacy JSONL.
-"""
 import json
-from datetime import datetime, timedelta, timezone
+from collections import Counter
 from pathlib import Path
 
-WINDOWS = {"24h": timedelta(hours=24), "1w": timedelta(days=7)}
+from stocks.engine.evaluation_contract import normalize_policy, utc, validate_signal
+from stocks.engine.exchange_targets import target_after
 
 
-def _utc(value):
-    dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    if dt.tzinfo is None:
-        raise ValueError("generated_at timezone required")
-    return dt.astimezone(timezone.utc)
+def schedule_signal(ledger, signal, window):
+    reason = validate_signal(signal)
+    if reason:
+        raise ValueError(reason)
+    market = signal["symbol"].split(":", 1)[0]
+    policy = normalize_policy(market, window)
+    old = ledger.definition(signal["signal_id"], policy["policy_id"])
+    # Calendar-library updates must not move previously frozen targets.
+    target = old["target"] if old else target_after(
+        utc(signal["generated_at"]), market, policy["horizon"], basis=policy["basis"])
+    return ledger.freeze_task(signal, policy, target)
 
 
-def sync_signal_events(signals_file, ledger, *, policy_prefix="directional"):
-    """Schedule each valid signal/window once; return an auditable summary."""
-    path = Path(signals_file)
+def sync_signal_events(signals_file, ledger, *, windows):
+    """Schedule explicit windows from new events; legacy data is only counted."""
+    for market, definitions in windows.items():
+        for window in definitions:
+            normalize_policy(market, window)
     summary = {"read": 0, "scheduled": 0, "existing_or_duplicate": 0,
-               "skipped_unscorable": 0, "skipped_malformed": 0}
+               "skipped": 0, "skip_reasons": Counter()}
+    path = Path(signals_file)
     if not path.exists():
-        return summary
+        raise FileNotFoundError(path)
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         summary["read"] += 1
         try:
-            row = json.loads(line)
-            signal_id = row["signal_id"]
-            generated = _utc(row["generated_at"])
-            if row.get("scoring_status") != "scorable":
-                summary["skipped_unscorable"] += 1
-                continue
-            if not row.get("entry_snapshot", {}).get("scoring_status") == "scorable":
-                summary["skipped_unscorable"] += 1
-                continue
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-            summary["skipped_malformed"] += 1
+            signal = json.loads(line)
+        except json.JSONDecodeError:
+            signal = None
+        reason = validate_signal(signal)
+        if reason:
+            summary["skipped"] += 1
+            summary["skip_reasons"][reason] += 1
             continue
-        for window, delta in WINDOWS.items():
-            policy = f"{policy_prefix}:{window}"
-            target = (generated + delta).isoformat()
-            before = ledger.get((signal_id, policy, target))
-            ledger.schedule(signal_id, policy, target)
-            if before is None:
-                summary["scheduled"] += 1
-            else:
-                summary["existing_or_duplicate"] += 1
+        definitions = windows.get(signal["symbol"].split(":", 1)[0], [])
+        if not definitions:
+            summary["skipped"] += 1
+            summary["skip_reasons"]["no_configured_window"] += 1
+        for window in definitions:
+            _, created = schedule_signal(ledger, signal, window)
+            summary["scheduled" if created else "existing_or_duplicate"] += 1
+    summary["skip_reasons"] = dict(summary["skip_reasons"])
     return summary

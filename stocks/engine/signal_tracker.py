@@ -1,13 +1,15 @@
-"""Signal tracking and backtest loop.
+"""Append-only producer events and read compatibility for legacy signal ledgers.
 
-Records generated signals with generation-time context, then settles them
-against future prices to compute win rates. Provides performance feedback
-for LLM prompt optimization.
+Versioned events retain identity, semantics and entry evidence. The old
+settlement helpers remain diagnostic-only and cannot mutate versioned events.
 """
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,6 +23,17 @@ SETTLE_WINDOWS = [
     ("24h", timedelta(hours=24)),
     ("1w", timedelta(days=7)),
 ]
+
+
+def signal_event_id(
+    source: str, generated_at: datetime, symbol: str, semantics: str, *, origin="production",
+) -> str:
+    """A stable identity for a producer event, independent of its observed price."""
+    if generated_at.tzinfo is None:
+        raise ValueError("generated_at timezone required")
+    key = [origin, source, generated_at.astimezone(timezone.utc).isoformat(), symbol, semantics]
+    digest = hashlib.sha256(json.dumps(key, ensure_ascii=False).encode()).hexdigest()
+    return f"signal-v1:{digest}"
 
 
 @dataclass
@@ -40,6 +53,13 @@ class TrackedSignal:
     entry_snapshot: Optional[dict] = None
     scoring_status: str = "unscorable"
     scoring_reason: Optional[str] = "legacy_missing_snapshot"
+    schema_version: int = 1
+    signal_type: str = "unknown"
+    action_semantics: str = "unknown"
+    strategy_id: str = "unknown"
+    strategy_version: str = "unknown"
+    forecast_horizon: Optional[str] = None
+    provenance: dict = field(default_factory=dict)
 
     # Settlement
     price_24h: Optional[float] = None
@@ -51,11 +71,18 @@ class TrackedSignal:
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "signal_id": self.signal_id,
+            "signal_type": self.signal_type,
+            "action_semantics": self.action_semantics,
+            "strategy_id": self.strategy_id,
+            "strategy_version": self.strategy_version,
+            "forecast_horizon": self.forecast_horizon,
+            "provenance": self.provenance,
             "generated_at": self.generated_at.isoformat(),
             "symbol": self.symbol,
             "direction": self.direction,
-            "rationale": self.rationale[:200],
+            "rationale": self.rationale if self.schema_version >= 1 else self.rationale[:200],
             "generation_price": self.generation_price,
             "confidence": self.confidence,
             "source": self.source,
@@ -82,65 +109,41 @@ class SignalTracker:
         self.signals_file = self.dir / "signals.jsonl"
         self.settlements_file = self.dir / "settlements.jsonl"
 
-    # P2-5 fix(2026-09-02 强化): 语义去重——同一标的同一方向的信号在整个持仓期
-    # 只记一次。此前 6h 窗口只能拦住日内刷屏, 跨日/跨周重复触发的同一方向信号
-    # 仍是同一市场判断的 N 次自我复制(8-20 单日 21 条 512400 buy), 统计样本
-    # 虚假膨胀, 分层胜率被污染。方向翻转(buy->sell)才是新的独立判断, 重新记录。
-    # DEDUP_WINDOW_SECONDS 保留仅为向后兼容, 语义已被方向存续去重取代。
-    # 精度修复: 最小价格波动阈值。A股 ETF 日波动常 <1%, <0.3% 的"方向"判定接近噪声,
-    # 标记为 below_min_change, 不计入胜率样本, 避免噪声污染自评精度。
+    # Used only by the disabled legacy settlement implementation.
     MIN_PRICE_CHANGE = 0.003
 
-    def _recent_keys(self) -> set[tuple[str, str]]:
-        """Return (symbol, direction) whose latest recorded direction is unchanged.
+    def record(self, signal: TrackedSignal) -> bool:
+        """Append an immutable event once; reject conflicting reuse of its ID.
 
-        方向存续去重: 取每个 symbol 最近一条记录的方向; 新信号方向与之相同
-        则视为同一判断的延续(不重复记录), 方向翻转才构成新信号。
+        Repeated judgments are retained. Statistical independence belongs in
+        metrics, not in destructive symbol/direction filtering at ingestion.
         """
-        recent: set[tuple[str, str]] = set()
-        if not self.signals_file.exists():
-            return recent
-        try:
-            latest_by_symbol: dict[str, tuple[datetime, str]] = {}
-            with open(self.signals_file, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        d = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    ts = d.get("generated_at")
-                    try:
-                        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-                    except (ValueError, TypeError):
-                        continue
-                    sym = str(d.get("symbol") or "")
-                    dirn = str(d.get("direction") or "")
-                    prev = latest_by_symbol.get(sym)
-                    if prev is None or dt >= prev[0]:
-                        latest_by_symbol[sym] = (dt, dirn)
-            for sym, (_dt, dirn) in latest_by_symbol.items():
-                recent.add((sym, dirn))
-        except OSError:
-            pass
-        return recent
+        payload = signal.to_dict()
+        if not signal.signal_id:
+            raise ValueError("signal_id required")
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        # The lock covers both lookup and append, including other processes.
+        with open(self.signals_file, "a+", encoding="utf-8") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            stream.seek(0)
+            for line in stream:
+                try:
+                    existing = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(existing, dict) or existing.get("signal_id") != signal.signal_id:
+                    continue
+                if json.dumps(existing, ensure_ascii=False, sort_keys=True) != encoded:
+                    raise ValueError(f"conflicting signal_id: {signal.signal_id}")
+                return False
+            stream.seek(0, os.SEEK_END)
+            stream.write(encoded + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        return True
 
-    def record(self, signal: TrackedSignal) -> None:
-        """Write a new signal to the tracking file."""
-        # skip duplicate symbol+direction within dedup window
-        if (signal.symbol, signal.direction) in self._recent_keys():
-            return
-        try:
-            with open(self.signals_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(signal.to_dict(), ensure_ascii=False) + "\n")
-        except OSError as exc:
-            logger.warning(f"SignalTracker: failed to record signal: {exc}")
-
-    def record_batch(self, signals: list[TrackedSignal]) -> None:
-        for s in signals:
-            self.record(s)
+    def record_batch(self, signals: list[TrackedSignal]) -> int:
+        return sum(self.record(signal) for signal in signals)
 
     def unsettled(self, window: str = "24h") -> list[TrackedSignal]:
         """Return signals that haven't been settled for the given window."""
@@ -178,6 +181,8 @@ class SignalTracker:
         ④结算延迟未超窗(并非补跑) 的结算才算"有效方向判定"并进入胜率样本。无效记录
         写 invalid_reason + correct=None, 保留审计但不污染胜率分母。
         """
+        if signal.schema_version >= 1:
+            raise ValueError("versioned signal events require the evaluation ledger")
         invalid_reason = None
         correct = self._is_correct(signal.direction, signal.generation_price, price)
         # 结算延迟(now - generated_at), 超窗则判定无效(补跑价无窗口意义)
@@ -372,7 +377,14 @@ class SignalTracker:
     @staticmethod
     def _from_dict(data: dict) -> TrackedSignal:
         return TrackedSignal(
+            schema_version=data.get("schema_version", 0),
             signal_id=data.get("signal_id", ""),
+            signal_type=data.get("signal_type", "unknown"),
+            action_semantics=data.get("action_semantics", "unknown"),
+            strategy_id=data.get("strategy_id", "unknown"),
+            strategy_version=data.get("strategy_version", "unknown"),
+            forecast_horizon=data.get("forecast_horizon"),
+            provenance=data.get("provenance", {}),
             generated_at=datetime.fromisoformat(data["generated_at"]),
             symbol=data.get("symbol", ""),
             direction=data.get("direction", ""),

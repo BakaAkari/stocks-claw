@@ -65,7 +65,7 @@ def _advice(index: int) -> AdviceRecord:
     )
 
 
-def test_advice_record_round_trip_and_rolls_over(tmp_path):
+def test_advice_record_round_trip_preserves_history(tmp_path):
     persistence = DataPersistence(
         str(tmp_path / "snapshots"),
         advice_dir=str(tmp_path / "advice"),
@@ -77,13 +77,13 @@ def test_advice_record_round_trip_and_rolls_over(tmp_path):
     persistence.save_advice(_advice(3))
 
     records = persistence.list_advice()
-    assert len(records) == 2
+    assert len(records) == 3
     assert records[0]["created_at"].endswith("03+00:00")
     assert records[0]["direction"]["a:000001"] == "watch"
     assert "rationale_summary" in records[0]
 
 
-def test_execution_record_round_trip_and_rolls_over(tmp_path):
+def test_execution_record_round_trip_preserves_history(tmp_path):
     persistence = DataPersistence(
         str(tmp_path / "snapshots"),
         execution_dir=str(tmp_path / "executions"),
@@ -135,7 +135,7 @@ def test_execution_record_round_trip_and_rolls_over(tmp_path):
     )
 
     records = persistence.list_executions()
-    assert len(records) == 2
+    assert len(records) == 3
     assert records[0]["id"] == "three"
     assert records[0]["extent"] == "partial"
     assert records[0]["status"] == "executed"
@@ -245,11 +245,13 @@ def test_rollover_uses_record_time_when_file_mtime_ties(tmp_path):
     persistence._trim_forecasts()
 
     advice_records = persistence.list_advice()
+    assert len(advice_records) == 3
     assert advice_records[0]["created_at"].endswith("03+00:00")
     assert advice_records[1]["created_at"].endswith("02+00:00")
     assert [item["id"] for item in persistence.list_executions()] == [
         "execution-3",
         "execution-2",
+        "execution-1",
     ]
     assert [item["id"] for item in persistence.list_forecasts()] == [
         "forecast-3",
@@ -454,22 +456,24 @@ def test_persistence_find_by_decision_id(tmp_path):
 
 
 def test_persistence_find_by_run_id(tmp_path):
-    """DataPersistence.find_executions_by_run_id 按前缀匹配 decision_id。"""
+    """Use explicit run identity; never infer it from a decision hash/prefix."""
     p = DataPersistence(
         str(tmp_path / "snapshots"),
         execution_dir=str(tmp_path / "executions"),
         max_execution_records=10,
     )
     r1 = ExecutionRecord.create(
-        id="f1", decision_id="20260715T100000Z_morning_run_001", status="executed",
+        id="f1", decision_id="hash-001", status="executed",
+        source_run_id="20260715T100000Z_morning_run",
         target="a:001", action="increase", price=1.0, executed_ratio=0.5,
     )
     r2 = ExecutionRecord.create(
-        id="f2", decision_id="20260715T100000Z_morning_run_002", status="rejected",
+        id="f2", decision_id="hash-002", status="rejected",
+        source_run_id="20260715T100000Z_morning_run",
         target="a:002", action="reduce", rejection_reason="no_liquidity",
     )
     r3 = ExecutionRecord.create(
-        id="f3", decision_id="20260716T100000Z_morning_run_001", status="planned",
+        id="f3", decision_id="20260715T100000Z_morning_run_003", status="planned",
         target="a:003", action="hold",
     )
     for r in (r1, r2, r3):
@@ -478,6 +482,7 @@ def test_persistence_find_by_run_id(tmp_path):
     matched = p.find_executions_by_run_id("20260715T100000Z_morning_run")
     assert len(matched) == 2
 
+    assert p.find_executions_by_run_id("20260715") == []
     matched2 = p.find_executions_by_run_id("nonexistent")
     assert matched2 == []
 

@@ -81,6 +81,11 @@ class BinanceQuoteProvider(QuoteProvider):
 
     def _data_to_quote(self, data: dict, instrument: Instrument) -> Quote:
         try:
+            symbol = self._build_symbol(instrument)
+            if data.get("symbol", symbol) != symbol:
+                raise ValueError("ticker instrument mismatch")
+            if float(data["closeTime"]) <= 0:
+                raise ValueError("closeTime must be positive")
             as_of = datetime.fromtimestamp(
                 float(data["closeTime"]) / 1000, tz=timezone.utc
             ).isoformat()
@@ -96,6 +101,13 @@ class BinanceQuoteProvider(QuoteProvider):
                 volume_lot=float(data["volume"]),
                 source=self.name,
                 as_of=as_of,
+                # A direct ticker response, not a cache fallback. This does
+                # not assert an independent market-time freshness threshold.
+                stale=False,
+                price_type="last_trade",
+                currency="USDT" if symbol in {"BTCUSDT", "ETHUSDT"} else None,
+                adjustment="not_applicable",
+                price_basis="raw_quoted_price",
             )
         except (KeyError, TypeError, ValueError, OverflowError, OSError) as exc:
             raise ProviderDataError(

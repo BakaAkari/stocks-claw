@@ -5,9 +5,32 @@
 > `STATUS.md`. Product north star is `stocks/VISION.md`; this document is
 > the migration route toward it.
 
-## Why this migration exists
+## Value order and acceptance
 
-Production today lets a deterministic rule engine (`QuantActionEngine` →
+The priority is personal financial truth and better decisions. Personalization
+starts before analysis: confirmed goals, capital uses, loss capacity, horizon,
+liquidity needs and operating frequency define the research boundary. Unknowns
+stay unknown; observed habits are not automatically preferences to reinforce.
+
+1. Reconcile confirmed account statements, positions, cash, actual fills and
+   external cash movements. Differences remain visible; never overwrite facts.
+2. Bind each LLM proposal to the same evidence and constraints, preserve its
+   original output, validation, displayed recommendation and the user's decision.
+3. Review actual execution and market observations with comparable definitions.
+   Acceptance and sale proceeds are not investment performance.
+4. Research personal strategy candidates from traceable published sources and
+   confirmed constraints; freeze hypotheses, compare alternatives and validate
+   out of sample before using results to revise a strategy.
+
+Win-rate expansion follows reliable inputs and explicit comparison contracts.
+Engineering acceptance, real-account reconciliation, online-model acceptance,
+delivery verification and demonstrated user value are separate gates. Local
+simulated replays do not satisfy the latter gates. The bounded contract is
+[financial trust](docs/contracts/financial-trust-v1.md); dynamic status is in STATUS.
+
+## Migration background
+
+The earlier production design let a deterministic rule engine (`QuantActionEngine` →
 `factor_rules` → `portfolio_adjudicator`) own most final trading actions,
 with the LLM restricted to news intelligence clustering and a constrained
 Outlook that never enters the report as market-direction judgment. This
@@ -30,17 +53,22 @@ tracking implementation slices rather than user value.
 ## Target responsibility chain
 
 ```text
-Financial Memory          user-confirmed facts
+Personal Mandate          confirmed goals, needs, preferences and constraints
+Financial Memory          user-confirmed facts + statements + actual events
+Account Reconciliation    differences, scope, availability as_of and evidence
 Unified Harvester         one collection pass, one as_of
 Feature Layer             indicators, risk, constraints, candidate signals
 LLM Investment Analyst    market outlook + actions + setup candidates
 Advisory Validator        evidence + feasibility check
 Presentation              seven-question report structure
 Delivery                  freshness, versioning, channel delivery
-User Feedback             accepted / partial / rejected / deferred
+Frozen Recommendation     original proposal + report structure + evidence
+User Decision             accepted / partial / rejected / deferred (append-only)
+Confirmed Execution       actual fills, separately recorded by the user
+Fact Review               choices + fills + cash flows + frozen observations + gaps
 ```
 
-## Milestones
+## Capability milestones (not execution order)
 
 Whether each milestone has actually landed is a `STATUS.md` question, not a
 roadmap question.
@@ -98,22 +126,29 @@ Non-goals: automated trading, LLM free-computing ratios/amounts, replacing
 
 ### M3 — Feedback loop
 
-Turn user decisions into evidence that flows back into the next Outlook
-run. Not an auto-tuner.
+Preserve what the system proposed, what the user decided, what actually
+executed, and what happened afterwards. Feed these distinct facts into the
+next analysis without treating acceptance as investment performance.
 
 Scope:
 - Per-recommendation feedback channel (Feishu inline card or CLI).
 - Feedback statuses: `accepted` / `partial` / `rejected` / `deferred`.
-- `AdviceRecord` becomes the ledger of feedback (renaming its original
-  role from "user-confirmable draft" to "user-marked outcome").
-- Weekly rollup: coverage of the seven questions, hit rate, top rejection
-  reasons, data-boundary hits.
-- The rollup feeds `recent_advice` in `AnalysisContext` and becomes an
-  input to future Outlook synthesis. No parameter auto-tuning on small
-  samples.
+- Freeze the original recommendation and report structure with stable
+  identities; preserve source evidence and missing information.
+- Keep confirmed advice, each user decision and every fill separately.
+  Multiple fills and a later rejection must remain visible together.
+- Review exact links, signed cash flows, frozen subsequent prices and
+  explicit gaps. Missing executions are unknown; sale proceeds are not profit.
+- Feed complete decision/fill facts into `recent_advice`. No auto-tuning.
+- Product acceptance is a separate test: compare against a previously
+  frozen user plan and simple rules under matched capital, risk, horizon
+  and cost assumptions. Assess research time, discipline and comparable
+  outcomes; neither adoption rate nor an engineering smoke proves value.
 
-Non-goals: execution capture, broker connectivity, automated position
-tracking (that remains manual per user preference).
+Non-goals: broker connectivity, order placement, automatic position updates,
+or strategy statistics before their input and comparison contracts are defined.
+The bounded fact-chain contract is `docs/contracts/decision-review-v2.md`;
+the current task and verification state remain in `STATUS.md`.
 
 ### M4 — Constraint model upgrade (candidate)
 
@@ -126,9 +161,8 @@ mandatory reduce candidate). Motivation and evidence:
 `docs/analysis/kimi-report-constraint-comparison-2026-07-31.md`; bounded
 scope in `docs/tasks/TASK-M4-constraint-model-upgrade.md`.
 
-Status: backlog candidate. Sequencing against M2/M3 is re-evaluated when
-M1 closes; it is independent of the outlook mainline and may be pulled
-forward if constraint-driven advice errors show up in real reports.
+Personal constraints precede all advice. More complex constraint execution
+remains a separate capability; its implementation status belongs in STATUS.
 
 Non-goals: multi-period glide-path planning (depends on M3 feedback
 data), execution surface, auto-tuning.
@@ -176,7 +210,7 @@ current as the personalization source.
 Non-goals: building an agent runtime, broker connectivity, automated
 order placement, moving conversational logic into the engine.
 
-Sequencing decision (2026-08-01): **A1 → M3 → W1 → M4**, with D1 folded
+Historical sequencing (2026-08-01, superseded by the value order above): **A1 → M3 → W1 → M4**, with D1 folded
 into whichever task next touches the US quote path. A1 first because the
 conversational asset-update pattern is the terminal's core write loop and
 the library is already built; M3 next per the original plan; M4 stays

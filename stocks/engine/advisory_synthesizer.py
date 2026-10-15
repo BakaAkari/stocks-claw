@@ -7,6 +7,7 @@ output free-form currency amounts, or make decisions without evidence references
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
@@ -20,12 +21,13 @@ from stocks.domain.advisory_models import (
     UnifiedAnalysisSnapshot,
 )
 from stocks.engine.advisory_contract import validate_advisory
+from stocks.engine.evaluation_contract import digest
 from stocks.logging_utils import get_logger
 
 logger = get_logger("advisory_synthesizer")
 
 
-DEFAULT_ADVISORY_PROMPT = """You are a conservative private investment analyst.
+DEFAULT_ADVISORY_PROMPT = """You are a private investment analyst.
 
 You are given a UnifiedAnalysisSnapshot containing evidence: portfolio facts,
 quotes, technical indicators, news digest, macro data, upcoming events, rotation
@@ -36,12 +38,12 @@ validation, falsification, scenario descriptions, statements, limitations,
 checkpoints) in Simplified Chinese — the output is rendered verbatim into a
 Chinese push report. Keep tickers, instrument codes, and metric names as-is.
 
-User trading style (left-side / value-oriented; advice MUST reflect these):
-- 不追高：不在上涨途中追买，等回调到支撑位分批介入。
-- 回调分批：趋势未破(MA20>MA60)的回调中分批加仓，不一次性满仓。
-- 破位果断砍：跌破关键均线/趋势破位时果断止损，不抱侥幸。
-- 接受短期浮亏换未来收益：左侧买入可能短期浮亏，属可接受。
-- 买入建议表述「回调分批」，止损建议明确「破位条件与价位」。
+Personal mandate:
+- Use metadata.personal_mandate, including its field statuses and sources.
+- Never invent the user's style, loss tolerance, time horizon, or permission.
+- A reference_default is not a user-confirmed constraint or trading preference.
+- Unknown personal information or non-matched financial_integrity must be stated
+  as limitations. Your proposal never executes an order or confirms user facts.
 
 Analysis perspective (two lenses, both required):
 1. 量化分析师视角: 技术面(均线/RSI/布林/量比)、可证伪的验证/证伪条件。
@@ -93,7 +95,7 @@ Action object fields:
   "action_id": "string",
   "target": "market:code or position_id",
   "action": "buy|sell|reduce|add|hold|watch|defer",
-  "size": "e.g. 10% or 100 shares or defer",
+  "size": "canonical number e.g. 100 (no units) or defer",
   "size_type": "ratio|shares|cny_value|defer",
   "reasoning": "string",
   "evidence_refs": ["fact_id"],
@@ -130,6 +132,13 @@ Rules:
 - MUST output exactly 3 scenarios, one each with name "base"/"bull"/"risk" (基准/乐观/风险情景).
 - sector_opportunities / asset_class_opportunities MUST be structured objects with a directional action (buy/sell/reduce/add), never plain strings and never "watch" — the report needs the direction, not just "observe".
 - Every action must include at least one `evidence_refs` from the snapshot.
+- For a concrete existing-position proposal, target the exact position_id,
+  use size_type="shares" and size as a positive numeric string, and include
+  the corresponding position:<position_id> fact in evidence_refs.
+- execute_when="now" means a current unconditional recommendation for the user
+  to decide, never an order. Other conditions are preserved for manual review.
+- New targets, ratios, missing available holdings/cash, and unknown fees cannot
+  be treated as executable. Do not convert them into a different action.
 - Every action object must include a valid `action` field (buy|sell|reduce|add|hold|watch|defer); never omit it, even in `hold_decisions` — each hold decision must carry "action": "hold".
 - Do NOT output absolute CNY amounts. Use ratios, share counts, or "defer".
 - Include "do_not_do" items where the evidence is too weak or the risk is high.
@@ -238,6 +247,7 @@ def synthesize_advisory(
     *,
     llm_client: Any | None = None,
     advisory_id: str = "",
+    capture: dict | None = None,
 ) -> InvestmentAdvisory:
     """Synthesize an InvestmentAdvisory from a snapshot using the LLM analyst.
 
@@ -247,19 +257,49 @@ def synthesize_advisory(
     generated_at = _iso_utc()
     advisory_id = advisory_id or _advisory_id(snapshot, generated_at)
 
+    snapshot_json = json.dumps(asdict(snapshot), ensure_ascii=False, sort_keys=True,
+                               allow_nan=False)
+    prompt = DEFAULT_ADVISORY_PROMPT.format(snapshot_json=snapshot_json)
+    trace = capture if capture is not None else {}
+    trace.update({
+        "schema_version": 1, "snapshot_hash": snapshot.snapshot_id,
+        "prompt_version": "personal-mandate-v2", "prompt": prompt,
+        "prompt_hash": digest(prompt), "prompt_scope": "complete_argument_only",
+        "model": str(getattr(llm_client, "model", "unknown")),
+        "model_identity_scope": "client_requested_label_not_server_attestation",
+        "server_model_version": None,
+        "client_type": type(llm_client).__name__ if llm_client is not None else None,
+        "requested_at": generated_at, "status": "not_called",
+        "raw_response": None, "parsed_response": None,
+    })
     if llm_client is None:
-        logger.info("no LLM client; returning fallback hold advisory")
         return _fallback_advisory(snapshot, advisory_id, generated_at)
-
     try:
-        snapshot_json = json.dumps(asdict(snapshot), ensure_ascii=False, default=str)
-        prompt = DEFAULT_ADVISORY_PROMPT.format(snapshot_json=snapshot_json)
         response = llm_client.complete(prompt)
+        trace["raw_response"] = deepcopy(response) if isinstance(response, (str, dict)) else str(response)
         parsed = _parse_llm_response(response)
-    except Exception as e:
-        logger.warning("advisory synthesis failed", extra={"error": str(e)})
-        return _fallback_advisory(snapshot, advisory_id, generated_at, error=str(e))
+        if not isinstance(parsed, dict):
+            raise ValueError("advisory response must be an object")
+        trace["parsed_response"] = deepcopy(parsed)
+        advisory = _build_advisory(parsed, snapshot, advisory_id, generated_at)
+        trace["status"] = "parsed"
+        trace["completed_at"] = _iso_utc()
+        return advisory
+    except Exception as error:
+        # Do not retain exception strings: transport exceptions can contain tokens.
+        trace["status"] = "failed"
+        trace["error_type"] = type(error).__name__
+        trace["completed_at"] = _iso_utc()
+        logger.warning("advisory synthesis failed (%s)", type(error).__name__)
+        return _fallback_advisory(snapshot, advisory_id, generated_at,
+                                  error=type(error).__name__)
 
+
+def _build_advisory(parsed, snapshot, advisory_id, generated_at):
+    for field in ("actions", "hold_decisions"):
+        items = parsed.get(field, [])
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise ValueError(f"{field} must be a list of action objects")
     return InvestmentAdvisory(
         advisory_id=advisory_id,
         snapshot_id=snapshot.snapshot_id,

@@ -116,6 +116,8 @@ class CLIAdapter:
             metavar="JSON",
             help="更新投资者画像字段",
         )
+        asset_actions.add_argument("--constraints-replace", metavar="JSON",
+                                   help="确认后整体替换个人组合约束；空对象表示明确无配置约束")
         asset_actions.add_argument(
             "--advice-list",
             action="store_true",
@@ -152,6 +154,22 @@ class CLIAdapter:
             action="store_true",
             help="列出已确认记录的执行记录",
         )
+        asset_actions.add_argument("--decision-save", metavar="JSON",
+                                  help="记录对某条建议的决定（需 --confirmed，不代表成交）")
+        asset_actions.add_argument("--decision-list", action="store_true",
+                                  help="读取已确认的决定历史")
+        asset_actions.add_argument("--decision-review", metavar="DECISION_ID",
+                                  help="复盘一条建议、你的决定、成交与后续观察（只读）")
+        asset_actions.add_argument("--statement-save", metavar="JSON", help="确认记录账户时点对账单")
+        asset_actions.add_argument("--statement-list", action="store_true", help="读取账户时点记录及读取错误")
+        asset_actions.add_argument("--cash-movement-save", metavar="JSON", help="确认记录非交易现金变动")
+        asset_actions.add_argument("--cash-movement-list", action="store_true", help="读取非交易现金变动")
+        asset_actions.add_argument("--financial-reconcile", nargs=2, metavar=("OPENING_ID", "CLOSING_ID"),
+                                  help="核对两个确认时点之间的数量和现金（只读）")
+        asset_actions.add_argument("--financial-integrity", action="store_true", help="读取最新核对及资产记忆差异")
+        asset_actions.add_argument("--personal-mandate", action="store_true", help="读取个性化约束与未知项")
+        parser.add_argument("--evaluation-database", metavar="PATH",
+                            help="复盘使用的冻结行情数据库（只读）")
         asset_actions.add_argument(
             "--execution-pending",
             metavar="RUN_ID",
@@ -301,6 +319,28 @@ class CLIAdapter:
         return None
 
     async def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
+        try:
+            if args.financial_reconcile:
+                return {"success": True, "data": self.engine.financial_reconcile(*args.financial_reconcile, as_of=args.now)}
+            if args.financial_integrity:
+                return {"success": True, "data": self.engine.financial_integrity(as_of=args.now)}
+            if args.personal_mandate:
+                return {"success": True, "data": self.engine.personal_mandate()}
+            if args.statement_list:
+                return {"success": True, "data": self.engine.list_account_statements()}
+            if args.cash_movement_list:
+                return {"success": True, "data": self.engine.list_cash_movements()}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+        if args.decision_review:
+            try:
+                data = self.engine.decision_review(args.decision_review, as_of=args.now,
+                                                   evaluation_database=args.evaluation_database)
+                return {"success": True, "data": data}
+            except (TypeError, ValueError) as exc:
+                return {"success": False, "error": str(exc)}
+        if args.decision_list:
+            return {"success": True, "data": self.engine.list_user_decisions()}
         if args.decision_attribution:
             return {"success": True, "data": self.engine.decision_attribution()}
         if args.decision_attribution_settle is not None:
@@ -332,11 +372,10 @@ class CLIAdapter:
             return {"success": True, "data": self.engine.list_executions()}
         if args.execution_pending:
             run_id = args.execution_pending
-            all_records = self.engine.list_executions()
+            all_records = self.engine.find_executions_by_run_id(run_id)
             pending = [
                 r for r in all_records
                 if r.get("status") == "planned"
-                and r.get("decision_id", "").startswith(run_id)
             ]
             return {"success": True, "data": pending, "run_id": run_id}
         if args.forecast_list:
@@ -395,9 +434,13 @@ class CLIAdapter:
                 args.asset_update,
                 args.asset_remove,
                 args.profile_update,
+                args.constraints_replace,
                 args.advice_save,
                 args.advice_feedback,
                 args.execution_save,
+                args.decision_save,
+                args.statement_save,
+                args.cash_movement_save,
                 args.execution_pending,
                 args.forecast_save,
                 args.scheduled_run_due,
@@ -416,6 +459,16 @@ class CLIAdapter:
             }
 
         try:
+            if args.constraints_replace is not None:
+                return {"success": True, "data": self.engine.replace_portfolio_constraints(
+                    self._parse_json_object(args.constraints_replace))}
+            if args.statement_save:
+                return {"success": True, "data": self.engine.save_account_statement(self._parse_json_object(args.statement_save))}
+            if args.cash_movement_save:
+                return {"success": True, "data": self.engine.save_cash_movement(self._parse_json_object(args.cash_movement_save))}
+            if args.decision_save:
+                record = self.engine.save_user_decision(self._parse_json_object(args.decision_save))
+                return {"success": True, "data": record, "action": "decision_saved"}
             if args.advice_feedback:
                 ref, status = args.advice_feedback
                 record = self.engine.mark_advice_feedback(ref, status, note=args.note or "")

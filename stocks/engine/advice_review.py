@@ -70,53 +70,80 @@ async def attach_advice_performance(
 def attach_execution_review(
     advice_records: list[dict],
     execution_records: list[dict],
+    user_decisions: Optional[list[dict]] = None,
 ) -> list[dict]:
-    """为建议 actions 附加执行对照；优先按 decision_id 精确匹配，其次按 advice_id + target。"""
-    if not advice_records:
-        return []
-    if not execution_records:
-        return [_with_unknown_execution_review(advice) for advice in advice_records]
+    """Preserve every fill and user decision; user intent never overwrites executions.
 
-    # Index by decision_id (new schema)
-    by_decision_id: dict[str, dict] = {}
-    # Index by (advice_id, target) (legacy schema)
-    by_advice_key: dict[tuple[str, str], dict] = {}
-    for record in execution_records:
-        decision_id = record.get("decision_id")
-        if isinstance(decision_id, str) and decision_id:
-            by_decision_id.setdefault(decision_id, record)
-        advice_id = record.get("advice_id")
-        target = record.get("target")
-        if isinstance(advice_id, str) and isinstance(target, str):
-            by_advice_key.setdefault((advice_id, target), record)
-
+    Frozen-source advice and schema 2 fills require exact advice, decision and
+    target linkage. Manual advice without a frozen source retains old timestamp
+    links for legacy records, explicitly marked unverified.
+    """
     reviewed: list[dict] = []
     for advice in advice_records:
         enriched = deepcopy(advice)
         advice_id = str(advice.get("id") or advice.get("created_at") or "")
         execution_review = []
         for action in advice.get("actions", []):
-            target = action.get("target")
-            # Try decision_id match first
-            decision_id = action.get("decision_id", "")
-            record = by_decision_id.get(decision_id) if decision_id else None
-            if record is None:
-                record = by_advice_key.get((advice_id, target))
-            execution_review.append(
-                _execution_review_item(action, record)
-            )
+            decision_id = action.get("decision_id")
+            records = [deepcopy(record) for record in execution_records if
+                       _execution_matches(advice, action, record)]
+            records.sort(key=lambda record: (
+                _record_time_key(record.get("executed_at") or record.get("recorded_at")),
+                _record_time_key(record.get("recorded_at")), str(record.get("id", "")),
+            ))
+            fills = [record for record in records if record.get("status") == "executed"]
+            decisions = [deepcopy(record) for record in user_decisions or [] if (
+                decision_id and record.get("decision_id") == decision_id
+                and record.get("advice_id") == advice_id
+            )]
+            decisions.sort(key=lambda record: (
+                _record_time_key(record.get("decided_at")),
+                _record_time_key(record.get("recorded_at")), str(record.get("id", "")),
+            ))
+            # The compatibility projection uses a fill if one exists, even after rejection.
+            representative = (fills or records or [None])[-1]
+            item = _execution_review_item(action, representative)
+            item.update({
+                "decision_id": decision_id,
+                "execution_status": "recorded" if fills else "unrecorded",
+                "fills": fills,
+                "execution_records": records,
+                "decision_history": decisions,
+                "latest_decision": decisions[-1] if decisions else None,
+                "linkage": "legacy_unverified" if any(
+                    record.get("schema_version", 1) < 2 for record in records
+                ) or advice.get("schema_version", 1) < 2 or (
+                    advice.get("source_snapshot") is None or not decision_id
+                ) else "exact_ids",
+            })
+            execution_review.append(item)
         enriched["execution_review"] = execution_review
         reviewed.append(enriched)
     return reviewed
 
 
-def _with_unknown_execution_review(advice: dict) -> dict:
-    enriched = deepcopy(advice)
-    enriched["execution_review"] = [
-        _execution_review_item(action, None)
-        for action in advice.get("actions", [])
-    ]
-    return enriched
+def _record_time_key(value: Optional[str]) -> float:
+    timestamp = _advice_datetime(value)
+    return timestamp.timestamp() if timestamp is not None else float("-inf")
+
+
+def _execution_matches(advice: dict, action: dict, record: dict) -> bool:
+    advice_id = str(advice.get("id") or advice.get("created_at") or "")
+    decision_id = action.get("decision_id")
+    if advice.get("source_snapshot") is not None or record.get("schema_version", 1) >= 2:
+        return bool(decision_id) and (
+            record.get("advice_id") == advice_id
+            and record.get("decision_id") == decision_id
+            and record.get("target") == action.get("target")
+        )
+    legacy_refs = {ref for ref in (advice_id, advice.get("created_at")) if ref}
+    if record.get("advice_id") and record.get("advice_id") not in legacy_refs:
+        return False
+    if decision_id:
+        return record.get("decision_id") == decision_id and record.get("target") == action.get("target")
+    return (
+        record.get("advice_id") in legacy_refs and record.get("target") == action.get("target")
+    )
 
 
 def _execution_review_item(action: dict, record: Optional[dict]) -> dict:
@@ -131,7 +158,9 @@ def _execution_review_item(action: dict, record: Optional[dict]) -> dict:
     status = record.get("status", "")
     if status == "executed":
         extent = record.get("extent")
-        item["status"] = "executed" if extent == "full" else "partial"
+        item["status"] = "executed" if extent == "full" or (
+            record.get("schema_version", 1) >= 2 and extent is None
+        ) else "partial"
         item["execution"] = record
         return item
     if status in ("rejected", "deferred", "planned", "not_executed"):

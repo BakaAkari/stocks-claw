@@ -94,6 +94,25 @@
 
 该命令不会影响生产推送，只会在 `.local/advisory_shadow/` 下产生可审计的 shadow run。
 
+## 信号评价字段参考
+
+生命周期见 `../docs/contracts/README.md`，完整最小口径与窗口定义见
+`../docs/contracts/signal-evaluation-v1.md`。
+
+- `TrackedSignal` 新事件为 `schema_version=1`，保存 `signal_id`、`generated_at`、
+  `symbol`、`signal_type`、`action_semantics`、`strategy_id/strategy_version`、
+  `forecast_horizon`、`provenance`、原始理由与 `entry_snapshot`；旧记录读取为
+  schema 0，不推断缺失语义。研究候选的 direction 为 unknown，原动作保留。
+- `entry_snapshot` 包含标的、价格、来源、as_of、stale、scoring_status/reason，
+  以及来源可证明的 `price_type`、`currency`、`adjustment`、`price_basis`。
+- `EvaluationTask` 执行键为 signal/policy/target；另存完整冻结 signal、policy、
+  target 和 `input_hash`。定义键 signal/policy 也唯一，不能用新目标绕过去重。
+- `MarketObservation` 保留 request URL、原始 JSON 响应及 SHA-256、时间来源及
+  精度、币种、价格基准、目标定义和原因。有效租约内提交的失败 attempt 也留存。
+- `EvaluationResult` 包含冻结输入、entry/exit、哈希、评价器版本、status/reason、
+  `price_return` 和内容绑定的 `result_id`；所有结果均为 observation_only，
+  outcome 为 null。报告只读这些结果，不从可变信号重算。
+
 ## 当前生产模型
 
 ## portfolio_decision.user_view
@@ -296,83 +315,48 @@ v1 文件不会自动写回；迁移必须通过 `asset_migrate_v2` / `--asset-m
 - `confidence` 表示当前证据与新鲜度,不表示历史胜率或未来收益概率。
 - 2026-07-15 历史交易质量审查见 `../docs/archive/TRADING_SYSTEM_ADVERSARIAL_REVIEW_20260715.md`；现行边界以 `VISION.md`、`../PLAN.md` 和 `../ROADMAP.md` 为准。
 
-## AdviceRecord
+## AdviceRecord / UserDecisionRecord / ExecutionRecord v2
 
-用户确认保存的建议摘要，位于 `.local/advice/`，最多保留 30 条。它只保存摘要，
-不保存 LLM 长文：
+字段及写入约束详见 [事实复盘契约](../docs/contracts/decision-review-v2.md)。
+生命周期见 `../docs/contracts/README.md`，本节不声明部署状态。
 
-- `created_at`：系统生成的 UTC ISO 时间
-- `instruments`：`[{market, code, name}]`
-- `direction`：`{"market:code": "buy|sell|watch|hold"}`
-- `rationale_summary`：500 字以内摘要
-- `based_on`：`quotes`、`news`、`indicators`、`macro`、`portfolio`、`profile`
-- `boundary`：`[{type: "fact"|"inference", text}]`
-- `triggers`（可选，默认 `[]`）：可核对的触发条件，每条为
-  `{instrument: "market:code", type, level, action, invalidation?}`，
-  `type ∈ {price_above, price_below, pct_change_above, pct_change_below,
-  pnl_pct_above, pnl_pct_below}`，
-  `level` 为数字（价位或百分数），`action` 为非空动作描述。
-  `pnl_pct_*` 的基准是用户 `holding.cost_basis`，保存时若目标持仓不存在或缺成本
-  会结构化拒绝。
-  旧记录缺失该字段时按 `[]` 加载。
-- `actions`（可选，默认 `[]`）：结构化调仓动作，每条为
-  `{target, action, size_hint, trigger?, invalidation?, horizon}`。
-  `target` 必须命中已映射持仓、watchlist、扫描池或约束 bucket；
-  `action ∈ {add, increase, reduce, exit, hold, watch}`；
-  `horizon ∈ {short, medium, long}`；`size_hint` 允许比例、区间或自然语言，
-  禁止保存具体货币金额。旧记录缺失该字段时按 `[]` 加载。
+- AdviceRecord 位于 `.local/advice/`，新增稳定 `id`、`schema_version`、
+  `source_run_id`、`original_text`、`source_snapshot`，actions 保留 `decision_id`。
+  `rationale_summary` 仍最多 500 字，完整原建议保存在原文和来源快照内。
+  action 为 add/increase/reduce/exit/hold/watch；无来源期限用 `horizon=unspecified`。
+  保留 instruments/direction/based_on/boundary/triggers 兼容字段。
+- UserDecisionRecord 位于 `.local/user_decisions/`，字段 id/advice_id/decision_id/
+  status/decided_at/recorded_at/note；status 为 accepted/partial/rejected/deferred。
+  每次决定追加，与成交分开。
+- ExecutionRecord v2 位于 `.local/executions/`，实际成交字段包括 id/advice_id/
+  decision_id/source_run_id/target/status/side/quantity/price/currency/executed_at/
+  recorded_at；可选 user_decision_id、fee_amount、fee_currency、account_id、note。
+  仅 status=executed，side 为 buy/sell；真实时间、有限正价格/数量必填。
+  executed_ratio 非必需；未知费用为 null。
 
-`AnalysisContext.recent_advice` 会在构建上下文时附加两个派生字段（均不写回
-`.local/advice/`）：
+三个记录集合均不滚动裁剪；相同事件 ID/内容幂等，冲突拒绝。新成交必须引用精确
+冻结建议。旧手工建议和 v1 execution 保留兼容读写，缺少来源的不伪造为 v2 完整链。
+旧 advice feedback 保留最新投影并追加 feedback_history；新决定走独立集合。
 
-- `performance`：并列展示建议日至最近历史收盘价的价格事实
-- `trigger_review`：对每条 trigger 按建议日之后的收盘价序列核对，
-  `status ∈ {fired, not_fired, no_data}`；有数据时附
-  `observed = {basis: "close", start_at, latest_at, start_price, latest_price,
-  max_price, min_price, pct_change}`，no_data 时附 `reason`。
-  核对只陈述价格事实，不判断建议对错。
-- `execution_review`：对每条 action 按 `advice_id + target` 精确匹配
-  `ExecutionRecord`，`status ∈ {executed, partial, not_executed, unknown}`。
-  匹配不到一律 `unknown`，不按名称、方向或金额猜测。
+`AnalysisContext.recent_advice` 仍有价格事实 performance / trigger_review，
+执行对照现在按 advice_id + decision_id + target 关联，提供全部 fills、
+execution_records、decision_history、latest_decision 及 unknown/unrecorded 缺口。
+latest 拒绝不能抹掉已经发生的部分成交。派生对照不写回金融记录。
 
-## ExecutionRecord
+## RecommendationSnapshot / DecisionReview v2
 
-用户确认记录的建议执行或明确未执行，位于 `.local/executions/`：
+RecommendationSnapshot 保存实际 approved/suppressed action、完整 report_view、
+当时 position/entry/context、生成时间、规则版本及 source_hash；一动作一份不可变
+记录，文件名为 `.local/decisions/recommendation-<decision_id摘要>.json`。
+自定义 local_data_dir 同时用于生产写入和复盘读取。
+不存在“系统批准即已成交”字段，也不为多个观察窗口重复保存建议。
 
-- `id`：系统生成的记录 id
-- `advice_id`：可选；建议记录的 `created_at`，用于与 action 精确匹配
-- `target`：对应 action 的 target
-- `action ∈ {add, increase, reduce, exit, hold, watch, none}`；`none` 表示明确未执行
-- `extent ∈ {full, partial}`；当 `action = none` 时省略
-- `note`
-- `executed_at`：实际执行或确认未执行的时间
-- `recorded_at`：系统记录时间
-- `run_id`：来源 scheduled run id
-- `decision_id`：必须关联的 portfolio action decision id
-- `status ∈ {executed, rejected, deferred, planned, not_executed}`
-- `planned_ratio`：建议动作比例
-- `executed_ratio`：实际执行比例（0-1）
-- `price`：执行或确认价格；status=executed 必填
-- `rejection_reason`：status=rejected 必填
-- `next_review_at`：status=deferred 可选的下次复核时间
-
-`status=executed` 时要求 `price` 与 `executed_ratio`；`status=rejected` 要求 `rejection_reason`。
-执行记录通过 `decision_id` 与后续 `execution_review` 精确关联，不再只依赖 `target` 字符串。
-
-## DecisionSnapshot / OutcomeAttribution
-
-`DecisionSnapshot` 保存每个 approved/suppressed action 的决策版本与计划，用于后续 Shadow Trial 效果归因：
-
-- `decision_id`：关联 portfolio_decision / action
-- `rule_version`：生成该决策的规则版本
-- `params_hash`：当时个性化参数哈希
-- `data_as_of`：决策所基于数据的时间戳
-- `position_id`、`signal`、`ratio`、`horizon_days`
-- `executed`：是否实际执行（基于 ExecutionRecord.status=executed）
-- `entry_price`、`execution_price`、`settlement_timing`、`commission_rate`
-- `settled`、`outcome`：结算状态与结果（hold/return 等）
-
-快照持久化于 `.local/decisions/{decision_id}_{horizon}d.json`。`settle_decisions(as_of, price_history, snapshots, executions)` 对到期 horizon 结算，使用确定性价格序列，扣除往返交易成本（2×commission_rate），区分 executed 与 shadow（未执行）反事实；样本<10 只输出 count/raw outcomes，≥10 才输出 Wilson 95% 置信区间。
+DecisionReview 只读关联建议、用户决定、逐笔成交、按币种现金流和冻结观察。
+净现金流只有在数量、价格和同币种费用明确时可用；它不是利润。
+已实现盈亏和组合增益在缺少成本批次/持仓路径/资金基线时 unavailable。
+价格观察复用唯一 EVAL task，按 decision_id + source_snapshot_hash + symbol 关联。
+旧 decision_attribution_settle 入口返回同一事实复盘；旧 DecisionSnapshot 的
+executed/settled/outcome 标记只作 legacy_unverified 历史，不再计算旧收益统计。
 
 ## ForecastRecord
 
@@ -689,3 +673,22 @@ v4 相对 v3 新增 `upcoming_events`、`rotation` 与
 
 默认最多保留 30 份。构建新上下文时先加载近期快照，新快照在成功构建后写入，因此第二次
 运行能够看到第一次的摘要。
+
+
+## Personal mandate and financial facts
+
+The [financial trust contract](../docs/contracts/financial-trust-v1.md) specifies
+`profile.mandate`, `AccountStatement` and `CashMovement` schema 1, execution schema 3,
+and the deterministic account equations. Execution v3 adds `record_origin`,
+`source`, `unit`, `settled_at` and `fee_booking`; manual fills need no advisory
+identity, while advice-linked fills validate their frozen account and instrument.
+Unknown fee/settlement facts stay unknown. Account statements preserve explicit
+settled/available cash and trade-date/available quantities separately.
+
+`AnalysisContext` also carries `personal_mandate` and `financial_integrity`;
+position valuations retain `holding` (quantity/unit) and `horizon`. The unified
+snapshot freezes these, actual quotes and execution policy under its content hash.
+LLM lineage preserves the available prompt/response trace, original proposal,
+validation policy and receipt, final decision and structured display hashes.
+Request model labels and structured display evidence do not prove service-side
+model identity or message delivery. Unknown portfolio cash plans remain unknown.

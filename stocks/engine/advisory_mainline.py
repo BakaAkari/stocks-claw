@@ -19,11 +19,12 @@ from typing import Any, Optional
 from stocks.domain.advisory_models import (
     AdvisoryScenario,
     InvestmentAdvisory,
-    UnifiedAnalysisSnapshot,
 )
 from stocks.domain.models import AnalysisContext
 from stocks.engine.advisory_contract import validate_advisory
+from stocks.engine.advisory_lineage import build_advisory_lineage, empty_decision
 from stocks.engine.advisory_synthesizer import synthesize_advisory
+from stocks.engine.evaluation_contract import digest
 from stocks.engine.unified_snapshot import build_unified_snapshot
 from stocks.providers.openai_client import LLMClient
 
@@ -351,26 +352,28 @@ def build_advisory_outlook(
     message.  Never raises for expected failure modes; never fabricates.
     """
     generated_at = now or datetime.now(timezone.utc).isoformat()
+    snapshot = build_unified_snapshot(
+        context, trigger="scheduled", session=session_id, market_scope=market,
+        execution_rules=(config or {}).get("execution_rules"),
+        financial_statement_max_age_seconds=(config or {}).get("financial_statement_max_age_seconds", 86400),
+    )
+    attempts = []
 
-    # 1. Freshness gate: stale/missing primary-market quotes or an old
-    #    context snapshot mean no judgment may be issued.
+    def unavailable(message, limitations=None, lineage=None):
+        result = _unavailable(message, generated_at=generated_at, data_limitations=limitations)
+        if lineage is None:
+            lineage = {"schema_version": 1, "author": "llm", "status": "unavailable",
+                       "snapshot": asdict(snapshot), "snapshot_hash": snapshot.snapshot_id,
+                       "attempts": attempts, "advisory": None, "validation_receipt": None,
+                       "portfolio_decision": empty_decision(message)}
+            lineage["content_hash"] = digest(lineage)
+        result["advisory_lineage"] = lineage
+        return result
+
     if _quotes_freshness_blocked(context, market):
-        logger.info("advisory mainline: quotes freshness gate blocked (%s)", market)
-        # P5-4: 给用户可行动的恢复提示(行情恢复后下个检查点自动重试)
-        return _unavailable(
-            "研判待复核：目标市场行情数据过旧或缺失（行情恢复后自动重试）",
-            generated_at=generated_at,
-        )
+        return unavailable("研判待复核：目标市场行情数据过旧或缺失（行情恢复后自动重试）")
     if _snapshot_too_old(context, now):
-        logger.info("advisory mainline: context snapshot older than 90 minutes")
-        return _unavailable(
-            "研判待复核：数据快照过旧（下次定时窗口自动刷新）",
-            generated_at=generated_at,
-        )
-
-    # 2. LLM client resolution.  "auto" resolves the primary client plus the
-    #    configured fallback-model chain from config; an explicit client
-    #    (tests, ad-hoc runs) is used as-is; None disables the path.
+        return unavailable("研判待复核：数据快照过旧（下次定时窗口自动刷新）")
     if llm_client == "auto":
         clients = resolve_mainline_llm_clients(config or {})
     elif llm_client is None:
@@ -378,56 +381,33 @@ def build_advisory_outlook(
     else:
         clients = [llm_client]
     if not clients:
-        logger.info("advisory mainline: no LLM client configured")
-        return _unavailable("研判待复核：LLM 分析端未配置", generated_at=generated_at)
-
-    # 3. Snapshot → synthesis with per-client retries, then next model in
-    #    the chain.  Only transport/parse failures (deterministic fallback
-    #    advisory) trigger another attempt; a validated advisory is final.
+        return unavailable("研判待复核：LLM 分析端未配置")
     outlook_cfg = (config or {}).get("llm", {}).get("outlook", {}) if isinstance(config, dict) else {}
     retry_attempts = max(0, int(outlook_cfg.get("retry_attempts") or 0))
-    snapshot: UnifiedAnalysisSnapshot = build_unified_snapshot(
-        context, trigger="scheduled", session=session_id, market_scope=market,
-    )
     advisory = None
-    last_limitations: list[str] = []
     for index, client in enumerate(clients):
-        model_label = getattr(client, "model", f"client#{index}")
         for attempt in range(1 + retry_attempts):
-            advisory = synthesize_advisory(snapshot, llm_client=client)
+            trace = {"client_index": index, "attempt": attempt + 1}
+            advisory = synthesize_advisory(snapshot, llm_client=client, capture=trace)
+            attempts.append(trace)
             if not _is_fallback_advisory(advisory):
                 break
-            last_limitations = list(advisory.data_limitations)
-            logger.info(
-                "advisory mainline: synthesis fallback (model=%s attempt=%d/%d)",
-                model_label, attempt + 1, 1 + retry_attempts,
-            )
         if advisory is not None and not _is_fallback_advisory(advisory):
-            if index > 0:
-                logger.info("advisory mainline: succeeded with fallback model %s", model_label)
             break
-    if advisory is None or _is_fallback_advisory(advisory):
-        logger.info("advisory mainline: LLM synthesis fell back to hold_default")
-        return _unavailable(
-            "研判待复核：LLM 分析暂不可用，下期重试",
-            generated_at=generated_at,
-            data_limitations=last_limitations,
-        )
-
-    # 4. Contract validation: receipt errors mean the judgment is unusable.
-    receipt = validate_advisory(advisory, snapshot_hash=snapshot.snapshot_id)
-    if receipt.errors:
-        logger.info("advisory mainline: validation errors: %s", list(receipt.errors))
-        return _unavailable(
-            "研判待复核：本期研判未通过校验",
-            generated_at=generated_at,
-            data_limitations=list(advisory.data_limitations),
-        )
-
-    # 5. Project into the display-shaped outlook dict.
-    projected = _project_outlook(advisory, receipt, generated_at=generated_at)
-    # C1-WP2: 关键数据过旧时确定性降级置信度(不改 rationale 文本)。
-    # 健康检查修正: 只按主市场行情降级,避免跨市场 stale 误伤。
-    return _apply_freshness_downgrade(
-        projected, context, primary_market=market
+    if advisory is None:
+        return unavailable("研判待复核：LLM 分析暂不可用，下期重试")
+    receipt = validate_advisory(
+        advisory, snapshot_hash=snapshot.snapshot_id,
+        prompt_contract_hash=attempts[-1].get("prompt_hash", ""), snapshot=snapshot,
     )
+    lineage = build_advisory_lineage(snapshot, advisory, receipt, attempts)
+    if _is_fallback_advisory(advisory):
+        return unavailable("研判待复核：LLM 分析暂不可用，下期重试",
+                           list(advisory.data_limitations), lineage)
+    if receipt.errors:
+        return unavailable("研判待复核：本期研判未通过校验",
+                           list(advisory.data_limitations), lineage)
+    projected = _project_outlook(advisory, receipt, generated_at=generated_at)
+    projected = _apply_freshness_downgrade(projected, context, primary_market=market)
+    projected["advisory_lineage"] = lineage
+    return projected

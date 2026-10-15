@@ -60,6 +60,9 @@ class MCPAdapter:
             return self._asset_migrate_v2(params)
         elif method == "profile_get":
             return {"success": True, "data": self.engine.get_profile()}
+        elif method in {"statement_save", "cash_movement_save", "statement_list", "cash_movement_list",
+                        "financial_reconcile", "financial_integrity", "personal_mandate", "constraints_replace"}:
+            return self._financial_facts(method, params)
         elif method == "profile_update":
             return self._profile_update(params)
         elif method == "advice_list":
@@ -70,6 +73,18 @@ class MCPAdapter:
             return {"success": True, "data": self.engine.list_executions()}
         elif method == "execution_save":
             return self._execution_save(params)
+        elif method == "decision_save":
+            return self._decision_save(params)
+        elif method == "decision_list":
+            return {"success": True, "data": self.engine.list_user_decisions()}
+        elif method == "decision_review":
+            try:
+                review = self.engine.decision_review(
+                    params.get("decision_id"), as_of=params.get("as_of"),
+                    evaluation_database=params.get("evaluation_database"))
+                return {"success": True, "data": review}
+            except (TypeError, ValueError) as exc:
+                return {"success": False, "error": str(exc)}
         elif method == "forecast_list":
             return {"success": True, "data": self.engine.list_forecasts()}
         elif method == "forecast_save":
@@ -216,6 +231,16 @@ class MCPAdapter:
                 response["errors"] = errors
             return response
 
+    def _decision_save(self, params: dict) -> dict:
+        confirmation_error = self._confirmed(params)
+        if confirmation_error:
+            return confirmation_error
+        try:
+            record = self.engine.save_user_decision(params.get("decision"))
+            return {"success": True, "data": record, "action": "decision_saved"}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
     def _execution_save(self, params: dict) -> dict:
         confirmation_error = self._confirmed(params)
         if confirmation_error:
@@ -226,6 +251,33 @@ class MCPAdapter:
         try:
             record = self.engine.save_execution(execution)
             return {"success": True, "data": record, "action": "execution_saved"}
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _financial_facts(self, method: str, params: dict) -> dict:
+        if method in {"statement_save", "cash_movement_save", "constraints_replace"}:
+            error = self._confirmed(params)
+            if error:
+                return error
+        try:
+            if method == "constraints_replace":
+                data = self.engine.replace_portfolio_constraints(params.get("constraints"))
+            elif method == "statement_save":
+                data = self.engine.save_account_statement(params.get("statement"))
+            elif method == "cash_movement_save":
+                data = self.engine.save_cash_movement(params.get("movement"))
+            elif method == "statement_list":
+                data = self.engine.list_account_statements()
+            elif method == "cash_movement_list":
+                data = self.engine.list_cash_movements()
+            elif method == "financial_reconcile":
+                data = self.engine.financial_reconcile(params.get("opening_id"), params.get("closing_id"),
+                                                       as_of=params.get("as_of"))
+            elif method == "financial_integrity":
+                data = self.engine.financial_integrity(as_of=params.get("as_of"))
+            else:
+                data = self.engine.personal_mandate()
+            return {"success": True, "data": data}
         except (TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
 
@@ -475,6 +527,54 @@ class MCPAdapter:
                     "properties": {
                         "execution": {"type": "object"},
                         "confirmed": {"type": "boolean", "const": True},
+                    },
+                },
+            },
+            {
+                "name": "decision_save",
+                "description": "保存用户确认的建议决定；接受或部分采纳不代表实际成交",
+                "parameters": {
+                    "type": "object", "required": ["decision", "confirmed"],
+                    "properties": {"decision": {"type": "object"},
+                                   "confirmed": {"type": "boolean", "const": True}},
+                },
+            },
+            *[
+                {"name": name, "description": description,
+                 "parameters": {"type": "object", "required": [field, "confirmed"],
+                                "properties": {field: {"type": "object"},
+                                               "confirmed": {"type": "boolean", "const": True}}}}
+                for name, field, description in (
+                    ("constraints_replace", "constraints", "确认后整体替换个人组合约束；空对象表示明确无配置约束"),
+                    ("statement_save", "statement", "用户确认后记录账户时点现金与持仓；不覆盖资产记忆"),
+                    ("cash_movement_save", "movement", "用户确认后记录非交易现金变动"),
+                )
+            ],
+            *[
+                {"name": name, "description": description,
+                 "parameters": {"type": "object", "properties": {}}}
+                for name, description in (
+                    ("statement_list", "读取账户时点记录和读取错误"),
+                    ("cash_movement_list", "读取非交易现金变动和读取错误"),
+                    ("personal_mandate", "读取已确认的个人约束和未知项"),
+                )
+            ],
+            {"name": "financial_reconcile", "description": "只读核对账户两个确认时点之间的现金与数量",
+             "parameters": {"type": "object", "required": ["opening_id", "closing_id"],
+                            "properties": {"opening_id": {"type": "string"}, "closing_id": {"type": "string"},
+                                           "as_of": {"type": "string"}}}},
+            {"name": "financial_integrity", "description": "只读核对最新账单与当前资产记忆的一致性",
+             "parameters": {"type": "object", "properties": {"as_of": {"type": "string"}}}},
+            {
+                "name": "decision_list", "description": "读取全部用户决定历史",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "decision_review", "description": "只读复盘真实建议、用户决定、逐笔成交与冻结行情",
+                "parameters": {
+                    "type": "object", "properties": {
+                        "decision_id": {"type": "string"}, "as_of": {"type": "string"},
+                        "evaluation_database": {"type": "string"},
                     },
                 },
             },

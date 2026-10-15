@@ -1,39 +1,90 @@
 import copy
-import sqlite3
-import json
+from datetime import timedelta
+
 import pytest
-from stocks.engine.evaluation_metrics import evaluate,build_report,summarize
+
+from stocks.engine.evaluation_contract import evaluate_observation, utc
 from stocks.engine.evaluation_ledger import EvaluationLedger
+from stocks.engine.evaluation_metrics import build_report
+from stocks.engine.evaluation_task_sync import schedule_signal
+from stocks.engine.observation_pipeline import collect_observation
 
 
-def sample():
- s={'signal_id':'s','symbol':'a:1','signal_type':'short_term_directional','direction':'buy','scoring_status':'scorable','corporate_actions_checked':True,
- 'entry_snapshot':{'scoring_status':'scorable','instrument_id':'a:1','price':100,'currency':'CNY','adjustment':'unadjusted','source':'fixture','as_of':'2026-01-01T00:00:00Z'}}
- o={'status':'observed','symbol':'a:1','price':110,'currency':'CNY','adjustment':'unadjusted','source':'fixture','observed_at':'2026-01-02T00:00:00Z','target_at':'2026-01-02T00:00:00Z'}
- return s,o,{'neutral_band':.001,'round_trip_cost_rate':.002}
+def test_report_uses_frozen_inputs_not_mutable_events(tmp_path, evaluation_signal, evaluation_window, observation_factory):
+    ledger = EvaluationLedger(tmp_path / 'ledger.db')
+    key, _ = schedule_signal(ledger, evaluation_signal, evaluation_window)
+    collect_observation(ledger, key, now=utc(key[2]) + timedelta(minutes=5), provider=observation_factory)
+    with ledger.connect() as db:
+        before = build_report(db)
+    evaluation_signal['entry_snapshot']['price'] = 200
+    evaluation_window['horizon'] = 24
+    with ledger.connect() as db:
+        after = build_report(db)
+    assert after == before
+    assert after['results'][0]['price_return'] == pytest.approx(.1)
+    assert after['results'][0]['entry']['price'] == 100
+    assert after['results'][0]['policy']['horizon'] == 1
 
-def test_returns_and_costs():
- s,o,p=sample();r=evaluate(s,o,p)
- assert r['gross_return']==pytest.approx(.1) and r['net_return']==pytest.approx(.098)
- s['direction']='sell'; assert evaluate(s,o,p)['outcome']=='loss'
- p['round_trip_cost_rate']=None;r=evaluate(s,o,p);assert r['net_return'] is None and r['outcome_basis']=='gross'
 
-@pytest.mark.parametrize('field,value,reason', [('signal_type','risk_reduction','unsupported_signal_semantics'),('corporate_actions_checked',False,'corporate_actions_unverified')])
-def test_semantic_guards(field,value,reason):
- s,o,p=sample();s[field]=value;assert evaluate(s,o,p)['reason']==reason
+def test_raw_price_change_is_not_direction_adjusted(tmp_path, evaluation_signal, evaluation_window, observation_factory):
+    ledger = EvaluationLedger(tmp_path / 'ledger.db')
+    evaluation_signal['direction'] = 'sell'
+    evaluation_signal['action_semantics'] = 'reduce_risk'
+    key, _ = schedule_signal(ledger, evaluation_signal, evaluation_window)
+    definition = ledger.definition(*key[:2])
+    observation = observation_factory(evaluation_signal['symbol'], definition['target'])
+    result = evaluate_observation(definition, observation)
+    assert result['price_return'] == pytest.approx(.1)
+    assert result['outcome'] is None and result['scoring_status'] == 'observation_only'
+    assert result['signal']['action_semantics'] == 'reduce_risk'
 
-@pytest.mark.parametrize('field,value,reason',[('currency',None,'currency_unverified'),('adjustment',None,'price_basis_unverified'),('price',float('nan'),'invalid_price'),('source',None,'missing_source')])
-def test_entry_guards(field,value,reason):
- s,o,p=sample();s['entry_snapshot'][field]=value;assert evaluate(s,o,p)['reason']==reason
 
-def test_neutral_small_sample():
- s,o,p=sample();o['price']=100.2;r=evaluate(s,o,p);assert r['outcome']=='neutral'
- r['policy_id']='p';g=summarize([r],20)[0]
- assert g['neutral']==1 and g['win_rate'] is None and g['expectancy'] is None and g['max_drawdown'] is None
+def test_currency_mismatch_and_corrupted_observation_cannot_become_return(tmp_path, evaluation_signal, evaluation_window, observation_factory):
+    ledger = EvaluationLedger(tmp_path / 'ledger.db')
+    key, _ = schedule_signal(ledger, evaluation_signal, evaluation_window)
+    definition = ledger.definition(*key[:2])
+    observation = observation_factory(evaluation_signal['symbol'], definition['target'])
+    bad = copy.deepcopy(definition)
+    bad['signal']['entry_snapshot']['currency'] = 'USD'
+    result = evaluate_observation(bad, observation)
+    assert result['reason'] == 'currency_mismatch' and result['price_return'] is None
+    observation['price'] = 999
+    result = evaluate_observation(definition, observation)
+    assert result['reason'] == 'source_evidence_mismatch:price'
+    assert result['price_return'] is None
 
-def test_unique_read_and_conflict(tmp_path):
- s,o,p=sample();l=EvaluationLedger(tmp_path/'x.db');key=l.schedule('s','observation-v1:p',o['target_at']);token=l.claim(key,0);l.finish(key,token,o,1)
- with sqlite3.connect(l.path) as db:
-  a=build_report(db,[s,s],p,2);b=build_report(db,[s,s],p,2);assert a==b and len(a['results'])==1
-  bad=copy.deepcopy(s);bad['direction']='sell'
-  assert build_report(db,[s,bad],p,2)['results'][0]['reason']=='conflicting_signal_id'
+
+def test_pending_and_legacy_are_explicit_not_mislabeled(tmp_path, evaluation_signal, evaluation_window):
+    ledger = EvaluationLedger(tmp_path / 'ledger.db')
+    schedule_signal(ledger, evaluation_signal, evaluation_window)
+    ledger.schedule('old', 'directional:24h', '2026-10-01T00:00:00Z')
+    with ledger.connect() as db:
+        report = build_report(db)
+    assert report['legacy_tasks_excluded'] == 1
+    assert report['summary'] == {'pending': 1}
+    assert report['results'] == []
+    assert report['tasks'][0]['last_observation'] is None
+
+
+def test_report_has_one_snapshot_during_concurrent_worker_commit(tmp_path, evaluation_signal, evaluation_window, observation_factory):
+    ledger = EvaluationLedger(tmp_path / 'ledger.db')
+    with ledger.connect() as db:
+        db.execute('PRAGMA journal_mode=WAL')
+    key, _ = schedule_signal(ledger, evaluation_signal, evaluation_window)
+
+    class CommitBetweenReads:
+        def __init__(self, connection):
+            self.connection = connection
+            self.committed = False
+
+        def execute(self, statement, *args):
+            if 'FROM tasks t JOIN' in statement and not self.committed:
+                self.committed = True
+                assert collect_observation(ledger, key, now=utc(key[2]) + timedelta(minutes=5), provider=observation_factory) == 'evaluated'
+            return self.connection.execute(statement, *args)
+
+    with ledger.connect() as db:
+        report = build_report(CommitBetweenReads(db))
+        assert report['results'] == []
+        assert report['summary'] == {'pending': 1}
+        assert build_report(db)['summary'] == {'completed': 1}

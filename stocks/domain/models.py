@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -68,9 +71,13 @@ class Quote:
     as_of: Optional[str] = None
 
     indicators: Optional[dict] = None  # 技术指标计算结果
+    price_type: Optional[str] = None
+    currency: Optional[str] = None
+    adjustment: Optional[str] = None
+    price_basis: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "instrument": {
                 "code": self.instrument.code,
                 "name": self.instrument.name,
@@ -92,6 +99,11 @@ class Quote:
             "as_of": self.as_of,
             "indicators": self.indicators,
         }
+        for key in ("price_type", "currency", "adjustment", "price_basis"):
+            value = getattr(self, key)
+            if value is not None:
+                result[key] = value
+        return result
 
 
 @dataclass(frozen=True)
@@ -753,6 +765,7 @@ class Position:
             "valuation_input": self.valuation_input.to_dict(),
             "liquidity": self.liquidity.to_dict(),
             "role": self.role,
+            "horizon": self.horizon,
             "reported_performance": (
                 self.reported_performance.to_dict() if self.reported_performance else None
             ),
@@ -1019,8 +1032,10 @@ def _normalize_optional_float(value, field_name: str) -> Optional[float]:
         raise ValueError(f"{field_name} must be a number")
     try:
         number = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{field_name} must be a number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field_name} must be finite")
     return number
 
 
@@ -1035,13 +1050,34 @@ def _normalize_date_string(value, field_name: str) -> str:
     return raw
 
 
+def _aware_record_time(value: str, field_name: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be an aware ISO timestamp")
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an aware ISO timestamp") from exc
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError(f"{field_name} must be an aware ISO timestamp")
+    return timestamp
+
+
+def _json_record(value: dict) -> None:
+    """Financial records must be portable JSON, never NaN/Infinity."""
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("record must contain finite JSON values") from exc
+
+
+def _record_id(value: str, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} is required")
+
+
 @dataclass(frozen=True)
 class AdviceRecord:
-    """用户确认保存的建议摘要，不保存 LLM 长文。
-
-    M3: `feedback` 是用户对该建议的结果标记（accepted / partial /
-    rejected / deferred + note + marked_at），缺省表示未标记。
-    """
+    """用户确认保存的建议及原始来源；feedback 仅为旧入口的最新投影。"""
 
     created_at: str
     instruments: list[dict]
@@ -1052,6 +1088,12 @@ class AdviceRecord:
     triggers: list[dict] = field(default_factory=list)
     actions: list[dict] = field(default_factory=list)
     feedback: Optional[dict] = None
+    schema_version: int = 1
+    id: Optional[str] = None
+    source_run_id: Optional[str] = None
+    original_text: Optional[str] = None
+    source_snapshot: Optional[dict] = None
+    feedback_history: list[dict] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -1064,9 +1106,20 @@ class AdviceRecord:
         boundary: list[dict],
         triggers: Optional[list[dict]] = None,
         actions: Optional[list[dict]] = None,
+        schema_version: int = 2,
+        id: Optional[str] = None,
+        created_at: Optional[str] = None,
+        source_run_id: Optional[str] = None,
+        original_text: Optional[str] = None,
+        source_snapshot: Optional[dict] = None,
     ) -> "AdviceRecord":
         return cls(
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=created_at if created_at is not None else datetime.now(timezone.utc).isoformat(),
+            schema_version=schema_version,
+            id=id if id is not None else uuid4().hex,
+            source_run_id=source_run_id,
+            original_text=original_text,
+            source_snapshot=deepcopy(source_snapshot),
             instruments=instruments,
             direction=direction,
             rationale_summary=rationale_summary,
@@ -1087,10 +1140,37 @@ class AdviceRecord:
             boundary=list(data.get("boundary", [])),
             triggers=list(data.get("triggers", [])),
             actions=list(data.get("actions", [])),
-            feedback=data.get("feedback"),
+            feedback=deepcopy(data.get("feedback")),
+            schema_version=data.get("schema_version", 1),
+            id=data.get("id"),
+            source_run_id=data.get("source_run_id"),
+            original_text=data.get("original_text"),
+            source_snapshot=deepcopy(data.get("source_snapshot")),
+            feedback_history=deepcopy(data.get("feedback_history", [])),
         )
 
     def __post_init__(self) -> None:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
+            raise ValueError("advice.schema_version must be 1 or 2")
+        if self.schema_version == 2:
+            _record_id(self.id, "advice.id")
+            _aware_record_time(self.created_at, "advice.created_at")
+        elif self.id is not None:
+            _record_id(self.id, "advice.id")
+        if self.source_run_id is not None:
+            _record_id(self.source_run_id, "advice.source_run_id")
+        if self.original_text is not None and not isinstance(self.original_text, str):
+            raise ValueError("advice.original_text must be a string")
+        if self.source_snapshot is not None and not isinstance(self.source_snapshot, dict):
+            raise ValueError("advice.source_snapshot must be an object")
+        if not isinstance(self.feedback_history, list) or not all(
+            isinstance(item, dict)
+            and item.get("status") in _ADVICE_FEEDBACK_STATUSES
+            and isinstance(item.get("note", ""), str)
+            and isinstance(item.get("marked_at", ""), str)
+            for item in self.feedback_history
+        ):
+            raise ValueError("feedback_history must contain valid feedback objects")
         if not self.created_at:
             raise ValueError("created_at is required")
         if self.feedback is not None:
@@ -1167,8 +1247,11 @@ class AdviceRecord:
                 raise ValueError("action.size_hint must be a non-empty string")
             if _EXACT_MONEY_RE.search(size_hint):
                 raise ValueError("action.size_hint must not contain exact currency amounts")
-            if item.get("horizon") not in _ADVICE_HORIZONS:
-                raise ValueError(f"action.horizon must be one of {sorted(_ADVICE_HORIZONS)}")
+            horizons = _ADVICE_HORIZONS | ({"unspecified"} if self.schema_version == 2 else set())
+            if item.get("horizon") not in horizons:
+                raise ValueError(f"action.horizon must be one of {sorted(horizons)}")
+            if "decision_id" in item:
+                _record_id(item["decision_id"], "action.decision_id")
             trigger = item.get("trigger")
             if trigger is not None and not isinstance(trigger, str):
                 raise ValueError("action.trigger must be a string when present")
@@ -1182,12 +1265,14 @@ class AdviceRecord:
                 "trigger",
                 "invalidation",
                 "horizon",
+                "decision_id",
             }
             if unknown:
                 raise ValueError(f"Unsupported action fields: {sorted(unknown)}")
+        _json_record(self.to_dict())
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "created_at": self.created_at,
             "instruments": self.instruments,
             "direction": self.direction,
@@ -1198,6 +1283,64 @@ class AdviceRecord:
             "actions": self.actions,
             "feedback": self.feedback,
         }
+        if self.schema_version != 1:
+            data["schema_version"] = self.schema_version
+        for key in ("id", "source_run_id", "original_text", "source_snapshot"):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        if self.feedback_history:
+            data["feedback_history"] = self.feedback_history
+        return deepcopy(data)
+
+
+@dataclass(frozen=True)
+class UserDecisionRecord:
+    """一次用户决定，不代表成交；每次改变决定均新增记录。"""
+
+    id: str
+    advice_id: str
+    decision_id: str
+    status: str
+    decided_at: str
+    recorded_at: str
+    note: str = ""
+
+    @classmethod
+    def create(
+        cls, *, advice_id: str, decision_id: str, status: str,
+        decided_at: Optional[str] = None, recorded_at: Optional[str] = None,
+        note: str = "", id: Optional[str] = None,
+    ) -> "UserDecisionRecord":
+        now = datetime.now(timezone.utc).isoformat()
+        return cls(
+            id=id if id is not None else uuid4().hex, advice_id=advice_id, decision_id=decision_id,
+            status=status, decided_at=decided_at if decided_at is not None else now,
+            recorded_at=recorded_at if recorded_at is not None else now, note=note,
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "UserDecisionRecord":
+        return cls(**{key: data.get(key, "") for key in (
+            "id", "advice_id", "decision_id", "status", "decided_at", "recorded_at", "note",
+        )})
+
+    def __post_init__(self) -> None:
+        for key in ("id", "advice_id", "decision_id"):
+            _record_id(getattr(self, key), f"user_decision.{key}")
+        if self.status not in _ADVICE_FEEDBACK_STATUSES:
+            raise ValueError(f"user_decision.status must be one of {sorted(_ADVICE_FEEDBACK_STATUSES)}")
+        decided = _aware_record_time(self.decided_at, "user_decision.decided_at")
+        recorded = _aware_record_time(self.recorded_at, "user_decision.recorded_at")
+        if decided > recorded:
+            raise ValueError("user_decision.decided_at must not be after recorded_at")
+        if not isinstance(self.note, str):
+            raise ValueError("user_decision.note must be a string")
+
+    def to_dict(self) -> dict:
+        return {key: getattr(self, key) for key in (
+            "id", "advice_id", "decision_id", "status", "decided_at", "recorded_at", "note",
+        )}
 
 
 @dataclass(frozen=True)
@@ -1205,7 +1348,7 @@ class ExecutionRecord:
     """决策执行记录 — 记录一次 planned / executed / rejected / deferred 的决策执行结果。"""
 
     id: str
-    decision_id: str  # 必填，关联到 PortfolioDecision.decision_id
+    decision_id: Optional[str]  # schema 3 manual may have no system recommendation
     status: str  # executed | rejected | deferred | planned
     target: str
     action: str
@@ -1215,15 +1358,29 @@ class ExecutionRecord:
     advice_id: Optional[str] = None
     extent: Optional[str] = None
     price: Optional[float] = None  # status=executed 时必填
-    executed_ratio: Optional[float] = None  # status=executed 时必填
+    executed_ratio: Optional[float] = None  # legacy schema 1 executed 时必填
     rejection_reason: Optional[str] = None  # status=rejected 时必填
     next_review_at: Optional[str] = None  # status=deferred 时可填
+    schema_version: int = 1
+    side: Optional[str] = None
+    quantity: Optional[float] = None
+    currency: Optional[str] = None
+    fee_amount: Optional[float] = None
+    fee_currency: Optional[str] = None
+    account_id: Optional[str] = None
+    user_decision_id: Optional[str] = None
+    source_run_id: Optional[str] = None
+    record_origin: Optional[str] = None
+    source: Optional[str] = None
+    unit: Optional[str] = None
+    settled_at: Optional[str] = None
+    fee_booking: Optional[str] = None
 
     @classmethod
     def create(
         cls,
         *,
-        decision_id: str,
+        decision_id: Optional[str] = None,
         status: str = "planned",
         target: str = "",
         action: str = "",
@@ -1237,19 +1394,47 @@ class ExecutionRecord:
         next_review_at: Optional[str] = None,
         id: Optional[str] = None,
         recorded_at: Optional[str] = None,
+        schema_version: int = 1,
+        side: Optional[str] = None,
+        quantity: Optional[float] = None,
+        currency: Optional[str] = None,
+        fee_amount: Optional[float] = None,
+        fee_currency: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_decision_id: Optional[str] = None,
+        source_run_id: Optional[str] = None,
+        record_origin: Optional[str] = None,
+        source: Optional[str] = None,
+        unit: Optional[str] = None,
+        settled_at: Optional[str] = None,
+        fee_booking: Optional[str] = None,
     ) -> "ExecutionRecord":
         now = datetime.now(timezone.utc).isoformat()
         return cls(
-            id=id or uuid4().hex,
+            id=id if id is not None else uuid4().hex,
             decision_id=decision_id,
             status=status,
             target=target,
             action=action,
             extent=extent,
             note=note,
-            recorded_at=recorded_at or now,
-            executed_at=executed_at or now,
+            recorded_at=recorded_at if recorded_at is not None else now,
+            executed_at=executed_at or (now if schema_version == 1 else ""),
             advice_id=advice_id,
+            schema_version=schema_version,
+            side=side,
+            quantity=quantity,
+            currency=currency,
+            fee_amount=fee_amount,
+            fee_currency=fee_currency,
+            account_id=account_id,
+            user_decision_id=user_decision_id,
+            source_run_id=source_run_id,
+            record_origin=record_origin,
+            source=source,
+            unit=unit,
+            settled_at=settled_at,
+            fee_booking=fee_booking,
             price=price,
             executed_ratio=executed_ratio,
             rejection_reason=rejection_reason,
@@ -1258,28 +1443,106 @@ class ExecutionRecord:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ExecutionRecord":
+        # Preserve legacy coercion, but do not turn null v2 identity into the string "None".
+        def string_value(key: str, default: str = ""):
+            value = data.get(key, default)
+            return str(value) if data.get("schema_version", 1) == 1 else value
+
         return cls(
-            id=str(data.get("id", "")),
-            decision_id=str(data.get("decision_id", "")),
-            status=str(data.get("status", "planned")),
-            target=str(data.get("target", "")),
-            action=str(data.get("action", "")),
+            id=string_value("id"),
+            decision_id=string_value("decision_id"),
+            status=string_value("status", "planned"),
+            target=string_value("target"),
+            action=string_value("action"),
             extent=data.get("extent"),
-            note=str(data.get("note", "")),
-            recorded_at=str(data.get("recorded_at", "")),
-            executed_at=str(data.get("executed_at", "")),
+            note=string_value("note"),
+            recorded_at=string_value("recorded_at"),
+            executed_at=string_value("executed_at"),
             advice_id=data.get("advice_id"),
             price=_normalize_optional_float(data.get("price"), "execution.price"),
             executed_ratio=_normalize_optional_float(data.get("executed_ratio"), "execution.executed_ratio"),
             rejection_reason=data.get("rejection_reason"),
             next_review_at=data.get("next_review_at"),
+            schema_version=data.get("schema_version", 1),
+            side=data.get("side"),
+            quantity=_normalize_optional_float(data.get("quantity"), "execution.quantity"),
+            currency=data.get("currency"),
+            fee_amount=_normalize_optional_float(data.get("fee_amount"), "execution.fee_amount"),
+            fee_currency=data.get("fee_currency"),
+            account_id=data.get("account_id"),
+            user_decision_id=data.get("user_decision_id"),
+            source_run_id=data.get("source_run_id"),
+            record_origin=data.get("record_origin"),
+            source=data.get("source"),
+            unit=data.get("unit"),
+            settled_at=data.get("settled_at"),
+            fee_booking=data.get("fee_booking"),
         )
 
     def __post_init__(self) -> None:
-        if not self.id:
-            raise ValueError("execution.id is required")
-        if not self.decision_id:
-            raise ValueError("execution.decision_id is required")
+        _record_id(self.id, "execution.id")
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2, 3}:
+            raise ValueError("execution.schema_version must be 1, 2 or 3")
+        if self.schema_version == 3:
+            if self.status != "executed":
+                raise ValueError("schema 3 execution.status must be executed")
+            if self.record_origin not in {"manual", "advice_linked"}:
+                raise ValueError("execution.record_origin must be manual or advice_linked")
+            _record_id(self.source, "execution.source")
+            _record_id(self.account_id, "execution.account_id")
+            if self.unit not in _HOLDING_UNITS:
+                raise ValueError(f"execution.unit must be one of {sorted(_HOLDING_UNITS)}")
+            if self.fee_booking != "cash":
+                raise ValueError("execution.fee_booking must explicitly be cash")
+            if self.record_origin == "manual":
+                for key in ("decision_id", "advice_id", "user_decision_id", "source_run_id"):
+                    if getattr(self, key) not in (None, ""):
+                        raise ValueError(f"manual execution must not contain {key}")
+                    object.__setattr__(self, key, None)
+            else:
+                for key in ("decision_id", "advice_id", "source_run_id"):
+                    _record_id(getattr(self, key), f"execution.{key}")
+        else:
+            _record_id(self.decision_id, "execution.decision_id")
+        for key in ("price", "executed_ratio", "quantity", "fee_amount"):
+            value = getattr(self, key)
+            if value is not None:
+                number = _normalize_optional_float(value, f"execution.{key}")
+                object.__setattr__(self, key, number)
+        if self.executed_ratio is not None and not 0 <= self.executed_ratio <= 1:
+            raise ValueError("execution.executed_ratio must be between 0 and 1")
+        if self.schema_version >= 2:
+            recorded = _aware_record_time(self.recorded_at, "execution.recorded_at")
+            if self.executed_at:
+                executed = _aware_record_time(self.executed_at, "execution.executed_at")
+                if executed > recorded:
+                    raise ValueError("execution.executed_at must not be after recorded_at")
+            if self.schema_version == 3 and self.settled_at is not None:
+                settled = _aware_record_time(self.settled_at, "execution.settled_at")
+                executed = _aware_record_time(self.executed_at, "execution.executed_at")
+                if not executed <= settled <= recorded:
+                    raise ValueError("execution times must satisfy executed_at <= settled_at <= recorded_at")
+            if self.side is not None and self.side not in {"buy", "sell"}:
+                raise ValueError("execution.side must be buy or sell")
+            if self.price is not None and self.price <= 0:
+                raise ValueError("execution.price must be positive")
+            if self.quantity is not None and self.quantity <= 0:
+                raise ValueError("execution.quantity must be positive")
+            if self.fee_amount is not None and self.fee_amount < 0:
+                raise ValueError("execution.fee_amount must be non-negative")
+            for key in ("currency", "fee_currency", "account_id", "user_decision_id", "source_run_id"):
+                if getattr(self, key) is not None:
+                    _record_id(getattr(self, key), f"execution.{key}")
+            if self.fee_amount is not None and self.fee_currency is None:
+                raise ValueError("execution.fee_currency is required when fee_amount is known")
+            if self.status == "executed":
+                _aware_record_time(self.executed_at, "execution.executed_at")
+                if self.side is None:
+                    raise ValueError("execution.side is required when status=executed")
+                if self.quantity is None:
+                    raise ValueError("execution.quantity is required when status=executed")
+                _record_id(self.currency, "execution.currency")
+                _record_id(self.target, "execution.target")
         if self.status not in _EXECUTION_STATUSES:
             raise ValueError(
                 f"execution.status must be one of {sorted(_EXECUTION_STATUSES)}"
@@ -1287,10 +1550,8 @@ class ExecutionRecord:
         if self.status == "executed":
             if self.price is None:
                 raise ValueError("execution.price is required when status=executed")
-            if self.executed_ratio is None:
+            if self.schema_version == 1 and self.executed_ratio is None:
                 raise ValueError("execution.executed_ratio is required when status=executed")
-            if self.executed_ratio < 0 or self.executed_ratio > 1:
-                raise ValueError("execution.executed_ratio must be between 0 and 1")
         if self.status == "rejected" and not self.rejection_reason:
             raise ValueError("execution.rejection_reason is required when status=rejected")
         # Legacy backward-compatible validation
@@ -1306,6 +1567,7 @@ class ExecutionRecord:
             raise ValueError("execution.extent must be full or partial when action is set")
         if not isinstance(self.note, str):
             raise ValueError("execution.note must be a string")
+        _json_record(self.to_dict())
 
     def to_dict(self) -> dict:
         data = {
@@ -1329,6 +1591,16 @@ class ExecutionRecord:
             data["rejection_reason"] = self.rejection_reason
         if self.next_review_at is not None:
             data["next_review_at"] = self.next_review_at
+        if self.schema_version != 1:
+            data["schema_version"] = self.schema_version
+        for key in (
+            "side", "quantity", "currency", "fee_amount", "fee_currency", "account_id",
+            "user_decision_id", "source_run_id", "record_origin", "source", "unit",
+            "settled_at", "fee_booking",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
         return data
 
 
@@ -1550,6 +1822,8 @@ class AnalysisContext:
 
     # 元信息（带默认值）
     schema_version: int = 12
+    personal_mandate: dict = field(default_factory=dict)
+    financial_integrity: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AnalysisContext":
@@ -1576,6 +1850,10 @@ class AnalysisContext:
                     stale=q.get("stale", False),
                     as_of=q.get("as_of"),
                     indicators=q.get("indicators"),
+                    price_type=q.get("price_type"),
+                    currency=q.get("currency"),
+                    adjustment=q.get("adjustment"),
+                    price_basis=q.get("price_basis"),
                 ) for q in v]
                 for k, v in data.get("quotes", {}).items()
             },
@@ -1607,6 +1885,8 @@ class AnalysisContext:
             advice_granularity=data.get("advice_granularity", {}),
             engine_config=data.get("engine_config", {}),
             schema_version=data.get("schema_version", 12),
+            personal_mandate=deepcopy(data.get("personal_mandate", {})),
+            financial_integrity=deepcopy(data.get("financial_integrity", {})),
         )
 
     def to_dict(self) -> dict:
@@ -1645,6 +1925,8 @@ class AnalysisContext:
             "asset_data_boundaries": self.asset_data_boundaries,
             "advice_granularity": self.advice_granularity,
             "engine_config": self.engine_config,
+            "personal_mandate": deepcopy(self.personal_mandate),
+            "financial_integrity": deepcopy(self.financial_integrity),
         }
 
 

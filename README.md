@@ -2,18 +2,12 @@
 
 A single-user personal investment analyst system. It stores user-confirmed accounts, positions, and investment preferences; collects quotes, price history, news, filings, macro data, and events; and prepares traceable evidence for an LLM investment analyst to produce portfolio actions, market assessments, and opportunity candidates. The user remains the sole decision-maker and the system never places orders.
 
-The current production path still uses deterministic rule actions plus a constrained Outlook. The long-term migration direction, described in `ROADMAP.md`, moves incrementally to:
-
-```text
-UnifiedAnalysisSnapshot
-→ LLM InvestmentAdvisory
-→ deterministic evidence/feasibility validation
-→ presentation and delivery
-```
-
-Migration is shadow-first and does not replace production in one step. Whether
-any given phase has actually landed is a `STATUS.md` question, not a claim
-this README makes.
+Development follows confirmed personal constraints → reconciled financial facts →
+traceable LLM proposals → user decisions and actual execution → review. The local
+main-window chain preserves original LLM proposals and deterministic validation;
+deployment and real-world acceptance are separate states recorded in `STATUS.md`.
+See [the financial truth contract](docs/contracts/financial-trust-v1.md) for the
+current API, supported actions, limitations and explicitly simulated smoke commands.
 
 [中文](README.zh.md) · [Agents](AGENTS.md) · [Status](STATUS.md) · [Roadmap](ROADMAP.md) · [Vision](stocks/VISION.md) · [Architecture](ARCHITECTURE.md) · [Agent guide](AGENT_GUIDE.md) · [Plan](PLAN.md)
 
@@ -76,6 +70,11 @@ Reads do not require confirmation:
 
 All asset, profile, advice, execution, and forecast writes require explicit user confirmation. Private state lives under `.local/`; credential symlinks under `.secret/` point to `/opt/data/.secret/`. Neither is committed.
 
+The [decision fact-chain contract](docs/contracts/decision-review-v2.md) describes
+source-linked advice, append-only user decisions, individual confirmed fills,
+and read-only review through CLI/MCP. Recorded fills do not automatically update
+balances or positions. Sale proceeds and subsequent price changes are not profit.
+
 SEC EDGAR requires a contact-bearing `SEC_USER_AGENT` or `.secret/sec-user-agent.md`.
 
 ## Verification
@@ -88,5 +87,21 @@ SEC EDGAR requires a contact-bearing `SEC_USER_AGENT` or `.secret/sec-user-agent
 ```
 
 For current verification evidence (latest ruff/pytest/smoke results), see `STATUS.md` — this README does not track a point-in-time pass/fail baseline.
+
+For the manual signal → frozen price-observation result pipeline, use the commands and
+explicit window definitions in [the minimum evaluation contract](docs/contracts/signal-evaluation-v1.md).
+Its real-price smoke replays existing production rule code into a new data directory;
+it does not restart scheduled analysis or enable strategy feedback.
+
+For the recommendation → decision → fills → review acceptance replay, run:
+
+```bash
+.venv/bin/python scripts/smoke_decision_review.py --output-dir /tmp/stocks-decision-review-example
+```
+
+Use a fresh output directory. This runs current project code with public historical
+prices and explicitly simulated user decisions, portfolio and fills; it does not
+use or modify the user's financial memory. Production rules must naturally produce
+an executable recommendation; absent one, the smoke reports failure.
 
 This software supports analysis and research. It does not promise returns or execute trades.

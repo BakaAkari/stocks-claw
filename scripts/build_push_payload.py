@@ -1646,67 +1646,84 @@ def _section_portfolio_and_checkpoint(
 
     # —— 资金折叠 ——
     cash = assistant.get("cash") or {}
-    cash_parts: list[str] = []
-
-    def _amount(key: str) -> float:
-        item = cash.get(key) or {}
-        try:
-            return float(item.get("amount_cny") or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    available_now = _amount("available_now")
-    confirmed_settling = _amount("confirmed_settling")
-    planned_release = _amount("planned_release")
-    locked = _amount("locked")
-    strategic_exit = _amount("strategic_exit")
-    safety_buffer = _amount("safety_buffer")
-    unresolved_settlement = _amount("unresolved_settlement")
-
-    cash_parts.append(f"现在能用 ¥{available_now:,.0f}")
-    if confirmed_settling > 0:
-        cash_parts.append(f"到账途中 ¥{confirmed_settling:,.0f}")
-    if planned_release > 0:
-        cash_parts.append(f"计划内到期释放 ¥{planned_release:,.0f}")
-    if locked > 0:
-        cash_parts.append(f"不能动 ¥{locked:,.0f}")
-
-    # strategic_exit 仅当存在可执行的 sell 类动作，或存在"已获批但等待人工
-    # 复核"的卖出（presentation 在 cash.pending_sell 置位）时展示
     actions = card.get("actions") or []
-    has_sell_action = any(
-        _is_sell_action(a) for a in actions
-    ) or bool(cash.get("pending_sell"))
-    if has_sell_action and strategic_exit > 0:
-        cash_parts.append(f"卖出后可释放 ¥{strategic_exit:,.0f}")
-    # 缺口4: 资金与待执行信号桥接 —— pending_sell 时,把"卖出后可释放"的
-    # 资金与可执行动作区列出的待确认 减仓/止盈 信号对应起来,让 Kari 知道
-    # 这笔可释放资金来自哪些被压制的信号,而非孤立的一笔钱。
-    if has_sell_action and signal_ref:
-        sell_labels = [
-            str(item.get("label") or "")
-            for item in signal_ref.values()
-            if str(item.get("signal_label") or "") in ("reduce", "take_profit", "stop_loss")
-        ]
-        sell_labels = list(dict.fromkeys(x for x in sell_labels if x))
-        if sell_labels:
-            lines.append(
-                f"- 减仓/止盈信号: {'、'.join(sell_labels[:6])}（若执行，卖出后可释放上述资金）"
-            )
+    unresolved_settlement = 0.0
+    if cash.get("scope") == "confirmed_account_cash_only":
+        lines.append("- 账户现金: 按已确认账单分账户、原币展示；组合资金计划与资产合计未提供")
+        if cash.get("status") != "matched":
+            lines.append("- 账户现金核对尚未完整，以下余额不能视为当前可执行资金")
+        accounts = cash.get("accounts") or {}
+        if not accounts:
+            lines.append("- 账户余额与可用金额未知")
+        for account_id, account in accounts.items():
+            for currency, row in (account.get("cash_by_currency") or {}).items():
+                balance = row.get("balance")
+                available = row.get("available_balance")
+                balance_text = "未知" if balance is None else str(balance)
+                available_text = "未知" if available is None else str(available)
+                lines.append(f"- 账户 {account_id} / {currency}: 已结算余额 {balance_text}；可用金额 {available_text}")
+    else:
+        cash_parts: list[str] = []
 
-    if safety_buffer > 0:
-        cash_parts.append(f"安全垫 ¥{safety_buffer:,.0f}（不计入可用）")
+        def _amount(key: str) -> float:
+            item = cash.get(key) or {}
+            try:
+                return float(item.get("amount_cny") or 0)
+            except (TypeError, ValueError):
+                return 0.0
 
-    if cash_parts:
-        lines.append(f"- 资金: {'；'.join(cash_parts)}")
+        available_now = _amount("available_now")
+        confirmed_settling = _amount("confirmed_settling")
+        planned_release = _amount("planned_release")
+        locked = _amount("locked")
+        strategic_exit = _amount("strategic_exit")
+        safety_buffer = _amount("safety_buffer")
+        unresolved_settlement = _amount("unresolved_settlement")
 
-    # R5-4: 总资产 —— 交易分析师需要知道资金桶的相对规模,否则 6 个数字
-    # 无法快速判断"现在可用仅占总资产 X%"。数字来自 presentation 的
-    # cash.total_assets_cny(与各桶同源,validator 已授权);占比为派生
-    # 百分比,与各桶同源可复核,不新增 payload 数字。
-    total_assets = float(cash.get("total_assets_cny") or 0.0)
-    if total_assets > 0:
-        lines.append(f"- 资产合计: ¥{total_assets:,.0f}（各资金桶加总，含安全垫与待决）")
+        cash_parts.append(f"现在能用 ¥{available_now:,.0f}")
+        if confirmed_settling > 0:
+            cash_parts.append(f"到账途中 ¥{confirmed_settling:,.0f}")
+        if planned_release > 0:
+            cash_parts.append(f"计划内到期释放 ¥{planned_release:,.0f}")
+        if locked > 0:
+            cash_parts.append(f"不能动 ¥{locked:,.0f}")
+
+        # strategic_exit 仅当存在可执行的 sell 类动作，或存在"已获批但等待人工
+        # 复核"的卖出（presentation 在 cash.pending_sell 置位）时展示
+        actions = card.get("actions") or []
+        has_sell_action = any(
+            _is_sell_action(a) for a in actions
+        ) or bool(cash.get("pending_sell"))
+        if has_sell_action and strategic_exit > 0:
+            cash_parts.append(f"卖出后可释放 ¥{strategic_exit:,.0f}")
+        # 缺口4: 资金与待执行信号桥接 —— pending_sell 时,把"卖出后可释放"的
+        # 资金与可执行动作区列出的待确认 减仓/止盈 信号对应起来,让 Kari 知道
+        # 这笔可释放资金来自哪些被压制的信号,而非孤立的一笔钱。
+        if has_sell_action and signal_ref:
+            sell_labels = [
+                str(item.get("label") or "")
+                for item in signal_ref.values()
+                if str(item.get("signal_label") or "") in ("reduce", "take_profit", "stop_loss")
+            ]
+            sell_labels = list(dict.fromkeys(x for x in sell_labels if x))
+            if sell_labels:
+                lines.append(
+                    f"- 减仓/止盈信号: {'、'.join(sell_labels[:6])}（若执行，卖出后可释放上述资金）"
+                )
+
+        if safety_buffer > 0:
+            cash_parts.append(f"安全垫 ¥{safety_buffer:,.0f}（不计入可用）")
+
+        if cash_parts:
+            lines.append(f"- 资金: {'；'.join(cash_parts)}")
+
+        # R5-4: 总资产 —— 交易分析师需要知道资金桶的相对规模,否则 6 个数字
+        # 无法快速判断"现在可用仅占总资产 X%"。数字来自 presentation 的
+        # cash.total_assets_cny(与各桶同源,validator 已授权);占比为派生
+        # 百分比,与各桶同源可复核,不新增 payload 数字。
+        total_assets = float(cash.get("total_assets_cny") or 0.0)
+        if total_assets > 0:
+            lines.append(f"- 资产合计: ¥{total_assets:,.0f}（各资金桶加总，含安全垫与待决）")
 
     # —— 待决事项统一段（带金额的 data_notes + 部分延后理由）——
     pending_items: list[tuple[str, str]] = []

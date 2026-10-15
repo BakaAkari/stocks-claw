@@ -434,13 +434,13 @@ class IntelligenceHarvester:
         )
         with urllib.request.urlopen(request, timeout=15) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        return {
-            "instrument": {"code": "BTCUSDT", "name": "Bitcoin", "market": "crypto"},
-            "price": float(payload.get("lastPrice", 0)) or None,
-            "pct_change": float(payload.get("priceChangePercent", 0)) or None,
-            "source": "binance",
-            "as_of": datetime.now(timezone.utc).isoformat(),
-        }
+        from stocks.providers.binance_quote import BinanceQuoteProvider
+
+        # Share the provider parser: source closeTime and provenance must be
+        # identical in the market-analysis and intelligence entry paths.
+        return BinanceQuoteProvider()._data_to_quote(
+            payload, Instrument(code="BTCUSDT", name="Bitcoin", market="crypto")
+        ).to_dict()
 
     # ------------------------------------------------------------------
     # Data quality

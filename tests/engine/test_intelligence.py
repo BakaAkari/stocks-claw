@@ -193,9 +193,8 @@ class TestLLMIntelligenceAnalyzerCredentials:
         fake_secret.mkdir()
         (fake_secret / "openai-key.md").write_text("sk-secret-1234567890abcdef", encoding="utf-8")
         (fake_secret / "openai-base-url.md").write_text("https://secret.example.com/v1", encoding="utf-8")
-        # 拦截 secret_dir 计算: 方法内硬编码 parents[2]/".secret", 无法从
-        # 外部 monkeypatch — 改为验证"os.environ 有错误 key 时 .secret 兜底
-        # 逻辑存在且返回非空"的行为, 用真实 .secret(仓库内)。
+        monkeypatch.setattr("stocks.engine.intelligence_analyzer.__file__",
+                            str(tmp_path / "stocks" / "engine" / "intelligence_analyzer.py"))
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -203,21 +202,20 @@ class TestLLMIntelligenceAnalyzerCredentials:
             holdings=[], fallback_to_rules=False, env_file_path=None,
         )
         api_key, base_url = analyzer._load_api_config()
-        # 真实仓库 .secret 有工作 key — 应返回它(os.environ 已清空)
-        assert api_key.startswith("sk-")
-        assert len(api_key) >= 30
-        assert base_url.startswith("http")
+        assert api_key == "sk-secret-1234567890abcdef"
+        assert base_url == "https://secret.example.com/v1"
 
-    def test_credentials_fail_closed_when_unconfigured(self, monkeypatch) -> None:
+    def test_credentials_fail_closed_when_unconfigured(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr("stocks.engine.intelligence_analyzer.__file__",
+                            str(tmp_path / "stocks" / "engine" / "intelligence_analyzer.py"))
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_COMPATIBLE_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
         monkeypatch.delenv("STOCKS_LLM__FALLBACK_BASE_URL", raising=False)
         analyzer = LLMIntelligenceAnalyzer(holdings=[], fallback_to_rules=False)
         api_key, base_url = analyzer._load_api_config()
-        # 真实仓库 .secret 存在工作 key — 断言至少不抛异常且结构合理
-        assert isinstance(api_key, str)
-        assert isinstance(base_url, str)
+        assert api_key == ""
+        assert base_url == ""
 
     def test_call_llm_falls_back_to_reasoning_content(self, monkeypatch) -> None:
         """8/11 修复: deepseek-v4-flash 推理模型 content 为空, JSON 在

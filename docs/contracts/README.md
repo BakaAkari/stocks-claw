@@ -14,6 +14,8 @@ actually consumes it, verified against code rather than plan intent.
   not reach production push or write financial memory.
 - **PLANNED** — schema/types exist in code but nothing produces or consumes
   them in a real run yet.
+- **LOCAL** — implemented and exercised in the current checkout; production
+  deployment is not implied. Financial-memory writes still require confirmation.
 - **DEPRECATED** — superseded by a newer contract; code/tests may still
   exist but it is not part of the current target direction.
 
@@ -21,12 +23,16 @@ actually consumes it, verified against code rather than plan intent.
 
 | Contract | Label | Implementation | Consumer |
 |---|---|---|---|
+| [PersonalMandate / AccountStatement / CashMovement / ExecutionRecord v3 / financial integrity / LLM lineage](financial-trust-v1.md) | LOCAL | `personal_mandate.py`, `financial_reconciliation.py`, `financial_service.py`, `advisory_lineage.py` | Confirmed CLI/MCP facts, read-only reconciliation, main-window proposal validation and source-linked review; no deployment or real-account acceptance implied. |
+| [RecommendationSnapshot / AdviceRecord / UserDecisionRecord / ExecutionRecord / DecisionReview v2](decision-review-v2.md) | LOCAL | `scheduled_analysis.py`, `decision_service.py`, `models.py`, `persistence.py`, `outcome_attribution.py`, `decision_observation.py` | Scheduled source capture; confirmed CLI/MCP fact APIs; read-only review and complete decision/fill context; public-price replay smoke. No automatic position updates or investment-performance claim. |
+| [SignalEvent / frozen EvaluationTask / EvaluationResult v1](signal-evaluation-v1.md) | SHADOW (manual) | `signal_tracker.py`, `evaluation_task_sync.py`, `evaluation_ledger.py`, `target_observation.py`, `evaluation_contract.py` | Manual collection and frozen-result report; real public-price replay smoke. Raw price observations only; no production feedback or financial-memory writes. |
 | `AnalysisContext` v12 | PRODUCTION | `stocks/domain/models.py`, `stocks/engine/context_builder.py` | All adapters (`stocks/adapters/`), scheduled runner |
 | `portfolio_decision.user_view` | PRODUCTION | `stocks/engine/presentation.py` | Push renderer (`build_push_payload.py`), Feishu delivery |
 | `structured_outlook` v2 / `outlook_delta` v1 | PRODUCTION | `stocks/engine/advisory_mainline.py` (primary sessions, M2), `stocks/engine/outlook_synthesizer.py` (legacy path when `llm.advisory_mainline.enabled: false`), `stocks/engine/outlook_validation.py` | Main-window and observation-window scheduled artifacts |
 | `ScheduledAnalysisRun` v1 | PRODUCTION | `stocks/engine/scheduled_analysis.py` | `.local/scheduled_runs/`, `scripts/run_push_report.py` |
 | `FinancialAsset` v1 / `Account` / `Position` v2 | PRODUCTION | `stocks/domain/models.py` | Financial memory adapters, `AnalysisContext` builder |
-| `AdviceRecord` / `ExecutionRecord` / `ForecastRecord` / `DecisionSnapshot` | PRODUCTION | `stocks/domain/models.py`, `stocks/engine/` ledger modules, `stocks/engine/advice_feedback.py` (M3 rollup) | CLI/MCP write adapters, `--advice-feedback` channel (M3), `recent_advice`/`forecast_summary` in `AnalysisContext`, `advice_outcome` facts in `UnifiedAnalysisSnapshot` |
+| Legacy `AdviceRecord` / `ExecutionRecord`, `ForecastRecord` | PRODUCTION | `stocks/domain/models.py`, `stocks/engine/` ledger modules, `stocks/engine/advice_feedback.py` | Original confirmed-write adapters and compatibility views. Legacy recommendations/executions are not promoted to the verified v2 chain. |
+| Legacy `DecisionSnapshot` / inferred return settlement | DEPRECATED | `outcome_attribution.py` compatibility reader | `legacy_unverified` history only; no old strategy returns or win rates. |
 | `data_quality`, `rotation`, `action_signals`, `macro_snapshot` | PRODUCTION | `stocks/engine/context_builder.py` and respective modules | `AnalysisContext`, scheduled runner |
 | `UnifiedAnalysisSnapshot` v1 | PRODUCTION | `stocks/domain/advisory_models.py`, `stocks/engine/unified_snapshot.py` | `stocks/engine/advisory_mainline.py` (primary sessions), `scripts/run_shadow_advisory.py` |
 | `InvestmentAdvisory` v1 | PRODUCTION | `stocks/domain/advisory_models.py`, `stocks/engine/advisory_contract.py`, `stocks/engine/advisory_synthesizer.py` | `stocks/engine/advisory_mainline.py` (production `structured_outlook`), shadow scripts |

@@ -15,6 +15,30 @@ from scripts.build_push_payload import (
 )
 
 
+def test_account_cash_scope_renders_unknown_available_without_zero_or_currency_aggregation():
+    from stocks.engine.presentation import _cash_view
+
+    artifact = _artifact()
+    brief = artifact["portfolio_decision"]["user_view"]["assistant_brief"]
+    brief["cash"] = _cash_view({
+        "scope": "confirmed_account_cash_only", "status": "matched",
+        "accounts": {
+            "broker": {"cash_by_currency": {
+                "USD": {"balance": "125.50", "available_balance": None},
+                "CNY": {"balance": "200", "available_balance": "0"},
+            }},
+            "bank": {"cash_by_currency": {"USD": {"balance": "40", "available_balance": "40"}}},
+        },
+    })
+    payload = build_push_payload(artifact, now=artifact["generated_at"])
+    rendered = render_push_payload(payload)
+    assert "账户 broker / USD: 已结算余额 125.50；可用金额 未知" in rendered
+    assert "账户 broker / CNY: 已结算余额 200；可用金额 0" in rendered
+    assert "账户 bank / USD: 已结算余额 40；可用金额 40" in rendered
+    assert "现在能用 ¥0" not in rendered
+    assert "资产合计: ¥" not in rendered
+
+
 def _action(**overrides):
     action = {
         "display_label": "化工ETF（516020）",
@@ -1076,7 +1100,6 @@ def test_validate_allows_batch_plan_percentages():
     数字门禁, 否则含左侧分批支撑的报告被 unauthorized number 拦截无法推送
     (今天上午 cn_post_open 即因此未推到 traders 群)。修复后 validate_payload_text
     对含分批支撑百分比的渲染不再报 unauthorized number。"""
-    from scripts.build_push_payload import _left_batch_plan
     # 构造一个会渲染"分批支撑: MA20(x)接53%..."的 payload(带 batch_ratios + 技术位)
     art = _artifact()
     # 往 research 里塞一个带左侧技术位的候选

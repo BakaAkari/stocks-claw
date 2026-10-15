@@ -7,6 +7,16 @@
 > `docs/contracts/README.md`；本文只在架构组件粒度给出导览，两者冲突时以
 > `docs/contracts/README.md`（数据契约）和 `STATUS.md`（当前进度）为准。
 
+## 当前 checkout 的 LOCAL 接线
+
+以 [金融真实性契约](docs/contracts/financial-trust-v1.md) 为准：confirmed CLI/MCP
+→ 个人约束、账户时点记录、逐笔成交与现金变动 → 只读核对 → 正式 AnalysisContext
+→ 完整哈希快照 → LLM 原始提案与引用/可执行性检查 → user_view 与来源冻结
+→ 用户决定、成交与只读复盘。规则候选在主窗口保留为 evidence。
+
+这条 LOCAL 接线尚不代表 NAS 已部署。后文保留的旧部署结构不描述本轮新增实现；
+当前运行状态只见 STATUS，二次 LLM 推送文字及送达证据仍未闭环。
+
 ## 1. 系统边界
 
 stocks-claw 是单用户个人投资分析师系统，不自动下单。

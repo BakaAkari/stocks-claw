@@ -1,7 +1,12 @@
 """最小化分析快照持久化。"""
 
+import fcntl
+import hashlib
 import json
-from datetime import datetime
+import os
+import tempfile
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +15,7 @@ from stocks.domain.models import (
     AnalysisContext,
     ExecutionRecord,
     ForecastRecord,
+    UserDecisionRecord,
 )
 
 
@@ -28,12 +34,17 @@ class DataPersistence:
         max_execution_records: int = 200,
         forecast_dir: str | None = None,
         max_forecast_records: int = 200,
+        decision_dir: str | None = None,
     ):
         self.base_dir = Path(base_dir)
         self.enabled = enabled
         self.max_snapshots = max(1, int(max_snapshots))
         self.advice_dir = Path(advice_dir) if advice_dir else self.base_dir.parent / "advice"
+        # Retained as constructor compatibility only; confirmed financial history never rolls over.
         self.max_advice_records = max(1, int(max_advice_records))
+        self.decision_dir = (
+            Path(decision_dir) if decision_dir else self.advice_dir.parent / "user_decisions"
+        )
         self.execution_dir = (
             Path(execution_dir) if execution_dir else self.base_dir.parent / "executions"
         )
@@ -101,88 +112,110 @@ class DataPersistence:
         return [path.name for path in self._list_snapshot_files()]
 
     def save_advice(self, record: AdviceRecord) -> str:
-        """保存一条确认过的建议摘要，并按 max_advice_records 滚动清理。"""
-        self.advice_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{self._safe_timestamp(record.created_at)}.json"
-        filepath = self.advice_dir / filename
-        if filepath.exists():
-            filename = f"{self._safe_timestamp(datetime.now().isoformat())}.json"
-            filepath = self.advice_dir / filename
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(record.to_dict(), f, ensure_ascii=False, indent=2)
-
-        self._trim_advice()
-        return str(filepath)
+        """Save once by stable ID; feedback projection is separate from immutable advice."""
+        return self._save_record_once(
+            self.advice_dir, record.to_dict(), timestamp=record.created_at,
+            legacy_id=record.created_at, mutable_fields={"feedback", "feedback_history"},
+        )
 
     def load_recent_advice(self, count: int = 3) -> list[dict]:
         """读取最近 N 条确认建议摘要。"""
         return [record.to_dict() for record in self._load_advice_records()[:count]]
 
     def update_advice_feedback(self, advice_ref: str, feedback: dict) -> dict:
-        """把用户反馈标记写回指定建议记录（M3）。
+        """Append legacy feedback history and update its latest projection atomically.
 
-        advice_ref: ``"latest"`` 取最新一条；否则按 created_at / 文件名
-        安全时间戳前缀匹配。匹配不到或匹配多条都报错，绝不猜测。
+        Stable ID is preferred; legacy timestamp references remain supported.
+        This API does not invent per-action UserDecisionRecords or actual fills.
         """
         if not isinstance(feedback, dict) or not feedback.get("status"):
             raise ValueError("feedback must be an object with a status")
-        files = self._list_advice_files()
-        if not files:
-            raise ValueError("advice ledger is empty")
-
-        if advice_ref == "latest":
-            target = files[0]
-        else:
+        with self._record_lock(self.advice_dir):
+            files = self._list_advice_files()
+            if not files:
+                raise ValueError("advice ledger is empty")
+            contents = [(path, json.loads(path.read_text(encoding="utf-8"))) for path in files]
             ref = str(advice_ref).strip()
-            safe_ref = self._safe_timestamp(ref)
-            matches = [path for path in files if path.stem.startswith(safe_ref)]
-            if not matches:
-                # 退化到 created_at 前缀匹配（读取文件内容）
-                for path in files:
-                    try:
-                        with open(path, "r", encoding="utf-8") as f:
-                            created = str(json.load(f).get("created_at", ""))
-                    except Exception:
-                        continue
-                    if created.startswith(ref):
-                        matches.append(path)
-            if not matches:
-                raise ValueError(f"no advice record matches ref '{advice_ref}'")
-            if len(matches) > 1:
-                raise ValueError(
-                    f"advice ref '{advice_ref}' is ambiguous ({len(matches)} matches)"
-                )
-            target = matches[0]
-
-        with open(target, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        data["feedback"] = dict(feedback)
-        # 经过模型校验后再落盘，保证台账里永远是合法记录
-        record = AdviceRecord.from_dict(data)
-        with open(target, "w", encoding="utf-8") as f:
-            json.dump(record.to_dict(), f, ensure_ascii=False, indent=2)
-        return record.to_dict()
+            if not ref:
+                raise ValueError("advice_ref is required")
+            if ref == "latest":
+                target, data = max(contents, key=lambda item: self._time_sort_key(item[1].get("created_at", "")))
+            else:
+                matches = [(path, data) for path, data in contents if data.get("id") == ref]
+                if not matches:
+                    safe_ref = self._safe_timestamp(ref)
+                    matches = [(path, data) for path, data in contents if (
+                        path.stem.startswith(safe_ref)
+                        or str(data.get("created_at", "")).startswith(ref)
+                    )]
+                if not matches:
+                    raise ValueError(f"no advice record matches ref '{advice_ref}'")
+                if len(matches) > 1:
+                    raise ValueError(f"advice ref '{advice_ref}' is ambiguous ({len(matches)} matches)")
+                target, data = matches[0]
+            history = list(data.get("feedback_history", []))
+            if not history and data.get("feedback") is not None:
+                history.append(dict(data["feedback"]))
+            history.append(dict(feedback))
+            data["feedback_history"] = history
+            data["feedback"] = dict(feedback)
+            record = AdviceRecord.from_dict(data)
+            # Keep unrecognized legacy metadata rather than rewrite it away.
+            self._atomic_json(target, data)
+            return record.to_dict()
 
     def list_advice(self) -> list[dict]:
         """列出所有确认建议摘要（按 created_at 倒序）。"""
         return [record.to_dict() for record in self._load_advice_records()]
 
     def save_execution(self, record: ExecutionRecord) -> str:
-        """保存一条确认执行记录，并按 max_execution_records 滚动清理。"""
-        self.execution_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{self._safe_timestamp(record.recorded_at)}_{record.id}.json"
-        filepath = self.execution_dir / filename
+        """Append one confirmed execution; identical IDs retry without overwriting."""
+        return self._save_record_once(
+            self.execution_dir, record.to_dict(), timestamp=record.recorded_at,
+        )
 
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(record.to_dict(), f, ensure_ascii=False, indent=2)
+    def save_decision(self, record: UserDecisionRecord) -> str:
+        """Append one confirmed user decision independently of execution facts."""
+        return self._save_record_once(
+            self.decision_dir, record.to_dict(), timestamp=record.recorded_at,
+        )
 
-        self._trim_executions()
-        return str(filepath)
+    def list_decisions(self) -> list[dict]:
+        records = []
+        if not self.decision_dir.is_dir():
+            return records
+        for path in self.decision_dir.glob("*.json"):
+            try:
+                records.append(UserDecisionRecord.from_dict(json.loads(path.read_text(encoding="utf-8"))))
+            except (ValueError, TypeError, OSError):
+                continue
+        records.sort(key=lambda record: (self._time_sort_key(record.recorded_at), record.id), reverse=True)
+        return [record.to_dict() for record in records]
 
     def list_executions(self) -> list[dict]:
         """列出所有执行记录（按 recorded_at 倒序）。"""
         return [record.to_dict() for record in self._load_execution_records()]
+
+    def list_executions_checked(self) -> dict:
+        """Read all valid records and expose every unreadable/invalid ledger file.
+
+        Reconciliation callers must treat errors as evidence gaps, never as an
+        empty ledger. The legacy list_executions API retains its old behavior.
+        """
+        records: list[dict] = []
+        errors: list[dict] = []
+        for path in self._list_execution_files():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("execution record must be an object")
+                records.append(ExecutionRecord.from_dict(data).to_dict())
+            except (OSError, ValueError, TypeError, AttributeError, OverflowError) as exc:
+                errors.append({"file": str(path), "reason": f"{type(exc).__name__}: {exc}"})
+        records.sort(key=lambda record: (
+            self._time_sort_key(record["recorded_at"]), record["id"],
+        ), reverse=True)
+        return {"records": records, "errors": errors}
 
     def find_executions_by_decision_id(self, decision_id: str) -> list[dict]:
         """按 decision_id 查找执行记录。"""
@@ -193,12 +226,11 @@ class DataPersistence:
         ]
 
     def find_executions_by_run_id(self, run_id: str) -> list[dict]:
-        """按 run_id 查找执行记录（decision_id 前缀包含 run_id 即匹配）。"""
-        results: list[dict] = []
-        for record in self._load_execution_records():
-            if record.decision_id and record.decision_id.startswith(run_id):
-                results.append(record.to_dict())
-        return results
+        """Match recorded source_run_id exactly; a decision hash is not a run prefix."""
+        return [
+            record.to_dict() for record in self._load_execution_records()
+            if record.source_run_id == run_id
+        ]
 
     def save_forecast(self, record: ForecastRecord) -> str:
         """保存一条确认预测记录或结算后的预测记录，并按上限滚动清理。"""
@@ -236,7 +268,7 @@ class DataPersistence:
                     records.append(AdviceRecord.from_dict(json.load(f)))
             except Exception:
                 continue
-        records.sort(key=lambda record: record.created_at, reverse=True)
+        records.sort(key=lambda record: self._time_sort_key(record.created_at), reverse=True)
         return records
 
     def _list_advice_files(self) -> list[Path]:
@@ -247,11 +279,7 @@ class DataPersistence:
         return files
 
     def _trim_advice(self) -> None:
-        self._trim_record_files(
-            self._list_advice_files(),
-            keep=self.max_advice_records,
-            sort_key=lambda data: data.get("created_at", ""),
-        )
+        """Compatibility no-op: user-confirmed advice history must not be deleted."""
 
     def _load_execution_records(self) -> list[ExecutionRecord]:
         records: list[ExecutionRecord] = []
@@ -261,7 +289,7 @@ class DataPersistence:
                     records.append(ExecutionRecord.from_dict(json.load(f)))
             except Exception:
                 continue
-        records.sort(key=lambda record: (record.recorded_at, record.id), reverse=True)
+        records.sort(key=lambda record: (self._time_sort_key(record.recorded_at), record.id), reverse=True)
         return records
 
     def _list_execution_files(self) -> list[Path]:
@@ -272,11 +300,7 @@ class DataPersistence:
         return files
 
     def _trim_executions(self) -> None:
-        self._trim_record_files(
-            self._list_execution_files(),
-            keep=self.max_execution_records,
-            sort_key=lambda data: data.get("recorded_at", ""),
-        )
+        """Compatibility no-op: user-confirmed fills must not be deleted."""
 
     def _load_forecast_records(self) -> list[ForecastRecord]:
         records: list[ForecastRecord] = []
@@ -317,6 +341,76 @@ class DataPersistence:
         ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
         for _, _, path in ranked[keep:]:
             path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _time_sort_key(value: str) -> float:
+        try:
+            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            return timestamp.timestamp()
+        except (TypeError, ValueError, AttributeError):
+            return float("-inf")
+
+    @staticmethod
+    @contextmanager
+    def _record_lock(directory: Path):
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / ".ledger.lock").open("a", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    @staticmethod
+    def _atomic_json(filepath: Path, data: dict) -> None:
+        encoded = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
+        descriptor, temp_name = tempfile.mkstemp(prefix=".pending-", dir=filepath.parent)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, filepath)
+        finally:
+            Path(temp_name).unlink(missing_ok=True)
+
+    def _save_record_once(
+        self, directory: Path, data: dict, *, timestamp: str,
+        legacy_id: str | None = None, mutable_fields: set[str] | None = None,
+    ) -> str:
+        """Lock identity lookup plus atomic append, including simultaneous retries."""
+        identity = data.get("id") or legacy_id
+        if not isinstance(identity, str) or not identity.strip():
+            raise ValueError("stable record id is required")
+        mutable_fields = mutable_fields or set()
+        immutable = {key: value for key, value in data.items() if key not in mutable_fields}
+        canonical = json.dumps(immutable, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        with self._record_lock(directory):
+            for path in directory.glob("*.json"):
+                try:
+                    existing = json.loads(path.read_text(encoding="utf-8"))
+                except (ValueError, OSError):
+                    continue
+                if not isinstance(existing, dict):
+                    continue
+                existing_id = existing.get("id") or (
+                    existing.get("created_at") if legacy_id is not None else None
+                )
+                if existing_id != identity:
+                    continue
+                original = {key: value for key, value in existing.items() if key not in mutable_fields}
+                if json.dumps(original, sort_keys=True, ensure_ascii=False, allow_nan=False) != canonical:
+                    raise ValueError(f"record id '{identity}' already exists with different content")
+                return str(path)
+            # Hash IDs to keep user-supplied values out of filesystem paths.
+            token = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+            filepath = directory / f"{self._safe_timestamp(timestamp)}_{token}.json"
+            if filepath.exists():
+                raise ValueError(f"record id '{identity}' collides with an unreadable record")
+            self._atomic_json(filepath, data)
+            return str(filepath)
 
     @staticmethod
     def _safe_timestamp(value: str) -> str:
