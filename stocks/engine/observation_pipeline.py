@@ -21,5 +21,9 @@ def collect_observation(ledger, signal, window, *, now=None, provider=observe):
         if now.timestamp()>=deadline:
             return dict(obs,status='expired',expiry_reason='observation_retry_deadline')
         return None
+    # A supplied time is an explicit deterministic replay clock. Live execution
+    # must advance while the provider is running so lease expiry remains real.
+    import time
+    started = time.monotonic()
     return run_evaluation(ledger,signal['signal_id'],policy,target['target_at'],evaluate,
-                          clock=lambda:now.timestamp())
+                          clock=lambda:now.timestamp() + time.monotonic() - started)
