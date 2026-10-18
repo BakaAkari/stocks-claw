@@ -9,15 +9,19 @@ actually consumes it, verified against code rather than plan intent.
 
 ## Labels
 
-- **PRODUCTION** — consumed by the live push/report path today.
+- **PRODUCTION** — the repository's designated production-shaped contract; actual NAS use still requires the operating-model deployment gates.
 - **SHADOW** — implemented and running, produces real artifacts, but does
   not reach production push or write financial memory.
 - **PLANNED** — schema/types exist in code but nothing produces or consumes
   them in a real run yet.
-- **LOCAL** — implemented and exercised in the current checkout; production
-  deployment is not implied. Financial-memory writes still require confirmation.
+- **LOCAL** — implemented and exercised in the current checkout; it is not yet the designated deployed contract. Financial-memory writes still require confirmation.
 - **DEPRECATED** — superseded by a newer contract; code/tests may still
   exist but it is not part of the current target direction.
+
+Lifecycle labels describe the checkout's code role, not deployment status.
+Use [Operating Model v1](operating-model-v1.md) for the L0-L5 readiness levels.
+A `LOCAL` contract cannot be treated as NAS production until its real-account,
+shadow and delivery gates pass.
 
 ## Index
 
@@ -34,11 +38,11 @@ actually consumes it, verified against code rather than plan intent.
 | Legacy `AdviceRecord` / `ExecutionRecord`, `ForecastRecord` | PRODUCTION | `stocks/domain/models.py`, `stocks/engine/` ledger modules, `stocks/engine/advice_feedback.py` | Original confirmed-write adapters and compatibility views. Legacy recommendations/executions are not promoted to the verified v2 chain. |
 | Legacy `DecisionSnapshot` / inferred return settlement | DEPRECATED | `outcome_attribution.py` compatibility reader | `legacy_unverified` history only; no old strategy returns or win rates. |
 | `data_quality`, `rotation`, `action_signals`, `macro_snapshot` | PRODUCTION | `stocks/engine/context_builder.py` and respective modules | `AnalysisContext`, scheduled runner |
-| `UnifiedAnalysisSnapshot` v1 | PRODUCTION | `stocks/domain/advisory_models.py`, `stocks/engine/unified_snapshot.py` | `stocks/engine/advisory_mainline.py` (primary sessions), `scripts/run_shadow_advisory.py` |
-| `InvestmentAdvisory` v1 | PRODUCTION | `stocks/domain/advisory_models.py`, `stocks/engine/advisory_contract.py`, `stocks/engine/advisory_synthesizer.py` | `stocks/engine/advisory_mainline.py` (production `structured_outlook`), shadow scripts |
-| `AdvisoryValidationReceipt` v1 | PRODUCTION | `stocks/engine/advisory_contract.py` | `advisory_mainline` gates on receipt errors; stored as `run["advisory_receipt"]`; read by `audit_report_quality.check_advisory_receipt_coverage` |
+| `UnifiedAnalysisSnapshot` v1 | LOCAL | `stocks/domain/advisory_models.py`, `stocks/engine/unified_snapshot.py` | Local advisory mainline and `scripts/run_shadow_advisory.py`; NAS deployment and real-account acceptance pending |
+| `InvestmentAdvisory` v1 | LOCAL | `stocks/domain/advisory_models.py`, `stocks/engine/advisory_contract.py`, `stocks/engine/advisory_synthesizer.py` | Local `stocks/engine/advisory_mainline.py`; online-model and delivery acceptance pending |
+| `AdvisoryValidationReceipt` v1 | LOCAL | `stocks/engine/advisory_contract.py` | Local advisory mainline and shadow artifacts; not evidence of production deployment |
 | `AdvisoryShadowRun` v1 | SHADOW | `stocks/engine/advisory_shadow_store.py` | Writes to `.local/advisory_shadow/`; read by `scripts/compare_advisory_paths.py` |
-| `AssetIntakeDraft` v1 | PRODUCTION | `stocks/engine/asset_intake_parser.py`, `llm_asset_intake.py`, `asset_intake_writer.py`, `asset_intake_service.py` (A1 translation layer) | CLI `--asset-intake` / `--asset-intake-confirm` (draft → token → audited v2 write) |
+| `AssetIntakeDraft` v1 | LOCAL (CLI) | `stocks/engine/asset_intake_parser.py`, `llm_asset_intake.py`, `asset_intake_writer.py`, `asset_intake_service.py` (A1 translation layer) | CLI `--asset-intake` / `--asset-intake-confirm`; MCP natural-language entry pending |
 | `portfolio_constraints` v2 (M4) | PRODUCTION | `stocks/engine/constraint_model.py` (schema + validation), loaded `.local/portfolio_constraints.json` first then `stocks/config/portfolio_constraints.json` (example fallback) via `StocksEngine._load_constraints` | `portfolio_adjudicator.adjudicate_portfolio` (pools / hard caps / no_buyback / per-pool bucket limits), `scheduled_analysis._build_capital_allocation` (per-pool funding fence), `scaffolds` drift checks and `context_builder` prompt via `iter_bucket_rules` (legacy buckets only) |
 | `DecisionEnvelope` v1 | DEPRECATED | `stocks/domain/models.py` (`DecisionEnvelope` class), `stocks/engine/decision_contract.py` | None — no adapter or runner produces or consumes it (verified by grep). Predates the 2026-07-22 Advisory-direction pivot; not part of `ARCHITECTURE.md`'s target architecture. Kept for its tests only; do not build on it. |
 

@@ -8,6 +8,8 @@ main-window chain preserves original LLM proposals and deterministic validation;
 deployment and real-world acceptance are separate states recorded in `STATUS.md`.
 See [the financial truth contract](docs/contracts/financial-trust-v1.md) for the
 current API, supported actions, limitations and explicitly simulated smoke commands.
+The operating order and deployment gates are defined in
+[Operating Model v1](docs/contracts/operating-model-v1.md).
 
 [中文](README.zh.md) · [Agents](AGENTS.md) · [Status](STATUS.md) · [Roadmap](ROADMAP.md) · [Vision](stocks/VISION.md) · [Architecture](ARCHITECTURE.md) · [Agent guide](AGENT_GUIDE.md) · [Plan](PLAN.md)
 

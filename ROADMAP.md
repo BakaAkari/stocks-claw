@@ -28,6 +28,11 @@ delivery verification and demonstrated user value are separate gates. Local
 simulated replays do not satisfy the latter gates. The bounded contract is
 [financial trust](docs/contracts/financial-trust-v1.md); dynamic status is in STATUS.
 
+The complete operating order and readiness gates are defined in
+[Operating Model v1](docs/contracts/operating-model-v1.md). The next implementation
+task must pass the real-account read-only gate before adding strategy statistics,
+automatic tuning or restoring routine NAS operation.
+
 ## Migration background
 
 The earlier production design let a deterministic rule engine (`QuantActionEngine` →
@@ -102,7 +107,7 @@ Scope:
 Non-goals: outlook mainline (M2), feedback loop (M3), execution surface
 (retired).
 
-### M2 — Outlook mainline
+### M2 — Outlook mainline (historical migration shape)
 
 Wire the LLM Investment Analyst path (`advisory_synthesizer.py` today,
 shadow-only) into the production push, replacing the current constrained
@@ -216,22 +221,19 @@ conversational asset-update pattern is the terminal's core write loop and
 the library is already built; M3 next per the original plan; M4 stays
 backlog until constraint-driven errors appear in real reports.
 
-## Acceptance gates (apply per milestone)
+## Acceptance gates (apply to every capability)
 
-1. **Engineering gate** — lint, tests, compile pass on the touched
-   surface, and full-suite regression stays green.
-2. **Data gate** — sources, freshness, gaps, and anomalies are visible in
-   the artifact, not papered over.
-3. **Consistency gate** — no duplicated authority across responsibility
-   boundaries.
-4. **Shadow gate** — for M2 specifically: new outlook path replayed
-   against ≥5 consecutive trading days of historical data, with delta
-   analysis logged.
-5. **User-value gate** — for M2 and M3: user confirms the new capability
-   reduces decision cost before the milestone is called done.
+1. **Truth gate** — facts have authority, source, time, scope and confirmation provenance.
+2. **Reconciliation gate** — account, cash, positions, fills and non-trade cash legs reconcile or remain explicitly blocked.
+3. **Lineage gate** — snapshot, proposal, validation, user decision, execution and review are independently reconstructable.
+4. **Safety gate** — unknown, stale, ambiguous or unsupported inputs stop the affected action.
+5. **Operational gate** — backup, rollback, path isolation, monitoring and delivery evidence exist before NAS operation.
+6. **User-value gate** — the user confirms reduced decision cost and improved discipline over a defined trial, not from a smoke test.
 
-Gates 4 and 5 cannot be satisfied by a local run; see `STATUS.md` for what
-has actually been run.
+Readiness levels are L0 documents, L1 simulated local replay, L2 local real-account
+read-only, L3 NAS shadow, L4 controlled advisory and L5 routine operation. A later
+level cannot be claimed from an earlier level's evidence. Return metrics and strategy
+updates remain behind the operating model's data and comparison definitions.
 
 ## Explicitly out of scope
 

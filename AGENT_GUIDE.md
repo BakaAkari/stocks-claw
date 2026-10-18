@@ -7,7 +7,8 @@
 
 ## 1. 当前产品边界
 
-stocks-claw 是个人投资分析师系统。当前生产仍使用确定性规则动作 + 受限 Outlook；
+stocks-claw 是个人投资分析师系统。当前 checkout 同时保留规则路径和本地 Advisory
+责任链；NAS 部署、在线模型和真实账户验收按分级门禁推进；
 目标架构见 `ARCHITECTURE.md`（按组件标注 `[PRODUCTION]`/`[SHADOW]`/`[PLANNED]`/
 `[DEPRECATED]`），当前要做的具体任务见 `docs/tasks/`，开发流程见 `AGENTS.md`。
 
@@ -28,11 +29,11 @@ stocks-claw 是个人投资分析师系统。当前生产仍使用确定性规�
 
 资产和画像读取不需确认；写入必须使用 CLI `--confirmed` 或 MCP `confirmed:true`。
 
-## 3. 当前生产报告规则（安全边界）
+## 3. 报告规则与安全边界
 
-在 Advisory 主窗口切换（ROADMAP A5）前：
+在 NAS 通过 L3/L4 门禁前：
 
-- 交易窗口产物仍以 `portfolio_decision.user_view` 为用户可见主结构；
+- 交易窗口产物以结构化 `portfolio_decision.user_view` 为展示主结构；
 - 主窗口可以附加已过滤 `outlook`，观察窗口可以附加 `outlook_delta`；
 - Agent 不得从内部 action_cards、decision_id、position_id 或兼容字段自行构造动作；
 - 数据异常、stale、fallback、锁定和结算边界必须展示；
@@ -49,12 +50,12 @@ stocks-claw 是个人投资分析师系统。当前生产仍使用确定性规�
 
 ### 4.1 Shadow-first（数据边界，不可绕过）
 
-当前 Advisory shadow 链路：
+未通过 L3/L4 部署门禁的 Advisory 链路：
 
-- 不进入生产 `user_view`；
+- 不进入 NAS 生产推送；
 - 不推送；
 - 不自动保存 advice/execution/forecast；
-- 只写 `.local/advisory_shadow/`；
+- 本地测试可以写隔离的 scheduled artifact；专用 shadow runner 写入 `.local/advisory_shadow/`；
 - 必须能按 `run_id` 与当前规则路径对比。
 
 ### 4.2 LLM 输出约束
@@ -84,7 +85,8 @@ Validator 可以拒绝、警告、计算确定性金额或要求 LLM 修正一�
 
 ## 5. 金融记忆写入规则
 
-自然语言资产入口的用户可见入口点还不存在（见 `ARCHITECTURE.md`）。在它落地前，
+自然语言资产入口已有 CLI 草稿/确认路径；MCP 入口和跨渠道验收仍待完成（见 `ARCHITECTURE.md`）。
+在完整入口落地前，
 外部 Agent 可以帮助用户组织资产写接口，但必须：
 
 1. 先列出将新增、修改、删除的字段；

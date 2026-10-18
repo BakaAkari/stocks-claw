@@ -21,21 +21,20 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-**TRUST-01 个人约束、金融事实核对与 LLM 建议责任链**
-（[任务方案与验收标准](TASK-TRUST-01-financial-reconciliation-advisory-lineage.md)）。
-按用户指定先核对持仓、资金、成交，再贯通 LLM 建议来源；采用
-[金融真实性契约](../contracts/financial-trust-v1.md)，保留 DECISION-01 与 EVAL 基础。
-暂不扩展 E4 胜率指标。当前进度、验证和部署状态只见 [STATUS](../../STATUS.md)。
+**DOC-01 运行模型与验收标准加固**
+（[任务方案与验收标准](TASK-DOC-01-operating-model-hardening.md)）。
+先统一事实权威、运行模式、就绪状态、个人策略研究和部署门禁，再开始下一项代码工作。
+完整规则见 [Operating Model v1](../contracts/operating-model-v1.md)。本任务不写真实
+金融记忆、不部署 NAS、不恢复 cron，也不实现胜率或自动调参。
 
-**硬边界**：旧 `settlements.jsonl` 不作策略真值，旧胜率不作反馈，系统恢复另行处理。
-原调查见 `docs/analysis/signal-evaluation-architecture-review-2026-10-15.md`；既往阶段
-验收只证明其中列明的局部能力，不能替代真实纵向闭环验收。
+TRUST-01、DECISION-01 与 EVAL 的代码和契约保留为已有基础。旧结算记录不作策略真值，
+旧胜率不作反馈；其当前状态只在 STATUS 顶部说明。
 
 ## Backlog (do not start before the current task closes)
 
 - **M1** — Report structure upgrade *(done 2026-07-31, `382207b`)*.
-- **M2** — Outlook mainline *(done 2026-07-31, `7c35c7f`; live-LLM
-  verified same day)*.
+- **M2** — Outlook mainline *(historical implementation milestone; its old live-LLM
+  claim is not current deployment evidence)*.
 - **A1** — Asset intake entry *(done 2026-08-01, `c313d22`)*:
   `TASK-A1-asset-intake-entry.md`.
 - **M3** — Feedback loop *(done 2026-08-01, `83e94ec`)*:

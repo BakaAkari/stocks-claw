@@ -17,14 +17,17 @@
 这条 LOCAL 接线尚不代表 NAS 已部署。后文保留的旧部署结构不描述本轮新增实现；
 当前运行状态只见 STATUS，二次 LLM 推送文字及送达证据仍未闭环。
 
+运行模型、事实类别、就绪状态和部署门禁以 [Operating Model v1](docs/contracts/operating-model-v1.md) 为准。
+“PRODUCTION”表示代码职责可服务生产路径，不表示当前 NAS 已部署或真实账户已验收；
+“LOCAL”表示本地实现和测试已存在；“SHADOW”表示不会进入用户推送或金融记忆。
+
 ## 1. 系统边界
 
 stocks-claw 是单用户个人投资分析师系统，不自动下单。
 
-当前生产仍由确定性规则生成大部分动作，LLM 负责情报和受限 Outlook。已批准的目标
-方向（见 `ROADMAP.md`）是保留数据底盘，重建以 LLM InvestmentAdvisory 为核心的
-决策中枢，并通过 shadow-only 渐进迁移；迁移是否已推进到某一步，只看下表标签和
-`STATUS.md`，不看本文措辞。
+历史 NAS 运行路径仍以确定性规则动作和受限 Outlook 为基础；当前 checkout 已接入
+本地 Advisory 责任链，但它必须经过 Operating Model 的 L2-L4 门禁后才能替换 NAS
+运行路径。迁移是否完成，只看下表标签、`STATUS.md` 和实际部署证据。
 
 ## 2. 组件标签导览
 
@@ -38,17 +41,17 @@ stocks-claw 是单用户个人投资分析师系统，不自动下单。
 | Outlook Synthesizer（受限中长期研判） | `[PRODUCTION]` | `structured_outlook` / `outlook_delta`，禁止交易指令 |
 | Deterministic Renderer + Push Validator | `[PRODUCTION]` | `build_push_payload.py` |
 | Unified Harvester（统一情报+组合采集） | `[PLANNED]` | 目标：合并当前两条独立采集路径为一次同 `as_of`（ROADMAP A2）；今天仍是两条部分独立路径 |
-| `UnifiedAnalysisSnapshot` | `[SHADOW]` | `stocks/domain/advisory_models.py`、`stocks/engine/unified_snapshot.py`；仅 `scripts/run_shadow_advisory.py` 消费 |
-| LLM Investment Analyst / `InvestmentAdvisory` | `[SHADOW]` | `advisory_synthesizer.py` + `advisory_contract.py` |
-| `AdvisoryValidationReceipt` 校验逻辑 | `[SHADOW]` | 已内置于 `advisory_contract.py`；产出 receipt，供 shadow 对照 |
+| `UnifiedAnalysisSnapshot` | `[LOCAL]` | `stocks/domain/advisory_models.py`、`stocks/engine/unified_snapshot.py`；本地 advisory mainline 和 shadow runner 消费，NAS/在线验收未完成 |
+| LLM Investment Analyst / `InvestmentAdvisory` | `[LOCAL]` | `advisory_synthesizer.py` + `advisory_contract.py` |
+| `AdvisoryValidationReceipt` 校验逻辑 | `[LOCAL]` | 已内置于 `advisory_contract.py`；产出 receipt，供 shadow 对照 |
 | 独立 Advisory Validator 模块（含单次修正重试） | `[PLANNED]` | **`advisory_validator.py` 目前不存在**——不要假设有这个文件；ROADMAP A4 描述的完整校验/重试流程尚未作为独立模块落地 |
-| `AssetIntakeDraft`（自然语言资产入口，library-only） | `[SHADOW]` | `asset_intake_parser.py`、`llm_asset_intake.py`、`asset_intake_writer.py` 已存在，但只有单测覆盖，无 CLI/MCP adapter 入口 |
+| `AssetIntakeDraft`（自然语言资产入口，CLI 已接入） | `[LOCAL]` | `asset_intake_parser.py`、`llm_asset_intake.py`、`asset_intake_writer.py`；CLI 有确认 token，MCP 自然语言入口待补 |
 | `DecisionEnvelope` | `[DEPRECATED]` | 无生产/shadow 消费者；字段细节见 `docs/contracts/legacy-reference.md` |
 
 `report_mode`（`advisory_shadow` / `advisory_primary` 配置开关）目前**不存在**于
 代码中——不要在实现或文档中假设有这个开关；见 `STATUS.md` "Report mode"。
 
-## 3. 当前生产责任链 `[PRODUCTION]`
+## 3. 现有规则路径与本地 Advisory 路径
 
 ```text
 Financial Memory
@@ -70,7 +73,9 @@ Deterministic Renderer + Push Validator
 Feishu
 ```
 
-整条链路当前均为 `[PRODUCTION]`。Advisory shadow 链路（§4）不参与其中任何一步。
+上图描述历史规则路径的职责边界，不代表当前 NAS 已运行。当前 checkout 的 Advisory
+路径会在主窗口生成结构化 lineage 和 user_view；它仍处于 LOCAL，不能以代码存在
+替代 NAS shadow、在线模型或真实账户验收。
 
 ### 3.1 当前优点
 
@@ -86,8 +91,7 @@ Feishu
 - LLM 不拥有完整综合建议权；
 - 情报与组合采集路径未完全统一（目标 `[PLANNED]`，见 Unified Harvester）；
 - `scheduled_analysis.py`、`build_push_payload.py` 等文件职责过宽；
-- 用户自然语言资产输入没有正式 diff/确认模型（library 已是 `[SHADOW]`，adapter
-  入口仍是 `[PLANNED]`）。
+- 用户自然语言资产输入已提供 CLI 草稿/确认入口，MCP 入口和跨渠道验收仍待完成。
 
 哪些偏差已经开始被下一步任务处理，见 `docs/tasks/` 的当前任务；本节只描述形状。
 
@@ -106,7 +110,7 @@ Feishu
 └────────────────┬────────────────┘
                  │
 ┌────────────────▼────────────────┐
-│ UnifiedAnalysisSnapshot [SHADOW] │
+│ UnifiedAnalysisSnapshot [LOCAL]  │
 │ facts + source registry + DQ    │
 └────────────────┬────────────────┘
                  │
@@ -117,19 +121,19 @@ Feishu
 └────────────────┬────────────────┘
                  │
 ┌────────────────▼────────────────┐
-│ LLM Investment Analyst  [SHADOW] │
+│ LLM Investment Analyst  [LOCAL] │
 │ InvestmentAdvisory              │
 └────────────────┬────────────────┘
                  │
 ┌────────────────▼────────────────┐
 │ Advisory Validator      [PLANNED] │
 │ receipt 逻辑今在 advisory_contract.py │
-│ [SHADOW]；独立模块与重试未落地   │
+│ [LOCAL]；独立模块与重试未落地    │
 └────────────────┬────────────────┘
                  │
 ┌────────────────▼────────────────┐
 │ Presentation / Delivery         │
-│ [PRODUCTION，尚未接 Advisory]   │
+│ [LOCAL；NAS 未部署]             │
 └────────────────┬────────────────┘
                  ▼
                User
@@ -140,12 +144,11 @@ Feishu
 
 ## 5. 目标组件说明
 
-### 5.1 Financial Memory 与 Asset Intake `[PRODUCTION]` + `[SHADOW，library-only]`
+### 5.1 Financial Memory 与 Asset Intake `[PRODUCTION]` + `[LOCAL，CLI]`
 
 `Account`、`Position` 和 investor profile 继续作为事实权威（`[PRODUCTION]`）。
-`AssetIntakeDraft`（`[SHADOW，library-only]`）只保存 LLM 提取草稿、diff、不确定项
-和 source quote；确认后由确定性写入器原子更新。用户可见的 CLI/MCP 入口仍是
-`[PLANNED]`。
+`AssetIntakeDraft`（`[LOCAL，CLI]`；MCP 入口仍待补）只保存 LLM 提取草稿、diff、不确定项
+和 source quote；确认后由确定性写入器原子更新。用户可见的 CLI 已接入确认 token；MCP 自然语言入口仍待补齐。
 
 ### 5.2 Unified Harvester `[PLANNED]`
 
@@ -153,24 +156,24 @@ Feishu
 但主报告必须以 freshness 合格的本次 snapshot 为准。今天尚不存在这一层——现状是
 两条部分独立的采集路径（见 §2.2）。
 
-### 5.3 UnifiedAnalysisSnapshot `[SHADOW]`
+### 5.3 UnifiedAnalysisSnapshot `[LOCAL]`
 
 是 LLM 分析的唯一证据入口。它包含组合、画像、行情、历史特征、情报、宏观、事件、
 约束、风险、候选信号、数据质量和 source registry。每个高风险事实使用 `fact_id`、
-`metric`、`unit`、`as_of` 和 `source_ref`。已实现并产出真实 shadow 产物，未接入
-生产。
+`metric`、`unit`、`as_of` 和 `source_ref`。当前 checkout 已接入 Advisory mainline，
+也可产出 shadow 产物；NAS 部署、真实账户和在线模型验收尚未完成。
 
 ### 5.4 Feature / Constraint Layer `[PRODUCTION]`（语义待统一）
 
 保留 `action_signals`、`quant_action`、`factor_rules`、数据异常、组合暴露和流动性；
 今天仍直接代表部分最终用户动作，尚未统一输出语义为 evidence/candidate/constraint。
 
-### 5.5 LLM Investment Analyst `[SHADOW]`
+### 5.5 LLM Investment Analyst `[LOCAL]`
 
-一次综合完整证据，输出结构化 `InvestmentAdvisory`。已实现并产出真实 shadow 产物
-（`advisory_synthesizer.py`），未接入生产 push 或 `user_view`。
+一次综合完整证据，输出结构化 `InvestmentAdvisory`。当前实现已接入本地 mainline，
+但真实在线模型、服务端元数据和生产送达仍待验收。
 
-### 5.6 Advisory Validator `[PLANNED]`（receipt 部分 `[SHADOW]`）
+### 5.6 Advisory Validator `[PLANNED]`（receipt 部分 `[LOCAL]`）
 
 目标：唯一语义与可执行性边界，检查 evidence refs、单位、标的、持仓、比例、现金、
 锁定、开放期、结算、风险暂停和数据异常，返回问题或确定性派生金额，不改写投资
@@ -178,12 +181,13 @@ Feishu
 hash、snapshot hash、advisory content hash、时间）。
 
 **当前实际状态**：receipt 的字段与哈希逻辑已实现于 `advisory_contract.py`
-（`[SHADOW]`），供 shadow 对照使用；但目标描述的"单次修正重试"和独立
+（`[LOCAL]`），供本地 mainline 和 shadow 对照使用；但目标描述的"单次修正重试"和独立
 `advisory_validator.py` 模块尚未创建——不要在代码或文档中假设它存在。
 
-### 5.7 Presentation 与 Delivery `[PRODUCTION]`（未接 Advisory）
+### 5.7 Presentation 与 Delivery `[LOCAL]`（本地已接 Advisory，NAS 未部署）
 
-Presentation 只将已验证内容投影为用户文本；Delivery 只检查 artifact 新鲜度、
+Presentation 只将已验证内容投影为用户文本；当前 checkout 已接收 Advisory 的结构化结果。
+Delivery 只检查 artifact 新鲜度、
 版本、receipt、内容哈希、内部 token 和渠道格式。当前只投影
 `portfolio_decision.user_view`，尚未接入 Advisory 输出；下游不得重新做金融语义
 判断。
@@ -214,11 +218,11 @@ Presentation 只将已验证内容投影为用户文本；Delivery 只检查 art
 上述均是今天仍在生产运行的现有文件（`[PRODUCTION]`）；"改变职责"这一列描述的是
 目标职责边界，本身是 `[PLANNED]`，不代表已经改变。
 
-### 6.3 已存在的 Advisory shadow 文件 `[SHADOW]`
+### 6.3 已存在的 Advisory 文件 `[LOCAL]` / `[SHADOW]`
 
 - `advisory_models.py`
 - `unified_snapshot.py`
-- `asset_intake_parser.py` / `llm_asset_intake.py` / `asset_intake_writer.py`（library-only）
+- `asset_intake_parser.py` / `llm_asset_intake.py` / `asset_intake_writer.py`（CLI LOCAL；MCP 待补）
 - `advisory_contract.py`（含 `AdvisoryValidationReceipt` 校验逻辑）
 - `advisory_synthesizer.py`
 - `advisory_shadow_store.py`
@@ -259,9 +263,9 @@ Presentation 只将已验证内容投影为用户文本；Delivery 只检查 art
 
 ## 9. 当前运行入口 `[PRODUCTION]`
 
-当前 CLI、MCP、HTTP、定时 Artifact 和 no-agent push 入口不变。详细命令见
-`README.md` 和 `AGENT_GUIDE.md`。新 Advisory 在 A5 前只作为
-`.local/advisory_shadow/` 影子产物（`scripts/run_shadow_advisory.py`）。
+当前 CLI、MCP、HTTP、定时 Artifact 和 no-agent push 入口仍需按部署级别区分。详细命令见
+`README.md` 和 `AGENT_GUIDE.md`。新 Advisory 在当前 checkout 产生本地 lineage；NAS
+shadow 和生产 push 切换仍需通过 Operating Model 的 L3/L4 门禁。
 
 ## 10. 当前验证证据
 
