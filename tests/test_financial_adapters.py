@@ -5,11 +5,17 @@ import json
 from scripts.smoke_decision_review import _files_hash, _isolated_adapter
 from scripts.smoke_financial_reconciliation import fixture_document, sample_facts
 from stocks.adapters.cli import CLIAdapter
+from stocks.engine.confirmation_provenance import ConfirmationStore
 
 
 def _cli(tmp_path):
     adapter = _isolated_adapter(tmp_path)
-    (tmp_path / ".local/financial_assets.json").write_text(json.dumps(fixture_document()))
+    doc = fixture_document()
+    path = tmp_path / ".local/financial_assets.json"
+    path.write_text(json.dumps(doc))
+    ConfirmationStore(tmp_path / ".local").record(
+        "financial_assets", doc, channel="cli", source_path=str(path)
+    )
     return CLIAdapter(adapter.engine)
 
 

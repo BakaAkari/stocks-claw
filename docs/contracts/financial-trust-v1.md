@@ -30,6 +30,13 @@
 `.local/cash_movements/`。写入经 CLI/MCP 确认门；相同 ID 同内容幂等，冲突拒绝。
 坏文件显式报告，不能静默丢弃后仍声称核对成功。
 
+每次 confirmed CLI/MCP 写入同时在 `.local/confirmation_events/` 生成不可变事件，包含
+`event_id`、目标、`content_hash`、`source_kind=user_confirmed`、渠道、确认时间、来源路径和事件封套完整性哈希。
+确认事件与当前业务内容哈希必须相等才有效；旧文件、手工修改文件或缺失 sidecar 只能是
+`legacy_unverified`，不能因为文件存在就升级为用户确认事实。重复提交复用同一事件，不以
+新的时间戳制造第二个确认身份。资产账本同样必须有匹配的确认事件，文件内的 `confirmed=true`
+不能单独进入 `financial_integrity` 的可信匹配。
+
 `financial_reconcile(opening_id, closing_id)` 用十进制算术核对
 `期初 + 区间逐笔变动 = 预计期末`，与独立期末记录比较。按账户、币种、标的和单位
 分开，输出 matched/mismatch/incomplete、差额、记录引用、哈希和缺口。

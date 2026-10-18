@@ -44,6 +44,7 @@ from stocks.domain.models import (
 from stocks.engine.advice_feedback import compute_feedback_rollup, make_feedback
 from stocks.engine.asset_intake_service import apply_intake_draft, build_intake_draft
 from stocks.engine.config_loader import load_engine_config
+from stocks.engine.confirmation_provenance import ConfirmationStore
 from stocks.engine.context_builder import ContextBuilder, _dedupe_instruments
 from stocks.engine.economic_event_watcher import EconomicEventWatcher
 from stocks.engine.event_calendar import (
@@ -761,13 +762,18 @@ class StocksEngine:
 
     def asset_intake_apply(self, draft: dict, token: str) -> dict:
         """A1：校验 token 并把草稿写入 v2 资产文件（带备份与审计）。"""
-        return apply_intake_draft(self, draft, token)
+        result = apply_intake_draft(self, draft, token)
+        if result.get("success"):
+            path = self._asset_file_path()
+            document = json.loads(path.read_text(encoding="utf-8"))
+            self._record_confirmation("financial_assets", document, channel="cli")
+        return result
 
     def get_profile(self) -> dict:
         """返回投资者偏好记忆副本。"""
         return dict(self._profile)
 
-    def update_profile(self, updates: dict) -> dict:
+    def update_profile(self, updates: dict, *, confirmation_channel: str | None = None) -> dict:
         """校验、合并并持久化投资者偏好记忆。"""
         if not isinstance(updates, dict):
             raise ValueError("Profile update must be an object")
@@ -811,6 +817,7 @@ class StocksEngine:
             json.dumps(self._profile, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        self._record_confirmation("profile", self._profile, channel=confirmation_channel)
         return dict(self._profile)
 
     def save_advice(self, payload: dict) -> dict:
@@ -871,13 +878,13 @@ class StocksEngine:
             self.persistence.list_advice(), window_days=window_days,
         )
 
-    def save_execution(self, payload: dict) -> dict:
+    def save_execution(self, payload: dict, *, confirmation_channel: str | None = None) -> dict:
         """保存用户确认过的执行记录。"""
         if not isinstance(payload, dict):
             raise ValueError("Execution payload must be an object")
         if payload.get("schema_version") == 3:
             from stocks.engine.financial_service import save_execution
-            return save_execution(self, payload)
+            return save_execution(self, payload, channel=confirmation_channel)
         if payload.get("schema_version") == 2:
             from stocks.engine.decision_service import save_linked_execution
             return save_linked_execution(self, payload)
@@ -954,10 +961,20 @@ class StocksEngine:
         def source(name, legacy_kind):
             local = self._local_data_dir / name
             fallback = self.config_dir / name
-            return {"kind": "local_confirmed" if local.exists() else
-                    legacy_kind if fallback.exists() else "missing",
-                    "path": str(local if local.exists() else fallback),
-                    "updated_at": self._profile.get("updated_at") if name == "investor_profile.json" else None}
+            document = self._profile if name == "investor_profile.json" else self._constraints
+            event = ConfirmationStore(self._local_data_dir).find(
+                "profile" if name == "investor_profile.json" else "constraints", document
+            ) if local.exists() else None
+            return {
+                "kind": ("local_confirmed" if event else "legacy_unverified") if local.exists()
+                else legacy_kind if fallback.exists() else "missing",
+                "path": str(local if local.exists() else fallback),
+                "updated_at": self._profile.get("updated_at") if name == "investor_profile.json" else None,
+                "confirmation_event_id": event.get("event_id") if event else None,
+                "confirmed_at": event.get("confirmed_at") if event else None,
+                "confirmation_channel": event.get("channel") if event else None,
+                "content_hash": event.get("content_hash") if event else None,
+            }
 
         return build_personal_mandate(
             self._profile, self._constraints,
@@ -965,7 +982,7 @@ class StocksEngine:
             constraints_source=source("portfolio_constraints.json", "reference_default"),
             captured_at=datetime.now(timezone.utc).isoformat())
 
-    def replace_portfolio_constraints(self, constraints: dict) -> dict:
+    def replace_portfolio_constraints(self, constraints: dict, *, confirmation_channel: str | None = None) -> dict:
         """Replace the explicit constraint document through confirmed adapters."""
         from copy import deepcopy
 
@@ -980,15 +997,28 @@ class StocksEngine:
         self._local_data_dir.mkdir(parents=True, exist_ok=True)
         self.persistence._atomic_json(self._local_data_dir / "portfolio_constraints.json", copied)
         self._constraints = copied
+        self._record_confirmation("constraints", self._constraints, channel=confirmation_channel)
         return deepcopy(copied)
 
-    def save_account_statement(self, payload: dict) -> dict:
-        from stocks.engine.financial_service import save_record
-        return save_record(self, "account_statements", payload)
+    def _record_confirmation(self, target: str, payload: dict, *, channel: str | None = None) -> dict:
+        """Record adapter provenance without changing the business payload schema."""
+        source_name = {
+            "profile": "investor_profile.json",
+            "constraints": "portfolio_constraints.json",
+            "financial_assets": "financial_assets.json",
+        }.get(target)
+        return ConfirmationStore(self._local_data_dir).record(
+            target, payload, channel=channel,
+            source_path=str(self._local_data_dir / source_name) if source_name else str(self._local_data_dir),
+        )
 
-    def save_cash_movement(self, payload: dict) -> dict:
+    def save_account_statement(self, payload: dict, *, confirmation_channel: str | None = None) -> dict:
         from stocks.engine.financial_service import save_record
-        return save_record(self, "cash_movements", payload)
+        return save_record(self, "account_statements", payload, channel=confirmation_channel)
+
+    def save_cash_movement(self, payload: dict, *, confirmation_channel: str | None = None) -> dict:
+        from stocks.engine.financial_service import save_record
+        return save_record(self, "cash_movements", payload, channel=confirmation_channel)
 
     def list_account_statements(self) -> dict:
         from stocks.engine.financial_service import load_records

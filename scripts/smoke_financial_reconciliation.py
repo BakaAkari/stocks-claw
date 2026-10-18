@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.smoke_decision_review import _call, _files_hash, _isolated_adapter
 from stocks.domain.models import Account, Position
+from stocks.engine.confirmation_provenance import ConfirmationStore
 
 
 def fixture_document(*, share_scale=1):
@@ -68,6 +69,10 @@ def run_smoke(output, *, share_scale=1):
     adapter = _isolated_adapter(output)
     doc = fixture_document(share_scale=share_scale)
     (output / ".local" / "financial_assets.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    ConfirmationStore(output / ".local").record(
+        "financial_assets", doc, channel="mcp",
+        source_path=str(output / ".local" / "financial_assets.json"),
+    )
     adapter.engine._assets = adapter.engine._load_assets_from_file()
     opening, closing, fills, movement, mandate = sample_facts(share_scale=share_scale)
     # This fixture explicitly asserts the simulated closing facts as of a

@@ -21,11 +21,12 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-**DOC-01 运行模型与验收标准加固**
+**DOC-02 确认来源与内容哈希加固**
 （[任务方案与验收标准](TASK-DOC-01-operating-model-hardening.md)）。
-先统一事实权威、运行模式、就绪状态、个人策略研究和部署门禁，再开始下一项代码工作。
-完整规则见 [Operating Model v1](../contracts/operating-model-v1.md)。本任务不写真实
-金融记忆、不部署 NAS、不恢复 cron，也不实现胜率或自动调参。
+沿用 DOC-01 的运行模型，为 profile、constraints、对账单、现金变动和成交记录补充
+不可变确认事件与内容哈希；旧文件保持未验证。完整规则见
+[Operating Model v1](../contracts/operating-model-v1.md)。本任务不新增指标、不部署 NAS、
+不恢复 cron，也不导入真实账户。
 
 TRUST-01、DECISION-01 与 EVAL 的代码和契约保留为已有基础。旧结算记录不作策略真值，
 旧胜率不作反馈；其当前状态只在 STATUS 顶部说明。

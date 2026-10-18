@@ -51,3 +51,14 @@ The follow-up code tasks must be sequenced behind the real-account read-only gat
 
 No code task may skip DOC-02 through DOC-04 by relying on the existing simulated
 smoke. No metric task may start before DOC-06 produces a stable review record.
+
+## DOC-02 outcome: confirmation provenance hardening
+
+Confirmed profile, portfolio constraints, the v2 asset ledger, account statements, cash movements and
+execution records now create content-addressed sidecar events under
+`.local/confirmation_events/`. Current content must match the event hash before
+the source is marked `local_confirmed`; old or tampered files remain
+`legacy_unverified`. The event envelope is also integrity-checked and user-confirmed
+events require a CLI or MCP channel. CLI and MCP channel/actor metadata are preserved,
+same-content retries are idempotent, and financial reconciliation exposes missing
+confirmation provenance as an explicit gap.

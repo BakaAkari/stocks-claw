@@ -461,11 +461,13 @@ class CLIAdapter:
         try:
             if args.constraints_replace is not None:
                 return {"success": True, "data": self.engine.replace_portfolio_constraints(
-                    self._parse_json_object(args.constraints_replace))}
+                    self._parse_json_object(args.constraints_replace), confirmation_channel="cli")}
             if args.statement_save:
-                return {"success": True, "data": self.engine.save_account_statement(self._parse_json_object(args.statement_save))}
+                return {"success": True, "data": self.engine.save_account_statement(
+                    self._parse_json_object(args.statement_save), confirmation_channel="cli")}
             if args.cash_movement_save:
-                return {"success": True, "data": self.engine.save_cash_movement(self._parse_json_object(args.cash_movement_save))}
+                return {"success": True, "data": self.engine.save_cash_movement(
+                    self._parse_json_object(args.cash_movement_save), confirmation_channel="cli")}
             if args.decision_save:
                 record = self.engine.save_user_decision(self._parse_json_object(args.decision_save))
                 return {"success": True, "data": record, "action": "decision_saved"}
@@ -480,7 +482,7 @@ class CLIAdapter:
                 return {"success": True, "data": advice, "action": "advice_saved"}
             if args.execution_save:
                 execution = self.engine.save_execution(
-                    self._parse_json_object(args.execution_save)
+                    self._parse_json_object(args.execution_save), confirmation_channel="cli"
                 )
                 return {
                     "success": True,
@@ -498,7 +500,7 @@ class CLIAdapter:
                 }
             if args.profile_update:
                 profile = self.engine.update_profile(
-                    self._parse_json_object(args.profile_update)
+                    self._parse_json_object(args.profile_update), confirmation_channel="cli"
                 )
                 return {"success": True, "data": profile, "action": "profile_updated"}
             if args.asset_add:

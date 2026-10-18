@@ -17,6 +17,7 @@ from scripts.smoke_financial_reconciliation import (
     fixture_document,
     sample_facts,
 )
+from stocks.engine.confirmation_provenance import ConfirmationStore
 
 RECORDED = "2026-10-10T00:00:00Z"
 AS_OF = "2026-10-14T00:00:00Z"
@@ -33,6 +34,9 @@ def finance(tmp_path):
     adapter = _isolated_adapter(tmp_path)
     path = tmp_path / ".local" / "financial_assets.json"
     path.write_text(json.dumps(fixture_document()), encoding="utf-8")
+    ConfirmationStore(tmp_path / ".local").record(
+        "financial_assets", fixture_document(), channel="mcp", source_path=str(path)
+    )
     adapter.engine._assets = adapter.engine._load_assets_from_file()
     return adapter, tmp_path
 

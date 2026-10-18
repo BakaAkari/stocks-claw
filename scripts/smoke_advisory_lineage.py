@@ -46,12 +46,13 @@ class SimulatedAnalyst:
 
 async def _produce(adapter, output):
     engine = adapter.engine
+    smoke_now = datetime(2026, 10, 16, 7, 30, tzinfo=timezone.utc)
 
     async def simulated_quotes(instruments):
         del instruments
         return {"a": [Quote(Instrument("518880", "模拟标的", "a"), price=8.5,
                             source="SIMULATED_quote_transport", stale=False, currency="CNY",
-                            as_of=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat())]}
+                            as_of=(smoke_now - timedelta(seconds=1)).isoformat())]}
 
     engine.fetcher.fetch_quotes = simulated_quotes
     analyst = SimulatedAnalyst()
@@ -66,7 +67,7 @@ async def _produce(adapter, output):
     config["llm"]["advisory_mainline"] = {"enabled": True}
     runner = ScheduledAnalysisRunner(engine, config=config, artifact_dir=config["artifact_dir"],
                                      repo_root=output, advisory_client=analyst)
-    result = await runner.run_session("cn_after_close", now=datetime.now(timezone.utc))
+    result = await runner.run_session("cn_after_close", now=smoke_now)
     if not result.get("paths"):
         raise RuntimeError(f"scheduled production did not run: {result}")
     artifact = json.loads(Path(result["paths"]["json_path"]).read_text())

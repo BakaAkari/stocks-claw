@@ -91,12 +91,20 @@ def _source(source, document):
     for key in ("path", "updated_at"):
         if source.get(key) is not None and not isinstance(source[key], str):
             raise ValueError(f"source.{key} must be a string or null")
-    return {
+    result = {
         "kind": source["kind"],
         "path": source.get("path"),
         "updated_at": source.get("updated_at"),
         "content_hash": digest(document),
     }
+    if source.get("confirmation_event_id"):
+        result.update({
+            "confirmation_event_id": source["confirmation_event_id"],
+            "confirmed_at": source.get("confirmed_at"),
+            "confirmation_channel": source.get("confirmation_channel"),
+            "content_hash": source["content_hash"],
+        })
+    return result
 
 
 def build_personal_mandate(

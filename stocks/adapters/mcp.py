@@ -209,7 +209,7 @@ class MCPAdapter:
         if not isinstance(updates, dict):
             return {"success": False, "error": "profile object is required"}
         try:
-            profile = self.engine.update_profile(updates)
+            profile = self.engine.update_profile(updates, confirmation_channel="mcp")
             return {"success": True, "data": profile, "action": "profile_updated"}
         except (TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
@@ -249,7 +249,7 @@ class MCPAdapter:
         if not isinstance(execution, dict):
             return {"success": False, "error": "execution object is required"}
         try:
-            record = self.engine.save_execution(execution)
+            record = self.engine.save_execution(execution, confirmation_channel="mcp")
             return {"success": True, "data": record, "action": "execution_saved"}
         except (TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
@@ -261,11 +261,11 @@ class MCPAdapter:
                 return error
         try:
             if method == "constraints_replace":
-                data = self.engine.replace_portfolio_constraints(params.get("constraints"))
+                data = self.engine.replace_portfolio_constraints(params.get("constraints"), confirmation_channel="mcp")
             elif method == "statement_save":
-                data = self.engine.save_account_statement(params.get("statement"))
+                data = self.engine.save_account_statement(params.get("statement"), confirmation_channel="mcp")
             elif method == "cash_movement_save":
-                data = self.engine.save_cash_movement(params.get("movement"))
+                data = self.engine.save_cash_movement(params.get("movement"), confirmation_channel="mcp")
             elif method == "statement_list":
                 data = self.engine.list_account_statements()
             elif method == "cash_movement_list":

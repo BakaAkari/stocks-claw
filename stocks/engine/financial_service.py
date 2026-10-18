@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from stocks.domain.models import ExecutionRecord
+from stocks.engine.confirmation_provenance import ConfirmationStore
 from stocks.engine.entry_snapshot import canonical_identity
 from stocks.engine.evaluation_contract import digest, utc
 from stocks.engine.financial_reconciliation import (
@@ -74,7 +75,11 @@ def _recorded_payload(payload, existing):
     return record
 
 
-def save_record(engine, kind, payload):
+def _confirmation(engine, target, payload):
+    return ConfirmationStore(engine._local_data_dir).find(target, payload)
+
+
+def save_record(engine, kind, payload, *, channel=None):
     loaded = load_records(engine, kind)
     if loaded["errors"]:
         raise ValueError("financial_record_read_errors")
@@ -84,10 +89,14 @@ def save_record(engine, kind, payload):
     _account(engine, record["account_id"])
     engine.persistence._save_record_once(
         engine._local_data_dir / kind, record, timestamp=record["recorded_at"])
+    ConfirmationStore(engine._local_data_dir).record(
+        f"{kind}:{record['id']}", record, channel=channel,
+        source_path=str(engine._local_data_dir / kind),
+    )
     return record
 
 
-def save_execution(engine, payload):
+def save_execution(engine, payload, *, channel=None):
     """Schema 3 records an actual fill, including independently chosen trades."""
     loaded = engine.persistence.list_executions_checked()
     if loaded["errors"]:
@@ -96,7 +105,13 @@ def save_execution(engine, payload):
     _account(engine, record.get("account_id"))
     if record.get("record_origin") == "advice_linked":
         from stocks.engine.decision_service import save_linked_execution
-        return save_linked_execution(engine, record)
+        linked = save_linked_execution(engine, record)
+        ConfirmationStore(engine._local_data_dir).record(
+            f"execution:{linked['id']}", linked,
+            channel=channel,
+            source_path=str(engine._local_data_dir / "executions"),
+        )
+        return linked
     if record.get("record_origin") != "manual":
         raise ValueError("explicit_execution_origin_required")
     record["target"] = canonical_identity(record.get("target"))
@@ -106,6 +121,10 @@ def save_execution(engine, payload):
     record["action"] = action
     fill = ExecutionRecord.create(**record)
     engine.persistence.save_execution(fill)
+    ConfirmationStore(engine._local_data_dir).record(
+        f"execution:{fill.id}", fill.to_dict(), channel=channel,
+        source_path=str(engine._local_data_dir / "executions"),
+    )
     return fill.to_dict()
 
 
@@ -126,6 +145,28 @@ def review(engine, opening_id, closing_id, *, as_of=None):
         report["status"] = "incomplete"
         report.setdefault("gaps", []).append("financial_record_read_errors")
     report["record_read_errors"] = errors
+    report["confirmation_events"] = {
+        f"account_statement:{statement['id']}": _confirmation(
+            engine, f"account_statements:{statement['id']}", statement
+        )
+        for statement in selected
+    }
+    report["confirmation_events"].update({
+        f"execution:{record['id']}": _confirmation(engine, f"execution:{record['id']}", record)
+        for record in fills["records"]
+    })
+    report["confirmation_events"].update({
+        f"cash_movement:{record['id']}": _confirmation(
+            engine, f"cash_movements:{record['id']}", record
+        )
+        for record in movements["records"]
+    })
+    report["confirmation_gaps"] = sorted(
+        key for key, event in report["confirmation_events"].items() if event is None
+    )
+    if report["confirmation_gaps"]:
+        report["status"] = "incomplete"
+        report.setdefault("gaps", []).append("confirmation_provenance_missing")
     report["content_hash"] = digest({k: v for k, v in report.items() if k != "content_hash"})
     return report
 
@@ -192,6 +233,10 @@ def integrity(engine, *, as_of=None):
     try:
         doc = asset_document(engine)
         result["asset_document_hash"] = digest(doc)
+        asset_confirmation = _confirmation(engine, "financial_assets", doc)
+        result["asset_confirmation"] = asset_confirmation
+        if asset_confirmation is None:
+            result["gaps"].append("financial_assets_confirmation_missing")
         statements = load_records(engine, "account_statements")
         fills = engine.persistence.list_executions_checked()
         movements = load_records(engine, "cash_movements")
@@ -225,8 +270,30 @@ def integrity(engine, *, as_of=None):
                 result["gaps"].append("ambiguous_statement_cutoff:" + aid)
                 continue
             report = reconcile(opening, closing, fills["records"], movements["records"], as_of=cutoff)
+            statement_events = {
+                statement["id"]: _confirmation(
+                    engine, f"account_statements:{statement['id']}", statement
+                )
+                for statement in (opening, closing)
+            }
+            missing_statement_events = [sid for sid, event in statement_events.items() if event is None]
+            gaps = []
             result["reports"][aid] = report
-            positions, gaps = _alignment(doc, closing)
+            positions, alignment_gaps = _alignment(doc, closing)
+            gaps.extend(alignment_gaps)
+            gaps.extend("confirmation_provenance_missing:" + sid for sid in missing_statement_events)
+            for event in fills["records"]:
+                if event.get("account_id") != aid:
+                    continue
+                target = f"execution:{event['id']}"
+                if _confirmation(engine, target, event) is None:
+                    gaps.append("confirmation_provenance_missing:" + target)
+            for event in movements["records"]:
+                if event.get("account_id") != aid:
+                    continue
+                target = f"cash_movements:{event['id']}"
+                if _confirmation(engine, target, event) is None:
+                    gaps.append("confirmation_provenance_missing:" + target)
             if closing["scope"] != "complete_account":
                 gaps.append("partial_statement_scope")
             for event in fills["records"] + movements["records"]:
@@ -244,6 +311,7 @@ def integrity(engine, *, as_of=None):
             result["accounts"][aid] = {
                 "status": "matched" if not gaps else "incomplete", "statement_id": closing["id"],
                 "statement_hash": digest(closing), "statement_as_of": closing["as_of"],
+                "statement_confirmation": statement_events.get(closing["id"]),
                 "cash_by_currency": {r["currency"]: {"balance": r["balance"],
                                         "available_balance": r.get("available_balance")} for r in closing["cash"]},
             }
