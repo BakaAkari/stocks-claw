@@ -1,10 +1,10 @@
 # STATUS.md
 
-## 当前状态：DOC-02 确认来源与内容哈希加固完成，未部署 NAS
+## 当前状态：Hermes 唯一入口契约加固完成，未部署 NAS
 
 2026-10-18。当前任务为
 [DOC-02 确认来源与内容哈希加固](docs/tasks/TASK-DOC-01-operating-model-hardening.md)。
-本轮复用既有运行模型，修改确认写入和读取核对代码；没有写入真实金融记忆、没有部署
+本轮在 DOC-02 基础上补齐 Hermes MCP 编排入口和失败保护；没有写入真实金融记忆、没有部署
 NAS、没有恢复 cron，也没有推送消息。当前 HEAD 为 `86b4c9b`，本轮改动已提交，待推送云端。
 
 ### 本轮设计结论
@@ -40,6 +40,11 @@ LLM 调用和测试通过不能替代真实账户验收或 NAS 生产验收。
 - 全量 pytest：**1821 passed / 7 skipped / 0 failed**；日志 `/tmp/stocks-doc02-final-pytest.log`。
 - 变更文件 Ruff、compileall 和 `git diff --check` 通过；Advisory smoke 使用固定工作日避免休市日期造成测试漂移。
 - 真实账户、在线 LLM、NAS shadow、最终推送和用户价值均未验收。
+
+Hermes 入口加固：新增只读 `agent_status`，以及 `asset_intake_draft` / `asset_intake_confirm`；
+资产迁移和草稿确认均绑定 MCP/CLI 来源。契约要求先读取状态，再录入、核对、生成建议、
+记录决定与成交、最后复盘；失败必须停止并保留原始错误，不得用推断值绕过确认。相关定向测试
+70 项通过，全量 **1822 passed / 7 skipped / 0 failed**；本轮代码和契约改动尚未提交。
 
 ## 历史状态材料
 

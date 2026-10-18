@@ -148,6 +148,23 @@ def test_cli_and_mcp_asset_migration_v2(adapter_engine, tmp_path, capsys):
     assert (tmp_path / "financial_assets.v1.bak.json").exists()
 
 
+def test_mcp_exposes_hermes_status_and_read_only_intake_contract(adapter_engine):
+    mcp = MCPAdapter(adapter_engine)
+    status = mcp.handle_request({"method": "agent_status", "params": {}})
+    assert status["success"] is True
+    assert status["data"]["contract"] == "hermes-operation-v1"
+    assert status["data"]["read_only"] is True
+    assert status["data"]["writes_require_user_confirmation"] is True
+    names = {tool["name"] for tool in mcp.list_tools()}
+    assert {"agent_status", "asset_intake_draft", "asset_intake_confirm"} <= names
+    rejected = mcp.handle_request({
+        "method": "asset_intake_confirm",
+        "params": {"draft": {}, "confirmation_token": "bad"},
+    })
+    assert rejected["success"] is False
+    assert "confirmed" in rejected["error"]
+
+
 def test_asset_instrument_mapping_cli_and_mcp_validation(adapter_engine, capsys):
     mcp = MCPAdapter(adapter_engine)
     cli = CLIAdapter(adapter_engine)

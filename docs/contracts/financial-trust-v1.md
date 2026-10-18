@@ -43,6 +43,21 @@
 `financial_integrity` 另核对当前资产记忆与最近账单；重复持仓 ID、未知账户、后续事件
 或资产差异不能获得可信匹配。以上读取不自动修改持仓、资金或成交。
 
+## Hermes 唯一操作入口
+
+Hermes 通过 MCP 负责编排本系统；CLI 是同一确认边界的本地兼容入口，不是另一套业务流程。
+Hermes 应先调用 `agent_status` 读取当前核对状态、个人约束来源和下一步，再按顺序使用
+`asset_intake_draft` → `asset_intake_confirm` 录入资产，使用 `statement_save`、
+`cash_movement_save` 和 `execution_save` 记录账户事实，使用 `financial_integrity` 或
+`financial_reconcile` 核对，使用 `get_analysis_context` 生成建议上下文，最后使用
+`decision_review` 复盘。`asset_intake_draft` 只生成草稿；确认接口要求原草稿、未过期 token
+和 `confirmed=true`，任何记忆变化或歧义都会拒绝且不写入。
+
+所有写入接口失败时必须停止当前链路并返回原始错误；不得用推断值重试、把建议当决定、
+把决定当成交，或在核对不完整时继续生成可执行组合动作。重复请求应复用原 ID/token，
+冲突请求必须保留原记录并报告冲突。`agent_status`、所有列表、核对、上下文和复盘接口
+均为只读；分析和复盘永远不能改写用户金融事实。
+
 matched 只表示已提供记录在声明区间内一致，不证明券商真实性、记录完整性、当前
 可用资金或利润。历史核对一致与当前可执行资格分开；LLM 检查冻结的账单时效政策。
 

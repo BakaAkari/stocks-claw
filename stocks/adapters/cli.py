@@ -413,7 +413,10 @@ class CLIAdapter:
                 data.append(asset_dict)
             return {"success": True, "data": data}
         if args.asset_migrate_v2:
-            return self.engine.migrate_assets_v2(confirmed=args.confirmed)
+            return self.engine.migrate_assets_v2(
+                confirmed=args.confirmed,
+                confirmation_channel="cli" if args.confirmed else None,
+            )
         if args.asset_intake:
             return self.engine.asset_intake_draft(args.asset_intake)
         if args.asset_intake_confirm:
@@ -426,7 +429,7 @@ class CLIAdapter:
                 draft = json.loads(args.draft_json)
             except json.JSONDecodeError as exc:
                 return {"success": False, "error": f"--draft-json 解析失败: {exc}"}
-            return self.engine.asset_intake_apply(draft, args.token)
+            return self.engine.asset_intake_apply(draft, args.token, confirmation_channel="cli")
 
         write_requested = any(
             (

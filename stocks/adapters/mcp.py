@@ -22,6 +22,20 @@ from typing import Optional
 from stocks.domain.models import FinancialAsset
 
 
+def _next_actions(integrity: dict, mandate: dict) -> list[str]:
+    """Translate read-only readiness into deterministic Hermes actions."""
+    actions: list[str] = []
+    if integrity.get("status") != "matched":
+        actions.append("collect_or_correct_confirmed_account_facts")
+    if not mandate.get("sources", {}).get("profile", {}).get("confirmation_event_id"):
+        actions.append("request_and_confirm_profile")
+    if not mandate.get("sources", {}).get("constraints", {}).get("confirmation_event_id"):
+        actions.append("request_and_confirm_constraints")
+    if not actions:
+        actions.append("build_read_only_analysis_context")
+    return actions
+
+
 class MCPAdapter:
     """MCP 适配器 — 将 stocks-claw 引擎能力暴露为 MCP 工具集。"""
 
@@ -58,6 +72,12 @@ class MCPAdapter:
             return self._asset_remove(params)
         elif method == "asset_migrate_v2":
             return self._asset_migrate_v2(params)
+        elif method == "asset_intake_draft":
+            return self._asset_intake_draft(params)
+        elif method == "asset_intake_confirm":
+            return self._asset_intake_confirm(params)
+        elif method == "agent_status":
+            return self._agent_status(params)
         elif method == "profile_get":
             return {"success": True, "data": self.engine.get_profile()}
         elif method in {"statement_save", "cash_movement_save", "statement_list", "cash_movement_list",
@@ -196,10 +216,54 @@ class MCPAdapter:
         try:
             result = self.engine.migrate_assets_v2(
                 confirmed=params.get("confirmed") is True,
+                confirmation_channel="mcp" if params.get("confirmed") is True else None,
             )
             return result
         except (TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
+
+    def _asset_intake_draft(self, params: dict) -> dict:
+        text = params.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return {"success": False, "error": "intake text must be a non-empty string"}
+        try:
+            return self.engine.asset_intake_draft(text)
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _asset_intake_confirm(self, params: dict) -> dict:
+        if params.get("confirmed") is not True:
+            return self._confirmed(params)
+        draft = params.get("draft")
+        token = params.get("confirmation_token")
+        if not isinstance(draft, dict) or not isinstance(token, str) or not token:
+            return {"success": False, "error": "draft and confirmation_token are required"}
+        try:
+            return self.engine.asset_intake_apply(
+                draft, token, confirmation_channel="mcp"
+            )
+        except (TypeError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _agent_status(self, params: dict) -> dict:
+        """Return the read-only checkpoints Hermes must inspect before acting."""
+        try:
+            integrity = self.engine.financial_integrity(as_of=params.get("as_of"))
+        except (TypeError, ValueError) as exc:
+            integrity = {"status": "incomplete", "gaps": [str(exc)]}
+        mandate = self.engine.personal_mandate()
+        return {
+            "success": True,
+            "data": {
+                "contract": "hermes-operation-v1",
+                "read_only": True,
+                "financial_integrity": integrity,
+                "mandate": mandate,
+                "next_actions": _next_actions(integrity, mandate),
+                "writes_require_user_confirmation": True,
+                "analysis_never_writes_financial_memory": True,
+            },
+        }
 
     def _profile_update(self, params: dict) -> dict:
         confirmation_error = self._confirmed(params)
@@ -478,6 +542,30 @@ class MCPAdapter:
                         "confirmed": {"type": "boolean", "default": False},
                     },
                 },
+            },
+            {
+                "name": "asset_intake_draft",
+                "description": "把 Hermes 收到的账户/持仓描述转换为不写入的结构化草稿；必须先检查歧义和来源，再请求用户确认。",
+                "parameters": {
+                    "type": "object", "required": ["text"],
+                    "properties": {"text": {"type": "string"}},
+                },
+            },
+            {
+                "name": "asset_intake_confirm",
+                "description": "仅在用户确认同一份草稿后写入资产账本；过期 token、记忆变化或歧义会拒绝，失败不应重试不同内容。",
+                "parameters": {
+                    "type": "object", "required": ["draft", "confirmation_token", "confirmed"],
+                    "properties": {
+                        "draft": {"type": "object"}, "confirmation_token": {"type": "string"},
+                        "confirmed": {"type": "boolean", "const": True},
+                    },
+                },
+            },
+            {
+                "name": "agent_status",
+                "description": "只读返回 Hermes 当前可执行检查点、金融核对状态、个人约束来源和下一步；不产生任何写入。",
+                "parameters": {"type": "object", "properties": {"as_of": {"type": "string"}}},
             },
             {
                 "name": "profile_get",

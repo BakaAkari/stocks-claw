@@ -760,13 +760,13 @@ class StocksEngine:
         """A1：自然语言 → 资产登记草稿 + 确认 token。绝不写文件。"""
         return build_intake_draft(self, text, llm_client=llm_client)
 
-    def asset_intake_apply(self, draft: dict, token: str) -> dict:
+    def asset_intake_apply(self, draft: dict, token: str, *, confirmation_channel: str | None = None) -> dict:
         """A1：校验 token 并把草稿写入 v2 资产文件（带备份与审计）。"""
         result = apply_intake_draft(self, draft, token)
         if result.get("success"):
             path = self._asset_file_path()
             document = json.loads(path.read_text(encoding="utf-8"))
-            self._record_confirmation("financial_assets", document, channel="cli")
+            self._record_confirmation("financial_assets", document, channel=confirmation_channel)
         return result
 
     def get_profile(self) -> dict:
@@ -1745,7 +1745,7 @@ class StocksEngine:
             "will_write": False,
         }
 
-    def migrate_assets_v2(self, *, confirmed: bool = False) -> dict:
+    def migrate_assets_v2(self, *, confirmed: bool = False, confirmation_channel: str | None = None) -> dict:
         """确认式 v2 资产文件迁移。"""
         preview = self.preview_asset_migration_v2()
         if self._asset_schema_version == 2:
@@ -1770,6 +1770,9 @@ class StocksEngine:
             json.dump(preview["payload"], f, ensure_ascii=False, indent=2)
 
         self._assets = self._load_assets_from_file()
+        self._record_confirmation(
+            "financial_assets", preview["payload"], channel=confirmation_channel,
+        )
         return {
             **preview,
             "success": True,
