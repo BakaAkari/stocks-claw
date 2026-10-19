@@ -14,6 +14,7 @@ StocksEngine 是 stocks-claw 的核心门面类，负责：
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -43,6 +44,7 @@ from stocks.domain.models import (
 )
 from stocks.engine.advice_feedback import compute_feedback_rollup, make_feedback
 from stocks.engine.asset_intake_service import apply_intake_draft, build_intake_draft
+from stocks.engine.atomic_io import atomic_write_json
 from stocks.engine.config_loader import load_engine_config
 from stocks.engine.confirmation_provenance import ConfirmationStore
 from stocks.engine.context_builder import ContextBuilder, _dedupe_instruments
@@ -90,6 +92,9 @@ from stocks.providers.rss_news import RSSNewsProvider
 from stocks.providers.tencent_a import TencentAQuoteProvider
 
 logger = logging.getLogger(__name__)
+
+# 预热 120 根日 K：MA60 斜率、60 日高低点等交易指标需要超过 60 根
+HISTORY_WARM_BARS = 120
 
 # 默认配置路径
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
@@ -197,7 +202,7 @@ class StocksEngine:
         )
         # 注入 fallback 追踪器（惰性，不创建目录直到首次 record）
         from stocks.engine.fallback_tracker import FallbackTracker
-        self.fetcher.set_fallback_tracker(FallbackTracker())
+        self.fetcher.set_fallback_tracker(FallbackTracker(self._local_data_dir / "fallback_logs"))
         self.portfolio_scaffold = PortfolioScaffold()
         self.market_scaffold = MarketScaffold()
 
@@ -230,15 +235,20 @@ class StocksEngine:
             if source.get("url")
         ]
         def instruments_getter() -> list[Instrument]:
-            return list(getattr(self, "_watchlist", []))
-        if self._config.get("news", {}).get(
+            return self._news_instruments()
+        engine_news_cfg = self._config.get("news", {})
+        if engine_news_cfg.get(
             "watchlist_templates_enabled", False
         ) and any(
             template.get("type") == "google_news_rss"
             and template.get("enabled", True)
             for template in news_cfg.get("watchlist_templates", [])
         ):
-            news_providers.append(WatchlistGoogleNewsProvider(instruments_getter))
+            news_providers.append(WatchlistGoogleNewsProvider(
+                instruments_getter,
+                per_symbol=engine_news_cfg.get("per_symbol_items"),
+                blocked_sources=engine_news_cfg.get("blocked_sources"),
+            ))
         filings_cfg = self._config.get("filings", {})
         filing_symbols = self._load_json("filing_symbols.json") or {}
         if filings_cfg.get("enabled", False):
@@ -268,16 +278,20 @@ class StocksEngine:
         self.news_aggregator = NewsAggregator(
             providers=news_providers,
             max_source_items=20,
+            max_age_days=engine_news_cfg.get("max_age_days"),
         )
+        self._news_max_items = int(engine_news_cfg.get("max_items") or 10)
 
         # 2.3 初始化宏观数据提供者
         macro_cfg = self._config.get("macro", {})
         self.macro_provider = None
         if macro_cfg.get("enabled", True):
             static_config = macro_cfg.get("static_config", {})
+            from stocks.engine.macro_data import ChinaMacroAdapter
             providers = [
-                FredMacroProvider(cache_dir=self._local_data_dir / "macro_cache"),
                 YahooFinanceMacroProvider(),
+                FredMacroProvider(cache_dir=self._local_data_dir / "macro_cache"),
+                ChinaMacroAdapter(),
             ]
             if static_config:
                 providers.append(StaticMacroProvider(static_config))
@@ -1036,6 +1050,18 @@ class StocksEngine:
         from stocks.engine.financial_service import integrity
         return integrity(self, as_of=as_of)
 
+    def fee_budget_preview(self, document: dict) -> dict:
+        from stocks.engine.fee_budget import preview
+        return preview(document)
+
+    def fee_budget_state(self) -> dict:
+        from stocks.engine.fee_budget import load_state
+        return load_state(self)
+
+    def replace_fee_budgets(self, document: dict, *, confirmed=False, confirmation_channel=None) -> dict:
+        from stocks.engine.fee_budget import replace_budgets
+        return replace_budgets(self, document, confirmed=confirmed, channel=confirmation_channel)
+
     def financial_intake_template(self, market: str) -> dict:
         from stocks.engine.financial_intake import intake_template
         return intake_template(market)
@@ -1261,18 +1287,84 @@ class StocksEngine:
     async def fetch_news(
         self,
         sources: Optional[list[str]] = None,
-        limit: int = 10,
+        limit: Optional[int] = None,
     ) -> list[NewsItem]:
-        """获取新闻数据 — 使用 NewsAggregator 多源聚合。"""
+        """获取新闻数据 — 使用 NewsAggregator 多源聚合；limit 缺省取 engine.yaml news.max_items。"""
+        if limit is None:
+            limit = self._news_max_items
         try:
             return await self.news_aggregator.fetch(max_items=limit, sources=sources)
         except Exception as e:
             logger.warning(f"News fetch failed: {e}")
             return []
 
+    async def investment_brief(self, *, include_news: bool = True, use_llm: bool = True) -> dict:
+        """投资日报：影响新闻、近期日历、持仓操作及 LLM 判断；不含金额等资产明细。只读。"""
+        from stocks.engine.advisory_mainline import resolve_mainline_llm_clients
+        from stocks.engine.investment_brief import build_brief_input, judge_brief, render_brief
+
+        context = await self.build_context(
+            include_news=include_news, include_quotes=True, include_history=True,
+        )
+        context_dict = context.to_dict()
+        metrics = await self._holding_trader_metrics(context_dict)
+        brief_input = build_brief_input(context_dict, metrics)
+        judgment = None
+        if use_llm:
+            clients = resolve_mainline_llm_clients(self._config)
+            for client in clients:
+                client.stream = True
+            judgment = await asyncio.to_thread(judge_brief, brief_input, clients)
+        return {"judgment": judgment, "markdown": render_brief(brief_input, judgment)}
+
+    # 相对强弱基准：A 股对沪深300，美股对标普500
+    _BENCHMARKS = {"a": ("a:000300", "沪深300"), "us": ("us:SPY", "标普500ETF")}
+
+    async def _holding_trader_metrics(self, context: dict) -> dict:
+        """从本地历史缓存计算行情持仓的交易员指标（不联网）。"""
+        from stocks.engine.trader_metrics import compute_trader_metrics
+
+        if not self.history_cache:
+            return {}
+        bars = HISTORY_WARM_BARS + 10
+        benchmarks: dict[str, Any] = {}
+        for market, (key, name) in self._BENCHMARKS.items():
+            try:
+                benchmarks[market] = await self.history_cache.get_history(
+                    self._instrument_from_key(key, name=name), lookback_bars=bars)
+            except Exception as exc:
+                logger.warning(f"benchmark history unavailable for {key}: {exc}")
+        result: dict[str, dict] = {}
+        for valuation in context.get("position_valuations") or []:
+            key = valuation.get("instrument_key")
+            if valuation.get("valuation_method") != "market_quote" or not key or key in result:
+                continue
+            try:
+                instrument = self._instrument_from_key(key, name=valuation.get("display_name") or key)
+                df = await self.history_cache.get_history(instrument, lookback_bars=bars)
+                result[key] = compute_trader_metrics(df, benchmarks.get(instrument.market))
+            except Exception as exc:
+                logger.warning(f"trader metrics failed for {key}: {exc}")
+        return result
+
     async def generate_report(self, context: AnalysisContext) -> str:
         """使用 LLM 生成投资分析报告。"""
         return await self.llm_analysis.generate_report(context)
+
+    def _news_instruments(self) -> list[Instrument]:
+        """定向新闻标的：watchlist ∪ 行情估值的持仓；持仓标记 pool="holding"。"""
+        held: dict[str, Instrument] = {}
+        for position in self._current_asset_positions():
+            if position.valuation_input.method != "market_quote" or not position.holding:
+                continue
+            instrument = self._instrument_from_position(position)
+            if instrument is not None:
+                held[f"{instrument.market}:{instrument.code}"] = instrument
+        result: list[Instrument] = []
+        for item in getattr(self, "_watchlist", []):
+            key = f"{item.market}:{item.code}"
+            result.append(replace(item, pool="holding") if held.pop(key, None) else item)
+        return result + list(held.values())
 
     def _with_runtime_holding_instruments(
         self,
@@ -1385,7 +1477,7 @@ class StocksEngine:
                     self.history_cache,
                     self._history_provider,
                     warm_targets,
-                    lookback_days=60,
+                    lookback_days=HISTORY_WARM_BARS,
                     market_holidays=self._market_holidays,
                     market_close=self._market_close,
                     market_tz=self._market_tz,
@@ -1436,7 +1528,7 @@ class StocksEngine:
                         self.history_cache,
                         self._history_provider,
                         scan_instruments,
-                        lookback_days=60,
+                        lookback_days=HISTORY_WARM_BARS,
                         market_holidays=self._market_holidays,
                         market_close=self._market_close,
                         market_tz=self._market_tz,
@@ -1514,6 +1606,7 @@ class StocksEngine:
             context, engine_config=deepcopy(self._config),
             personal_mandate=self.personal_mandate(),
             financial_integrity=self.financial_integrity(),
+            fee_budgets=self.fee_budget_state(),
         )
 
         # 保存最小快照，供下一次上下文进行前后对照。
@@ -1780,8 +1873,7 @@ class StocksEngine:
             backup_path = source_path.with_name("financial_assets.v1.bak.json")
             shutil.copy2(source_path, backup_path)
 
-        with open(write_path, "w", encoding="utf-8") as f:
-            json.dump(preview["payload"], f, ensure_ascii=False, indent=2)
+        atomic_write_json(write_path, preview["payload"])
 
         self._assets = self._load_assets_from_file()
         self._record_confirmation(
@@ -1843,13 +1935,7 @@ class StocksEngine:
         self._ensure_legacy_asset_writable()
         local_path = self._local_data_dir / "financial_assets.json"
         self._local_data_dir.mkdir(parents=True, exist_ok=True)
-        with open(local_path, "w", encoding="utf-8") as f:
-            json.dump(
-                [a.to_storage_dict() for a in self._assets],
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
+        atomic_write_json(local_path, [a.to_storage_dict() for a in self._assets])
 
     @staticmethod
     def _with_cny_valuation(asset: FinancialAsset) -> FinancialAsset:

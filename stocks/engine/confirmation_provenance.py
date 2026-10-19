@@ -12,6 +12,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
+from stocks.engine.atomic_io import atomic_write_json
 from stocks.engine.evaluation_contract import digest, utc
 
 SCHEMA_VERSION = 1
@@ -97,7 +98,7 @@ class ConfirmationStore:
             if existing.get("event_integrity") != _event_integrity(existing):
                 raise ValueError("confirmation_event_tampered")
             return existing
-        path.write_text(json.dumps(event, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(path, event)
         return event
 
     def find(self, target: str, payload: dict) -> dict | None:

@@ -388,3 +388,30 @@ class TestWatchlistGoogleNewsProvider:
         assert result[0].raw_metadata["symbol"] == "AAPL"
         assert result[0].raw_metadata["market"] == "us"
         assert "AAPL" in result[0].tags
+
+
+async def test_rss_transport_failure_propagates_to_aggregate_quality():
+    import urllib.error
+    provider = RSSNewsProvider("https://example.com/feed", source_name="broken")
+    with patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("https://example.com/?token=secret", 404, "not found", {}, None)):
+        aggregator = NewsAggregator([provider])
+        assert await aggregator.fetch() == []
+    assert aggregator.last_errors == {"rss_broken:transport": "HTTPError: HTTP 404"}
+    assert "secret" not in str(aggregator.last_errors)
+
+
+async def test_html_is_not_a_successful_empty_news_feed():
+    from unittest.mock import MagicMock
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = b"<html><body>moved</body></html>"
+    provider = RSSNewsProvider("https://example.com/feed")
+    with patch("urllib.request.urlopen", return_value=response):
+        assert await provider.fetch() == []
+    assert provider.last_errors == {"parse": "response_is_not_rss_or_atom"}
+
+
+async def test_watchlist_news_retains_per_symbol_errors():
+    provider = WatchlistGoogleNewsProvider(lambda: [Instrument("AAPL", "Apple", "us")])
+    with patch("urllib.request.urlopen", side_effect=TimeoutError):
+        assert await provider.fetch() == []
+    assert "AAPL:transport" in provider.last_errors

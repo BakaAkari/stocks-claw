@@ -685,10 +685,24 @@ identity, while advice-linked fills validate their frozen account and instrument
 Unknown fee/settlement facts stay unknown. Account statements preserve explicit
 settled/available cash and trade-date/available quantities separately.
 
-`AnalysisContext` also carries `personal_mandate` and `financial_integrity`;
+`AnalysisContext` also carries `personal_mandate`, `financial_integrity` and optional
+`fee_budgets` (default empty, no inferred budget);
 position valuations retain `holding` (quantity/unit) and `horizon`. The unified
 snapshot freezes these, actual quotes and execution policy under its content hash.
 LLM lineage preserves the available prompt/response trace, original proposal,
 validation policy and receipt, final decision and structured display hashes.
 Request model labels and structured display evidence do not prove service-side
 model identity or message delivery. Unknown portfolio cash plans remain unknown.
+
+
+## Confirmed purchase fee budgets
+
+[Fee budget v1](../docs/contracts/fee-budget-v1.md) defines a document with
+`schema_version: 1` and `budgets`, stored separately from actual execution fees.
+Each entry binds account, instrument, market, currency, validity interval,
+quantity/notional caps, positive all-in fee upper bound and source. Confirmation
+is content-bound. The context carries document, confirmation and read status;
+the unified snapshot hashes these. `fee_budget_check` records reserve arithmetic,
+source hashes and validity; `purchase_cost` projects only user-facing currency,
+fee reserve and total cash requirement. Neither field changes confirmed cash or
+execution history. Lifecycle status is maintained only in the contract index.

@@ -226,3 +226,66 @@ def test_confirmed_apis_normal_context_and_scheduled_producer_to_review(tmp_path
     assert summary["real_llm_call"] is False and summary["real_user_records"] is False
     assert summary["display_linked"] is True and summary["review_read_only"] is True
     assert summary["cashflow_CNY"] == 849 and summary["cashflow_is_profit"] is False
+
+
+def confirmed_fee_context(tmp_path):
+    from stocks.engine.confirmation_provenance import ConfirmationStore
+    from stocks.engine.fee_budget import validate_document
+    context = context_fixture()
+    doc = validate_document({"schema_version": 1, "budgets": [{
+        "id": "fixture-fee", "account_id": "fixture-account", "instrument_id": "a:518880",
+        "market": "a", "currency": "CNY", "valid_from": "2026-10-01T00:00:00Z",
+        "valid_until": "2026-11-01T00:00:00Z", "max_quantity": "1000",
+        "max_notional": "10000", "fee_upper_bound": "5", "source": "SIMULATED fee upper bound"}]})
+    event = ConfirmationStore(tmp_path).record("fee_budgets", doc, channel="mcp", confirmed_at=NOW)
+    return replace(context, fee_budgets={"status": "confirmed", "document": doc,
+                                       "content_hash": event["content_hash"], "confirmation": event})
+
+
+def test_confirmed_fee_allows_existing_add_only_and_freezes_evidence(tmp_path):
+    context = confirmed_fee_context(tmp_path)
+    result = run(context, InjectedClient({"action": "add"}))["advisory_lineage"]
+    approved = result["portfolio_decision"]["approved_actions"]
+    assert len(approved) == 1, result["portfolio_decision"]
+    assert approved[0]["fee_budget_check"]["total_cash_required"] == "855.0"
+    assert result["snapshot"]["metadata"]["fee_budgets"] == context.fee_budgets
+    roundtrip = AnalysisContext.from_dict(context.to_dict())
+    assert roundtrip.fee_budgets == context.fee_budgets
+    assert build_unified_snapshot(context).snapshot_id != build_unified_snapshot(context_fixture()).snapshot_id
+    buy = run(context, InjectedClient({"action": "buy"}))["advisory_lineage"]["portfolio_decision"]
+    assert not buy["approved_actions"]
+    assert "new_position_buy_requires_explicit_account_route" in buy["suppressed_actions"][0]["validation_reasons"]
+
+
+def test_fee_cannot_bypass_cash_or_allocation_limits(tmp_path):
+    context = confirmed_fee_context(tmp_path)
+    context.financial_integrity["accounts"]["fixture-account"]["cash_by_currency"]["CNY"]["available_balance"] = "850"
+    result = run(context, InjectedClient({"action": "add"}))["advisory_lineage"]["portfolio_decision"]
+    assert "available_cash_including_fee_exceeded" in result["suppressed_actions"][0]["validation_reasons"]
+    context = confirmed_fee_context(tmp_path)
+    context.personal_mandate["constraint_snapshot"]["value"] = {"hard_caps": {"max_position_weight": 0.3}}
+    result = run(context, InjectedClient({"action": "add"}))["advisory_lineage"]["portfolio_decision"]
+    assert not result["approved_actions"]
+
+
+def test_multiple_purchases_never_spend_same_cash_twice(tmp_path):
+    from stocks.domain.advisory_models import AdvisoryValidationReceipt, InvestmentAdvisory
+    from stocks.engine.advisory_lineage import build_advisory_lineage
+    context = confirmed_fee_context(tmp_path)
+    first = run(context, InjectedClient({"action": "add"}))["advisory_lineage"]
+    # Two distinct holdings share the same account cash. Neither alone exceeds
+    # available cash; approval of both would double-spend it.
+    peer = deepcopy(context.position_valuations[0])
+    peer["position_id"] = "other-position"
+    context.position_valuations.append(peer)
+    context.financial_integrity["positions"]["other-position"] = deepcopy(context.financial_integrity["positions"]["fixture-position"])
+    context.financial_integrity["accounts"]["fixture-account"]["cash_by_currency"]["CNY"]["available_balance"] = "855"
+    snapshot = build_unified_snapshot(context, execution_rules=EXECUTION_RULES)
+    from stocks.domain.advisory_models import AdvisoryAction
+    action = AdvisoryAction(**first["advisory"]["actions"][0])
+    advisory = InvestmentAdvisory(**{**first["advisory"], "actions": (action, replace(action, action_id="other", target="other-position", evidence_refs=("position:other-position",)))})
+    receipt = AdvisoryValidationReceipt(**first["validation_receipt"]["contract_receipt"])
+    result = build_advisory_lineage(snapshot, advisory, receipt, first["attempts"])["portfolio_decision"]
+    assert not result["approved_actions"]
+    assert all(row["validation_reasons"] == ["multiple_purchases_require_cash_projection"]
+               for row in result["suppressed_actions"])

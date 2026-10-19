@@ -130,6 +130,12 @@ class StaticEventCalendarProvider:
         end: date,
         watchlist: list[Instrument],
     ) -> list[UpcomingEvent]:
+        last = max((event.date for event in self._events), default=None)
+        if last is None or end.isoformat() > last:
+            logger.warning(
+                "static event_calendar.json ends at %s, before requested window end %s; "
+                "add newly published official dates", last, end.isoformat(),
+            )
         result = []
         for event in self._events:
             event_date = _parse_date(event.date)

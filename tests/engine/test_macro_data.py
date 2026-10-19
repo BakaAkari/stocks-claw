@@ -113,7 +113,7 @@ class TestFredMacroProvider:
 
         assert snapshot.vix == 18.5
         assert snapshot.us_10y_yield == 4.25
-        assert snapshot.dxy == 119.5
+        assert snapshot.dxy is None  # Broad trade-weighted dollar index is not ICE DXY.
         assert snapshot.usd_cny == 6.81
         assert snapshot.crude_oil == 72.4
         assert snapshot.gold is None
@@ -159,7 +159,7 @@ class TestFredMacroProvider:
 
         assert snapshot.official_stats["cpi_yoy"] == 2.5
         assert set(requested_series) == {
-            "VIXCLS", "DGS10", "DTWEXBGS", "DEXCHUS", "DCOILWTICO"
+            "VIXCLS", "DGS10", "DEXCHUS", "DCOILWTICO"
         }
 
 
@@ -361,7 +361,7 @@ class TestCompositeMacroProvider:
         assert snapshot.field_sources["vix"]["source"] == "static_config"
         assert snapshot.source == "composite"
 
-    async def test_fred_still_provides_five_market_fields_when_yahoo_fails(
+    async def test_fred_provides_four_market_fields_without_substituting_dxy(
         self, tmp_path
     ):
         class FailedYahoo:
@@ -388,7 +388,7 @@ class TestCompositeMacroProvider:
             snapshot.gold,
             snapshot.crude_oil,
         ]
-        assert sum(value is not None for value in market_values) == 5
+        assert sum(value is not None for value in market_values) == 4
         assert snapshot.gold is None
         assert len(snapshot.official_stats) == 3
         assert snapshot.field_sources["vix"]["source"] == "fred:VIXCLS"

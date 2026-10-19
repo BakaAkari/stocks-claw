@@ -15,8 +15,9 @@ from stocks.engine.constraint_model import ConstraintModel
 from stocks.engine.entry_snapshot import select_entry
 from stocks.engine.evaluation_contract import digest, utc
 from stocks.engine.execution_rules import resolve_execution
+from stocks.engine.fee_budget import check_purchase
 
-BRIDGE_VERSION = "llm-proposal-gate-v1"
+BRIDGE_VERSION = "llm-proposal-gate-v2"
 _ACTIONABLE = {"buy", "add", "reduce", "sell"}
 _HARD_CONTEXT_FIELDS = ("loss_capacity", "cash_needs")
 _PREFERENCE_FIELDS = ("goals", "horizon", "operation_frequency", "style_preferences")
@@ -113,6 +114,9 @@ def _validate_proposal(action, snapshot, common_reasons, position_counts):
             reasons.append("entry_quote_after_snapshot")
     except (TypeError, ValueError):
         reasons.append("entry_quote_time_unknown")
+    fee_check = None
+    if action.action == "buy":
+        reasons.append("new_position_buy_requires_explicit_account_route")
     if action.action in {"reduce", "sell"}:
         available = _number(confirmed.get("available_quantity"))
         if available is None or quantity is None or not (0 < quantity <= available <= (held or 0)):
@@ -124,9 +128,11 @@ def _validate_proposal(action, snapshot, common_reasons, position_counts):
         if (available_cash is None or quantity is None or price is None
                 or quantity * price > available_cash):
             reasons.append("available_cash_missing_or_exceeded")
-        # This release has no confirmed broker-fee-budget contract. Never assume
-        # zero fee or use projected sale proceeds to approve a purchase.
-        reasons.append("confirmed_fee_budget_unavailable")
+        fee_check = check_purchase(
+            meta.get("fee_budgets"), account_id=aid, instrument_id=instrument,
+            currency=entry.get("currency"), quantity=quantity, price=price,
+            available_cash=available_cash, as_of=snapshot.generated_at)
+        reasons.extend(fee_check["reasons"])
     mandate = meta.get("personal_mandate") or {}
     constraints = (mandate.get("constraint_snapshot") or {}).get("value") or {}
     try:
@@ -169,6 +175,7 @@ def _validate_proposal(action, snapshot, common_reasons, position_counts):
                                   if quantity is not None and entry.get("currency") == "CNY"
                                   and _number(entry.get("price")) is not None
                                   and _number(quantity * _number(entry["price"])) is not None else None),
+        "fee_budget_check": fee_check,
         "amount_is_estimate": True, "author": "llm", "original_proposal": asdict(action),
         "validation_reasons": list(dict.fromkeys(reasons)),
         "decision_reason": "；".join(dict.fromkeys(reasons)) if reasons else action.reasoning,
@@ -197,6 +204,19 @@ def build_advisory_lineage(snapshot, advisory, receipt, attempts):
         position_counts[key] = position_counts.get(key, 0) + 1
     records = [_validate_proposal(a, snapshot, common, position_counts)
                for a in advisory.actions if a.action in _ACTIONABLE]
+    # Per-order reserves cannot be spent twice in one batch. Until full cash
+    # projection exists, suppress all co-funded purchases without choosing one.
+    purchase_groups = {}
+    for record in records:
+        if record["signal"] in {"buy", "add"}:
+            currency = (record.get("fee_budget_check") or {}).get("currency")
+            purchase_groups.setdefault((record["account_id"], currency), []).append(record)
+    for group in purchase_groups.values():
+        if len(group) > 1:
+            for record in group:
+                record["validation_reasons"].append("multiple_purchases_require_cash_projection")
+                record["execution_status"] = "review_required"
+                record["decision_reason"] = "；".join(record["validation_reasons"])
     action_validation = [{"action_id": r["original_proposal"]["action_id"],
                           "status": r["execution_status"], "reasons": r["validation_reasons"]}
                          for r in records]
@@ -212,7 +232,8 @@ def build_advisory_lineage(snapshot, advisory, receipt, attempts):
                 if ((snapshot.metadata.get("personal_mandate") or {}).get("fields", {}).get(key) or {}).get("status") != "confirmed"],
             "mechanical_checks": ["explicit_position_restrictions", "allocation_constraint_support",
                                   "account_position_identity", "available_quantity", "available_cash",
-                                  "exact_quantity_and_settlement_rules"],
+                                  "exact_quantity_and_settlement_rules", "confirmed_fee_budget",
+                                  "single_purchase_cash_scope"],
             "llm_context_only": ["goals", "horizon", "operation_frequency", "style_preferences",
                                  "loss_capacity", "cash_needs"],
             "not_claimed": ["suitability", "loss_forecast", "realized_profit", "cash_needs_optimization"],

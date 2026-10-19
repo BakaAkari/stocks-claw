@@ -16,7 +16,7 @@ import json
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -29,50 +29,50 @@ _EASTMONEY_DATACENTER_BASE = "https://datacenter-web.eastmoney.com/api/data/v1/g
 
 # 指标 → reportName 映射（东方财富数据中心）
 _EASTMONEY_REPORT_NAMES = {
-    "pmi": "RPT_ECONOMICVALUE_PMI",
-    "cpi": "RPT_ECONOMICVALUE_CPI",
-    "ppi": "RPT_ECONOMICVALUE_PPI",
-    "m2": "RPT_ECONOMICVALUE_MONEY_SUPPLY",
+    "pmi": "RPT_ECONOMY_PMI",
+    "cpi": "RPT_ECONOMY_CPI",
+    "ppi": "RPT_ECONOMY_PPI",
+    "m2": "RPT_ECONOMY_CURRENCY_SUPPLY",
     "social_financing": "RPT_ECONOMICVALUE_SOCIALFINANCING",
-    "lpr": "RPT_ECONOMICVALUE_LPR",
-    "retail_sales": "RPT_ECONOMICVALUE_RETAILSALES",
-    "industrial_production": "RPT_ECONOMICVALUE_INDUSTRIALPRODUCTION",
+    "lpr": "RPTA_WEB_RATE",
+    "retail_sales": "RPT_ECONOMY_TOTAL_RETAIL",
+    "industrial_production": "RPT_ECONOMY_INDUS_GROW",
 }
 
 # 指标字段映射（东方财富返回字段 → 内部字段名）
 _EASTMONEY_FIELD_MAP = {
     "pmi": {
         "date_field": "REPORT_DATE",
-        "value_field": "PMI",
+        "value_field": "MAKE_INDEX",
     },
     "cpi": {
         "date_field": "REPORT_DATE",
-        "value_field": "CPI_YOY",  # 同比
+        "value_field": "NATIONAL_SAME",  # 同比
     },
     "ppi": {
         "date_field": "REPORT_DATE",
-        "value_field": "PPI_YOY",
+        "value_field": "BASE_SAME",
     },
     "m2": {
         "date_field": "REPORT_DATE",
-        "value_field": "M2_YOY",
+        "value_field": "BASIC_CURRENCY_SAME",
     },
     "social_financing": {
         "date_field": "REPORT_DATE",
         "value_field": "SOCIAL_FINANCING",
     },
     "lpr": {
-        "date_field": "REPORT_DATE",
+        "date_field": "TRADE_DATE",
         "value_field_1y": "LPR1Y",
         "value_field_5y": "LPR5Y",
     },
     "retail_sales": {
         "date_field": "REPORT_DATE",
-        "value_field": "RETAIL_SALES_YOY",
+        "value_field": "RETAIL_TOTAL_SAME",
     },
     "industrial_production": {
         "date_field": "REPORT_DATE",
-        "value_field": "INDUSTRIAL_PRODUCTION_YOY",
+        "value_field": "BASE_SAME",
     },
 }
 
@@ -187,6 +187,7 @@ class CnMacroProvider:
             "usd_cny_mid": asyncio.to_thread(self._fetch_usd_cny_mid),
         }
 
+        tasks = {key: asyncio.create_task(task) for key, task in tasks.items()}
         results: dict[str, tuple[Optional[float], Optional[str]]] = {}
         errors: dict[str, str] = {}
 
@@ -194,6 +195,8 @@ class CnMacroProvider:
             try:
                 value, as_of = await task
                 results[key] = (value, as_of)
+                if value is None or (isinstance(value, tuple) and any(v is None for v in value)):
+                    errors[key] = "observation_missing"
             except Exception as exc:
                 logger.warning(f"CnMacroProvider {key} failed: {exc}")
                 errors[key] = f"{type(exc).__name__}: {exc}"
@@ -216,7 +219,7 @@ class CnMacroProvider:
                 if lpr_5y is not None:
                     field_sources["lpr_5y"] = {"source": "eastmoney", "as_of": lpr_as_of}
             elif value is not None:
-                field_sources[key] = {"source": "eastmoney", "as_of": as_of}
+                field_sources[key] = {"source": {"social_financing": "mofcom", "usd_cny_mid": "safe"}.get(key, "eastmoney"), "as_of": as_of}
 
         return CnMacroSnapshot(
             pmi=results.get("pmi", (None, None))[0],
@@ -258,7 +261,18 @@ class CnMacroProvider:
         return self._fetch_eastmoney_indicator("m2")
 
     def _fetch_social_financing(self) -> tuple[Optional[float], Optional[str]]:
-        return self._fetch_eastmoney_indicator("social_financing")
+        req = urllib.request.Request(
+            "https://data.mofcom.gov.cn/datamofcom/front/gnmy/shrzgmQuery", data=b"",
+            headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=self._timeout) as response:
+            rows = json.loads(response.read().decode("utf-8"))
+        rows = sorted(rows, key=lambda row: str(row.get("date", "")), reverse=True)
+        for row in rows:
+            period = str(row.get("date", ""))
+            value = _to_float(row.get("tiosfs"))
+            if len(period) == 6 and value is not None:
+                return value, f"{period[:4]}-{period[4:]}-01"
+        return None, None
 
     def _fetch_lpr(self) -> tuple[tuple[Optional[float], Optional[float]], Optional[str]]:
         """返回 ((lpr_1y, lpr_5y), as_of)"""
@@ -284,25 +298,27 @@ class CnMacroProvider:
         return self._fetch_eastmoney_indicator("industrial_production")
 
     def _fetch_usd_cny_mid(self) -> tuple[Optional[float], Optional[str]]:
-        """人民币兑美元中间价 — 使用东方财富汇率接口"""
-        try:
-            # 东方财富外汇行情接口
-            url = (
-                "https://push2.eastmoney.com/api/qt/stock/get?"
-                "secid=133.USDCNH&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f107,f170"
-            )
-            data = self._request_json(url)
-            if not data:
-                return (None, None)
-            stock_data = data.get("data", {})
-            # f43 是最新价（需除以 100）
-            price = stock_data.get("f43")
-            if price is not None:
-                return (_to_float(price) / 100.0, datetime.now(timezone.utc).isoformat())
-            return (None, None)
-        except Exception as exc:
-            logger.warning(f"USD/CNY mid fetch failed: {exc}")
-            return (None, None)
+        """SAFE official central parity, CNY per USD (table quotes per USD 100)."""
+        from io import StringIO
+
+        import pandas as pd
+
+        end = datetime.now(timezone.utc).date()
+        params = urllib.parse.urlencode({"startDate": str(end - timedelta(days=14)),
+                                         "endDate": str(end), "queryYN": "true"}).encode()
+        req = urllib.request.Request("https://www.safe.gov.cn/AppStructured/hlw/RMBQuery.do",
+                                     data=params, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=self._timeout) as response:
+            html = response.read().decode("utf-8")
+        for table in pd.read_html(StringIO(html), flavor="lxml"):
+            if "日期" not in table or "美元" not in table:
+                continue
+            rows = table.sort_values("日期", ascending=False)
+            for _, row in rows.iterrows():
+                value, day = _to_float(row["美元"]), _parse_date(str(row["日期"]))
+                if value is not None and day:
+                    return round(value / 100.0, 8), day
+        return None, None
 
     # ------------------------------------------------------------------
     # 通用东方财富请求
@@ -329,7 +345,8 @@ class CnMacroProvider:
             return []
 
         params = {
-            "sortColumns": "REPORT_DATE",
+            "sortColumns": _EASTMONEY_FIELD_MAP[indicator]["date_field"],
+            "columns": "ALL", "source": "WEB", "client": "WEB",
             "sortTypes": "-1",
             "pageSize": str(page_size),
             "pageNumber": "1",
@@ -337,15 +354,10 @@ class CnMacroProvider:
         }
         url = f"{_EASTMONEY_DATACENTER_BASE}?{urllib.parse.urlencode(params)}"
 
-        try:
-            data = self._request_json(url)
-            if not data:
-                return []
-            result = data.get("result", {})
-            return result.get("data", []) or []
-        except Exception as exc:
-            logger.warning(f"Eastmoney request failed for {indicator}: {exc}")
-            return []
+        data = self._request_json(url)
+        if not data or not isinstance(data.get("result"), dict):
+            raise ValueError("eastmoney_missing_result:" + indicator)
+        return data["result"].get("data", []) or []
 
     def _request_json(self, url: str) -> Optional[dict]:
         """发起 HTTP GET 请求并返回 JSON"""
@@ -383,11 +395,11 @@ def _parse_date(value) -> Optional[str]:
         for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d"):
             try:
                 dt = datetime.strptime(str(value).split(" ")[0], fmt)
-                return dt.replace(tzinfo=timezone.utc).isoformat()
+                return dt.date().isoformat()
             except ValueError:
                 continue
         # 尝试 ISO 格式
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return dt.isoformat()
+        return dt.date().isoformat()
     except (ValueError, TypeError):
         return None

@@ -27,6 +27,7 @@ shadow and delivery gates pass.
 
 | Contract | Label | Implementation | Consumer |
 |---|---|---|---|
+| [Confirmed fee budget v1](fee-budget-v1.md) | LOCAL | `fee_budget.py`, CLI/MCP, context/snapshot, `advisory_lineage.py` | Confirmed per-order reserve for existing-position add, all-in cash checks and delivery expiry; new buys and multi-purchase cash projection remain blocked. |
 | [Account intake preview / readiness v1](account-intake-readiness-v1.md) | LOCAL | `financial_intake.py`, CLI/MCP | Pure single-account draft reconciliation and current-fact gaps; no writes, action approval or L2 acceptance. |
 | [PersonalMandate / AccountStatement / CashMovement / ExecutionRecord v3 / financial integrity / LLM lineage](financial-trust-v1.md) | LOCAL | `personal_mandate.py`, `financial_reconciliation.py`, `financial_service.py`, `advisory_lineage.py` | Confirmed CLI/MCP facts, read-only reconciliation, main-window proposal validation and source-linked review; no deployment or real-account acceptance implied. |
 | [RecommendationSnapshot / AdviceRecord / UserDecisionRecord / ExecutionRecord / DecisionReview v2](decision-review-v2.md) | LOCAL | `scheduled_analysis.py`, `decision_service.py`, `models.py`, `persistence.py`, `outcome_attribution.py`, `decision_observation.py` | Scheduled source capture; confirmed CLI/MCP fact APIs; read-only review and complete decision/fill context; public-price replay smoke. No automatic position updates or investment-performance claim. |

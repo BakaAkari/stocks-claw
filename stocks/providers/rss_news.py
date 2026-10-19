@@ -96,9 +96,11 @@ class RSSNewsProvider:
         self.source_name = source_name
         self.language = language
         self.scope = scope
+        self.last_errors: dict[str, str] = {}
 
     def _fetch_sync(self) -> list[NewsItem]:
         """同步获取并解析 RSS feed。"""
+        self.last_errors = {}
         try:
             req = urllib.request.Request(
                 self.rss_url,
@@ -106,12 +108,18 @@ class RSSNewsProvider:
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
                 xml_data = resp.read()
-        except Exception:
+        except Exception as exc:
+            self.last_errors["transport"] = f"{type(exc).__name__}: HTTP {getattr(exc, 'code', 'unknown')}"
             return []
 
         try:
             root = ET.fromstring(xml_data)
         except ET.ParseError:
+            self.last_errors["parse"] = "invalid_feed_xml"
+            return []
+
+        if root.tag.split("}")[-1].lower() not in {"rss", "feed", "rdf"}:
+            self.last_errors["parse"] = "response_is_not_rss_or_atom"
             return []
 
         # RSS 2.0 格式: <rss><channel><item>...</item></channel></rss>

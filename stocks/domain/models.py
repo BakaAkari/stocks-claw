@@ -1824,10 +1824,18 @@ class AnalysisContext:
     schema_version: int = 12
     personal_mandate: dict = field(default_factory=dict)
     financial_integrity: dict = field(default_factory=dict)
+    fee_budgets: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AnalysisContext":
         """Deserialize from a dict previously produced by `to_dict`."""
+        def dated_item(item):
+            values = dict(item)
+            raw = values.get("published_at")
+            if isinstance(raw, str):
+                values["published_at"] = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else None
+            return values
+
         return cls(
             generated_at=data.get("generated_at", ""),
             assets=[FinancialAsset(**a) for a in data.get("assets", [])],
@@ -1857,14 +1865,14 @@ class AnalysisContext:
                 ) for q in v]
                 for k, v in data.get("quotes", {}).items()
             },
-            news=[NewsItem(**n) for n in data.get("news", [])],
+            news=[NewsItem(**dated_item(n)) for n in data.get("news", [])],
             news_count=data.get("news_count", 0),
             market_state=MarketState(**data.get("market_state", {})),
             portfolio_mapping=PortfolioMapping(**data.get("portfolio_mapping", {})),
             drift_checks=[DriftCheck(**d) for d in data.get("drift_checks", [])],
             recent_snapshots=data.get("recent_snapshots", []),
             raw_prompt_input=data.get("raw_prompt_input", ""),
-            market_events=[MarketEvent(**e) for e in data.get("market_events", [])],
+            market_events=[MarketEvent(**dated_item(e)) for e in data.get("market_events", [])],
             news_digest=data.get("news_digest", {}),
             intelligence_digest=data.get("intelligence_digest", {}),
             macro_snapshot=data.get("macro_snapshot"),
@@ -1887,6 +1895,7 @@ class AnalysisContext:
             schema_version=data.get("schema_version", 12),
             personal_mandate=deepcopy(data.get("personal_mandate", {})),
             financial_integrity=deepcopy(data.get("financial_integrity", {})),
+            fee_budgets=deepcopy(data.get("fee_budgets", {})),
         )
 
     def to_dict(self) -> dict:
@@ -1927,6 +1936,7 @@ class AnalysisContext:
             "engine_config": self.engine_config,
             "personal_mandate": deepcopy(self.personal_mandate),
             "financial_integrity": deepcopy(self.financial_integrity),
+            "fee_budgets": deepcopy(self.fee_budgets),
         }
 
 

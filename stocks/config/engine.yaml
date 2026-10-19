@@ -49,8 +49,8 @@ fetcher:
 cache:
   # 启用本地缓存
   enabled: true
-  # 历史数据保留期（秒，90 天）
-  history_ttl: 7776000
+  # 历史数据保留期（秒，180 天）。90 天在长假后不足 60 个交易日，MA60 会缺失
+  history_ttl: 15552000
   # 历史缓存目录；默认写入 .local/history，避免污染源码目录
   history_dir: null
   # 保留最大快照数
@@ -59,7 +59,7 @@ cache:
   save_to_file: true
 
 macro:
-  # 启用宏观数据采集（FRED 主源 → Yahoo 备源 → static_config 兜底）
+  # 启用宏观数据采集（Yahoo 当前市场指标 → FRED 官方统计/缺失补齐 → static_config 兜底）
   enabled: true
   # 静态配置兜底（离线时使用）
   static_config:
@@ -88,8 +88,13 @@ filings:
     enabled: true
 
 news:
-  # 为 watchlist 动态生成 Google News RSS 定向源
+  # 为 watchlist 与行情估值的持仓动态生成 Google News RSS 定向源
   watchlist_templates_enabled: true
+  per_symbol_items: 3     # 每个定向标的取的条数
+  max_items: 40           # 一次上下文保留的新闻总数（持仓定向约占 60%）
+  max_age_days: 7         # 早于此天数的已知时间新闻丢弃
+  # 定向新闻屏蔽的来源（标题末尾“ - 来源”包含即屏蔽）：社区帖、营销/标题党
+  blocked_sources: [Moomoo, Motley Fool, 24/7 Wall St, TMGM, tmgm.com, Benzinga Pro, 富途牛牛, 老虎社区, 东方财富股吧]
 
 llm:
   # LLM 深度分析模块（投资建议生成）— 建议由 Agent 主脑处理，此处可禁用
@@ -106,7 +111,7 @@ llm:
   # 报告渲染 LLM（scripts/run_llm_report.py 消费）
   report_render:
     base_url: "http://172.16.248.60:8000/v1"   # NAS 本地 vllm
-    model: "DeepSeek-V4-Flash"
+    model: "glm-5.3-flash"  # 2026-10-19 在线 /models 核实
     api_key: "EMPTY"
     timeout_seconds: 180
     max_attempts: 3            # 渲染失败自动重试次数（含首次）
@@ -307,6 +312,8 @@ quant_action:
 
   # ── 情报代理/主题暴露映射（2026-08-22 从 config_loader 内置提级，唯一权威）──
   intel_signal_proxy:
+    # 只映射同向且口径一致的代理；跨行业/跨市场/跨久期（如 KWEB→半导体、IWM→红利低波、
+    # TLT→超短债）不映射，交给 exposure_tags 匹配。
     USO: XLE
     GLD: NEM
     NEM: NEM
@@ -316,19 +323,15 @@ quant_action:
     ITA: ITA
     NVDA: NVDA
     XLE: XLE
-    KWEB: '512480'
     FXI: '510300'
     ASHR: '510300'
     GDX: NEM
-    SLV: NEM
     GC=F: '518880'
     XAU: '518880'
     GC: '518880'
     518880: '518880'
-    TLT: SGOV
     SHY: SGOV
     SGOV: SGOV
-    IWM: '512890'
   theme_to_exposure:
     geopolitics: [energy, defense, gold, oil_gas, aerospace, mining, military, commodity]
     monetary_policy: [gold, fixed_income, us_rates, cash_like, money_market, bank_wmp, credit_plus, us_equity,

@@ -217,9 +217,8 @@ class TestLLMIntelligenceAnalyzerCredentials:
         assert api_key == ""
         assert base_url == ""
 
-    def test_call_llm_falls_back_to_reasoning_content(self, monkeypatch) -> None:
-        """8/11 修复: deepseek-v4-flash 推理模型 content 为空, JSON 在
-        reasoning_content — 必须回退, 否则永远解析失败回退规则分析。"""
+    def test_call_llm_rejects_reasoning_without_final_content(self, monkeypatch) -> None:
+        """A parseable reasoning trace is not a completed model answer."""
         import json as _json
         import urllib.request
 
@@ -248,8 +247,8 @@ class TestLLMIntelligenceAnalyzerCredentials:
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
         analyzer = LLMIntelligenceAnalyzer(holdings=[], fallback_to_rules=False)
-        result = analyzer._call_llm([], {}, "sk-test", "https://example.com/v1")
-        assert result.get("cross_cluster_synthesis_cn") == "测试"
+        with pytest.raises(ValueError, match="final content is empty"):
+            analyzer._call_llm([], {}, "sk-test", "https://example.com/v1")
 
     def test_urgency_and_sentiment(self, sample_snapshot: IntelligenceSnapshot) -> None:
         analyzer = IntelligenceAnalyzer()
@@ -301,3 +300,58 @@ class TestIntegration:
         loaded_signals = tmp_store.latest_signals()
         assert loaded_clusters is not None and loaded_clusters["clusters"]
         assert loaded_signals is not None and loaded_signals["signals"]
+
+
+async def test_harvester_distinguishes_missing_empty_and_failed_sources(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    harvester = IntelligenceHarvester(fred_cache_dir=tmp_path, keywords=['test'])
+    harvester._gnews_api_key = ''
+    harvester._finnhub = None
+    monkeypatch.setattr(harvester, '_fetch_gnews_all', AsyncMock(return_value=[]))
+    monkeypatch.setattr(harvester, '_fetch_finnhub_market_news', AsyncMock(return_value=[]))
+    monkeypatch.setattr(harvester, '_fetch_google_rss_all', AsyncMock(return_value=[]))
+    monkeypatch.setattr(harvester, '_fetch_macro', AsyncMock(return_value={}))
+    monkeypatch.setattr(harvester, '_fetch_quotes', AsyncMock(return_value={}))
+    result = await harvester.harvest()
+    assert result.source_status['gnews']['status'] == 'not_configured'
+    assert result.source_status['finnhub_market']['status'] == 'not_configured'
+    assert result.source_status['google_rss']['status'] == 'empty'
+    monkeypatch.setattr(harvester, '_fetch_google_rss_all', AsyncMock(side_effect=RuntimeError('failed')))
+    result = await harvester.harvest()
+    assert result.source_status['google_rss']['status'] == 'error'
+
+
+async def test_google_news_errors_survive_rss_empty_fallback(monkeypatch, tmp_path):
+    from stocks.providers.rss_news import RSSNewsProvider
+
+    def fail(provider):
+        provider.last_errors = {'transport': 'HTTPError:503'}
+        return []
+
+    monkeypatch.setattr(RSSNewsProvider, '_fetch_sync', fail)
+    harvester = IntelligenceHarvester(fred_cache_dir=tmp_path, keywords=['test'])
+    assert await harvester._fetch_google_rss_all() == []
+    assert harvester.last_source_errors['google_rss'] == ['RuntimeError']
+
+
+def test_llm_news_evidence_filters_old_duplicates_and_dates_signals(monkeypatch, sample_snapshot):
+    from dataclasses import replace
+
+    old = dict(sample_snapshot.articles[0], url='https://example.com/old', published_at='2020-01-01T00:00:00Z')
+    snapshot = replace(sample_snapshot, articles=sample_snapshot.articles + [sample_snapshot.articles[0], old])
+    analyzer = LLMIntelligenceAnalyzer(fallback_to_rules=False)
+    monkeypatch.setattr(analyzer, '_load_api_config', lambda: ('test', 'https://example.com'))
+    def respond(articles, *args):
+        assert len(articles) == 2
+        return {'clusters': [{'article_ids': [0], 'sentiment': {'gold': 'bullish'}}],
+                'signals': [{'symbol': 'GLD', 'source_article_ids': [0], 'direction': 'buy'}]}
+    monkeypatch.setattr(analyzer, '_call_llm', respond)
+    result = analyzer.analyze([snapshot])
+    assert result.metadata['excluded_articles'] == 2
+    assert result.clusters[0].affected_markets == ['gold']
+    assert result.signals[0].source_as_of == datetime.fromisoformat(sample_snapshot.articles[0]['published_at'])
+    with pytest.raises(ValueError, match='source article IDs'):
+        analyzer._parse_clusters({'clusters': [{'article_ids': [99]}]}, snapshot.articles)
+    with pytest.raises(ValueError, match='source article IDs'):
+        analyzer._parse_signals({'signals': [{'source_article_ids': [99]}]}, articles=snapshot.articles)

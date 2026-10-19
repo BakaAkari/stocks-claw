@@ -168,6 +168,7 @@ class IntelligenceHarvester:
         self._max_items_per_source = max(1, max_items_per_source)
         self._fred = FredMacroProvider(cache_dir=fred_cache_dir, cache_ttl=14400)
         self._watchlist = watchlist or _WATCHLIST_DEFAULT
+        self.last_source_errors: dict[str, list[str]] = {}
         # API usage tracking
         self._usage_dir: Optional[Path] = None
 
@@ -199,6 +200,7 @@ class IntelligenceHarvester:
         collected_at = datetime.now(timezone.utc)
         articles: list[dict] = []
         source_status: dict = {}
+        self.last_source_errors = {}
 
         # News sources in parallel
         news_tasks = {
@@ -206,10 +208,15 @@ class IntelligenceHarvester:
             "google_rss": self._fetch_google_rss_all(),
             "finnhub_market": self._fetch_finnhub_market_news(),
         }
+        news_tasks = {name: asyncio.create_task(task) for name, task in news_tasks.items()}
         for name, awaitable in news_tasks.items():
             try:
                 items = await awaitable
-                source_status[name] = {"status": "ok", "count": len(items)}
+                configured = not ((name == "gnews" and not self._gnews_api_key)
+                                  or (name == "finnhub_market" and not self._finnhub))
+                errors = self.last_source_errors.get(name, [])
+                status = "not_configured" if not configured else "partial" if errors and items else "error" if errors else "ok" if items else "empty"
+                source_status[name] = {"status": status, "count": len(items), "errors": errors}
                 articles.extend(items)
             except Exception as exc:
                 logger.warning(f"Intelligence source {name} failed: {exc}")
@@ -217,7 +224,7 @@ class IntelligenceHarvester:
 
         # Track API usage
         gnews_count = source_status.get("gnews", {}).get("count", 0)
-        self._log_usage("gnews", calls=_GNEWS_KEYWORD_COUNT, errors=1 if gnews_count == 0 else 0,
+        self._log_usage("gnews", calls=_GNEWS_KEYWORD_COUNT if self._gnews_api_key else 0, errors=1 if gnews_count == 0 else 0,
                         extra={"articles": gnews_count})
         self._log_usage("google_rss", calls=len(self._keywords),
                         extra={"articles": source_status.get("google_rss", {}).get("count", 0)})
@@ -279,7 +286,8 @@ class IntelligenceHarvester:
             if isinstance(result, list):
                 items.extend(result)
             elif isinstance(result, Exception):
-                logger.warning(f"GNews keyword failed: {result}")
+                self.last_source_errors.setdefault("gnews", []).append(type(result).__name__)
+                logger.warning(f"GNews keyword failed: {type(result).__name__}")
         return items
 
     def _fetch_gnews_keyword_sync(self, keyword: str, max_items: int) -> list[dict]:
@@ -327,7 +335,8 @@ class IntelligenceHarvester:
             if isinstance(result, list):
                 items.extend(result)
             elif isinstance(result, Exception):
-                logger.warning(f"Google RSS keyword failed: {result}")
+                self.last_source_errors.setdefault("google_rss", []).append(type(result).__name__)
+                logger.warning(f"Google RSS keyword failed: {type(result).__name__}")
         return items
 
     def _fetch_google_rss_keyword_sync(self, keyword: str, max_items: int) -> list[dict]:
@@ -335,6 +344,8 @@ class IntelligenceHarvester:
         url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
         provider = RSSNewsProvider(url, source_name=f"Google News:{keyword}", language="en")
         items = provider._fetch_sync()
+        if provider.last_errors:
+            raise RuntimeError("google_rss_fetch_failed")
         return [
             {
                 "title": item.title,
@@ -379,7 +390,8 @@ class IntelligenceHarvester:
                         }
                     )
             except Exception as exc:
-                logger.warning(f"Finnhub {category} news failed: {exc}")
+                self.last_source_errors.setdefault("finnhub_market", []).append(category + ":" + type(exc).__name__)
+                logger.warning(f"Finnhub {category} news failed: {type(exc).__name__}")
         return items
 
     # ------------------------------------------------------------------

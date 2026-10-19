@@ -128,6 +128,13 @@ def build_push_payload(artifact: dict, *, now: str, max_age_min: float | None = 
     is_intel = artifact.get("market") == "intelligence"
     generated = _parse_dt(artifact.get("generated_at") or "")
     current = _parse_dt(now)
+    if artifact.get("advisory_lineage"):
+        for action in (artifact.get("portfolio_decision") or {}).get("approved_actions", []):
+            if action.get("signal") in {"buy", "add"}:
+                fee = action.get("fee_budget_check") or {}
+                if (fee.get("status") != "covered" or not fee.get("valid_from") or not fee.get("valid_until")
+                        or not _parse_dt(fee["valid_from"]) <= current < _parse_dt(fee["valid_until"])):
+                    raise ValueError("purchase fee budget unavailable or expired at delivery")
     age = (current.astimezone(generated.tzinfo) - generated).total_seconds() / 60
     if age < -1 or (max_age_min is not None and age > max_age_min):
         raise ValueError(f"artifact age {age:.1f} minutes outside allowed range")
@@ -1509,6 +1516,10 @@ def _section_executable_actions(
         platform_line = " | ".join(x for x in [platform, settlement] if x) or "平台待确认"
         cancel = action.get("cancel_condition") or "触发条件不再成立时取消"
         lines.append(f"- **{signal}｜{label}**：{pct_text}{qty_text}{amount_text}")
+        cost = action.get("purchase_cost")
+        if cost:
+            lines.append(f"  费用预留上界 {cost['currency']} {cost['fee_upper_bound']}；"
+                         f"按快照价格含费需用 {cost['currency']} {cost['total_cash_required']}（非成交保证）")
         lines.append(f"  通道: {platform_line}；取消条件: {cancel}")
     overflow = card.get("actions_overflow")
     if isinstance(overflow, int) and not isinstance(overflow, bool) and overflow > 0:

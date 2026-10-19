@@ -21,8 +21,8 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-**HARDEN-02 账户只读预检与证据时间加固**
-（[任务与验收标准](TASK-HARDEN-02-account-readiness-evidence-time.md)）。
+**HARDEN-04 在线数据与公开市场研判验收**
+（[任务与验收标准](TASK-HARDEN-04-online-data-market-acceptance.md)）。
 本轮结果、当前基线和待验收内容统一见 `../../STATUS.md`。
 全系统审查和后续实施顺序见
 [系统健壮性审查](../analysis/system-hardening-2026-10-19.md)。

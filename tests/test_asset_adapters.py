@@ -165,6 +165,17 @@ def test_mcp_exposes_hermes_status_and_read_only_intake_contract(adapter_engine)
     assert "confirmed" in rejected["error"]
 
 
+def test_mcp_asset_intake_deterministic_mode_returns_safe_draft(adapter_engine):
+    mcp = MCPAdapter(adapter_engine)
+    draft = mcp.handle_request({
+        "method": "asset_intake_draft",
+        "params": {"text": "我想买点 518880", "deterministic": True},
+    })
+    assert draft["success"] is True
+    assert draft["used_llm"] is False
+    assert draft["ambiguities"]
+
+
 def test_asset_instrument_mapping_cli_and_mcp_validation(adapter_engine, capsys):
     mcp = MCPAdapter(adapter_engine)
     cli = CLIAdapter(adapter_engine)

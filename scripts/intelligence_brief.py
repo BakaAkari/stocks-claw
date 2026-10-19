@@ -13,11 +13,11 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECT_ROOT = Path("/mnt/user/code-project/stocks-claw")
+PROJECT_ROOT = Path(os.environ.get("STOCKS_CLAW_REPO_ROOT") or Path(__file__).resolve().parents[1])
 LATEST = PROJECT_ROOT / ".local/scheduled_runs/latest/global_intelligence_watch.json"
 BRIEF_PATH = PROJECT_ROOT / ".local/intelligence"
 BRIEF_FILE = BRIEF_PATH / "latest_brief.json"
-ENV_FILE = Path("/opt/data/.env")
+ENV_FILE = Path(os.environ.get("HERMES_HOME", "/opt/data")) / ".env"
 
 # ── Theme → portfolio exposure tags ──
 THEME_EXPOSURE_MAP = {

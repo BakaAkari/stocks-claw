@@ -647,7 +647,8 @@ class LLMIntelligenceAnalyzer:
         "若持仓清单无直接相关标的，才用大类代理(SPY/QQQ/GLD/USO/XLE/NVDA)代表方向\n"
         "5. article_ids: 每个cluster必须包含article_ids数组，引用新闻的编号[0][1]等\n"
         "6. 跨集群合成: cross_cluster_synthesis_cn用中文写一句传导链\n"
-        "7. 没有重要事件时clusters可为空\n\n"
+        "7. 没有重要事件时clusters可为空；只依据所给标题与摘要，不能补写未提供的财务数据或人物职务。\n"
+        "8. 保留新闻日期并注明报道性质；传导机制和阈值属于假设，不能当作已发生事实。\n\n"
         "输出严格JSON:\n"
         '{"schema_version":1,"dedup_articles":[{"article_ids":[0,3],"representative_title":"...","duplicate_count":2}],'
         '"clusters":[{"theme":"geopolitics","sub_cluster":"us_iran","summary_cn":"...","article_ids":[0,3],'
@@ -754,11 +755,24 @@ class LLMIntelligenceAnalyzer:
             )
 
         primary = max(snapshots, key=lambda s: s.collected_at)
-        articles = primary.articles[:self.max_input_articles]
+        articles = []
+        seen_urls = set()
+        for article in primary.articles:
+            observed = _parse_iso(article.get("published_at") or "")
+            age = (primary.collected_at - observed).total_seconds()
+            url = article.get("url")
+            if not url or url in seen_urls or not -60 <= age <= 7 * 86400:
+                continue
+            seen_urls.add(url)
+            articles.append(article)
+        excluded_count = len(primary.articles) - len(articles)
+        articles = articles[:self.max_input_articles]
         macro = primary.macro or {}
 
         if not articles:
-            return self._fallback.analyze(snapshots)
+            return AnalysisResult(analyzed_at=analyzed_at, clusters=[], market_impact={}, signals=[],
+                data_quality={"status": "degraded", "errors": ["no dated recent articles"]},
+                metadata={"analysis_mode": "unavailable", "excluded_articles": excluded_count})
 
         api_key, base_url = self._load_api_config()
         if not api_key:
@@ -768,7 +782,7 @@ class LLMIntelligenceAnalyzer:
         try:
             llm_result = self._call_llm(articles, macro, api_key, base_url)
             clusters = self._parse_clusters(llm_result, articles)
-            signals = self._parse_signals(llm_result)
+            signals = self._parse_signals(llm_result, articles=articles)
             market_impact = self._build_market_impact(llm_result, clusters, macro, signals)
             data_quality = self._build_quality(llm_result, articles, clusters, signals)
 
@@ -795,6 +809,7 @@ class LLMIntelligenceAnalyzer:
                     "analysis_mode": "llm",
                     "model": self.model,
                     "articles_input": len(articles),
+                    "excluded_articles": excluded_count,
                     "dedup_count": len(llm_result.get("dedup_articles", [])),
                     "cross_cluster": llm_result.get("cross_cluster_synthesis_cn", ""),
                 },
@@ -834,7 +849,7 @@ class LLMIntelligenceAnalyzer:
         }, ensure_ascii=False).encode("utf-8")
 
         req = urllib.request.Request(
-            f"{base_url}/chat/completions",
+            f"{base_url.rstrip('/')}/chat/completions",
             data=payload,
             headers={
                 "Authorization": f"Bearer {api_key}",
@@ -845,12 +860,13 @@ class LLMIntelligenceAnalyzer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             result = json.loads(resp.read().decode("utf-8"))
 
-        # 8/11 修复: 推理模型(content 为空)时回退 reasoning_content,
-        # 与 outlook_synthesizer._parse_response 同源处理。
-        message = result["choices"][0].get("message", {})
+        choice = result["choices"][0]
+        if choice.get("finish_reason") in {"length", "content_filter"}:
+            raise ValueError("LLM final response is incomplete")
+        message = choice.get("message", {})
         content = (message.get("content") or "").strip()
         if not content:
-            content = (message.get("reasoning_content") or "").strip()
+            raise ValueError("LLM final content is empty")
         # Extract JSON from markdown code block if present
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -914,16 +930,8 @@ class LLMIntelligenceAnalyzer:
                         "source_name": a.get("source_name", ""),
                         "published_at": a.get("published_at"),
                     })
-            # If LLM didn't return article IDs, use representative articles
-            if not article_refs and articles:
-                # Take first 3 articles as representative
-                for a in articles[:3]:
-                    article_refs.append({
-                        "title": a.get("title", ""),
-                        "url": a.get("url", ""),
-                        "source_name": a.get("source_name", ""),
-                        "published_at": a.get("published_at"),
-                    })
+            if not article_refs:
+                raise ValueError("LLM cluster has no valid source article IDs")
 
             sentiment = c.get("sentiment", {})
             sentiment_str = "neutral"
@@ -943,7 +951,7 @@ class LLMIntelligenceAnalyzer:
                 event_type=theme,
                 summary=f"[{sub}] {summary}" if sub else summary,
                 articles=article_refs[:5],
-                affected_markets=c.get("affected_markets", ["equity"]),
+                affected_markets=c.get("affected_markets", list(sentiment) if isinstance(sentiment, dict) else []),
                 affected_symbols=c.get("affected_symbols", []),
                 sentiment=sentiment_str,
                 urgency=c.get("urgency", "medium"),
@@ -952,10 +960,16 @@ class LLMIntelligenceAnalyzer:
             ))
         return clusters
 
-    def _parse_signals(self, llm_result: dict) -> list[IntelligenceSignal]:
+    def _parse_signals(self, llm_result: dict, *, articles: Optional[list[dict]] = None) -> list[IntelligenceSignal]:
         signals = []
         for s in llm_result.get("signals", []):
             sym = s.get("symbol", "") or s.get("asset", "") or "GENERAL"
+            ids = s.get("source_article_ids") or []
+            source_as_of = None
+            if articles is not None:
+                if not ids or any(type(i) is not int or not 0 <= i < len(articles) for i in ids):
+                    raise ValueError("LLM signal has invalid source article IDs")
+                source_as_of = min(_parse_iso(articles[i].get("published_at") or "") for i in ids)
             signals.append(IntelligenceSignal(
                 symbol=sym,
                 name=s.get("name", sym),
@@ -968,7 +982,7 @@ class LLMIntelligenceAnalyzer:
                 urgency=s.get("urgency", "medium"),
                 generated_at=datetime.now(timezone.utc),
                 generation_method="llm",
-                source_as_of=datetime.now(timezone.utc),
+                source_as_of=source_as_of,
                 source_article_ids=[int(i) for i in (s.get("source_article_ids") or [])],
             ))
         return signals

@@ -17,6 +17,7 @@ from stocks.domain.models import (
     ForecastRecord,
     UserDecisionRecord,
 )
+from stocks.engine.atomic_io import atomic_write_json
 
 
 class DataPersistence:
@@ -238,8 +239,7 @@ class DataPersistence:
         filename = f"{self._safe_timestamp(record.created_at)}_{record.id}.json"
         filepath = self.forecast_dir / filename
 
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(record.to_dict(), f, ensure_ascii=False, indent=2)
+        atomic_write_json(filepath, record.to_dict())
 
         self._trim_forecasts()
         return str(filepath)

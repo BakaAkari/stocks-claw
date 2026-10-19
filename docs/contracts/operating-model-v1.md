@@ -24,6 +24,25 @@ No lower layer may compensate for a failed higher layer. A polished report
 cannot compensate for an unverified position. A high apparent win rate cannot
 compensate for missing fills, changing denominators or unclear signal meaning.
 
+For this user the operating profile is part of the contract: limited time to
+monitor markets, A-share and IBKR US accounts, a preference for left-side entries
+at valuable lows, stable employment income, and a normal hold-until-profitable
+or thesis-invalidated style. The system therefore optimizes for low-frequency
+research and review; it must not turn every price move into a trade prompt or
+require intraday attention.
+
+The portfolio has two explicitly separate roles:
+
+- `core`: patient positions based on a documented value or recovery thesis;
+  the default action after entry is hold and review at the agreed cadence.
+- `tactical`: a bounded short-term sleeve with its own cash, size limit,
+  holding horizon, trigger and exit rule. Tactical results never rewrite the
+  core thesis or mix into its review.
+
+Every candidate and position carries one role. Missing role, account, currency,
+cost basis or available quantity is a review block, not a reason to infer a
+default.
+
 ## Fact classes and authority
 
 Every important value belongs to exactly one class:
@@ -44,7 +63,7 @@ the confirmation event, time, actor and content hash.
 
 ## Operating modes
 
-The product has six explicit modes. A run declares its mode and may not silently
+The product has eight explicit modes. A run declares its mode and may not silently
 skip to a later mode.
 
 ### 1. Capture
@@ -62,32 +81,66 @@ separate. The result is `matched`, `mismatch` or `incomplete`.
 prove broker authenticity, completeness of records, tax treatment, corporate
 action treatment or profit.
 
-### 3. Advise
+### 3. Scan
+
+At a low-frequency cadence, scan A-share and US instruments using the relevant
+market calendar, currency and source availability. The scan produces a research
+candidate queue, not a buy/sell list. A candidate requires an identifiable
+instrument, market and account route, liquidity evidence, a current price window,
+a reason it may be undervalued or in a left-side zone, and explicit missing
+evidence. The queue records why it entered, why it was not promoted, and the next
+review condition. One indicator or one price drop never promotes a candidate.
+
+Data may refresh daily or on events, but user-facing action prompts are emitted
+only when a candidate materially changes or reaches a pre-declared review
+condition. Intraday monitoring is not assumed.
+
+### 4. Advise
 
 Build one timestamped snapshot containing mandate, financial integrity, market
 evidence, data quality and execution rules. The LLM may propose judgment and
 actions. It may not change facts, invent quantities, or turn a rule candidate
 into an approved action.
 
+Advice must distinguish `research_candidate`, `core_candidate`, `core_hold`,
+`tactical_candidate`, `hold_review` and `exit_review`. A low price alone is not
+an entry reason. A left-side candidate states its thesis, value evidence,
+staged-entry conditions, invalidation, maximum patience window and review
+cadence. Advice may recommend waiting; it may not force an action because a scan
+found a match.
+
 Portfolio actions require current enough statements, explicit account and unit,
 known available quantity or cash, valid instrument identity, and a supported
 settlement rule. Market-only commentary may continue when portfolio action is
 blocked, but the block must be visible.
 
-### 4. Decide
+### 5. Decide
 
 The user accepts, changes, rejects or defers the proposal. The decision points
 to the immutable proposal and records the user's chosen scope. Acceptance is
 not execution.
 
-### 5. Record execution
+### 6. Record execution
 
 Record each fill independently, including side, quantity, price, currency,
 fees, account, execution time and settlement time when known. Independent user
 trades do not need a fabricated advice link. The system never places an order
 and never updates a position merely because a fill was recorded.
 
-### 6. Review and learn
+### 7. Hold and review
+
+After an entry, the system follows the frozen thesis and role. It records new
+evidence, checks whether the thesis remains valid, and reports only material
+changes at the agreed cadence. Ordinary volatility is not an exit signal. A core
+position can move to `hold_review`, `add_review`, `reduce_review` or `exit_review`;
+a tactical position must additionally check its deadline and position limit.
+
+An exit review distinguishes at least: target or profit condition reached; thesis
+invalidated; risk or liquidity changed; or planned time window expired.
+“Profitable” is evidence for review, not an automatic sell. The proposed exit
+condition and the user's decision remain separate records.
+
+### 8. Review and learn
 
 Review the original evidence, proposal, decision, actual fills, cash movements
 and frozen observations. Mark missing information explicitly. Strategy research
@@ -137,6 +190,13 @@ Every personal strategy candidate must record:
 
 One trade, one market episode or one attractive backtest cannot promote a strategy.
 No strategy may auto-tune user facts, action sizes or constraints.
+
+For this user's strategy candidates, the minimum record also includes portfolio
+role (`core` or `tactical`), account (`a_share` or `ibkr_us`), currency and
+settlement assumptions, low-frequency monitoring plan, staged-entry logic,
+thesis invalidation, profit-taking condition, and the evidence that would move
+the candidate from research to a user-reviewable proposal. Without these fields
+the candidate remains research-only.
 
 ## Metrics that matter before win rate
 
@@ -197,3 +257,21 @@ repeat deterministically, preserve unknowns, and leave the financial memory
 unchanged during read-only analysis. Simulated smoke data is evidence of the
 implementation path only; it is never evidence of user value or investment
 performance.
+
+### User-fit acceptance before metric work
+
+Before adding win rate, return or drawdown work, a local simulated review must:
+
+1. scan a simulated A-share or US instrument at a declared low-frequency cadence;
+2. preserve it as a candidate with account, market, role, thesis, value-zone
+   evidence, missing data and next review condition;
+3. reject promotion when the evidence or account route is incomplete;
+4. promote only after the user confirms the proposed core or tactical scope;
+5. record the entry and later observations without changing the original thesis;
+6. surface hold review and profit/target or invalidation exit review as separate
+   user decisions; and
+7. keep core and tactical records separated in context and review.
+
+The acceptance question is whether the system saves the user's limited attention
+and makes a patient decision easier to inspect. A synthetic buy or sell action
+without a candidate thesis, hold tracking and exit reason does not satisfy it.

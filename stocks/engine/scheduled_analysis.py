@@ -13,6 +13,7 @@ import tempfile
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -182,6 +183,8 @@ class ScheduledSession:
     can_recommend_new: Optional[bool] = None
     can_review_closed: Optional[bool] = None
     ignore_weekend: bool = False
+    # 交易所日历库覆盖终点；之后的日期只靠手填 holidays
+    holidays_covered_until: Optional[str] = None
 
     @property
     def exchange_tz(self) -> ZoneInfo:
@@ -221,7 +224,36 @@ def load_scheduled_config(config_dir: Path) -> dict:
         data = json.load(file)
     if not isinstance(data, dict) or data.get("schema_version") != 1:
         raise ValueError("scheduled_sessions.json must be an object with schema_version=1")
+    for market, market_config in (data.get("markets") or {}).items():
+        if isinstance(market_config, dict) and market in _EXCHANGE_CALENDARS:
+            library, covered_until = _exchange_holidays(_EXCHANGE_CALENDARS[market])
+            configured = {str(item) for item in market_config.get("holidays") or []}
+            market_config["holidays"] = sorted(configured | library)
+            market_config["holidays_covered_until"] = covered_until
     return data
+
+
+_EXCHANGE_CALENDARS = {"cn": "XSHG", "us": "XNYS"}
+
+
+@lru_cache(maxsize=None)
+def _exchange_holidays(calendar_code: str) -> tuple[frozenset[str], Optional[str]]:
+    """交易所日历库中的工作日休市日及其覆盖终点；配置里的手填假日与之取并集。
+
+    库的覆盖期之外（例如尚未公布的下一年 A 股假期）只能依赖手填配置。
+    """
+    try:
+        import exchange_calendars as xc
+        import pandas as pd
+
+        cal = xc.get_calendar(calendar_code)
+        start = max(cal.first_session, pd.Timestamp("2024-01-01"))
+        sessions = set(cal.sessions_in_range(start, cal.last_session).strftime("%Y-%m-%d"))
+        weekdays = pd.bdate_range(start, cal.last_session).strftime("%Y-%m-%d")
+        return frozenset(d for d in weekdays if d not in sessions), cal.last_session.strftime("%Y-%m-%d")
+    except Exception as exc:  # 日历库不可用时退回纯配置
+        logger.warning("exchange calendar %s unavailable: %s", calendar_code, exc)
+        return frozenset(), None
 
 
 class MarketSessionCalendar:
@@ -322,6 +354,7 @@ class MarketSessionCalendar:
                         can_recommend_new=item.get("can_recommend_new"),
                         can_review_closed=item.get("can_review_closed"),
                         ignore_weekend=bool(item.get("ignore_weekend", False)),
+                        holidays_covered_until=market_config.get("holidays_covered_until"),
                     )
                 )
         return sessions
@@ -331,6 +364,13 @@ class MarketSessionCalendar:
         # ignore_weekend=True 的会话（如全球情报巡逻）周末照常运行，仅跳过假期
         if not session.ignore_weekend and market_date.weekday() >= 5:
             return False
+        covered = session.holidays_covered_until
+        if covered and market_date.isoformat() > covered:
+            logger.warning(
+                "%s holiday calendar only covers through %s; %s treated as trading day "
+                "unless listed in scheduled_sessions.json holidays",
+                session.market, covered, market_date.isoformat(),
+            )
         return market_date.isoformat() not in session.holidays
 
 

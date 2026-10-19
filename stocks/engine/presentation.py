@@ -1376,6 +1376,9 @@ def build_user_view(
             "original_ratio": raw.get("original_ratio"),
             "estimated_amount_cny": raw.get("estimated_amount_cny"),
             "amount_is_estimate": raw.get("amount_is_estimate"),
+            "purchase_cost": {key: (raw.get("fee_budget_check") or {}).get(key)
+                              for key in ("currency", "fee_upper_bound", "total_cash_required")}
+                             if (raw.get("fee_budget_check") or {}).get("status") == "covered" else None,
             "reason_summary": _action_sentence(raw, label),
             "decision_reason": raw.get("decision_reason"),
             "evidence_summary": raw.get("evidence_summary"),

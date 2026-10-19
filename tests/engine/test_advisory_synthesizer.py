@@ -165,3 +165,25 @@ class TestAdvisorySynthesizer:
         dump = json.dumps(asdict(advisory), default=str)
         assert "sk-" not in dump
         assert "OPENAI" not in dump
+
+
+def test_live_research_narrative_errors_reject_without_rewriting():
+    from dataclasses import replace
+
+    from stocks.domain.advisory_models import FactRef
+
+    snapshot = replace(_snapshot(), metadata={'position_valuations': []},
+        macro=(FactRef('macro:gold', 'macro:gold', 4000, 'USD/oz', '2026-10-19', 'yahoo'),))
+    for prose, expected in [
+        ('降低方向性暴露，属研究判断，非交易指令', 'market_only_narrative_contains_allocation_instruction'),
+        ('现货金4000', 'gold_futures_mislabeled_as_spot'),
+    ]:
+        class Client:
+            def complete(self, prompt):
+                return {'market_assessment': prose}
+        trace = {}
+        advisory = synthesize_advisory(snapshot, llm_client=Client(), capture=trace)
+        assert trace['status'] == 'failed'
+        assert expected in trace['evidence_errors']
+        assert trace['parsed_response']['market_assessment'] == prose
+        assert advisory.market_assessment != prose

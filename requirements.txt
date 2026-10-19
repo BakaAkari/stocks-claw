@@ -9,3 +9,5 @@ ruff>=0.1.0
 akshare>=1.18
 # E3 authoritative session calendars; out-of-coverage dates fail closed
 exchange-calendars==4.13.2
+# SAFE official central parity HTML tables
+lxml>=4.9

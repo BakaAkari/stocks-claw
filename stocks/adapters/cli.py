@@ -53,6 +53,14 @@ class CLIAdapter:
             help="OpenAI 兼容 API Base URL（覆盖环境变量和 .secret 文件）"
         )
         parser.add_argument(
+            "--investment-brief", action="store_true",
+            help="投资日报（只读，不含资产金额）：影响新闻、近期日历、持仓操作及 LLM 判断",
+        )
+        parser.add_argument(
+            "--no-llm", action="store_true",
+            help="配合 --investment-brief：只输出新闻与日历，不调用模型",
+        )
+        parser.add_argument(
             "--no-news", action="store_true",
             help="构建上下文时不包含新闻"
         )
@@ -167,6 +175,9 @@ class CLIAdapter:
         asset_actions.add_argument("--financial-reconcile", nargs=2, metavar=("OPENING_ID", "CLOSING_ID"),
                                   help="核对两个确认时点之间的数量和现金（只读）")
         asset_actions.add_argument("--financial-integrity", action="store_true", help="读取最新核对及资产记忆差异")
+        asset_actions.add_argument("--fee-budget-preview", metavar="JSON", help="只读预检费用预算文档")
+        asset_actions.add_argument("--fee-budget-state", action="store_true", help="读取费用预算与确认来源")
+        asset_actions.add_argument("--fee-budget-replace", metavar="JSON", help="替换全部费用预算（需 --confirmed）")
         asset_actions.add_argument("--financial-intake-template", choices=["a", "us"], help="输出单账户资料模板（不写入）")
         asset_actions.add_argument("--financial-intake-preview", metavar="JSON", help="预检账户资料和核对差异（不写入）")
         asset_actions.add_argument("--financial-intake-preview-file", metavar="PATH", help="从 JSON 文件只读预检账户资料")
@@ -260,6 +271,16 @@ class CLIAdapter:
             print(json.dumps(asset_result, ensure_ascii=False, indent=2))
             return
 
+        if args.investment_brief:
+            result = await self.engine.investment_brief(
+                include_news=not args.no_news, use_llm=not args.no_llm,
+            )
+            if args.output == "text":
+                print(result["markdown"], end="")
+            else:
+                print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            return
+
         # 1. 加载外部 JSON 数据（如提供）
         external_assets = self._load_json_file(args.assets)
         external_constraints = self._load_json_file(args.constraints)
@@ -324,6 +345,10 @@ class CLIAdapter:
 
     async def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
         try:
+            if args.fee_budget_preview:
+                return {"success": True, "data": self.engine.fee_budget_preview(self._parse_json_object(args.fee_budget_preview))}
+            if args.fee_budget_state:
+                return {"success": True, "data": self.engine.fee_budget_state()}
             if args.financial_intake_template:
                 return {"success": True, "data": self.engine.financial_intake_template(args.financial_intake_template)}
             if args.financial_intake_preview:
@@ -452,6 +477,7 @@ class CLIAdapter:
                 args.asset_remove,
                 args.profile_update,
                 args.constraints_replace,
+                args.fee_budget_replace,
                 args.advice_save,
                 args.advice_feedback,
                 args.execution_save,
@@ -476,6 +502,9 @@ class CLIAdapter:
             }
 
         try:
+            if args.fee_budget_replace is not None:
+                return {"success": True, "data": self.engine.replace_fee_budgets(
+                    self._parse_json_object(args.fee_budget_replace), confirmed=True, confirmation_channel="cli")}
             if args.constraints_replace is not None:
                 return {"success": True, "data": self.engine.replace_portfolio_constraints(
                     self._parse_json_object(args.constraints_replace), confirmation_channel="cli")}

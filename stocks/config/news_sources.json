@@ -26,10 +26,11 @@
     {
       "name": "Yahoo Finance",
       "type": "rss",
-      "url": "https://finance.yahoo.com/news/rssindex",
+      "url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
       "language": "en",
       "category": "us_macro",
-      "enabled": true
+      "enabled": true,
+      "note": "原 news/rssindex 返回 404；使用 Yahoo 标普500定向 RSS，不代表全市场覆盖。"
     },
     {
       "name": "Fed Press Releases",
@@ -46,8 +47,8 @@
       "url": "http://www.csrc.gov.cn/pub/newsite/zjhxwfb/xwfbh/index.xml",
       "language": "zh",
       "category": "cn_policy",
-      "enabled": true,
-      "note": "证监会官方发布会实录/政策原文"
+      "enabled": false,
+      "note": "2026-10-19 在线核查：旧 index.xml 返回 HTML 非 RSS。暂禁该无效直连；政策搜索源仅为间接补充，不冒充官方公告。"
     },
     {
       "name": "EIA Today in Energy",

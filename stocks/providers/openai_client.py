@@ -79,8 +79,11 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: int = DEFAULT_TIMEOUT,
+        stream: bool = False,
     ):
         self.model = model
+        # 流式返回让连接持续有数据，避免代理网关对长生成的空闲超时（如 30 秒 502）
+        self.stream = stream
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
@@ -111,6 +114,8 @@ class LLMClient:
             # 最终答案 content 为空 → json.loads 失败。留足空间给 reasoning+content。
             "max_tokens": 65536,
         }
+        if self.stream:
+            payload["stream"] = True
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             url,
@@ -122,9 +127,11 @@ class LLMClient:
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-        msg = result["choices"][0]["message"]
-        content = msg.get("content", "").strip()
+            if self.stream:
+                content = _read_stream_content(resp)
+            else:
+                result = json.loads(resp.read().decode("utf-8"))
+                content = (result["choices"][0]["message"].get("content") or "").strip()
         if not content:
             # 推理模型(deepseek-v4) content 为空 = reasoning 占满 max_tokens,
             # 最终答案没产出。不能拿 reasoning_content(推理过程,非 JSON)冒充
@@ -134,6 +141,26 @@ class LLMClient:
                 "raise max_tokens or use a non-reasoning model"
             )
         return content
+
+
+def _read_stream_content(resp) -> str:
+    """拼接 SSE 流中的 delta.content；reasoning_content 是推理过程，不计入答案。"""
+    parts: list[str] = []
+    for raw in resp:
+        line = raw.decode("utf-8").strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:"):].strip()
+        if data == "[DONE]":
+            break
+        chunk = json.loads(data)
+        if chunk.get("error"):
+            raise RuntimeError(f"LLM stream error: {chunk['error']}")
+        for choice in chunk.get("choices") or []:
+            piece = (choice.get("delta") or {}).get("content")
+            if piece:
+                parts.append(piece)
+    return "".join(parts).strip()
 
 
 def get_llm_client() -> LLMClient:

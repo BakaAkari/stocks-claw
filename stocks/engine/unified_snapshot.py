@@ -221,7 +221,10 @@ def _build_macro_facts(
         "field_sources", "official_stats", "errors",
         "market_as_of", "official_as_of", "timestamp", "next_official_release", "source",
     })
-    for key, value in macro.items():
+    scalar_values = dict(macro)
+    for key, value in (macro.get("official_stats") or {}).items():
+        scalar_values[f"official_stats.{key}"] = value
+    for key, value in scalar_values.items():
         if key in _SKIP_MACRO_KEYS or value is None or value == "":
             continue
         if isinstance(value, (dict, list, tuple, bool)):
@@ -483,10 +486,11 @@ clearly
             "context_generated_at": str(context.generated_at or ""),
             "personal_mandate": mandate,
             "financial_integrity": integrity,
+            "fee_budgets": deepcopy(context.fee_budgets),
             "position_valuations": positions,
             "quotes": deepcopy(context.to_dict().get("quotes") or {}),
             "execution_rules": deepcopy(execution_rules),
-            "validation_policy": {"version": "llm-proposal-gate-v1",
+            "validation_policy": {"version": "llm-proposal-gate-v2",
                                   "financial_statement_max_age_seconds": financial_statement_max_age_seconds},
         },
     )

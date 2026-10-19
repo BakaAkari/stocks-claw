@@ -10,13 +10,13 @@ MCP 是 Anthropic 推出的协议，允许 LLM 调用外部工具。
 4. 提供 `get_portfolio_summary` 工具
 
 使用方式：
-    由支持 MCP 的 Agent（如 Claude Desktop）自动发现并调用。
-    也可通过 python -m stocks.adapters.mcp 启动 stdio 服务器。
+    python -m stocks.adapters.mcp_server [--read-only] 启动符合 MCP 的 stdio 服务器；
+    python -m stocks.adapters.mcp 为兼容入口，行为相同。
+    ``MCPAdapter.handle_request`` 是协议无关的工具分发，供服务器和测试直接调用。
 """
 
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from stocks.domain.models import FinancialAsset
@@ -62,6 +62,8 @@ class MCPAdapter:
             return self._get_news(params)
         elif method == "get_portfolio_summary":
             return self._get_portfolio_summary(params)
+        elif method == "investment_brief":
+            return self._investment_brief(params)
         elif method == "assets_list":
             return self._assets_list()
         elif method == "asset_add":
@@ -82,7 +84,8 @@ class MCPAdapter:
             return {"success": True, "data": self.engine.get_profile()}
         elif method in {"statement_save", "cash_movement_save", "statement_list", "cash_movement_list",
                         "financial_reconcile", "financial_integrity", "personal_mandate", "constraints_replace",
-                        "financial_intake_template", "financial_intake_preview", "financial_readiness"}:
+                        "financial_intake_template", "financial_intake_preview", "financial_readiness",
+                        "fee_budget_preview", "fee_budget_state", "fee_budget_replace"}:
             return self._financial_facts(method, params)
         elif method == "profile_update":
             return self._profile_update(params)
@@ -130,6 +133,17 @@ class MCPAdapter:
                 "success": True,
                 "data": context.to_dict(),
             }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _investment_brief(self, params: dict) -> dict:
+        import asyncio
+        try:
+            result = asyncio.run(self.engine.investment_brief(
+                include_news=params.get("include_news", True),
+                use_llm=params.get("use_llm", True) is not False,
+            ))
+            return {"success": True, "data": result}
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
@@ -228,7 +242,8 @@ class MCPAdapter:
         if not isinstance(text, str) or not text.strip():
             return {"success": False, "error": "intake text must be a non-empty string"}
         try:
-            return self.engine.asset_intake_draft(text)
+            llm_client = None if params.get("deterministic") is True else "auto"
+            return self.engine.asset_intake_draft(text, llm_client=llm_client)
         except (TypeError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
 
@@ -330,12 +345,18 @@ class MCPAdapter:
             return {"success": False, "error": str(exc)}
 
     def _financial_facts(self, method: str, params: dict) -> dict:
-        if method in {"statement_save", "cash_movement_save", "constraints_replace"}:
+        if method in {"statement_save", "cash_movement_save", "constraints_replace", "fee_budget_replace"}:
             error = self._confirmed(params)
             if error:
                 return error
         try:
-            if method == "financial_intake_template":
+            if method == "fee_budget_preview":
+                data = self.engine.fee_budget_preview(params.get("document"))
+            elif method == "fee_budget_state":
+                data = self.engine.fee_budget_state()
+            elif method == "fee_budget_replace":
+                data = self.engine.replace_fee_budgets(params.get("document"), confirmed=True, confirmation_channel="mcp")
+            elif method == "financial_intake_template":
                 data = self.engine.financial_intake_template(params.get("market"))
             elif method == "financial_intake_preview":
                 data = self.engine.financial_intake_preview(params.get("bundle"), as_of=params.get("as_of"))
@@ -521,6 +542,19 @@ class MCPAdapter:
                 },
             },
             {
+                "name": "investment_brief",
+                "description": "投资日报：影响新闻、近期投资日历、每个持仓该不该动及怎么操作，均附项目内 LLM 判断；"
+                               "不含金额、数量等资产明细。只读，联网取数并调用模型，约半分钟到两分钟。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "include_news": {"type": "boolean", "default": True},
+                        "use_llm": {"type": "boolean", "default": True,
+                                    "description": "false 时只返回新闻与日历，由调用方自行判断"},
+                    },
+                },
+            },
+            {
                 "name": "assets_list",
                 "description": "列出金融资产记忆。",
                 "parameters": {"type": "object", "properties": {}},
@@ -565,7 +599,11 @@ class MCPAdapter:
                 "description": "把 Hermes 收到的账户/持仓描述转换为不写入的结构化草稿；必须先检查歧义和来源，再请求用户确认。",
                 "parameters": {
                     "type": "object", "required": ["text"],
-                    "properties": {"text": {"type": "string"}},
+                    "properties": {
+                        "text": {"type": "string"},
+                        "deterministic": {"type": "boolean", "default": False,
+                                          "description": "仅使用本地确定性解析，不调用 LLM；模拟或无模型时应设为 true。"},
+                    },
                 },
             },
             {
@@ -670,6 +708,13 @@ class MCPAdapter:
                                            "as_of": {"type": "string"}}}},
             {"name": "financial_integrity", "description": "只读核对最新账单与当前资产记忆的一致性",
              "parameters": {"type": "object", "properties": {"as_of": {"type": "string"}}}},
+            {"name": "fee_budget_preview", "description": "只读预检单笔全部费用上界；不推断实际费率，不确认",
+             "parameters": {"type": "object", "required": ["document"], "properties": {"document": {"type": "object"}}}},
+            {"name": "fee_budget_state", "description": "读取费用预算及确认来源；不授权交易",
+             "parameters": {"type": "object", "properties": {}}},
+            {"name": "fee_budget_replace", "description": "用户确认后替换全部费用预算；空 budgets 列表撤销全部预算",
+             "parameters": {"type": "object", "required": ["document", "confirmed"],
+                            "properties": {"document": {"type": "object"}, "confirmed": {"type": "boolean"}}}},
             {"name": "financial_intake_template", "description": "只读生成 A 股或美股单账户资料模板；未知项不填猜测值",
              "parameters": {"type": "object", "required": ["market"],
                             "properties": {"market": {"type": "string", "enum": ["a", "us"]}}}},
@@ -741,45 +786,11 @@ class MCPAdapter:
         }
 
 
-def _stdio_loop(adapter: MCPAdapter) -> None:
-    """基于标准输入输出的简单 MCP 消息循环。"""
-    import sys
-
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError:
-            response = {"error": "Invalid JSON"}
-            print(json.dumps(response, ensure_ascii=False))
-            continue
-
-        response = adapter.handle_request(request)
-        print(json.dumps(response, ensure_ascii=False))
-        sys.stdout.flush()
-
-
 def main():
-    """MCP stdio 服务器入口。"""
-    import argparse
+    """MCP stdio 服务器入口；协议实现见 ``stocks.adapters.mcp_server``。"""
+    from stocks.adapters.mcp_server import main as server_main
 
-    parser = argparse.ArgumentParser(description="stocks-claw MCP 服务器")
-    parser.add_argument("--llm-analysis", action="store_true", help="启用 LLM 深度分析")
-    parser.add_argument("--openai-key", default=None, help="OpenAI 兼容 API Key")
-    parser.add_argument("--openai-base-url", default=None, help="OpenAI 兼容 API Base URL")
-    args = parser.parse_args()
-
-    from stocks.engine import StocksEngine  # type: ignore[import-not-found]
-
-    engine = StocksEngine(
-        llm_analysis_enabled=args.llm_analysis,
-        openai_api_key=args.openai_key,
-        openai_base_url=args.openai_base_url,
-    )
-    adapter = MCPAdapter(engine)
-    _stdio_loop(adapter)
+    server_main()
 
 
 if __name__ == "__main__":

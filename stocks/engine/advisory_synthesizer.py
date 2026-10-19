@@ -7,6 +7,7 @@ output free-form currency amounts, or make decisions without evidence references
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -45,12 +46,36 @@ Personal mandate:
 - Unknown personal information or non-matched financial_integrity must be stated
   as limitations. Your proposal never executes an order or confirms user facts.
 
+Evidence discipline:
+- Treat observation dates as part of each fact. A monthly observation is not
+  a quote today; delayed/unknown-time observations cannot establish current levels.
+- Use only supplied evidence for factual numbers, valuations, fund flows and
+  corporate fundamentals. When these are absent say unknown; do not fill gaps
+  from model memory or turn a news headline into verified business performance.
+- Distinguish supplied observations, analytical hypotheses and proposed scenario
+  thresholds. An invented trigger threshold must not be phrased as a measured fact.
+- If metadata.position_valuations is empty, this is market-only research:
+  actions and hold_decisions must be empty; do not invent positions or trading
+  instructions. This also applies to narrative fields: no scale-in, reduce exposure,
+  buy-the-dip or position-sizing instructions hidden in research prose.
+- macro:gold is GC=F gold FUTURES, not spot gold; macro:crude_oil is CL=F futures.
+- Without positions, express direction only (偏弱/分化/不确定). Do not write
+  降低方向性暴露, 降低敞口, 分批买入, or any equivalent portfolio instruction,
+  even followed by a disclaimer that it is research.
+- us_10y_yield is a NOMINAL yield, not a real yield. Without inflation-linked
+  bond yields or matching inflation expectations, real rates are unknown.
+- Without valuation and earnings evidence, do not characterize a decline as
+  情绪错杀, undervaluation, or intact fundamentals. State that the cause is unknown.
+- A market-specific session must focus its short/medium-term assessment on that
+  market; other markets are context. News claims and vendor earnings dates are
+  attributed reports/estimates, not independently confirmed facts.
+
 Analysis perspective (two lenses, both required):
 1. 量化分析师视角: 技术面(均线/RSI/布林/量比)、可证伪的验证/证伪条件。
 2. 投资大师视角: 产业周期(该产业处于周期哪个阶段)、长期逻辑(商业模式/护城河/需求刚性)、
-   估值与错杀判断(当前波动是基本面恶化还是情绪错杀)。
+   估值与盈利证据审查；缺少这些证据时明确无法判断波动原因。
 summary 和每个 sector/asset opportunity 的 reasoning 都要体现两种视角,
-不要只写"回踩 MA20 分批"的技术面, 也要写"这个产业的长期逻辑/当前估值/是否错杀"。
+不要将技术超卖等同于低估；有产业与估值证据时分析其含义，没有时只列待验证问题。
 数据不足时诚实标注, 不要编造估值分位数字。
 
 Output JSON format:
@@ -281,6 +306,10 @@ def synthesize_advisory(
         if not isinstance(parsed, dict):
             raise ValueError("advisory response must be an object")
         trace["parsed_response"] = deepcopy(parsed)
+        evidence_errors = _research_narrative_errors(parsed, snapshot)
+        if evidence_errors:
+            trace["evidence_errors"] = evidence_errors
+            raise ValueError("research narrative violates evidence boundaries")
         advisory = _build_advisory(parsed, snapshot, advisory_id, generated_at)
         trace["status"] = "parsed"
         trace["completed_at"] = _iso_utc()
@@ -293,6 +322,26 @@ def synthesize_advisory(
         logger.warning("advisory synthesis failed (%s)", type(error).__name__)
         return _fallback_advisory(snapshot, advisory_id, generated_at,
                                   error=type(error).__name__)
+
+
+def _research_narrative_errors(parsed: dict, snapshot: UnifiedAnalysisSnapshot) -> list[str]:
+    """Narrow guards for observed live-output defects; not a general fact checker.
+
+    Reject the original proposal rather than rewriting its investment judgment.
+    Exclude limitations/do_not_do, which legitimately describe prohibited acts.
+    """
+    keys = ("market_assessment", "short_term", "medium_term", "scenarios",
+            "sector_opportunities", "asset_class_opportunities")
+    prose = json.dumps({key: parsed.get(key) for key in keys}, ensure_ascii=False)
+    errors = []
+    positions = snapshot.metadata.get("position_valuations")
+    if positions == [] and re.search(
+        r"(?:降低|减少|增加|提高).{0,8}(?:暴露|敞口)|分批(?:买入|加仓|减仓)|逢低(?:买入|加仓)", prose
+    ):
+        errors.append("market_only_narrative_contains_allocation_instruction")
+    if any(f.fact_id == "macro:gold" for f in snapshot.macro) and re.search(r"现货(?:黄金|金)|spot gold", prose, re.I):
+        errors.append("gold_futures_mislabeled_as_spot")
+    return errors
 
 
 def _build_advisory(parsed, snapshot, advisory_id, generated_at):

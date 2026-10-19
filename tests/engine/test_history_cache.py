@@ -571,3 +571,23 @@ class TestEdgeCases:
         assert df2.iloc[0]["price"] == 100.0
         assert df1.iloc[0]["code"] == "000001"
         assert df2.iloc[0]["code"] == "AAPL"
+
+
+def test_us_midnight_daily_bar_dedupes_with_same_day_realtime_row():
+    """供应商日 K（UTC 零点）与收盘后实时快照（20:00 UTC）属同一美股交易日。"""
+    from stocks.engine.history_cache import HistoryCache
+
+    cache = HistoryCache(base_dir=tempfile.mkdtemp(), ttl=86400)
+    row = {"code": "NEM", "name": "NEM", "market": "us", "price": 118.6, "open_price": 115.3,
+           "high": 120.0, "low": 115.0, "prev_close": 115.8}
+    provider = pd.DataFrame([
+        {**row, "timestamp": "2026-10-15T00:00:00+00:00", "price": 115.8, "volume_lot": 1.0, "data_source": "provider"},
+        {**row, "timestamp": "2026-10-16T00:00:00+00:00", "volume_lot": 2.0, "data_source": "provider"},
+    ])
+    realtime = pd.DataFrame([
+        {**row, "timestamp": "2026-10-16T20:00:00+00:00", "volume_lot": None, "data_source": "realtime"},
+    ])
+    merged = cache._merge_and_deduplicate(provider, realtime)
+    assert len(merged) == 2
+    assert merged.iloc[-1]["data_source"] == "provider"
+    assert merged.iloc[-1]["volume_lot"] == 2.0

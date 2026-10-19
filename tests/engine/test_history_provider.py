@@ -636,22 +636,26 @@ class TestWarmHistoryCache:
         """单个标的失败不影响其他;失败项记录 error 字符串(D0-3)"""
         cache = HistoryCache(base_dir=str(tmp_path), ttl=86400)
         provider = Mock()
-        provider.fetch = AsyncMock(side_effect=[
-            Exception("API down"),
-            Exception("API down"),  # retry also fails
-            pd.DataFrame({
-                "timestamp": pd.date_range("2024-01-01", periods=3, freq="D"),
-                "code": ["QQQ"] * 3,
-                "name": ["纳斯达克100"] * 3,
-                "market": ["us"] * 3,
-                "price": [400.0, 401.0, 402.0],
-                "open_price": [400.0, 401.0, 402.0],
-                "high": [402.0, 403.0, 404.0],
-                "low": [398.0, 399.0, 400.0],
-                "prev_close": [400.0, 400.0, 401.0],
-                "volume_lot": [1_000_000] * 3,
-            }),
-        ])
+        qqq_frame = pd.DataFrame({
+            "timestamp": pd.date_range("2024-01-01", periods=3, freq="D"),
+            "code": ["QQQ"] * 3,
+            "name": ["纳斯达克100"] * 3,
+            "market": ["us"] * 3,
+            "price": [400.0, 401.0, 402.0],
+            "open_price": [400.0, 401.0, 402.0],
+            "high": [402.0, 403.0, 404.0],
+            "low": [398.0, 399.0, 400.0],
+            "prev_close": [400.0, 400.0, 401.0],
+            "volume_lot": [1_000_000] * 3,
+        })
+
+        # 预热并发执行，按标的返回而非依赖调用顺序；A 股首次与重试都失败。
+        async def fetch(inst, lookback):
+            if inst.market == "a":
+                raise Exception("API down")
+            return qqq_frame
+
+        provider.fetch = AsyncMock(side_effect=fetch)
 
         report = await warm_history_cache(cache, provider, [sample_instrument_a, sample_instrument_us], 5)
         await cache.close()

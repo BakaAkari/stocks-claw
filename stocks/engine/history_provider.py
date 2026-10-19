@@ -612,6 +612,7 @@ async def warm_history_cache(
     market_holidays: dict | None = None,
     market_close: dict | None = None,
     market_tz: dict | None = None,
+    concurrency: int = 4,
 ) -> list[dict]:
     """为给定标的列表 warm HistoryCache,返回结构化回填报告(D0-3)。
 
@@ -637,7 +638,7 @@ async def warm_history_cache(
     stale_cutoff = today - timedelta(days=max(1, int(stale_days)))
     tz_by_market = dict(market_tz or {})
 
-    for inst in instruments:
+    async def _warm_one(inst: Instrument) -> dict:
         key = f"{inst.market}:{inst.code}"
         source = _resolve_history_source(inst.market)
         primary_source = source
@@ -679,13 +680,12 @@ async def warm_history_cache(
             except Exception:
                 cache_stale = True
             if not cache_stale:
-                report.append({
+                return {
                     "symbol": key, "market": inst.market, "source": source,
                     "primary_source": primary_source, "fallback_source": fallback_source,
                     "degradation_result": "skipped_cached", "errors": provider_errors,
                     "rows": len(df), "status": "skipped_cached", "error": None,
-                })
-                continue
+                }
             # 数据量足但新鲜度不足 → 落到下方重拉,并标注原因
             degradation_result = "stale_cache"
             provider_errors["cache"] = (
@@ -720,32 +720,39 @@ async def warm_history_cache(
             if last_error is None:
                 last_error = "provider returned empty frame"
             logger.info(f"Warm empty for {inst.code}: {last_error}")
-            report.append({
+            return {
                 "symbol": key, "market": inst.market, "source": source,
                 "primary_source": primary_source, "fallback_source": fallback_source,
                 "degradation_result": degradation_result, "errors": provider_errors,
                 "rows": 0, "status": "failed", "error": last_error,
-            })
-            continue
+            }
 
         try:
             await cache.warm(inst, hist_df)
             rows = len(hist_df)
             logger.info(f"Warmed {inst.code} with {rows} rows")
-            report.append({
+            return {
                 "symbol": key, "market": inst.market, "source": source,
                 "primary_source": primary_source, "fallback_source": fallback_source,
                 "degradation_result": degradation_result, "errors": provider_errors,
                 "rows": rows, "status": "ok", "error": None,
-            })
+            }
         except Exception as e:
             logger.info(f"Warm cache write failed for {inst.code}: {e}")
-            report.append({
+            return {
                 "symbol": key, "market": inst.market, "source": source,
                 "primary_source": primary_source, "fallback_source": fallback_source,
                 "degradation_result": degradation_result, "errors": provider_errors,
                 "rows": 0, "status": "failed",
                 "error": f"cache_write:{type(e).__name__}: {e}",
-            })
+            }
 
+    # 各标的独立且网络请求走线程，限流并发；报告保持输入顺序。
+    semaphore = asyncio.Semaphore(max(1, int(concurrency)))
+
+    async def _bounded(inst: Instrument) -> dict:
+        async with semaphore:
+            return await _warm_one(inst)
+
+    report.extend(await asyncio.gather(*[_bounded(inst) for inst in instruments]))
     return report

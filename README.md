@@ -88,6 +88,75 @@ balances or positions. Sale proceeds and subsequent price changes are not profit
 
 SEC EDGAR requires a contact-bearing `SEC_USER_AGENT` or `.secret/sec-user-agent.md`.
 
+## Investment brief
+
+Daily read-only brief with three sections, each with an LLM judgment: impactful news,
+the upcoming two-week calendar (macro events and held companies' earnings), and per-holding
+action (hold / watch / add / reduce / stop-loss / take-profit, how, and why).
+No amounts, quantities, weights, P/L figures or non-market assets appear in the brief, and
+the model input carries only coarse position-size and P/L bands. Model output is validated
+(links must come from the input, holdings and actions must match); on failure the brief keeps
+news and calendar and states the judgment is unavailable. The model call streams to avoid
+proxy idle timeouts.
+
+```bash
+.venv/bin/python -m stocks.adapters.cli --investment-brief --output text
+.venv/bin/python -m stocks.adapters.cli --investment-brief --no-llm --output text
+```
+
+The model evaluates each holding with trader metrics computed from cached daily bars
+(`stocks/engine/trader_metrics.py`): MA alignment and slope, RSI, MACD histogram change,
+5/20/60-day returns, 20-day relative strength vs CSI 300 / S&P 500, ATR and 2xATR stop,
+realized volatility, Bollinger %B / bandwidth percentile, volume trend and OBV direction,
+20/60-day highs/lows and drawdowns; plus market regime (macro values, A-share/US breadth,
+strongest/weakest sectors). Valuation, fund-flow, earnings and options data are not
+available and the model is told not to invent them.
+
+MCP tool: `investment_brief`. Cron/push wrapper: `scripts/cron/stocks-claw-push-investment_brief.sh`.
+Targeted news covers held positions as well as the watchlist and keeps only headlines that
+name the instrument (own code/name; other funds' codes are dropped; US ETFs need the ticker),
+with `news.blocked_sources` for community/clickbait sources (`engine.yaml`).
+
+## MCP server (Hermes)
+
+`stocks.adapters.mcp_server` is a standard MCP stdio server (newline-delimited
+JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`, `ping`; protocol versions
+2024-11-05 / 2025-03-26 / 2025-06-18). stdout carries protocol messages only;
+logs go to stderr. The engine is built lazily on the first tool call.
+
+```bash
+.venv/bin/python -m stocks.adapters.mcp_server --read-only
+```
+
+`--read-only` hides and rejects every financial-memory write tool; use it until the
+operator has decided to let the agent record confirmed facts. Without it, write
+tools still require `confirmed: true`, which the agent must only set after the user
+explicitly confirms that write in chat. Example Hermes `config.yaml` entry (check
+key names against your Hermes version):
+
+```yaml
+mcp_servers:
+  stocks-claw:
+    command: /path/to/stocks-claw/.venv/bin/python
+    args: ["-m", "stocks.adapters.mcp_server", "--read-only"]
+```
+
+`get_analysis_context` fetches quotes, history and news and can take minutes; give the
+client a generous tool timeout. Keep the checkout on local disk (file locks).
+
+NAS setup notes:
+
+- `uv sync --extra cn` also installs AkShare for the A-share earnings calendar
+  (optional; without it that provider degrades).
+- Deployment scripts under `scripts/` default to `/mnt/user/code-project/stocks-claw`;
+  override with `STOCKS_CLAW_REPO_ROOT`. `intelligence_brief.py` reads LLM keys from
+  `$HERMES_HOME/.env` (default `/opt/data`).
+- Exchange holidays come from `exchange-calendars` merged with
+  `stocks/config/scheduled_sessions.json`. The library only covers A-share holidays
+  through its last published year; add next year's dates to the config once announced
+  (a warning is logged otherwise). `stocks/config/event_calendar.json` is also manual
+  and logs a warning when it runs out.
+
 ## Verification
 
 ```bash
@@ -96,6 +165,22 @@ SEC EDGAR requires a contact-bearing `SEC_USER_AGENT` or `.secret/sec-user-agent
 .venv/bin/python -m compileall -q stocks tests
 .venv/bin/python -m stocks.adapters.cli --output json --no-news --no-quotes
 ```
+
+Online, account-free diagnostics (uses public representative symbols and existing
+credentials; output must be a **new directory outside this repository**):
+
+```bash
+.venv/bin/python scripts/check_online_market.py --output-dir /tmp/stocks-online-new-run
+# Optional: actual model calls for CN/US market research and news analysis (API costs may apply)
+.venv/bin/python scripts/check_online_market.py --output-dir /tmp/stocks-online-new-llm-run --with-llm
+```
+
+Read the resulting `sources/health.json`; exit code zero means the diagnostic
+completed, not that every source is healthy. SEC is intentionally skipped pending
+a real contact User-Agent. Missing Polygon/GNews credentials and invalid/empty
+sources remain visible. No private accounts, messages, orders or schedules are used.
+See [the dated acceptance report](docs/analysis/online-market-acceptance-2026-10-19.md)
+for coverage, source freshness, actual model evidence and remaining limitations.
 
 For current verification evidence (latest ruff/pytest/smoke results), see `STATUS.md` — this README does not track a point-in-time pass/fail baseline.
 
@@ -131,3 +216,19 @@ for A-share/US templates, required broker evidence and the confirmation boundary
 
 These APIs do not import or confirm facts. The smoke uses synthetic accounts in
 an isolated new directory; passing it does not establish real-account readiness.
+
+
+## Confirmed fee reserves
+
+[Fee budget v1](docs/contracts/fee-budget-v1.md) documents readonly
+`--fee-budget-preview JSON` / `--fee-budget-state` and the explicitly confirmed
+`--fee-budget-replace JSON --confirmed` interface. The budget is a bounded
+per-order all-in reserve, not a guessed broker rate or a cash lock. New buys,
+co-funded multiple purchases and unsupported allocation projections remain blocked.
+
+```bash
+.venv/bin/python scripts/smoke_fee_budget.py --output-dir /tmp/stocks-fee-budget-new
+```
+
+This isolated smoke uses synthetic facts and a simulated analyst; it verifies
+cash/fee gates and deterministic reports without sending messages or placing orders.

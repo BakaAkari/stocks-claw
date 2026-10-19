@@ -58,6 +58,14 @@ _MARKET_TIMEZONES = {
 _SOURCE_PRIORITY = {"realtime": 0, "unknown": 1, "provider": 2}
 
 
+def _trade_date(timestamp: pd.Timestamp, market: str):
+    """行情所属交易日。供应商日 K 以 UTC 零点标记日期本身；换算到纽约时区会落到前一天，
+    与当日实时快照（收盘后 20:00 UTC）错开而无法去重，故零点时间戳直接取 UTC 日期。"""
+    if (timestamp.hour, timestamp.minute, timestamp.second, timestamp.microsecond) == (0, 0, 0, 0):
+        return timestamp.date()
+    return timestamp.tz_convert(_MARKET_TIMEZONES.get(market, timezone.utc)).date()
+
+
 class HistoryCache:
     """历史数据缓存，支持内存 + 磁盘两级存储
 
@@ -310,7 +318,7 @@ class HistoryCache:
             )
         combined = pd.concat(frames, ignore_index=True)
         combined["_trade_date"] = [
-            timestamp.tz_convert(_MARKET_TIMEZONES.get(market, timezone.utc)).date()
+            _trade_date(timestamp, market)
             for timestamp, market in zip(combined["timestamp"], combined["market"])
         ]
         combined["_source_priority"] = (

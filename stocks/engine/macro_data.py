@@ -274,7 +274,8 @@ class YahooFinanceMacroProvider:
 _FRED_MARKET_SERIES = {
     "vix": "VIXCLS",
     "us_10y_yield": "DGS10",
-    "dxy": "DTWEXBGS",
+    # DTWEXBGS is a broad trade-weighted dollar index, NOT ICE DXY.
+    # Leave DXY absent here; use the matching Yahoo instrument instead.
     "usd_cny": "DEXCHUS",
     "crude_oil": "DCOILWTICO",
 }
@@ -514,6 +515,35 @@ class FredMacroProvider:
 # 静态配置兜底
 # ------------------------------------------------------------------
 
+class ChinaMacroAdapter:
+    """Keep Chinese observations distinct from US statistics and market quotes."""
+
+    async def fetch(self) -> MacroSnapshot:
+        from stocks.providers.cn_macro import CnMacroProvider
+        snapshot = await CnMacroProvider().fetch()
+        mapping = {"pmi": "pmi", "cpi_yoy": "cpi", "ppi_yoy": "ppi", "m2_yoy": "m2",
+                   "social_financing": "social_financing", "lpr_1y": "lpr_1y", "lpr_5y": "lpr_5y",
+                   "retail_sales_yoy": "retail_sales", "industrial_production_yoy": "industrial_production",
+                   "usd_cny_mid": "usd_cny_mid"}
+        stats, sources = {}, {}
+        errors = dict(snapshot.errors)
+        now = datetime.now(timezone.utc).date()
+        for field_name, source_key in mapping.items():
+            value = getattr(snapshot, field_name)
+            meta = dict(snapshot.field_sources.get(source_key) or {})
+            observed = meta.get("as_of")
+            if value is not None and observed:
+                age = (now - datetime.fromisoformat(observed).date()).days
+                limit = 7 if field_name == "usd_cny_mid" else 100 if field_name.startswith("lpr") else 75
+                if age < 0 or age > limit:
+                    errors[field_name] = "observation_outside_age_policy:" + observed
+                    continue
+                stats["cn_" + field_name] = value
+                meta["date_semantics"] = "observation_period_or_effective_date_not_retrieval_time"
+                sources["official_stats.cn_" + field_name] = meta
+        return MacroSnapshot(source="china_macro", official_stats=stats, field_sources=sources, errors=errors)
+
+
 class StaticMacroProvider:
     """从本地配置读取宏观数据（用于离线或测试环境）"""
 
@@ -589,10 +619,9 @@ class CompositeMacroProvider:
                             field_name,
                             {"source": snapshot.source, "as_of": None},
                         )
-                for field_name in _OFFICIAL_FIELDS:
-                    value = snapshot.official_stats.get(field_name)
+                for field_name, value in snapshot.official_stats.items():
                     source_key = f"official_stats.{field_name}"
-                    if official_stats[field_name] is None and value is not None:
+                    if official_stats.get(field_name) is None and value is not None:
                         official_stats[field_name] = value
                         field_sources[source_key] = snapshot.field_sources.get(
                             source_key,

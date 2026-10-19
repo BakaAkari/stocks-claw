@@ -240,3 +240,14 @@ class TestUnifiedSnapshotBuilder:
         assert src is not None
         assert src.provider == "finnhub"
         assert src.endpoint_type == "news"
+
+
+def test_official_statistics_keep_their_own_observation_period():
+    from types import SimpleNamespace
+
+    from stocks.engine.unified_snapshot import _build_macro_facts
+    ctx = SimpleNamespace(macro_snapshot={"official_stats": {"cpi_yoy": 2.1, "cn_pmi": 50.1},
+        "field_sources": {"official_stats.cpi_yoy": {"as_of": "2026-09-01"}}})
+    facts = {f.fact_id: f for f in _build_macro_facts(ctx, [])}
+    assert facts["macro:official_stats.cpi_yoy"].as_of == "2026-09-01"
+    assert facts["macro:official_stats.cn_pmi"].as_of == ""

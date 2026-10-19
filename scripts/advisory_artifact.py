@@ -73,6 +73,10 @@ def _validate(artifact):
     for action in actions:
         source = approved_by_id.get(action.get("decision_id"))
         _require(source is not None, "display action was not approved")
+        fee = source.get("fee_budget_check") or {}
+        expected_cost = ({key: fee.get(key) for key in ("currency", "fee_upper_bound", "total_cash_required")}
+                         if fee.get("status") == "covered" else None)
+        _require(action.get("purchase_cost") == expected_cost, "display purchase cost mismatch")
         for key in ("source_advisory_id", "source_action_id", "validation_receipt_hash", "input_hash",
                     "signal", "executable_quantity", "final_ratio", "execution_status"):
             _require(action.get(key) == source.get(key), "display action mismatch: " + key)

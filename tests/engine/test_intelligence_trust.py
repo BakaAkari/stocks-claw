@@ -108,6 +108,20 @@ class TestMatchIntelligence:
         assert len(gld) == 1
         assert gld[0].match_method == "proxy"
 
+    @pytest.mark.parametrize("symbol,position_key", [
+        ("KWEB", "a:512480"),   # 中概互联 ≠ 半导体
+        ("IWM", "a:512890"),    # 美股小盘 ≠ A股红利低波
+        ("TLT", "us:SGOV"),     # 长久期国债 ≠ 超短债
+    ])
+    def test_mismatched_proxies_do_not_match(self, symbol, position_key):
+        sig = IntelligenceSignal(
+            symbol=symbol, name=symbol, direction="buy", horizon="short_term",
+            rationale="", falsification="", risk_source="", confidence=0.8,
+            urgency="medium", generated_at=datetime.now(timezone.utc),
+        )
+        matched = match_intelligence({"instrument_key": position_key, "classification": {}}, [sig])
+        assert [m for m in matched if m.match_method == "proxy"] == []
+
     def test_exposure_tag_fallback(self):
         """When no exact/proxy match, exposure tag should fall through to padding."""
         now = datetime.now(timezone.utc)

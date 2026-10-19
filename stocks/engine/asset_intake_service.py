@@ -23,6 +23,7 @@ from stocks.domain.models import Account, Position
 from stocks.engine.advisory_mainline import resolve_mainline_llm_client
 from stocks.engine.asset_intake_parser import parse_asset_intake
 from stocks.engine.asset_intake_writer import AssetIntakeWriter
+from stocks.engine.atomic_io import atomic_write_json
 from stocks.engine.llm_asset_intake import parse_llm_asset_intake
 from stocks.logging_utils import get_logger
 
@@ -454,11 +455,11 @@ def apply_intake_draft(engine: Any, draft_dict: dict, token: str) -> dict:
     if result.get("status") != "applied":
         return {"success": False, **result}
 
-    # Persist: timestamped backup + atomic-ish write, then reload engine state.
+    # Persist: timestamped backup + atomic write, then reload engine state.
     path = _asset_path(engine)
     backup_path = path.with_name(f"financial_assets.intake-{_backup_stamp()}.bak.json")
     shutil.copy2(path, backup_path)
-    path.write_text(json.dumps(work, ensure_ascii=False, indent=2), "utf-8")
+    atomic_write_json(path, work)
 
     for change in staged:
         if change["type"] == "update_profile":
