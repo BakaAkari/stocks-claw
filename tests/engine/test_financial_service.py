@@ -337,3 +337,30 @@ async def test_build_context_uses_configured_directory_and_real_personal_facts(f
     after = _files_hash(output / ".local")
     for path, value in before.items():
         assert after[path] == value, f"context construction changed confirmed fact {path}"
+
+
+async def test_context_history_does_not_settle_confirmed_overdue_forecasts(finance):
+    from stocks.domain.models import ForecastRecord
+
+    adapter, output = finance
+    record = ForecastRecord(
+        id="overdue-confirmed", created_at="2026-01-01T00:00:00Z",
+        statement="Simulated forecast for read-only regression", target="a:518880",
+        metric="close", comparator="above", level=1, deadline="2026-01-02",
+        confidence="low", status="open",
+    )
+    payload = {k: v for k, v in record.to_dict().items()
+               if k not in {"created_at", "status", "resolved_at", "resolution_note"}}
+    call(adapter, "forecast_save", {"forecast": payload, "confirmed": True})
+    before = _files_hash(output / ".local")
+    context = await adapter.engine.build_context(
+        include_news=False, include_quotes=False, include_history=True,
+    )
+    after = _files_hash(output / ".local")
+    for path, value in before.items():
+        assert after[path] == value, f"analysis changed existing financial memory: {path}"
+    assert context.forecast_summary["open_count"] == 1
+    assert context.forecast_summary["recent_settlements"] == []
+    assert adapter.engine.persistence.list_forecasts()[0]["status"] == "open"
+    context.engine_config["read_only_regression"] = True
+    assert "read_only_regression" not in adapter.engine._config

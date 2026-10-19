@@ -18,6 +18,13 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts.advisory_artifact import validate_advisory_artifact
+from scripts.build_push_payload import (
+    build_push_payload,
+    render_push_payload,
+    validate_payload_text,
+    validate_push_truth,
+)
 from scripts.smoke_decision_review import _call, _files_hash, _isolated_adapter
 from scripts.smoke_financial_reconciliation import run_smoke as finance_smoke
 from stocks.domain.models import Instrument, Quote
@@ -103,6 +110,13 @@ def _run_smoke(output):
     finance = finance_smoke(output, share_scale=10)
     adapter = _isolated_adapter(output)
     artifact, analyst = asyncio.run(_produce(adapter, output))
+    validate_advisory_artifact(artifact, require_primary=True)
+    payload = build_push_payload(artifact, now=artifact["generated_at"], require_lineage=True)
+    report = render_push_payload(payload)
+    delivery_errors = validate_push_truth(payload) + validate_payload_text(payload, report)
+    if delivery_errors:
+        raise RuntimeError(f"simulated report failed delivery validation: {delivery_errors}")
+    (output / "advisory-report.txt").write_text(report, encoding="utf-8")
     (output / "advisory-run.json").write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
     decision = artifact["portfolio_decision"]
     if decision["status"] != "approved" or len(decision["approved_actions"]) != 1:
@@ -158,6 +172,7 @@ def _run_smoke(output):
                "finance_smoke": finance, "decision_id": did, "source_advisory_id": action["source_advisory_id"],
                "snapshot_hash": lineage["snapshot_hash"], "validation_receipt_hash": action["validation_receipt_hash"],
                "private_io_guard": True, "prompt_and_raw_preserved": True, "display_linked": True, "unconfirmed_writes": 0,
+               "deterministic_delivery_validated": True,
                "duplicates_added": 0, "review_read_only": True, "cashflow_CNY": 849,
                "cashflow_is_profit": False, "future_market_observation": "not_requested",
                "final_llm_report_verified": False, "output_dir": str(output)}

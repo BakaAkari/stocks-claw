@@ -1,6 +1,45 @@
 # STATUS.md
 
-## 当前状态：Hermes 唯一入口契约加固完成，未部署 NAS
+## 当前状态：HARDEN-01 分析与交付边界加固完成，整体未达到生产验收
+
+2026-10-19。用户要求全面审查并增强系统；本轮完成的单一实现任务是
+[TASK-HARDEN-01](docs/tasks/TASK-HARDEN-01-analysis-delivery-boundaries.md)。
+[系统审查与后续实施顺序](docs/analysis/system-hardening-2026-10-19.md) 覆盖金融事实、
+输入证据、建议、展示、调度、用户适配、评价和部署，区分代码缺口与真实验收缺口。
+
+### 本轮实现
+
+- `build_context` 不再自动结算、写回预测；历史金融记录只读，分析缓存/产物仍可保存。
+- AnalysisContext 通过 `replace` 填充已声明的运行时字段，配置与引擎对象隔离。
+- 四主窗口报告入口核对完整 Advisory 来源、快照/receipt/展示哈希、原提案和动作关联；
+  缺失来源、跨窗口错配、重复或遗漏动作、改写内容均拒绝。
+- 无模型/关闭模型保留明确的待复核封套，不恢复规则动作。
+- 现有 cron 调用的 `run_llm_report.py` 对四主窗口采用确定性展示，保留上游 LLM 的分析；
+  第二次自由文本改写不再触碰交易动作。主窗口手动重发也不能绕过时效。
+- 缺少市场研判引用时只将 outlook 标为待复核，保留独立通过校验的持仓提案。
+- Hypothesis 旁路失败保留日志与 artifact 错误；payload 在最终文本校验通过后才落盘。
+- 修正文档中 MCP 入口未接入、主窗口未接 Advisory、观察窗口默认可用等过时描述。
+
+### 本轮验证
+
+- 全量 pytest：**1846 passed / 7 skipped / 0 failed**；日志 `/tmp/stocks-harden01-pytest.log`。
+- 本轮变更 Python 文件 Ruff 通过；全仓 Ruff 仍有 **39 条既有诊断，分布在 13 个本轮未修改文件**，
+  不宣称全仓静态检查通过；日志 `/tmp/stocks-harden01-ruff.log`。
+- `compileall stocks tests scripts` 与 `git diff --check` 通过。
+- 实际隔离 smoke：`scripts/smoke_advisory_lineage.py` 通过，新增最终确定性报告校验；
+  未确认写入为 0、重复新增为 0、只读复盘通过。日志 `/tmp/stocks-harden01-smoke.log`。
+- 模拟 smoke 不代表在线模型、真实行情、真实账户、NAS、飞书送达或投资有效性验收。
+
+### 仍需完成
+
+依次处理真实账户只读就绪与证据时点、确认费用预算、整批组合约束投影、
+core/tactical 候选—持有—退出流程、部署/备份恢复门禁，最后才是有固定定义的效果评估。
+买入/加仓的费用预算阻断和组合约束投影阻断仍保留，不能仅靠录入账户解除。
+本轮没有导入真实账户、写入真实金融记忆、修改密钥、部署、恢复 cron 或发送消息。
+用户已授权提交并推送 HARDEN-01；提交基线为 `60b756a`。此前独立的 Hermes/设计修改保留在工作区，
+不纳入本轮提交。上述全量测试结果来自工作区，包含此前未提交的独立测试。
+
+## 上轮记录：Hermes 唯一入口契约加固（历史快照）
 
 2026-10-18。当前任务为
 [DOC-02 确认来源与内容哈希加固](docs/tasks/TASK-DOC-01-operating-model-hardening.md)。

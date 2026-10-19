@@ -55,7 +55,7 @@ from stocks.engine.event_calendar import (
 )
 from stocks.engine.exchange_rate import convert_to_cny
 from stocks.engine.fetchers import DataFetcher
-from stocks.engine.forecasts import settle_due_forecasts, summarize_forecasts
+from stocks.engine.forecasts import summarize_forecasts
 from stocks.engine.history_cache import HistoryCache
 from stocks.engine.history_provider import CompositeKLineProvider, warm_history_cache
 from stocks.engine.llm_analysis import LLMAnalysis
@@ -1462,13 +1462,9 @@ class StocksEngine:
             execution_records = self.persistence.list_executions()
             user_decisions = self.persistence.list_decisions()
             forecast_records = self.persistence.list_forecasts()
-            forecast_records, settled_forecasts = await settle_due_forecasts(
-                forecast_records,
-                watchlist=list(self._watchlist) + list(self._sector_scan),
-                history_cache=self.history_cache,
-            )
-            for record in settled_forecasts:
-                self.persistence.save_forecast(record)
+            # Analysis reads confirmed records; it must not turn later prices
+            # into unconfirmed financial-memory updates. Settlement remains an
+            # explicit review operation, separate from context construction.
             forecast_summary = summarize_forecasts(forecast_records)
 
         # 5. 构建 AnalysisContext
@@ -1498,9 +1494,11 @@ class StocksEngine:
         )
 
         # 注入引擎运行时配置，使下游分析管道可直接访问阈值/风控参数
-        object.__setattr__(context, 'engine_config', self._config)
-        object.__setattr__(context, 'personal_mandate', self.personal_mandate())
-        object.__setattr__(context, 'financial_integrity', self.financial_integrity())
+        context = replace(
+            context, engine_config=deepcopy(self._config),
+            personal_mandate=self.personal_mandate(),
+            financial_integrity=self.financial_integrity(),
+        )
 
         # 保存最小快照，供下一次上下文进行前后对照。
         self.persistence.save_context(context)

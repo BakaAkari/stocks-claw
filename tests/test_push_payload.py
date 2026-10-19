@@ -13,6 +13,7 @@ from scripts.build_push_payload import (
     validate_payload_text,
     validate_push_truth,
 )
+from tests.advisory_artifacts import blocked_artifact
 
 
 def test_account_cash_scope_renders_unknown_available_without_zero_or_currency_aggregation():
@@ -362,14 +363,14 @@ def test_cli_rejects_hostile_action_text_before_writing_output(tmp_path):
         text=True,
     )
     assert result.returncode == 2
-    assert "action text percentage" in result.stderr
+    assert "missing decision authority" in result.stderr
     assert not output.exists()
 
 
 def test_cli_fail_closed_and_writes_atomic_payload(tmp_path):
     artifact = tmp_path / "artifact.json"
     output = tmp_path / "push.json"
-    artifact.write_text(json.dumps(_artifact(), ensure_ascii=False), encoding="utf-8")
+    artifact.write_text(json.dumps(blocked_artifact(_artifact()), ensure_ascii=False), encoding="utf-8")
     script = Path(__file__).parents[1] / "scripts" / "build_push_payload.py"
     result = subprocess.run(
         [

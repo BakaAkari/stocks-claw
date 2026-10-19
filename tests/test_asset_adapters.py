@@ -724,7 +724,7 @@ def test_cli_forecast_save_and_list(adapter_engine, capsys):
     assert listed["data"][0]["metric"] == "close"
 
 
-def test_due_forecast_settles_and_feeds_context(adapter_engine):
+def test_due_forecast_stays_confirmed_and_open_during_context_read(adapter_engine):
     instrument = Instrument("588000", "科创50ETF", "a")
     adapter_engine._watchlist = [instrument]
     history = pd.DataFrame([
@@ -768,19 +768,18 @@ def test_due_forecast_settles_and_feeds_context(adapter_engine):
 
     assert context_result["success"] is True
     summary = context_result["data"]["forecast_summary"]
-    assert summary["open_count"] == 0
-    assert summary["recent_settlements"][0]["id"] == "fixture-hit"
-    assert summary["recent_settlements"][0]["status"] == "hit"
+    assert summary["open_count"] == 1
+    assert summary["recent_settlements"] == []
     prompt = context_result["data"]["raw_prompt_input"]
     assert "【复盘】" in prompt
     assert "4. 到期预测结算" in prompt
     assert "fixture-hit" not in prompt
-    assert "a:588000 | hit | 科创50ETF 到期收盘高于 1.0" in prompt
+    assert "a:588000 | hit | 科创50ETF 到期收盘高于 1.0" not in prompt
     assert "样本不足" in prompt
     assert "累计命中率" not in prompt
     assert "胜率" not in prompt
     assert "概率" not in prompt
-    assert adapter_engine.persistence.list_forecasts()[0]["status"] == "hit"
+    assert adapter_engine.persistence.list_forecasts()[0]["status"] == "open"
 
 
 def test_mcp_confirmed_memory_updates_feed_personal_advice_context(adapter_engine):

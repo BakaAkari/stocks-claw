@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+if __package__:
+    from .advisory_artifact import validate_advisory_artifact
+else:
+    from advisory_artifact import validate_advisory_artifact
+
 _SESSION_LABELS = {
     "cn_post_open": "A股开盘后",
     "cn_after_close": "A股盘后复盘",
@@ -96,7 +101,8 @@ def _has_content(view: dict) -> bool:
     return bool(card.get("actions") or card.get("status") == "manual_review")
 
 
-def build_push_payload(artifact: dict, *, now: str, max_age_min: float | None = 45) -> dict:
+def build_push_payload(artifact: dict, *, now: str, max_age_min: float | None = 45,
+                       require_lineage: bool = False) -> dict:
     """Build the sanitized push payload.
 
     ``max_age_min`` bounds how stale an artifact may be before it is rejected
@@ -106,9 +112,17 @@ def build_push_payload(artifact: dict, *, now: str, max_age_min: float | None = 
     (rejecting near-future timestamps, ``age < -1``) is always kept as a
     sanity check against clock skew / bad inputs.
     """
+    validate_advisory_artifact(artifact, require_primary=require_lineage)
     session = str(artifact.get("session") or "")
     if session not in _SESSION_LABELS:
         raise ValueError(f"unsupported session: {session}")
+    if require_lineage and session == "global_intelligence_watch":
+        if artifact.get("market") != "intelligence":
+            raise ValueError("intelligence session/market mismatch")
+        decision = artifact.get("portfolio_decision") or {}
+        displayed = ((decision.get("user_view") or {}).get("instruction_card") or {}).get("actions")
+        if decision.get("approved_actions") or displayed:
+            raise ValueError("intelligence session cannot deliver portfolio actions")
     if ((artifact.get("agent_task") or {}).get("task_version")) != 5:
         raise ValueError("task_version must be 5")
     is_intel = artifact.get("market") == "intelligence"
@@ -2050,18 +2064,18 @@ def main() -> int:
     args = parser.parse_args()
     try:
         artifact = json.loads(Path(args.artifact).read_text(encoding="utf-8"))
-        if artifact.get("session") != args.session:
+        if not isinstance(artifact, dict) or artifact.get("session") != args.session:
             raise ValueError("session mismatch")
-        payload = build_push_payload(artifact, now=args.now)
+        payload = build_push_payload(artifact, now=args.now, require_lineage=True)
         truth_errors = validate_push_truth(payload)
         if truth_errors:
             raise ValueError("; ".join(truth_errors))
         payload_text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-        _atomic_write(Path(args.output), payload_text)
         output = payload_text if args.format == "json" else render_push_payload(payload)
         errors = validate_payload_text(payload, output) if args.format == "markdown" else []
         if errors:
             raise ValueError("; ".join(errors))
+        _atomic_write(Path(args.output), payload_text)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 2

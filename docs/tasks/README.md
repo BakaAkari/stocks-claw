@@ -21,15 +21,14 @@ from `ROADMAP.md`, `ARCHITECTURE.md`, or `stocks/DATA_MODEL.md`.
 
 ## Current task
 
-**DOC-02 确认来源与内容哈希加固**
-（[任务方案与验收标准](TASK-DOC-01-operating-model-hardening.md)）。
-沿用 DOC-01 的运行模型，为 profile、constraints、对账单、现金变动和成交记录补充
-不可变确认事件与内容哈希；旧文件保持未验证。完整规则见
-[Operating Model v1](../contracts/operating-model-v1.md)。本任务不新增指标、不部署 NAS、
-不恢复 cron，也不导入真实账户。
+**HARDEN-01 分析与交付边界加固**
+（[任务与验收标准](TASK-HARDEN-01-analysis-delivery-boundaries.md)）。
+本轮结果、当前基线和待验收内容统一见 `../../STATUS.md`。
+全系统审查和后续实施顺序见
+[系统健壮性审查](../analysis/system-hardening-2026-10-19.md)。
 
-TRUST-01、DECISION-01 与 EVAL 的代码和契约保留为已有基础。旧结算记录不作策略真值，
-旧胜率不作反馈；其当前状态只在 STATUS 顶部说明。
+DOC-02、TRUST-01、DECISION-01 与 EVAL 作为已有基础保留；旧结算记录不作策略真值，
+旧胜率不作生产反馈。后续功能须单独定义任务和验收，不把本轮边界加固当作 L2-L5 通过。
 
 ## Backlog (do not start before the current task closes)
 

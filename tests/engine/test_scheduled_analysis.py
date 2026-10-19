@@ -225,6 +225,28 @@ def test_runner_writes_latest_and_skips_duplicate(tmp_path):
     assert duplicate["status"] == "skipped_duplicate"
 
 
+def test_optional_hypothesis_failure_is_recorded_without_rule_fallback(tmp_path, monkeypatch, caplog):
+    import stocks.engine.scheduled_analysis as scheduled
+    from scripts.advisory_artifact import validate_advisory_artifact
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("simulated diagnostic store failure")
+
+    monkeypatch.setattr(scheduled, "auto_check_hypotheses", fail)
+    config = _config(tmp_path)
+    config["llm"] = {"advisory_mainline": {"enabled": False}}
+    runner = ScheduledAnalysisRunner(FakeEngine(_context()), config=config,
+                                     artifact_dir=config["artifact_dir"], repo_root=tmp_path)
+    result = _run(runner.run_session("cn_post_open", now=datetime.fromisoformat("2026-07-06T09:55:00+08:00")))
+    artifact = json.loads(Path(result["paths"]["json_path"]).read_text())
+    assert artifact["diagnostic_errors"] == [{"component": "hypothesis_tracker",
+        "error_type": "RuntimeError", "error": "simulated diagnostic store failure",
+        "affects_decision_authority": False}]
+    assert "simulated diagnostic store failure" in caplog.text
+    assert artifact["portfolio_decision"]["approved_actions"] == []
+    validate_advisory_artifact(artifact, require_primary=True)
+
+
 def test_due_run_reports_degraded_when_artifact_is_generated(tmp_path):
     config = _config(tmp_path)
     runner = ScheduledAnalysisRunner(

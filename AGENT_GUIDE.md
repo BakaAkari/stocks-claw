@@ -34,7 +34,9 @@ stocks-claw 是个人投资分析师系统。当前 checkout 同时保留规则�
 在 NAS 通过 L3/L4 门禁前：
 
 - 交易窗口产物以结构化 `portfolio_decision.user_view` 为展示主结构；
-- 主窗口可以附加已过滤 `outlook`，观察窗口可以附加 `outlook_delta`；
+- 主窗口可以附加已过滤 `outlook`；当前观察窗口集合为空，不会产出调度 `outlook_delta`；
+- 主窗口动作只来自 Advisory 校验结果；报告 CLI 要求完整来源关联，最终展示不再由第二个 LLM 改写；
+- `--force-llm` 只保留情报窗口重发语义，不绕过主窗口时效或来源校验；
 - Agent 不得从内部 action_cards、decision_id、position_id 或兼容字段自行构造动作；
 - 数据异常、stale、fallback、锁定和结算边界必须展示；
 - 研究候选不能进入交易指令卡；
@@ -85,8 +87,8 @@ Validator 可以拒绝、警告、计算确定性金额或要求 LLM 修正一�
 
 ## 5. 金融记忆写入规则
 
-自然语言资产入口已有 CLI 草稿/确认路径；MCP 入口和跨渠道验收仍待完成（见 `ARCHITECTURE.md`）。
-在完整入口落地前，
+自然语言资产入口已有 CLI/MCP 草稿与确认路径；真实账户和在线提取验收仍需单独完成。
+
 外部 Agent 可以帮助用户组织资产写接口，但必须：
 
 1. 先列出将新增、修改、删除的字段；

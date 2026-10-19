@@ -61,6 +61,15 @@ The operating order and deployment gates are defined in
 
 The legacy `--llm-analysis` entrypoint is intentionally disabled and is not the target Advisory path.
 
+Primary CN/US report commands require a frozen Advisory lineage and render its
+validated view deterministically, including the existing `run_llm_report.py`
+cron entrypoint. `--force-llm` cannot bypass primary-session freshness or lineage
+checks. Intelligence-only narration retains its separate LLM path.
+Context construction may persist derived caches/artifacts, but never automatically
+settles or rewrites confirmed forecasts. See the
+[hardening review](docs/analysis/system-hardening-2026-10-19.md) for remaining gaps.
+
+
 ## Financial memory
 
 Reads do not require confirmation:

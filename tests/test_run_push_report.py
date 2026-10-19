@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.advisory_artifacts import blocked_artifact
 from tests.test_push_payload import _action, _artifact, _full_outlook_artifact
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "run_push_report.py"
@@ -13,7 +14,7 @@ SCRIPT = Path(__file__).parents[1] / "scripts" / "run_push_report.py"
 def test_entrypoint_renders_and_persists_sanitized_payload(tmp_path):
     root = tmp_path / "latest"
     root.mkdir()
-    (root / "cn_after_close.json").write_text(json.dumps(_artifact(), ensure_ascii=False))
+    (root / "cn_after_close.json").write_text(json.dumps(blocked_artifact(_artifact()), ensure_ascii=False))
     payload = tmp_path / "payload"
     r = subprocess.run(
         [
@@ -60,7 +61,7 @@ def test_entrypoint_renders_and_persists_sanitized_payload(tmp_path):
 def test_entrypoint_fails_loudly_on_invalid_or_stale_artifact(tmp_path):
     root = tmp_path / "latest"
     root.mkdir()
-    bad = _artifact()
+    bad = blocked_artifact(_artifact())
     bad["generated_at"] = "2026-07-16T00:00:00+00:00"
     (root / "cn_after_close.json").write_text(json.dumps(bad))
     r = subprocess.run(
@@ -92,7 +93,7 @@ def test_entrypoint_fails_loudly_when_push_truth_violated(tmp_path):
     delivery even though it never touches build_push_payload's own checks."""
     root = tmp_path / "latest"
     root.mkdir()
-    bad = _artifact()
+    bad = blocked_artifact(_artifact())
     bad["portfolio_decision"]["user_view"]["instruction_card"]["actions"] = [
         _action(final_ratio=0.25, reason_summary="化工ETF（516020）：减仓 50%")
     ]
@@ -117,7 +118,7 @@ def test_entrypoint_fails_loudly_when_push_truth_violated(tmp_path):
     assert r.returncode != 0
     assert r.stdout == ""
     assert "INVALID:" in r.stderr
-    assert "disagrees with final_ratio" in r.stderr
+    assert "display hash mismatch" in r.stderr
     assert not (payload / "cn_after_close.json").exists()
 
 
@@ -132,7 +133,7 @@ def test_entrypoint_renders_outlook_section(tmp_path):
     root = tmp_path / "latest"
     root.mkdir()
     (root / "cn_after_close.json").write_text(
-        json.dumps(_full_outlook_artifact(), ensure_ascii=False)
+        json.dumps(blocked_artifact(_full_outlook_artifact()), ensure_ascii=False)
     )
     payload_dir = tmp_path / "payload"
     r = subprocess.run(

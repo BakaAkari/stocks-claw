@@ -242,6 +242,12 @@ def _project_forecast_candidates(advisory: InvestmentAdvisory) -> list[dict]:
 
 
 def _project_outlook(advisory: InvestmentAdvisory, receipt: Any, *, generated_at: str) -> dict:
+    source_refs = _project_source_refs(advisory)
+    if not source_refs:
+        # A valid position proposal is not evidence for a market outlook. Keep
+        # its lineage/actions, but do not advertise uncited commentary as ok.
+        return {**_unavailable("研判待复核：缺少可追溯的市场研判引用", generated_at=generated_at),
+                "advisory_receipt": asdict(receipt)}
     return {
         "status": "ok",
         "generated_at": generated_at,
@@ -249,7 +255,7 @@ def _project_outlook(advisory: InvestmentAdvisory, receipt: Any, *, generated_at
         "near_term": _project_horizon(advisory.short_term, "3-7天"),
         "medium_term": _project_horizon(advisory.medium_term, "1-3个月"),
         "scenarios": _project_scenarios(advisory.scenarios),
-        "source_refs": _project_source_refs(advisory),
+        "source_refs": source_refs,
         "sector_views": _project_views(advisory.sector_opportunities, key="sector"),
         "asset_views": _project_views(advisory.asset_class_opportunities, key="asset_class"),
         "data_limitations": list(advisory.data_limitations)[:3],

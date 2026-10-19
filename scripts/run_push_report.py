@@ -29,7 +29,9 @@ def main() -> int:
     payload_path = Path(args.payload_root) / f"{args.session}.json"
     try:
         artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-        payload = build_push_payload(artifact, now=now)
+        if not isinstance(artifact, dict) or artifact.get("session") != args.session:
+            raise ValueError("artifact session mismatch")
+        payload = build_push_payload(artifact, now=now, require_lineage=True)
         truth_errors = validate_push_truth(payload)
         if truth_errors:
             raise ValueError("; ".join(truth_errors))

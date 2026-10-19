@@ -4,6 +4,7 @@ TASK-013 (2026-08-17): 切回 LLM 渲染, 让 agent_task 的 render_discipline �
 失败降级确定性渲染。这里锁定的是 LLM 输出的专属文本门禁(_validate_llm_text),
 不依赖真实 LLM 调用。
 """
+import json as _json
 import sys
 from pathlib import Path
 
@@ -15,7 +16,11 @@ except ImportError:  # pragma: no cover
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "scripts"))
 
+import run_llm_report as _rlr  # noqa: E402
 from run_llm_report import _validate_llm_text  # noqa: E402
+
+from tests.advisory_artifacts import blocked_artifact  # noqa: E402
+from tests.test_push_payload import _artifact  # noqa: E402
 
 
 def _payload(actions=None):
@@ -73,20 +78,21 @@ def test_validate_llm_accepts_intel_without_actions():
 # + 失败日志落盘; 保留 --no-llm / --force-llm 手动路径。
 # ---------------------------------------------------------------------------
 
-import json as _json
-import run_llm_report as _rlr
-from tests.test_push_payload import _artifact
 
 
-def _run_main(monkeypatch, tmp_path, args, *, now="2026-07-17T15:27:00+08:00"):
+def _run_main(monkeypatch, tmp_path, args, *, now="2026-07-17T15:27:00+08:00", intelligence=False):
     """把合法 artifact 写进 tmp 后以 monkeypatch 的 sys.argv 跑 main()。"""
     root = tmp_path / "latest"
     root.mkdir(parents=True, exist_ok=True)
-    (root / "cn_after_close.json").write_text(
-        _json.dumps(_artifact(), ensure_ascii=False), encoding="utf-8"
+    session = "global_intelligence_watch" if intelligence else "cn_after_close"
+    artifact = _artifact(session) if intelligence else blocked_artifact(_artifact())
+    if intelligence:
+        artifact["market"] = "intelligence"
+    (root / f"{session}.json").write_text(
+        _json.dumps(artifact, ensure_ascii=False), encoding="utf-8"
     )
     argv = [
-        "run_llm_report.py", "--session", "cn_after_close",
+        "run_llm_report.py", "--session", session,
         "--artifact-root", str(root),
         "--payload-root", str(tmp_path / "payload"),
     ] + args
@@ -107,7 +113,7 @@ def test_main_fails_loud_after_3_llm_failures(monkeypatch, tmp_path, capsys):
         raise RuntimeError("vllm down")
 
     monkeypatch.setattr(_rlr, "_render_llm", boom)
-    rc = _run_main(monkeypatch, tmp_path, [])
+    rc = _run_main(monkeypatch, tmp_path, [], intelligence=True)
     assert rc == 3
     assert calls["n"] == 3, f"expected 3 attempts, got {calls['n']}"
     out = capsys.readouterr()
@@ -117,7 +123,7 @@ def test_main_fails_loud_after_3_llm_failures(monkeypatch, tmp_path, capsys):
     assert "FAILED after 3 attempts" in out.err
     assert "--force-llm" in out.err
     # 失败日志落盘 3 次
-    logf = tmp_path / "errlog" / "cn_after_close.log"
+    logf = tmp_path / "errlog" / "global_intelligence_watch.log"
     assert logf.exists()
     content = logf.read_text(encoding="utf-8")
     assert content.count("attempt=") == 3
@@ -134,7 +140,7 @@ def test_main_retries_then_succeeds_on_second_attempt(monkeypatch, tmp_path, cap
         return "**交易指令卡**\n- 科创50ETF（588000）：止盈 60%\n\n**私人投资助理**\n多空震荡。"
 
     monkeypatch.setattr(_rlr, "_render_llm", flaky)
-    rc = _run_main(monkeypatch, tmp_path, [])
+    rc = _run_main(monkeypatch, tmp_path, [], intelligence=True)
     assert rc == 0
     assert calls["n"] == 2
     out = capsys.readouterr()
@@ -144,14 +150,15 @@ def test_main_retries_then_succeeds_on_second_attempt(monkeypatch, tmp_path, cap
 def test_force_llm_skips_age_gate_but_regular_gate_holds(monkeypatch, tmp_path, capsys):
     """--force-llm 跳过 age 上限(重发旧 artifact); 常规路径仍被 age 门禁拦。"""
     # 把 artifact 的 generated_at 改到 3 天前, 让 age 远超 45min 门禁。
-    artifact = _artifact()
+    artifact = _artifact("global_intelligence_watch")
+    artifact["market"] = "intelligence"
     artifact["generated_at"] = "2026-07-14T07:25:00+00:00"
     root = tmp_path / "latest"
     root.mkdir(parents=True, exist_ok=True)
-    (root / "cn_after_close.json").write_text(
+    (root / "global_intelligence_watch.json").write_text(
         _json.dumps(artifact, ensure_ascii=False), encoding="utf-8"
     )
-    argv = ["run_llm_report.py", "--session", "cn_after_close",
+    argv = ["run_llm_report.py", "--session", "global_intelligence_watch",
             "--artifact-root", str(root),
             "--payload-root", str(tmp_path / "payload"),
             "--now", "2026-07-17T15:27:00+08:00"]
@@ -181,6 +188,22 @@ def test_main_no_llm_renders_deterministic(monkeypatch, tmp_path, capsys):
     assert "本窗口变化" in out.out
     payload = tmp_path / "payload" / "cn_after_close.json"
     assert payload.exists()
+
+
+@pytest.mark.parametrize("args", [[], ["--force-llm"], ["--no-llm"]])
+def test_primary_report_never_rewrites_approved_view_with_second_llm(monkeypatch, tmp_path, capsys, args):
+    def forbidden(*args, **kwargs):
+        pytest.fail("primary report must not call a second LLM")
+    monkeypatch.setattr(_rlr, "_render_llm", forbidden)
+    assert _run_main(monkeypatch, tmp_path, args) == 0
+    assert "**可执行动作**" in capsys.readouterr().out
+
+
+def test_primary_force_cannot_bypass_freshness(monkeypatch, tmp_path, capsys):
+    assert _run_main(monkeypatch, tmp_path, ["--force-llm"], now="2026-07-19T15:27:00+08:00") == 2
+    result = capsys.readouterr()
+    assert result.out == ""
+    assert "outside allowed range" in result.err
 
 
 def test_project_context_digest_strips_internal_tokens():

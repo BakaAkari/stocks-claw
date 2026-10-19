@@ -9,6 +9,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+if __package__:
+    from .advisory_artifact import validate_advisory_artifact
+else:
+    from advisory_artifact import validate_advisory_artifact
+
 # Reuse outlook leak-scan helpers (no evidence needed)
 from stocks.engine.outlook_validation import (
     _check_internal_tokens,
@@ -56,6 +61,11 @@ def main() -> int:
         artifact = json.loads(raw)
     except json.JSONDecodeError:
         return fail("invalid JSON")
+
+    try:
+        validate_advisory_artifact(artifact, require_primary=True)
+    except ValueError as exc:
+        return fail(str(exc))
 
     # ── Schema / version checks ─────────────────────────────────────
     if artifact.get("schema_version") != 1:

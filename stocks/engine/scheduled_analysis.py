@@ -516,6 +516,13 @@ def apply_advisory_authority(run: dict) -> None:
     run["portfolio_decision"] = deepcopy(
         lineage.get("portfolio_decision") if isinstance(lineage, dict) else None
     ) or empty_decision("LLM proposal unavailable; rule candidates are evidence only")
+    if not isinstance(lineage, dict):
+        run["advisory_lineage"] = {
+            "schema_version": 1, "author": "llm", "status": "unavailable",
+            "snapshot": None, "attempts": [], "advisory": None,
+            "validation_receipt": None,
+            "portfolio_decision": deepcopy(run["portfolio_decision"]),
+        }
     run["action_cards"] = deepcopy(run["portfolio_decision"].get("approved_actions") or [])
     run["cash_schedule"] = deepcopy(run["portfolio_decision"].get("cash_schedule") or {})
     run["capital_allocation"] = {}
@@ -726,8 +733,12 @@ class ScheduledAnalysisRunner:
                     if report:
                         mb = run.setdefault("mandatory_blocks", {})
                         mb["hypothesis_tracker"] = report
-            except Exception:
-                pass  # 非关键路径
+            except Exception as exc:
+                logger.exception("Hypothesis diagnostics failed for %s", run["run_id"])
+                run.setdefault("diagnostic_errors", []).append({
+                    "component": "hypothesis_tracker", "error_type": type(exc).__name__,
+                    "error": str(exc), "affects_decision_authority": False,
+                })
 
         # Outlook synthesis for primary windows; delta for observation windows.
         # These feed the single build_user_view() call below — no field is

@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
-"""LLM-first report renderer for stocks-claw push.
+"""Report entrypoint used by existing cron wrappers.
 
-Reads an artifact, renders the user-facing report via LLM (the agent_task prompt
-is consumed exactly as designed: output_structure + render_discipline + persona +
-must_not_do), validates the LLM output against the same fail-closed gates the
-deterministic renderer uses.
-
-TASK-013 (2026-08-17): 切回 LLM 渲染, 让 agent_task 的 render_discipline /
-output_structure(简洁化/论断 vs 罗列)真正生效——此前这些规则落在 LLM prompt 层
-但推送一直走确定性 run_push_report.py, 从未消费 agent_task, 故报告格式未变。
-
-TASK-014 (2026-08-17, Kari 拍板 B 方案): LLM 失败不再静默降级推送数据报告。
-- LLM 渲染失败自动重试, 最多 _LLM_MAX_ATTEMPTS 次(含首次)。
-- 全部失败 -> 标 fail, 非 0 退出码(3), stdout 保持空, 不推送数据;
-  失败原因落盘 .local/llm_render_errors/<session>.log。
-- Kari 手动重发: --force-llm(跳过 age 门禁, 仅 LLM 渲染)。
-- --no-llm 保留为显式手动兜底(强制确定性渲染, troubleshoot 用)。
-
-Usage:  run_llm_report.py --session cn_after_close [--now ISO]
-        [--artifact-root DIR] [--force-llm|--no-llm]
+Primary CN/US sessions render their verified Advisory view deterministically.
+The upstream analyst remains the sole LLM author of investment proposals.
+Intelligence-only sessions retain LLM narration and bounded retry behavior.
+--force-llm skips only the intelligence age bound, never primary freshness or
+lineage validation. --no-llm explicitly uses deterministic intelligence output.
+This command prepares report text; it does not authorize deployment or trading.
 """
 
 from __future__ import annotations
@@ -37,6 +25,7 @@ for p in (str(_HERE), str(_ROOT)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from advisory_artifact import PRIMARY_SESSIONS
 from build_push_payload import (  # noqa: E402
     _FORBIDDEN,
     build_push_payload,
@@ -44,6 +33,7 @@ from build_push_payload import (  # noqa: E402
     validate_payload_text,
     validate_push_truth,
 )
+
 
 def _load_render_cfg() -> dict:
     """报告渲染 LLM 配置：权威来源 engine.yaml llm.report_render。
@@ -353,23 +343,29 @@ def main() -> int:
     parser.add_argument("--no-llm", action="store_true",
                         help="显式手动兜底: 强制只用确定性渲染(troubleshoot)")
     parser.add_argument("--force-llm", action="store_true",
-                        help="手动重发: 跳过 age 门禁, 仅 LLM 渲染(失败标 fail 非0退出)")
+                        help="情报窗口手动重发；主窗口仍校验时效并使用确定性展示")
     args = parser.parse_args()
 
     now = args.now or datetime.now().astimezone().isoformat()
     artifact_path = Path(args.artifact_root) / f"{args.session}.json"
     payload_path = Path(args.payload_root) / f"{args.session}.json"
 
-    # force-llm(手动重发) 跳过 age 上限; 常规/--no-llm 保持 45min 门禁
-    max_age = None if args.force_llm else 45
+    # Only intelligence re-sends may bypass the age upper bound.
+    primary_session = args.session in PRIMARY_SESSIONS
+    max_age = None if args.force_llm and not primary_session else 45
     try:
         artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-        payload = build_push_payload(artifact, now=now, max_age_min=max_age)
+        if not isinstance(artifact, dict) or artifact.get("session") != args.session:
+            raise ValueError("artifact session mismatch")
+        payload = build_push_payload(artifact, now=now, max_age_min=max_age, require_lineage=True)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 2
 
-    if args.no_llm:
+    # Investment judgment already came from the frozen Advisory. A second free
+    # text model can invent/reverse actions while preserving a percentage, so
+    # primary reports use only the verified deterministic projection.
+    if args.no_llm or primary_session:
         return _render_deterministic(payload, payload_path)
 
     # ---- LLM 优先: 失败自动重试, 最多 _LLM_MAX_ATTEMPTS 次 ----
