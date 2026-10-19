@@ -53,7 +53,9 @@ class SimulatedAnalyst:
 
 async def _produce(adapter, output):
     engine = adapter.engine
-    smoke_now = datetime(2026, 10, 16, 7, 30, tzinfo=timezone.utc)
+    # Keep run/context/statement clocks coherent. Only this synthetic schedule
+    # permits weekends; real market calendars are not changed by the smoke.
+    smoke_now = datetime.now(timezone.utc)
 
     async def simulated_quotes(instruments):
         del instruments
@@ -70,7 +72,8 @@ async def _produce(adapter, output):
                    "execution_rules": deepcopy(load_engine_config()["execution_rules"]),
                    "markets": {"cn": {"enabled": True, "exchange_timezone": "Asia/Shanghai", "holidays": [],
                                        "sessions": [{"id": "cn_after_close", "time": "15:30",
-                                                     "intent": "after_close_review", "push": "normal"}]}}})
+                                                     "intent": "after_close_review", "push": "normal",
+                                                     "ignore_weekend": True}]}}})
     config["llm"]["advisory_mainline"] = {"enabled": True}
     runner = ScheduledAnalysisRunner(engine, config=config, artifact_dir=config["artifact_dir"],
                                      repo_root=output, advisory_client=analyst)

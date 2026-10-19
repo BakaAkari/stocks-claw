@@ -167,6 +167,10 @@ class CLIAdapter:
         asset_actions.add_argument("--financial-reconcile", nargs=2, metavar=("OPENING_ID", "CLOSING_ID"),
                                   help="核对两个确认时点之间的数量和现金（只读）")
         asset_actions.add_argument("--financial-integrity", action="store_true", help="读取最新核对及资产记忆差异")
+        asset_actions.add_argument("--financial-intake-template", choices=["a", "us"], help="输出单账户资料模板（不写入）")
+        asset_actions.add_argument("--financial-intake-preview", metavar="JSON", help="预检账户资料和核对差异（不写入）")
+        asset_actions.add_argument("--financial-intake-preview-file", metavar="PATH", help="从 JSON 文件只读预检账户资料")
+        asset_actions.add_argument("--financial-readiness", action="store_true", help="只读检查账户资料时效与缺失项")
         asset_actions.add_argument("--personal-mandate", action="store_true", help="读取个性化约束与未知项")
         parser.add_argument("--evaluation-database", metavar="PATH",
                             help="复盘使用的冻结行情数据库（只读）")
@@ -320,6 +324,16 @@ class CLIAdapter:
 
     async def _handle_asset_action(self, args: argparse.Namespace) -> Optional[dict]:
         try:
+            if args.financial_intake_template:
+                return {"success": True, "data": self.engine.financial_intake_template(args.financial_intake_template)}
+            if args.financial_intake_preview:
+                return {"success": True, "data": self.engine.financial_intake_preview(
+                    self._parse_json_object(args.financial_intake_preview), as_of=args.now)}
+            if args.financial_intake_preview_file:
+                payload = self._parse_json_object(Path(args.financial_intake_preview_file).read_text(encoding="utf-8"))
+                return {"success": True, "data": self.engine.financial_intake_preview(payload, as_of=args.now)}
+            if args.financial_readiness:
+                return {"success": True, "data": self.engine.financial_readiness(as_of=args.now)}
             if args.financial_reconcile:
                 return {"success": True, "data": self.engine.financial_reconcile(*args.financial_reconcile, as_of=args.now)}
             if args.financial_integrity:
@@ -330,7 +344,7 @@ class CLIAdapter:
                 return {"success": True, "data": self.engine.list_account_statements()}
             if args.cash_movement_list:
                 return {"success": True, "data": self.engine.list_cash_movements()}
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OSError) as exc:
             return {"success": False, "error": str(exc)}
         if args.decision_review:
             try:

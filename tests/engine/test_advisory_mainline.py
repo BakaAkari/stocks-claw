@@ -11,6 +11,8 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from stocks.domain.models import AnalysisContext, MarketState, PortfolioMapping
 from stocks.engine.advisory_mainline import (
     _apply_freshness_downgrade,
@@ -150,6 +152,25 @@ class _FakeClient:
 
 
 class TestBuildAdvisoryOutlook:
+    @pytest.mark.parametrize("generated,current", [
+        ("2026-07-31T00:00:00Z", NOW), ("2026-07-29", NOW),
+        (NOW, "not-a-time"), (NOW, "2026-07-29T08:00:00"),
+    ])
+    def test_invalid_or_future_time_never_reaches_model(self, generated, current):
+        client = _FakeClient()
+        result = build_advisory_outlook(_context(generated_at=generated), session_id="cn_after_close",
+                                        market="cn", llm_client=client, now=current)
+        assert result["status"] == "unavailable"
+        assert client.calls == 0
+
+    @pytest.mark.parametrize("seconds,called", [(-5401, False), (-5400, True), (60, True), (61, False)])
+    def test_snapshot_clock_skew_and_age_boundaries(self, seconds, called):
+        generated = (datetime.fromisoformat(NOW) + timedelta(seconds=seconds)).isoformat()
+        client = _FakeClient()
+        build_advisory_outlook(_context(generated_at=generated), session_id="cn_after_close",
+                               market="cn", llm_client=client, now=NOW)
+        assert bool(client.calls) is called
+
     def test_ok_with_fake_client(self) -> None:
         client = _FakeClient()
         outlook = build_advisory_outlook(
@@ -246,7 +267,7 @@ class TestBuildAdvisoryOutlook:
             llm_client=client, now=NOW,
         )
         assert outlook["status"] == "unavailable"
-        assert outlook["message"] == "研判待复核：数据快照过旧（下次定时窗口自动刷新）"
+        assert "时间无效、超前或过旧" in outlook["message"]
         assert client.calls == 0
 
     def test_missing_falsification_fails_validation(self) -> None:
@@ -275,7 +296,7 @@ class TestBuildAdvisoryOutlook:
 
     def test_two_outlooks_feed_outlook_delta(self) -> None:
         earlier = build_advisory_outlook(
-            _context(), session_id="cn_after_close", market="cn",
+            _context(generated_at="2026-07-29T15:00:00+08:00"), session_id="cn_after_close", market="cn",
             llm_client=_FakeClient(), now="2026-07-29T15:00:00+08:00",
         )
         later_payload = _valid_advisory_payload()

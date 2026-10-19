@@ -116,3 +116,18 @@ use or modify the user's financial memory. Production rules must naturally produ
 an executable recommendation; absent one, the smoke reports failure.
 
 This software supports analysis and research. It does not promise returns or execute trades.
+
+## Account evidence preview
+
+See [account intake and readiness](docs/contracts/account-intake-readiness-v1.md)
+for A-share/US templates, required broker evidence and the confirmation boundary.
+
+```bash
+.venv/bin/python -m stocks.adapters.cli --financial-intake-template a --output json
+.venv/bin/python -m stocks.adapters.cli --financial-intake-preview-file /absolute/private/account.json --output json
+.venv/bin/python -m stocks.adapters.cli --financial-readiness --output json
+.venv/bin/python scripts/smoke_account_readiness.py --output-dir /tmp/stocks-account-readiness-new
+```
+
+These APIs do not import or confirm facts. The smoke uses synthetic accounts in
+an isolated new directory; passing it does not establish real-account readiness.

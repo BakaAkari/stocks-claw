@@ -25,6 +25,7 @@ from stocks.engine.advisory_contract import validate_advisory
 from stocks.engine.advisory_lineage import build_advisory_lineage, empty_decision
 from stocks.engine.advisory_synthesizer import synthesize_advisory
 from stocks.engine.evaluation_contract import digest
+from stocks.engine.evaluation_contract import utc as strict_utc
 from stocks.engine.unified_snapshot import build_unified_snapshot
 from stocks.providers.openai_client import LLMClient
 
@@ -35,6 +36,7 @@ _STALE_FRESHNESS = frozenset({"stale", "old", "missing", "no_data", "unknown", "
 
 # Snapshot older than this relative to `now` is too old to judge.
 _MAX_SNAPSHOT_AGE_SECONDS = 90 * 60
+_MAX_SNAPSHOT_CLOCK_SKEW_SECONDS = 60
 
 # Direction mapping for sector / asset-class views derived from advisory actions.
 _DIRECTION_BY_ACTION = {
@@ -153,12 +155,18 @@ def _quotes_freshness_blocked(context: AnalysisContext, market: str) -> bool:
 
 
 def _snapshot_too_old(context: AnalysisContext, now: str) -> bool:
-    """True when the context snapshot is older than 90 minutes relative to now."""
-    generated = _parse_iso(str(getattr(context, "generated_at", "") or ""))
-    current = _parse_iso(now) or datetime.now(timezone.utc)
-    if generated is None:
+    """Reject invalid/naive, >90-minute-old or >60-second-future snapshots.
+
+    The runner timestamps the run before building context; tolerate at most a
+    minute of construction/clock skew, never arbitrary future evidence.
+    """
+    try:
+        generated = strict_utc(context.generated_at)
+        current = strict_utc(now) if now else datetime.now(timezone.utc)
+    except (TypeError, ValueError):
         return True
-    return (current - generated).total_seconds() > _MAX_SNAPSHOT_AGE_SECONDS
+    age = (current - generated).total_seconds()
+    return not -_MAX_SNAPSHOT_CLOCK_SKEW_SECONDS <= age <= _MAX_SNAPSHOT_AGE_SECONDS
 
 
 def _is_fallback_advisory(advisory: InvestmentAdvisory) -> bool:
@@ -379,7 +387,7 @@ def build_advisory_outlook(
     if _quotes_freshness_blocked(context, market):
         return unavailable("研判待复核：目标市场行情数据过旧或缺失（行情恢复后自动重试）")
     if _snapshot_too_old(context, now):
-        return unavailable("研判待复核：数据快照过旧（下次定时窗口自动刷新）")
+        return unavailable("研判待复核：数据快照时间无效、超前或过旧（请核对时钟并刷新）")
     if llm_client == "auto":
         clients = resolve_mainline_llm_clients(config or {})
     elif llm_client is None:

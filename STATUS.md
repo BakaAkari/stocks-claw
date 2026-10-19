@@ -1,6 +1,38 @@
 # STATUS.md
 
-## 当前状态：HARDEN-01 分析与交付边界加固完成，整体未达到生产验收
+## 当前状态：HARDEN-02 账户只读预检与证据时间加固完成，真实账户验收待资料
+
+2026-10-19。本轮任务为 [TASK-HARDEN-02](docs/tasks/TASK-HARDEN-02-account-readiness-evidence-time.md)。
+当前提交基线 `fbdf03c2da8d0a14a0b4e1184653bf20000475f9`（HARDEN-01 已推送）；
+本轮实现尚未提交。此前独立的 Hermes/设计修改继续保留，未被覆盖。
+
+### 本轮实现与边界
+
+- CLI/MCP 新增单账户资料模板、只读预检和就绪检查；返回具体错误与核对差异，不自动修账或导入。
+- 区分历史核对通过、当前事实可用与动作批准；账单过期/未来时点、缺少可用现金或数量、
+  未确认画像和约束均显式列出。MCP `agent_status` 同步这些缺口。
+- 快照缺失/无效时间、超前超过 60 秒或超过 90 分钟时阻断模型调用；宏观字段只用自己的来源时间。
+- 新增 [接入说明](docs/contracts/account-intake-readiness-v1.md) 与 A 股/美股空模板；未知值保留 null。
+- 尚无真实资料导入、确认写入、NAS 部署、cron 修改或消息发送。预检不是新批量写入器，也不授予建议权限。
+
+### 本轮验证
+
+- 全量 pytest：**1880 passed / 7 skipped**；日志 `/tmp/stocks-harden02-pytest.log`。
+- 本轮变更 Python 文件 Ruff 通过；全仓仍有 **39 条既有诊断**，日志 `/tmp/stocks-harden02-ruff.log`。
+- `compileall stocks tests scripts`、`git diff --check` 通过。
+- 实际运行 account-readiness 与 advisory-lineage 两条隔离 smoke 均通过；A 股/美股预检、
+  过期与跨账户阻断、只读金融文件哈希一致、确定性报告校验通过。
+  日志 `/tmp/stocks-harden02-account-smoke.log`、`/tmp/stocks-harden02-advisory-smoke.log`。
+- 模拟账户、行情、模型不能代替真实账户、在线模型或生产交付验收；测试包含此前独立未提交测试。
+
+### 下一步及用户输入
+
+完成 L2 真实账户核对需用户提供一个账户的两期完整账单（含可用余额/数量）、区间成交及实际费用、
+非交易现金变动，并分别确认资产路由、画像和约束。先只读核对展示差异，再请求确认写入；不需要密码。
+后续代码阶段依序为确认费用预算、整批组合约束投影、候选—持有—退出流程、运行交付门禁及效果评价。
+买入/加仓费用和组合投影阻断仍保留，不因预检通过而解除。
+
+## 上轮结果：HARDEN-01 分析与交付边界加固完成，整体未达到生产验收
 
 2026-10-19。用户要求全面审查并增强系统；本轮完成的单一实现任务是
 [TASK-HARDEN-01](docs/tasks/TASK-HARDEN-01-analysis-delivery-boundaries.md)。

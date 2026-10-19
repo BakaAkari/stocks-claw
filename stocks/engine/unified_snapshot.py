@@ -219,19 +219,20 @@ def _build_macro_facts(
     # fact 或把 6/1 的官方统计塞进无时间戳的 fact,一并跳过。
     _SKIP_MACRO_KEYS = frozenset({
         "field_sources", "official_stats", "errors",
-        "market_as_of", "official_as_of", "timestamp", "next_official_release",
+        "market_as_of", "official_as_of", "timestamp", "next_official_release", "source",
     })
-    as_of = str(context.generated_at or "")
     for key, value in macro.items():
         if key in _SKIP_MACRO_KEYS or value is None or value == "":
+            continue
+        if isinstance(value, (dict, list, tuple, bool)):
             continue
         # P4-1: macro fact 的 as_of 必须用数据自身时间戳,不能伪造为当前时间。
         # 此前统一用 context.generated_at,导致 6/1 的 CPI/失业率被标注为
         # 8/6 新鲜数据喂给研判,LLM 据此给"置信中"。field_sources 记录了
         # 每字段真实 as_of,优先使用。
         meta = field_sources.get(key) or {}
-        if meta.get("as_of"):
-            as_of = str(meta["as_of"])
+        # Unknown observation time remains unknown, independent of field order.
+        as_of = str(meta.get("as_of") or "") if isinstance(meta, dict) else ""
         unit = "index_points" if "vix" in key.lower() else "percent" if "rate" in key.lower() else "unknown"
         fact = _fact(f"macro:{key}", f"macro:{key}", value, unit, as_of, base_source)
         if fact is not None:

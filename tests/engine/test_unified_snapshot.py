@@ -24,6 +24,19 @@ from stocks.domain.models import (
 from stocks.engine.unified_snapshot import build_unified_snapshot
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_macro_missing_time_never_inherits_another_field_or_context_time(reverse):
+    from dataclasses import replace
+    pairs = [("vix", 20), ("gold", 100), ("us_10y_yield", 4), ("source", "fixture")]
+    macro = dict(reversed(pairs) if reverse else pairs)
+    macro["field_sources"] = {"vix": {"as_of": "2026-01-01"}, "gold": {"source": "fixture"}}
+    context = replace(_minimal_context(), macro_snapshot=macro)
+    facts = {f.fact_id: f for f in build_unified_snapshot(context).macro}
+    assert facts["macro:vix"].as_of == "2026-01-01"
+    assert facts["macro:gold"].as_of == facts["macro:us_10y_yield"].as_of == ""
+    assert "macro:source" not in facts
+
+
 def _minimal_context() -> AnalysisContext:
     """Return the smallest AnalysisContext that satisfies dataclass defaults."""
     return AnalysisContext(

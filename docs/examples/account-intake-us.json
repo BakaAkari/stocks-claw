@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "account_id": null,
+  "market": "us",
+  "opening_statement": {
+    "schema_version": 1,
+    "id": null,
+    "account_id": null,
+    "as_of": null,
+    "source": null,
+    "cash_basis": "settled",
+    "position_basis": "trade_date",
+    "scope": "complete_account",
+    "cash": [
+      {
+        "currency": "USD",
+        "balance": null,
+        "available_balance": null
+      }
+    ],
+    "positions": [
+      {
+        "instrument_id": null,
+        "unit": "share",
+        "quantity": null,
+        "available_quantity": null
+      }
+    ]
+  },
+  "closing_statement": {
+    "schema_version": 1,
+    "id": null,
+    "account_id": null,
+    "as_of": null,
+    "source": null,
+    "cash_basis": "settled",
+    "position_basis": "trade_date",
+    "scope": "complete_account",
+    "cash": [
+      {
+        "currency": "USD",
+        "balance": null,
+        "available_balance": null
+      }
+    ],
+    "positions": [
+      {
+        "instrument_id": null,
+        "unit": "share",
+        "quantity": null,
+        "available_quantity": null
+      }
+    ]
+  },
+  "executions": [],
+  "cash_movements": []
+}

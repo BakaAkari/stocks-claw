@@ -1036,6 +1036,22 @@ class StocksEngine:
         from stocks.engine.financial_service import integrity
         return integrity(self, as_of=as_of)
 
+    def financial_intake_template(self, market: str) -> dict:
+        from stocks.engine.financial_intake import intake_template
+        return intake_template(market)
+
+    def financial_intake_preview(self, bundle: dict, *, as_of=None) -> dict:
+        from stocks.engine.financial_intake import preview_intake
+        return preview_intake(bundle, as_of=as_of)
+
+    def financial_readiness(self, *, as_of=None) -> dict:
+        from stocks.engine.financial_intake import account_readiness
+        cutoff = as_of or datetime.now(timezone.utc).isoformat()
+        return account_readiness(
+            self.financial_integrity(as_of=cutoff), self.personal_mandate(), as_of=cutoff,
+            max_age_seconds=self._config.get("financial_statement_max_age_seconds", 86400),
+        )
+
     def decision_review(self, decision_id: str | None = None, *, as_of: str | None = None,
                         evaluation_database: str | None = None) -> dict:
         """Read the recommendation, user choices, fills and frozen observations."""

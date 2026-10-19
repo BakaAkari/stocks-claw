@@ -81,7 +81,8 @@ class MCPAdapter:
         elif method == "profile_get":
             return {"success": True, "data": self.engine.get_profile()}
         elif method in {"statement_save", "cash_movement_save", "statement_list", "cash_movement_list",
-                        "financial_reconcile", "financial_integrity", "personal_mandate", "constraints_replace"}:
+                        "financial_reconcile", "financial_integrity", "personal_mandate", "constraints_replace",
+                        "financial_intake_template", "financial_intake_preview", "financial_readiness"}:
             return self._financial_facts(method, params)
         elif method == "profile_update":
             return self._profile_update(params)
@@ -252,6 +253,15 @@ class MCPAdapter:
         except (TypeError, ValueError) as exc:
             integrity = {"status": "incomplete", "gaps": [str(exc)]}
         mandate = self.engine.personal_mandate()
+        from stocks.engine.financial_intake import account_readiness
+        readiness = account_readiness(
+            integrity, mandate, as_of=integrity.get("as_of"),
+            max_age_seconds=self.engine._config.get("financial_statement_max_age_seconds", 86400),
+        )
+        next_actions = _next_actions(integrity, mandate)
+        if readiness["status"] != "current_facts_available":
+            next_actions = [action for action in next_actions if action != "build_read_only_analysis_context"]
+            next_actions.append("review_current_account_evidence_gaps")
         return {
             "success": True,
             "data": {
@@ -259,7 +269,8 @@ class MCPAdapter:
                 "read_only": True,
                 "financial_integrity": integrity,
                 "mandate": mandate,
-                "next_actions": _next_actions(integrity, mandate),
+                "readiness": readiness,
+                "next_actions": next_actions,
                 "writes_require_user_confirmation": True,
                 "analysis_never_writes_financial_memory": True,
             },
@@ -324,7 +335,13 @@ class MCPAdapter:
             if error:
                 return error
         try:
-            if method == "constraints_replace":
+            if method == "financial_intake_template":
+                data = self.engine.financial_intake_template(params.get("market"))
+            elif method == "financial_intake_preview":
+                data = self.engine.financial_intake_preview(params.get("bundle"), as_of=params.get("as_of"))
+            elif method == "financial_readiness":
+                data = self.engine.financial_readiness(as_of=params.get("as_of"))
+            elif method == "constraints_replace":
                 data = self.engine.replace_portfolio_constraints(params.get("constraints"), confirmation_channel="mcp")
             elif method == "statement_save":
                 data = self.engine.save_account_statement(params.get("statement"), confirmation_channel="mcp")
@@ -652,6 +669,14 @@ class MCPAdapter:
                             "properties": {"opening_id": {"type": "string"}, "closing_id": {"type": "string"},
                                            "as_of": {"type": "string"}}}},
             {"name": "financial_integrity", "description": "只读核对最新账单与当前资产记忆的一致性",
+             "parameters": {"type": "object", "properties": {"as_of": {"type": "string"}}}},
+            {"name": "financial_intake_template", "description": "只读生成 A 股或美股单账户资料模板；未知项不填猜测值",
+             "parameters": {"type": "object", "required": ["market"],
+                            "properties": {"market": {"type": "string", "enum": ["a", "us"]}}}},
+            {"name": "financial_intake_preview", "description": "只读预检单账户账单、成交与现金变动；返回差异，不确认、不导入",
+             "parameters": {"type": "object", "required": ["bundle"],
+                            "properties": {"bundle": {"type": "object"}, "as_of": {"type": "string"}}}},
+            {"name": "financial_readiness", "description": "只读检查历史核对、账单时效和可用金额/数量；不授权投资建议",
              "parameters": {"type": "object", "properties": {"as_of": {"type": "string"}}}},
             {
                 "name": "decision_list", "description": "读取全部用户决定历史",
