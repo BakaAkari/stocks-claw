@@ -1,6 +1,6 @@
 # stocks-claw
 
-A single-user personal investment analyst system. It stores user-confirmed accounts, positions, and investment preferences; collects quotes, price history, news, filings, macro data, and events; and prepares traceable evidence for an LLM investment analyst to produce portfolio actions, market assessments, and opportunity candidates. The user remains the sole decision-maker and the system never places orders.
+A single-user personal investment analyst system. It stores user-confirmed accounts, positions, and investment preferences; collects quotes, price history, news, filings, macro data, and events; and prepares traceable evidence for an LLM investment analyst to produce portfolio actions, market assessments, and opportunity candidates. The user remains the sole decision-maker; the system never places orders autonomously (real broker execution is permitted only upon explicit per-order user approval).
 
 Development follows confirmed personal constraints → reconciled financial facts →
 traceable LLM proposals → user decisions and actual execution → review. The local
@@ -200,7 +200,7 @@ prices and explicitly simulated user decisions, portfolio and fills; it does not
 use or modify the user's financial memory. Production rules must naturally produce
 an executable recommendation; absent one, the smoke reports failure.
 
-This software supports analysis and research. It does not promise returns or execute trades.
+This software supports analysis and research. It does not promise returns or execute trades autonomously (any broker execution requires explicit per-order user approval).
 
 ## Account evidence preview
 

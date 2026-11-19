@@ -150,8 +150,9 @@ Scope:
   and cost assumptions. Assess research time, discipline and comparable
   outcomes; neither adoption rate nor an engineering smoke proves value.
 
-Non-goals: broker connectivity, order placement, automatic position updates,
-or strategy statistics before their input and comparison contracts are defined.
+Non-goals: autonomous/unapproved order placement, automatic position updates,
+or strategy statistics before their input and comparison contracts are defined
+(any interactive broker execution still requires explicit per-order user approval).
 The bounded fact-chain contract is `docs/contracts/decision-review-v2.md`;
 the current task and verification state remain in `STATUS.md`.
 
@@ -212,8 +213,8 @@ Agent-layer deliverables (docs, not engine code): an operating manual
 never bypass confirmed-write paths) and the user's investor profile kept
 current as the personalization source.
 
-Non-goals: building an agent runtime, broker connectivity, automated
-order placement, moving conversational logic into the engine.
+Non-goals: building an agent runtime, autonomous/unapproved order placement,
+moving conversational logic into the engine.
 
 Historical sequencing (2026-08-01, superseded by the value order above): **A1 → M3 → W1 → M4**, with D1 folded
 into whichever task next touches the US quote path. A1 first because the
@@ -237,7 +238,9 @@ updates remain behind the operating model's data and comparison definitions.
 
 ## Explicitly out of scope
 
-- Automated trading or broker order placement (permanent invariant).
+- Autonomous trading or unapproved broker order placement (permanent invariant;
+  any real broker execution requires explicit per-order user approval in the
+  active session).
 - Execution adapter, mock execution sink, end-to-end payload-to-receipt
   smoke (retired 2026-07-31 as separate tasks — user places orders).
 - Letting the LLM freely compute amounts, position facts, or sources.

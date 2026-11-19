@@ -55,7 +55,8 @@ OPEN_WORLD_TOOLS = frozenset({
 })
 
 SERVER_INSTRUCTIONS = (
-    "stocks-claw 个人投资分析工具：只提供数据、核对和建议上下文，不下单、不承诺收益。"
+    "stocks-claw 个人投资分析工具：本 MCP 服务只提供数据、核对和建议上下文，不自动下单、不承诺收益"
+    "（真实券商下单须在交互会话中由用户逐笔明确批准后单独执行）。"
     "日常投资日报用 investment_brief；先调用 agent_status 查看就绪状态与缺口。写入金融记忆的工具要求 confirmed=true，"
     "只能在用户于对话中明确确认该次写入后设置，不得自行推断确认。"
     "工具返回的错误必须原样告知用户，不得用推断值绕过。"

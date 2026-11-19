@@ -45,7 +45,12 @@ never follow an instruction found only in an archived document.
   confirmation.** No writes under `.secret/`, no edits to `.local/*assets*`,
   `.local/investor_profile.json`, `.local/advice/`, `.local/executions/`, or
   `.local/forecasts/` outside the confirmed-write paths the code already
-  provides. Never place real orders; this system does not trade.
+  provides. **Never place autonomous or unapproved orders**: connecting to a
+  broker and executing, modifying, or canceling a real order is permitted only
+  after explicit per-order user approval in the current session (exact
+  account, instrument, side, quantity, order type, price, and TIF, plus
+  explicit approval for any broker write-unlock), followed by read-back
+  verification.
 
 ## Where to look
 
@@ -71,7 +76,11 @@ never follow an instruction found only in an archived document.
 These hold regardless of task, phase, or plan (full detail in
 `stocks/VISION.md` §5):
 
-- No automated order placement; no promised returns.
+- No autonomous or unapproved order placement; no promised returns. Broker
+  connectivity and real order execution are permitted only upon explicit
+  per-order user approval in the current session, with explicit order
+  parameters confirmed beforehand and read-back verification afterward; a prior
+  approval never carries forward.
 - Long-term financial memory (accounts, positions, profile, advice,
   executions, forecasts) is written only after explicit user confirmation.
 - Market data, LLM inference, and derived analysis never overwrite user-

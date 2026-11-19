@@ -124,8 +124,11 @@ not execution.
 
 Record each fill independently, including side, quantity, price, currency,
 fees, account, execution time and settlement time when known. Independent user
-trades do not need a fabricated advice link. The system never places an order
-and never updates a position merely because a fill was recorded.
+trades do not need a fabricated advice link. The system never places an
+autonomous or unapproved order (broker execution is permitted only on explicit
+per-order user approval in an interactive session with confirmed order
+parameters and post-submission read-back verification) and never updates a
+position merely because an order was submitted or a fill was recorded.
 
 ### 7. Hold and review
 
