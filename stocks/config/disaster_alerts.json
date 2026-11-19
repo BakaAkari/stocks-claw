@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "host": "100.121.167.1",
+  "port": 8888,
+  "client_id": 171,
+  "expected_account": "U16075508",
+  "timeout_seconds": 25,
+  "history_max_age_seconds": 72000,
+  "sentinels_file": ".local/disaster_alerts/sentinel_levels.json",
+  "rules": {
+    "technical_warnings_enabled": false,
+    "warning_day_pct": -6.0,
+    "warning_five_day_pct": -12.0,
+    "warning_unrealized_pct": -15.0,
+    "disaster_day_pct": -12.0,
+    "disaster_day_atr_multiple": 3.0,
+    "disaster_five_day_pct": -20.0,
+    "disaster_five_day_atr_multiple": 4.0,
+    "account_warning_day_pct": -2.5,
+    "account_disaster_day_pct": -5.0,
+    "rearm_cooldown_minutes": 120,
+    "provider_failure_cooldown_minutes": 60
+  },
+  "market_data_type": 3
+}

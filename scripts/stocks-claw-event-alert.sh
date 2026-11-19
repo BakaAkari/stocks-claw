@@ -9,6 +9,7 @@ if [[ "$branch" != "$EXPECTED_BRANCH" ]]; then
   exit 40
 fi
 PYTHON=.venv/bin/python
+$PYTHON ./scripts/disaster_alert.py
 
 event_json=$($PYTHON -m stocks.adapters.cli --check-event-triggers 2>/dev/null || echo '{"triggered":[]}')
 triggered=$(printf '%s' "$event_json" | $PYTHON -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('triggered',[])))" 2>/dev/null || echo "0")

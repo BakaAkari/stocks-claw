@@ -1,5 +1,28 @@
 # STATUS.md
 
+## 系统整合升级：三层架构收口与高信噪哨兵上线（未提交）
+
+2026-11-19。解决 Mac (`7090598`) 与 NAS (`887084a` + 未提交生产修改) 代码分叉，并打通
+`stocks-claw` + IBKR 哨兵 + `trading-analyst v1.3.1` 联动闭环：
+
+- 仓库合流：将 NAS `asset_records.py`（`account_snapshots` 隔离）、`disaster_alert` 全套、
+  `ibkr_alerts.py`、`PRODUCT_SCOPE.md` 与测试完整合入当前代码库；统一 `engine.yaml`
+  `report_render` 与 `.secret` 凭据回退。
+- `investment_brief.py` 与引擎修复：过滤 `quantity <= 0` 已清仓记录（同步过滤运行期行情、
+  定向新闻与 `trader_metrics`）；`position_size` 改按在手 `market_quote` 持仓净值计算
+  （消除现金/固收/锁定保单对权重的稀释）。
+- 高信噪哨兵（`disaster_alerts.py` / `stocks/config/disaster_alerts.json` /
+  `scripts/disaster_alert.py`）：关闭日常 `below_ma20` / `below_ma50` / 浮亏等 5 分钟刷屏告警
+  （`technical_warnings_enabled: false`），保留尾盘断崖跌幅与账户级回撤；新增按标的导入
+  `.local/disaster_alerts/sentinel_levels.json`（`watch_below` / `stop_1r` / `hard_stop` /
+  `entry_zone_max` / `take_profit`）及同因退避冷却（`rearm_cooldown_minutes: 120`），
+  升级到 `hard_stop` 或 `disaster` 时无视冷却立即穿透告警。
+- `trading-analyst v1.3.1` 联动：`portfolio_factor_audit.py --export-sentinels` 生成与
+  `decision_journal.jsonl`（Brier 校准台账）及 `sentinel_overrides.json` 一致的 IBKR 价位哨兵。
+- 验证：本地 pytest **1986 passed / 7 skipped**（`-k "not test_akshare_provider"` 排除本地未安装可选
+  `akshare` 的 5 项），NAS `.venv`（含完整 `akshare`+`ibapi`）全量 pytest **1991 passed / 7 skipped**；
+  变更文件 Ruff、`compileall`、`git diff --check` 通过。
+
 ## 并行修改：MCP 协议服务器（用户直接指令，未提交）
 
 2026-10-19。原 `stocks.adapters.mcp` stdio 循环不是 MCP 协议（无 initialize/tools/list/
