@@ -110,10 +110,11 @@ llm:
   base_url_env: STOCKS_LLM_UNUSED_BASE_URL
   # 报告渲染 LLM（scripts/run_llm_report.py 消费）
   report_render:
-    base_url: "http://172.16.248.60:8000/v1"   # NAS 本地 vllm
-    model: "glm-5.3-flash"  # 2026-10-19 在线 /models 核实
-    api_key: "EMPTY"
-    timeout_seconds: 180
+    # 指向 DeepSeek 官方 API；api_key 留空由 run_llm_report.py 从 .secret/openai-key.md 解析
+    base_url: "https://api.deepseek.com/v1"
+    model: "deepseek-v4-flash"
+    api_key: ""
+    timeout_seconds: 240
     max_attempts: 3            # 渲染失败自动重试次数（含首次）
   # 中长期研判综合器
   outlook:

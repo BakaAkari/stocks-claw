@@ -56,7 +56,18 @@ _LLM_BASE_URL = str(_RENDER_CFG["base_url"])
 _LLM_MODEL = str(_RENDER_CFG["model"])
 _LLM_TIMEOUT = int(_RENDER_CFG["timeout_seconds"])
 _LLM_MAX_ATTEMPTS = int(_RENDER_CFG["max_attempts"])
-_LLM_API_KEY = str(_RENDER_CFG.get("api_key", "EMPTY"))
+def _secret_value(name: str) -> str:
+    """Bare-value reader for .secret/<name> (repo-root relative)."""
+    p = _ROOT / ".secret" / name
+    return p.read_text(encoding="utf-8").strip() if p.exists() else ""
+
+
+_LLM_API_KEY = str(_RENDER_CFG.get("api_key") or "").strip()
+if not _LLM_API_KEY or _LLM_API_KEY.upper() == "EMPTY":
+    _LLM_API_KEY = _secret_value("openai-key.md") or "EMPTY"
+_SECRET_BASE_URL = _secret_value("openai-base-url.md")
+if _SECRET_BASE_URL and "172.16.248.60" in _LLM_BASE_URL:
+    _LLM_BASE_URL = _SECRET_BASE_URL
 
 
 def _strip_llm_wrapping(text: str) -> str:

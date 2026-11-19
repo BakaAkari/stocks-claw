@@ -25,6 +25,16 @@ def _num(value: Any) -> Optional[float]:
     return round(float(value), 2)
 
 
+def _is_active_quote_valuation(valuation: dict) -> bool:
+    """Only include active market-quote positions (exclude closed quantity <= 0)."""
+    if valuation.get("valuation_method") != "market_quote" or not valuation.get("instrument_key"):
+        return False
+    qty = valuation.get("quantity")
+    if isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty <= 0:
+        return False
+    return True
+
+
 def _pct_vs(price: Optional[float], level: Optional[float]) -> Optional[float]:
     if price is None or not level:
         return None
@@ -55,9 +65,10 @@ def _matched_news(code: str, news: list[dict]) -> list[dict]:
 
 
 def _weight_band(weight: Optional[float]) -> Optional[str]:
+    """Relative position size band within active market-quote equity/ETF holdings."""
     if weight is None:
         return None
-    return "轻仓" if weight < 1 else "中等仓位" if weight < 3 else "较重仓位"
+    return "轻仓" if weight < 2 else "中等仓位" if weight < 8 else "较重仓位"
 
 
 def _pnl_band(pnl: Optional[float]) -> Optional[str]:
@@ -88,14 +99,14 @@ def build_brief_input(context: dict, metrics: Optional[dict] = None) -> dict:
     news = context.get("news") or []
     events = context.get("upcoming_events") or []
     rotation = {i.get("symbol"): i for i in (context.get("rotation") or {}).get("items") or []}
-    valuations = context.get("position_valuations") or []
+    valuations = [v for v in (context.get("position_valuations") or []) if _is_active_quote_valuation(v)]
+    # Denominator covers only active market-quote holdings so cash/WMP/locked insurance
+    # neither leak into the prompt nor dilute every stock into "轻仓".
     total = sum(_num(v.get("market_value_cny")) or 0.0 for v in valuations)
 
     holdings: list[dict] = []
     for v in valuations:
         key = v.get("instrument_key")
-        if v.get("valuation_method") != "market_quote" or not key:
-            continue
         price = _num(v.get("price"))
         ind = v.get("indicators") or {}
         value = _num(v.get("market_value_cny"))

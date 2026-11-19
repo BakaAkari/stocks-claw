@@ -17,16 +17,23 @@ def _context():
             {"display_name": "Newmont", "instrument_key": "us:NEM", "valuation_method": "market_quote",
              "market_value_cny": 98765.43, "price": 118.6, "indicators": {},
              "evidence": {"price_freshness": "stale"}},
+            {"display_name": "已清仓DELL", "instrument_key": "us:DELL", "valuation_method": "market_quote",
+             "market_value_cny": 0.0, "quantity": 0, "price": 140.0, "indicators": {},
+             "evidence": {"price_freshness": "fresh"}},
             {"display_name": "银行理财", "valuation_method": "manual", "market_value_cny": 55555.0},
         ],
         "news": [
             {"title": "半导体ETF公告", "url": "u1", "scope": "holding", "source_type": "filing",
              "published_at": "2026-10-18", "tags": ["512480"]},
+            {"title": "DELL新闻", "url": "u_dell", "scope": "holding", "source_type": "rss",
+             "published_at": "2026-10-18", "raw_metadata": {"symbol": "DELL"}},
             {"title": "美联储观点", "url": "u2", "scope": "general", "source_type": "rss"},
         ],
         "upcoming_events": [
             {"date": "2026-10-22", "name": "Newmont 财报", "event_type": "earnings", "days_until": 3,
              "affected_symbols": ["us:NEM", "us:XLE"]},
+            {"date": "2026-10-23", "name": "DELL 财报", "event_type": "earnings", "days_until": 4,
+             "affected_symbols": ["us:DELL"]},
             {"date": "2026-11-02", "name": "AAPL 财报", "event_type": "earnings", "days_until": 14,
              "affected_symbols": ["us:AAPL", "us:NEM"]},
             {"date": "2026-10-28", "name": "FOMC", "event_type": "central_bank", "days_until": 9,
@@ -67,15 +74,37 @@ def test_input_has_no_amounts_or_non_market_assets():
     for secret in SECRET_AMOUNTS:
         assert secret not in dumped
     assert "银行理财" not in dumped
+    assert "DELL" not in dumped
     assert [h["key"] for h in data["holdings"]] == ["a:512480", "us:NEM"]
-    assert data["holdings"][0]["position_size"] == "较重仓位"  # 44.4% → 档位
+    assert data["holdings"][0]["position_size"] == "较重仓位"  # 55.6% within active holdings
     assert data["holdings"][0]["pnl_band"] == "深度浮亏"
     assert "pnl_pct" not in dumped and "weight" not in dumped
-    assert [e["name"] for e in data["calendar"]] == ["Newmont 财报", "FOMC"]  # 不含非持仓财报和远期事件
+    assert [e["name"] for e in data["calendar"]] == ["Newmont 财报", "FOMC"]  # 不含非持仓及已清仓财报
     assert data["calendar"][1]["related_holdings"] == ["半导体ETF"]
     assert data["market"]["macro"] == {"vix": 18.5}
     assert data["holdings"][0]["technical"]["rsi_14"] == 23.7          # 无交易指标时退回基础指标
     assert "估值（PE/PB/分位）" in data["unavailable_data"]
+
+
+def test_non_quote_assets_do_not_dilute_active_position_weights():
+    ctx = {
+        "generated_at": "2026-10-19T08:00:00+00:00",
+        "position_valuations": [
+            {"display_name": "NVDA", "instrument_key": "us:NVDA", "valuation_method": "market_quote",
+             "market_value_cny": 12000.0, "quantity": 10, "price": 180.0, "indicators": {}},
+            {"display_name": "GOOG", "instrument_key": "us:GOOG", "valuation_method": "market_quote",
+             "market_value_cny": 13000.0, "quantity": 7, "price": 280.0, "indicators": {}},
+            {"display_name": "SOXL", "instrument_key": "us:SOXL", "valuation_method": "market_quote",
+             "market_value_cny": 350.0, "quantity": 1, "price": 50.0, "indicators": {}},
+            {"display_name": "银行理财", "valuation_method": "manual_amount", "market_value_cny": 900000.0},
+            {"display_name": "中银人寿", "valuation_method": "insurance_value", "market_value_cny": 350000.0},
+        ],
+    }
+    data = build_brief_input(ctx)
+    by_key = {h["key"]: h for h in data["holdings"]}
+    assert by_key["us:GOOG"]["position_size"] == "较重仓位"
+    assert by_key["us:NVDA"]["position_size"] == "较重仓位"
+    assert by_key["us:SOXL"]["position_size"] == "轻仓"
 
 
 def test_trader_metrics_are_used_when_provided():

@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+from stocks.domain.asset_records import split_asset_records
 from stocks.domain.models import ExecutionRecord
 from stocks.engine.confirmation_provenance import ConfirmationStore
 from stocks.engine.entry_snapshot import canonical_identity
@@ -178,7 +179,8 @@ def _alignment(doc, statement):
     positions = {}
     quantities = defaultdict(Decimal)
     cash = defaultdict(Decimal)
-    for p in doc["positions"]:
+    position_rows, _ = split_asset_records(doc["accounts"], doc["positions"])
+    for p in position_rows:
         if p.get("account_id") != account:
             continue
         if p.get("confirmed") is not True:
@@ -195,7 +197,7 @@ def _alignment(doc, statement):
             quantities[(instrument, unit)] += _memory_amount(holding["quantity"])
             matches = [s for s in statement["positions"]
                        if s["instrument_id"] == instrument and s["unit"] == unit]
-            peers = [q for q in doc["positions"] if q.get("account_id") == account
+            peers = [q for q in position_rows if q.get("account_id") == account
                      and (q.get("instrument") or {}).get("instrument_key") == instrument]
             if len(matches) != 1 or len(peers) != 1:
                 gaps.append("position_statement_link_ambiguous:" + str(p.get("position_id")))

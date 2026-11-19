@@ -58,6 +58,20 @@ def isolate_private_defaults(request, tmp_path_factory, monkeypatch):
         monkeypatch.setattr(module, key, root / "secret" / (key.lower() + ".md"))
         monkeypatch.setattr(module, "ALT_KEY_PATH", root / "secret" / (key.lower() + "-alt.md"))
 
+    from stocks.engine import intelligence_harvester, scheduled_analysis
+    monkeypatch.setattr(intelligence_harvester, "GNEWS_KEY_PATHS", (
+        root / "secret" / "gnews-key.md", root / "secret" / "gnews_api_key.md",
+    ))
+    monkeypatch.delenv("GNEWS_API_KEY", raising=False)
+    original_load_computed = scheduled_analysis.load_computed
+
+    def isolated_load_computed(path):
+        if Path(path).resolve() == repo / ".local" / "computed_profile.json":
+            path = root / "local" / "computed_profile.json"
+        return original_load_computed(path)
+
+    monkeypatch.setattr(scheduled_analysis, "load_computed", isolated_load_computed)
+
     original_outlook_init = OutlookSynthesizer.__init__
 
     def isolated_outlook_init(self, config, **kwargs):

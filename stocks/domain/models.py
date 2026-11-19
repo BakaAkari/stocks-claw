@@ -1811,6 +1811,7 @@ class AnalysisContext:
     # v2 资产事实与运行时派生估值（S2）
     asset_accounts: list[dict] = field(default_factory=list)
     asset_positions: list[dict] = field(default_factory=list)
+    account_snapshots: list[dict] = field(default_factory=list)
     position_valuations: list[dict] = field(default_factory=list)
     exposure_summary: dict = field(default_factory=dict)
     liquidity_summary: dict = field(default_factory=dict)
@@ -1886,6 +1887,7 @@ class AnalysisContext:
             forecast_summary=data.get("forecast_summary", {}),
             asset_accounts=data.get("asset_accounts", []),
             asset_positions=data.get("asset_positions", []),
+            account_snapshots=deepcopy(data.get("account_snapshots", [])),
             position_valuations=data.get("position_valuations", []),
             exposure_summary=data.get("exposure_summary", {}),
             liquidity_summary=data.get("liquidity_summary", {}),
@@ -1928,6 +1930,7 @@ class AnalysisContext:
             "forecast_summary": self.forecast_summary,
             "asset_accounts": self.asset_accounts,
             "asset_positions": self.asset_positions,
+            "account_snapshots": deepcopy(self.account_snapshots),
             "position_valuations": self.position_valuations,
             "exposure_summary": self.exposure_summary,
             "liquidity_summary": self.liquidity_summary,

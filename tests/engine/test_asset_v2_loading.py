@@ -16,6 +16,115 @@ from tests.engine.test_engine import MINIMAL_CONFIG
 
 
 @pytest.fixture
+def snapshot_document():
+    return {
+        "schema_version": 2,
+        "base_currency": "CNY",
+        "accounts": [{"account_id": "bank", "display_name": "Test bank",
+                      "institution_type": "bank", "base_currency": "CNY"}],
+        "positions": [
+            {"position_id": "cash", "account_id": "bank", "display_name": "Cash",
+             "currency": "CNY", "classification": {"asset_class": "cash", "product_type": "cash"},
+             "valuation_input": {"method": "manual_amount", "manual_amount": 100,
+                                 "as_of": "2026-01-01"}, "confirmed": True},
+            {"position_id": "bank_total", "account_id": "bank", "display_name": "Account total",
+             "currency": "CNY", "classification": {
+                 "asset_class": "account_snapshot", "product_type": "account_snapshot",
+                 "exposure_tags": ["non_additive_snapshot"]},
+             "valuation_input": {"method": "manual_amount", "manual_amount": 150},
+             "liquidity": {"tradable": False, "rebalance_eligible": False, "tier": "unknown"},
+             "confirmed": True, "notes": "Approximate total; source date unavailable."},
+        ],
+    }
+
+
+def test_snapshot_separation_preserves_source_and_excludes_double_count(engine, tmp_path, snapshot_document):
+    from stocks.adapters.mcp import MCPAdapter
+
+    path = tmp_path / "financial_assets.json"
+    original = json.dumps(snapshot_document)
+    path.write_text(original)
+    engine._assets = engine._load_assets_from_file()
+    assert engine._asset_load_warning is None
+    assert len(engine._asset_positions_v2) == len(engine.load_assets()) == 1
+    snapshot = engine.account_snapshots()[0]
+    assert snapshot["record"] == snapshot_document["positions"][1]
+    assert snapshot["as_of"] is None
+    assert snapshot["freshness"] == "unknown"
+    assert snapshot["included_in_position_totals"] is False
+    summary = MCPAdapter(engine)._get_portfolio_summary({})
+    assert summary["success"] is True
+    assert summary["data"]["total_value"] == 100
+    assert summary["data"]["asset_count"] == 1
+    assert summary["data"]["account_snapshots"] == [snapshot]
+    assert summary["data"]["total_value_scope"] == "position_values_only_not_account_net_worth"
+    assert engine.financial_integrity()["asset_confirmation"] is None
+    assert path.read_text() == original
+    snapshot["record"]["notes"] = "mutated caller copy"
+    assert engine.account_snapshots()[0]["record"]["notes"] != "mutated caller copy"
+    path.write_text(json.dumps({**snapshot_document, "positions": []}))
+    engine._load_assets_from_file()
+    assert engine.account_snapshots() == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("classification", {"asset_class": "account_snapshot", "product_type": "cash"}),
+    ("account_id", "unknown"),
+    ("position_id", "cash"),
+    ("currency", None),
+    ("valuation_input", {"method": "manual_amount", "manual_amount": True}),
+    ("valuation_input", {"method": "manual_amount", "manual_amount": float("nan")}),
+    ("valuation_input", {"method": "market_quote", "manual_amount": 150}),
+    ("holding", {"quantity": 1, "unit": "share"}),
+    ("instrument", {"instrument_key": "us:TEST"}),
+    ("liquidity", {"tradable": True, "rebalance_eligible": False}),
+])
+def test_invalid_snapshot_is_not_silently_skipped(engine, tmp_path, snapshot_document, field, value):
+    snapshot_document["positions"][1][field] = value
+    (tmp_path / "financial_assets.json").write_text(json.dumps(snapshot_document))
+    assert engine._load_assets_from_file() == []
+    assert engine._asset_load_warning == "asset_file_invalid_v2_record"
+    assert engine.account_snapshots() == []
+
+
+@pytest.mark.asyncio
+async def test_context_carries_non_additive_snapshot_without_promoting_confirmation(
+    engine, tmp_path, snapshot_document,
+):
+    from stocks.domain.models import AnalysisContext
+
+    (tmp_path / "financial_assets.json").write_text(json.dumps(snapshot_document))
+    engine._assets = engine._load_assets_from_file()
+    engine._watchlist = []
+    engine._sector_scan = []
+    engine.context_builder.macro_provider = None
+    context = await engine.build_context(include_news=False, include_quotes=False, include_history=False)
+    payload = context.to_dict()
+    assert payload["asset_count"] == 1
+    assert len(payload["asset_positions"]) == 1
+    assert payload["account_snapshots"][0]["record"] == snapshot_document["positions"][1]
+    assert AnalysisContext.from_dict(payload).account_snapshots == payload["account_snapshots"]
+    assert AnalysisContext.from_dict({"account_snapshots": payload["account_snapshots"]}).to_dict()[
+        "account_snapshots"
+    ] == payload["account_snapshots"]
+    assert context.financial_integrity["asset_confirmation"] is None
+    payload["account_snapshots"][0]["record"]["notes"] = "caller mutation"
+    assert context.account_snapshots[0]["record"]["notes"] != "caller mutation"
+
+
+def test_reconciliation_does_not_treat_snapshot_as_cash_or_a_statement(snapshot_document):
+    from stocks.engine.financial_service import _alignment
+
+    statement = {"account_id": "bank", "positions": [],
+                 "cash": [{"currency": "CNY", "balance": 100}]}
+    positions, gaps = _alignment(snapshot_document, statement)
+    assert positions == {}
+    assert gaps == []
+    statement["cash"][0]["balance"] = 150
+    assert "asset_memory_cash_mismatch:CNY" in _alignment(snapshot_document, statement)[1]
+
+
+@pytest.fixture
 def engine(tmp_path):
     config = deepcopy(MINIMAL_CONFIG)
     config["paths"]["local_data_dir"] = str(tmp_path)

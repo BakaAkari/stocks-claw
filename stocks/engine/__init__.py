@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from stocks.domain.asset_records import split_asset_records
 from stocks.domain.models import (
     Account,
     AdviceRecord,
@@ -431,6 +432,7 @@ class StocksEngine:
         self._asset_base_currency: str = "CNY"
         self._asset_accounts_v2: list[Account] = []
         self._asset_positions_v2: list[Position] = []
+        self._account_snapshots: list[dict] = []
         self._asset_load_warning: Optional[str] = None
         self._constraints: dict = {}
         self._profile: dict = {}
@@ -548,6 +550,7 @@ class StocksEngine:
         self._asset_base_currency = "CNY"
         self._asset_accounts_v2 = []
         self._asset_positions_v2 = []
+        self._account_snapshots = []
         self._asset_load_warning = None
         path = self._asset_file_path()
 
@@ -630,16 +633,35 @@ class StocksEngine:
             self._asset_schema_version = 2
             self._asset_base_currency = (data.get("base_currency") or "CNY").upper()
             self._asset_accounts_v2 = [Account.from_dict(item) for item in accounts]
+            positions, snapshots = split_asset_records(accounts, positions)
             self._asset_positions_v2 = [Position.from_dict(item) for item in positions]
+            self._account_snapshots = snapshots
         except (TypeError, ValueError, AttributeError):
             self._asset_load_warning = "asset_file_invalid_v2_record"
             self._asset_schema_version = 1
             self._asset_accounts_v2 = []
             self._asset_positions_v2 = []
+            self._account_snapshots = []
             return []
         return [
             self._with_cny_valuation(position_v2_to_financial_asset(position))
             for position in self._asset_positions_v2
+        ]
+
+    def account_snapshots(self) -> list[dict]:
+        """Non-additive source records, never promoted to live/verified balances."""
+        return [
+            {
+                "record": deepcopy(row),
+                "included_in_position_totals": False,
+                "source_kind": "manual_account_snapshot",
+                "as_of": row["valuation_input"].get("as_of") or row.get("as_of"),
+                "freshness": (
+                    "snapshot_only" if row["valuation_input"].get("as_of") or row.get("as_of")
+                    else "unknown"
+                ),
+            }
+            for row in self._account_snapshots
         ]
 
     def _load_profile(self) -> dict:
@@ -1337,7 +1359,13 @@ class StocksEngine:
         result: dict[str, dict] = {}
         for valuation in context.get("position_valuations") or []:
             key = valuation.get("instrument_key")
-            if valuation.get("valuation_method") != "market_quote" or not key or key in result:
+            qty = valuation.get("quantity")
+            if (
+                valuation.get("valuation_method") != "market_quote"
+                or not key
+                or key in result
+                or (isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty <= 0)
+            ):
                 continue
             try:
                 instrument = self._instrument_from_key(key, name=valuation.get("display_name") or key)
@@ -1351,11 +1379,21 @@ class StocksEngine:
         """使用 LLM 生成投资分析报告。"""
         return await self.llm_analysis.generate_report(context)
 
+    @staticmethod
+    def _is_active_holding(position: Any) -> bool:
+        holding = getattr(position, "holding", None)
+        if not holding:
+            return False
+        qty = holding.get("quantity") if isinstance(holding, dict) else getattr(holding, "quantity", None)
+        if isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty <= 0:
+            return False
+        return True
+
     def _news_instruments(self) -> list[Instrument]:
-        """定向新闻标的：watchlist ∪ 行情估值的持仓；持仓标记 pool="holding"。"""
+        """定向新闻标的：watchlist ∪ 行情估值的在手持仓；持仓标记 pool="holding"。"""
         held: dict[str, Instrument] = {}
         for position in self._current_asset_positions():
-            if position.valuation_input.method != "market_quote" or not position.holding:
+            if position.valuation_input.method != "market_quote" or not self._is_active_holding(position):
                 continue
             instrument = self._instrument_from_position(position)
             if instrument is not None:
@@ -1370,7 +1408,7 @@ class StocksEngine:
         self,
         instruments: list[Instrument],
     ) -> tuple[list[Instrument], list[str]]:
-        """把 detailed 持仓临时加入本次行情/历史请求，不写 watchlist。"""
+        """把 detailed 在手(quantity>0)持仓临时加入本次行情/历史请求，不写 watchlist。"""
         result = list(instruments)
         existing = {f"{item.market}:{item.code}" for item in result}
         auto_included: list[str] = []
@@ -1378,7 +1416,7 @@ class StocksEngine:
             if (
                 position.valuation_input.method != "market_quote"
                 or not position.instrument_key
-                or not position.holding
+                or not self._is_active_holding(position)
             ):
                 continue
             key = position.instrument_key
@@ -1607,6 +1645,7 @@ class StocksEngine:
             personal_mandate=self.personal_mandate(),
             financial_integrity=self.financial_integrity(),
             fee_budgets=self.fee_budget_state(),
+            account_snapshots=self.account_snapshots(),
         )
 
         # 保存最小快照，供下一次上下文进行前后对照。
